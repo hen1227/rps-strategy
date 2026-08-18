@@ -1,0 +1,16 @@
+# Build output
+/bin/
+
+# Local development and hot-reload output
+**/tmp/
+
+# Runtime data
+**/data/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
+# Local environment and OS files
+.env
+.env.*
+.DS_Store
