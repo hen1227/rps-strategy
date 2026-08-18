@@ -1,20 +1,51 @@
+import { NavigationContainer, DarkTheme } from '@react-navigation/native';
+import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { StatusBar } from 'expo-status-bar';
-import { StyleSheet, Text, View } from 'react-native';
+
+import { GameSoundEffects } from './hooks/useGameSounds';
+import GameScreen from './screens/GameScreen';
+import LobbyScreen from './screens/LobbyScreen';
+
+const Stack = createNativeStackNavigator();
+
+const theme = {
+  ...DarkTheme,
+  colors: {
+    ...DarkTheme.colors,
+    background: '#312e2b',
+    card: '#262522',
+    primary: '#81b64c',
+    text: '#f5f5f5',
+    border: '#45423e',
+  },
+};
 
 export default function App() {
   return (
-    <View style={styles.container}>
-      <Text>Open up App.js to start working on your app!</Text>
-      <StatusBar style="auto" />
-    </View>
+    <>
+      <GameSoundEffects />
+      <NavigationContainer theme={theme}>
+        <StatusBar style="light" />
+        <Stack.Navigator
+          screenOptions={{
+            headerStyle: { backgroundColor: '#262522' },
+            headerTintColor: '#f5f5f5',
+            headerShadowVisible: false,
+            contentStyle: { backgroundColor: '#312e2b' },
+          }}
+        >
+          <Stack.Screen
+            name="Lobby"
+            component={LobbyScreen}
+            options={{ headerShown: false }}
+          />
+          <Stack.Screen
+            name="Game"
+            component={GameScreen}
+            options={{ headerShown: false, gestureEnabled: false }}
+          />
+        </Stack.Navigator>
+      </NavigationContainer>
+    </>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#fff',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-});
