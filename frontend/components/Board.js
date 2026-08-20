@@ -8,13 +8,37 @@ import {
   View,
 } from 'react-native';
 import Animated, { FadeIn, FadeOut, LinearTransition } from 'react-native-reanimated';
+import Svg, { Defs, Line, Marker, Polygon } from 'react-native-svg';
 
 import PieceIcon from './PieceIcon';
 
 const BOARD_SIZE = 9;
 const FILES = 'ABCDEFGHI';
+const MODE_ANNIHILATION = 'V1';
+const MODE_INFILTRATION = 'V3';
+const MODE_TOTAL_WAR = 'V5';
+const TILE_PERCENTAGE = 100 / BOARD_SIZE;
 
 const samePosition = (first, second) => first?.x === second?.x && first?.y === second?.y;
+
+const tintForTile = (modeId, tile) => {
+  if (modeId === MODE_ANNIHILATION) return null;
+
+  if (modeId === MODE_INFILTRATION) {
+    if (tile.y === 0) return { color: 'Red', kind: 'goal' };
+    if (tile.y === BOARD_SIZE - 1) return { color: 'Blue', kind: 'goal' };
+    return null;
+  }
+
+  if (
+    modeId === MODE_TOTAL_WAR &&
+    (tile.ownerColor === 'Red' || tile.ownerColor === 'Blue')
+  ) {
+    return { color: tile.ownerColor, kind: 'territory' };
+  }
+
+  return null;
+};
 
 const positionFromDrag = (from, dx, dy, boardSize, isFlipped) => {
   const squareSize = boardSize / BOARD_SIZE;
@@ -35,6 +59,8 @@ const positionFromDrag = (from, dx, dy, boardSize, isFlipped) => {
 const DraggablePiece = memo(function DraggablePiece({
   boardSize,
   dragEnabled,
+  displayX,
+  displayY,
   isFlipped,
   isSelected,
   onDragEnd,
@@ -104,7 +130,17 @@ const DraggablePiece = memo(function DraggablePiece({
       entering={FadeIn.duration(160)}
       exiting={FadeOut.duration(140)}
       layout={LinearTransition.springify().damping(19)}
-      style={[styles.pieceLayout, (isSelected || isDragging) && styles.selectedPiece]}
+      style={[
+        styles.pieceLayout,
+        {
+          height: `${TILE_PERCENTAGE}%`,
+          left: `${displayX * TILE_PERCENTAGE}%`,
+          top: `${displayY * TILE_PERCENTAGE}%`,
+          width: `${TILE_PERCENTAGE}%`,
+        },
+        isSelected && styles.selectedPieceLayout,
+        isDragging && styles.draggingPieceLayout,
+      ]}
     >
       <NativeAnimated.View
         {...panResponder.panHandlers}
@@ -113,9 +149,10 @@ const DraggablePiece = memo(function DraggablePiece({
           dragEnabled && styles.draggablePiece,
           isDragging && styles.draggingPiece,
           {
+            pointerEvents: dragEnabled ? 'auto' : 'none',
             transform: [
               ...translation.getTranslateTransform(),
-              { scale: isDragging ? 1.14 : 1 },
+              { scale: isDragging ? 1.14 : isSelected ? 1.08 : 1 },
             ],
           },
         ]}
@@ -127,9 +164,13 @@ const DraggablePiece = memo(function DraggablePiece({
 });
 
 export default function Board({
+  analysisArrows = [],
   boardSize,
   canMove,
   grid,
+  lastMove,
+  modeId,
+  movableColor,
   onPieceDrop,
   onTilePress,
   playerColor,
@@ -137,6 +178,7 @@ export default function Board({
   validMoves,
 }) {
   const isFlipped = playerColor === 'Blue';
+  const activeMoveColor = movableColor ?? playerColor;
   const validMoveKeys = new Set(validMoves.map(({ x, y }) => `${x}:${y}`));
   const displayedGrid = useMemo(() => {
     if (!isFlipped) return grid;
@@ -160,99 +202,224 @@ export default function Board({
   return (
     <View
       accessibilityLabel="Nine by nine game board"
-      style={[styles.board, { width: boardSize, height: boardSize }]}
+      style={[styles.boardFrame, { width: boardSize, height: boardSize }]}
     >
-      {displayedGrid.map((row, displayY) => (
-        <View key={`row-${displayY}`} style={styles.row}>
-          {row.map((tile, displayX) => {
+      <View style={styles.boardSurface}>
+        {displayedGrid.map((row, displayY) => (
+          <View key={`row-${displayY}`} style={styles.row}>
+            {row.map((tile, displayX) => {
+              const position = { x: tile.x, y: tile.y };
+              const isSelected = samePosition(selectedTile, position);
+              const isValid = validMoveKeys.has(`${tile.x}:${tile.y}`);
+              const isCapture = isValid && tile.occupant !== 'Empty';
+              const isLight = (tile.x + tile.y) % 2 === 0;
+              const isLastMoveFrom = samePosition(lastMove?.from, position);
+              const isLastMoveTo = samePosition(lastMove?.to, position);
+              const tint = tintForTile(modeId, tile);
+              const tintLabel = tint
+                ? tint.kind === 'goal'
+                  ? `, ${tint.color} goal tile`
+                  : `, captured by ${tint.color}`
+                : '';
+              const lastMoveLabel = isLastMoveFrom
+                ? ', previous move origin'
+                : isLastMoveTo
+                  ? ', previous move destination'
+                  : '';
+
+              return (
+                <Pressable
+                  key={`${tile.x}-${tile.y}`}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${tile.occupantOwner} ${tile.occupant} on ${
+                    FILES[tile.x]
+                  }${BOARD_SIZE - tile.y}${tintLabel}${lastMoveLabel}`}
+                  onPress={() => onTilePress(position)}
+                  style={[
+                    styles.tile,
+                    isLight ? styles.lightTile : styles.darkTile,
+                    isSelected && styles.selectedTile,
+                  ]}
+                >
+                  {tint && (
+                    <View
+                      style={[
+                        styles.tileTint,
+                        tint.color === 'Red' ? styles.redTint : styles.blueTint,
+                        tint.kind === 'goal' && styles.goalTint,
+                      ]}
+                    />
+                  )}
+                  {(isLastMoveFrom || isLastMoveTo) && (
+                    <View
+                      style={[
+                        styles.lastMoveTint,
+                        isLastMoveFrom ? styles.lastMoveFromTint : styles.lastMoveToTint,
+                      ]}
+                    />
+                  )}
+                  {isSelected && <View style={styles.selectionTint} />}
+                  {isValid &&
+                    (isCapture ? (
+                      <View style={styles.captureRing} />
+                    ) : (
+                      <View style={styles.validDot} />
+                    ))}
+
+                  {displayX === 0 && (
+                    <Text
+                      style={[
+                        styles.rankLabel,
+                        isLight ? styles.labelOnLight : styles.labelOnDark,
+                      ]}
+                    >
+                      {BOARD_SIZE - tile.y}
+                    </Text>
+                  )}
+                  {displayY === BOARD_SIZE - 1 && (
+                    <Text
+                      style={[
+                        styles.fileLabel,
+                        isLight ? styles.labelOnLight : styles.labelOnDark,
+                      ]}
+                    >
+                      {FILES[tile.x]}
+                    </Text>
+                  )}
+                </Pressable>
+              );
+            })}
+          </View>
+        ))}
+
+        {analysisArrows.length > 0 && (
+          <Svg
+            aria-hidden
+            style={styles.analysisLayer}
+            viewBox="0 0 9 9"
+          >
+            <Defs>
+              {analysisArrows.slice(0, 3).map((arrow, index) => {
+                const color = ['#51d6a9', '#55a9ff', '#f0b857'][index];
+                return (
+                  <Marker
+                    id={`analysis-arrow-${index}`}
+                    key={`marker-${index}`}
+                    markerHeight="5"
+                    markerUnits="strokeWidth"
+                    markerWidth="5"
+                    orient="auto"
+                    refX="8"
+                    refY="5"
+                    viewBox="0 0 10 10"
+                  >
+                    <Polygon fill={color} points="0,0 10,5 0,10 2.5,5" />
+                  </Marker>
+                );
+              })}
+            </Defs>
+            {analysisArrows.slice(0, 3).map((arrow, index) => {
+              const color = ['#51d6a9', '#55a9ff', '#f0b857'][index];
+              const fromX = (isFlipped ? 8 - arrow.from.x : arrow.from.x) + 0.5;
+              const fromY = (isFlipped ? 8 - arrow.from.y : arrow.from.y) + 0.5;
+              const toX = (isFlipped ? 8 - arrow.to.x : arrow.to.x) + 0.5;
+              const toY = (isFlipped ? 8 - arrow.to.y : arrow.to.y) + 0.5;
+              return (
+                <Line
+                  key={`${arrow.from.x}:${arrow.from.y}-${arrow.to.x}:${arrow.to.y}`}
+                  markerEnd={`url(#analysis-arrow-${index})`}
+                  opacity={index === 0 ? 0.94 : 0.76}
+                  stroke={color}
+                  strokeLinecap="round"
+                  strokeWidth={index === 0 ? 0.18 : 0.13}
+                  x1={fromX}
+                  x2={toX}
+                  y1={fromY}
+                  y2={toY}
+                />
+              );
+            })}
+          </Svg>
+        )}
+
+        {displayedGrid.flatMap((row, displayY) =>
+          row.map((tile, displayX) => {
+            if (tile.occupant === 'Empty') return null;
             const position = { x: tile.x, y: tile.y };
-            const isSelected = samePosition(selectedTile, position);
-            const isValid = validMoveKeys.has(`${tile.x}:${tile.y}`);
-            const isCapture = isValid && tile.occupant !== 'Empty';
-            const isLight = (tile.x + tile.y) % 2 === 0;
-            const dragEnabled =
-              canMove && tile.occupant !== 'Empty' && tile.occupantOwner === playerColor;
+            const dragEnabled = canMove && tile.occupantOwner === activeMoveColor;
 
             return (
-              <Pressable
+              <DraggablePiece
+                boardSize={boardSize}
+                displayX={displayX}
+                displayY={displayY}
+                dragEnabled={dragEnabled}
+                isFlipped={isFlipped}
+                isSelected={samePosition(selectedTile, position)}
                 key={`${tile.x}-${tile.y}`}
-                accessibilityRole="button"
-                accessibilityLabel={`${tile.occupantOwner} ${tile.occupant} on ${FILES[tile.x]}${BOARD_SIZE - tile.y}`}
-                onPress={() => onTilePress(position)}
-                style={[
-                  styles.tile,
-                  isLight ? styles.lightTile : styles.darkTile,
-                  tile.ownerColor === 'Red' && styles.redTerritory,
-                  tile.ownerColor === 'Blue' && styles.blueTerritory,
-                  isSelected && styles.selectedTile,
-                ]}
-              >
-                {isValid &&
-                  (isCapture ? <View style={styles.captureRing} /> : <View style={styles.validDot} />)}
-
-                {tile.occupant !== 'Empty' && (
-                  <DraggablePiece
-                    boardSize={boardSize}
-                    dragEnabled={dragEnabled}
-                    isFlipped={isFlipped}
-                    isSelected={isSelected}
-                    onDragEnd={handleDragEnd}
-                    onDragStart={handleDragStart}
-                    position={position}
-                    tile={tile}
-                  />
-                )}
-
-                {displayX === 0 && (
-                  <Text style={[styles.rankLabel, isLight ? styles.labelOnLight : styles.labelOnDark]}>
-                    {BOARD_SIZE - tile.y}
-                  </Text>
-                )}
-                {displayY === BOARD_SIZE - 1 && (
-                  <Text style={[styles.fileLabel, isLight ? styles.labelOnLight : styles.labelOnDark]}>
-                    {FILES[tile.x]}
-                  </Text>
-                )}
-              </Pressable>
+                onDragEnd={handleDragEnd}
+                onDragStart={handleDragStart}
+                position={position}
+                tile={tile}
+              />
             );
-          })}
-        </View>
-      ))}
+          }),
+        )}
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  board: {
+  boardFrame: {
     borderWidth: 3,
     borderColor: '#202631',
-    borderRadius: 8,
-    overflow: 'hidden',
+    borderRadius: 10,
     backgroundColor: '#202631',
-    shadowColor: '#000000',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.32,
-    shadowRadius: 16,
+    boxShadow: [
+      { offsetX: 0, offsetY: 10, blurRadius: 16, color: 'rgba(0, 0, 0, 0.32)' },
+    ],
     elevation: 8,
   },
+  boardSurface: { flex: 1, position: 'relative', overflow: 'hidden', borderRadius: 6 },
   row: { flex: 1, flexDirection: 'row' },
+  analysisLayer: { ...StyleSheet.absoluteFillObject, zIndex: 4, pointerEvents: 'none' },
   tile: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'hidden',
   },
   lightTile: { backgroundColor: '#d8d1c1' },
   darkTile: { backgroundColor: '#6f8f8c' },
-  redTerritory: { backgroundColor: '#b86b66' },
-  blueTerritory: { backgroundColor: '#6285a3' },
+  tileTint: { ...StyleSheet.absoluteFillObject, pointerEvents: 'none' },
+  redTint: { backgroundColor: 'rgba(190, 56, 65, 0.42)' },
+  blueTint: { backgroundColor: 'rgba(47, 111, 174, 0.42)' },
+  goalTint: {
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.28)',
+  },
+  lastMoveTint: { ...StyleSheet.absoluteFillObject, zIndex: 1, pointerEvents: 'none' },
+  lastMoveFromTint: { backgroundColor: 'rgba(45, 204, 165, 0.17)' },
+  lastMoveToTint: {
+    backgroundColor: 'rgba(45, 204, 165, 0.3)',
+    borderWidth: 1,
+    borderColor: 'rgba(220, 255, 247, 0.42)',
+  },
   selectedTile: {
-    backgroundColor: '#d5bb63',
     borderWidth: 2,
     borderColor: '#ffe497',
   },
+  selectionTint: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 1,
+    pointerEvents: 'none',
+    backgroundColor: 'rgba(242, 192, 67, 0.38)',
+  },
   validDot: {
     position: 'absolute',
-    zIndex: 1,
+    zIndex: 2,
+    pointerEvents: 'none',
     width: '24%',
     aspectRatio: 1,
     borderRadius: 30,
@@ -260,28 +427,35 @@ const styles = StyleSheet.create({
   },
   captureRing: {
     position: 'absolute',
-    zIndex: 1,
+    zIndex: 2,
+    pointerEvents: 'none',
     width: '84%',
     aspectRatio: 1,
     borderRadius: 50,
     borderWidth: 4,
     borderColor: 'rgba(21, 39, 38, 0.42)',
   },
-  pieceLayout: { zIndex: 2, alignItems: 'center', justifyContent: 'center' },
+  pieceLayout: {
+    position: 'absolute',
+    zIndex: 3,
+    pointerEvents: 'box-none',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  selectedPieceLayout: { zIndex: 3 },
+  draggingPieceLayout: { zIndex: 100, elevation: 24 },
   piece: { alignItems: 'center', justifyContent: 'center' },
   draggablePiece: { cursor: 'grab' },
   draggingPiece: {
-    zIndex: 20,
     cursor: 'grabbing',
-    shadowColor: '#000000',
-    shadowOffset: { width: 0, height: 7 },
-    shadowOpacity: 0.4,
-    shadowRadius: 7,
+    boxShadow: [
+      { offsetX: 0, offsetY: 7, blurRadius: 7, color: 'rgba(0, 0, 0, 0.4)' },
+    ],
     elevation: 12,
   },
-  selectedPiece: { transform: [{ scale: 1.08 }] },
   rankLabel: {
     position: 'absolute',
+    zIndex: 3,
     top: 2,
     left: 3,
     fontSize: 7,
@@ -289,6 +463,7 @@ const styles = StyleSheet.create({
   },
   fileLabel: {
     position: 'absolute',
+    zIndex: 3,
     right: 3,
     bottom: 2,
     fontSize: 7,

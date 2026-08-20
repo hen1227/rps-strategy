@@ -32,7 +32,7 @@ export const getGameSoundForTransition = (previous, next, playerColor) => {
   }
 
   if (next.status === 'Finished') {
-    const reachedBackRank = next.mode?.id === 'V3' && next.endReason !== 'timeout';
+    const reachedBackRank = next.mode?.id === 'V3' && next.endReason === 'infiltration';
     return reachedBackRank ? 'promote' : 'moveCheck';
   }
 

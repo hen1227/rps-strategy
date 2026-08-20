@@ -3,6 +3,7 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { StatusBar } from 'expo-status-bar';
 
 import { GameSoundEffects } from './hooks/useGameSounds';
+import AnalysisScreen from './screens/AnalysisScreen';
 import GameScreen from './screens/GameScreen';
 import LobbyScreen from './screens/LobbyScreen';
 
@@ -43,6 +44,11 @@ export default function App() {
             name="Game"
             component={GameScreen}
             options={{ headerShown: false, gestureEnabled: false }}
+          />
+          <Stack.Screen
+            name="Analysis"
+            component={AnalysisScreen}
+            options={{ headerShown: false }}
           />
         </Stack.Navigator>
       </NavigationContainer>

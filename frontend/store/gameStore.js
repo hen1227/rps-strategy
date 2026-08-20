@@ -22,15 +22,15 @@ const BASE_MODES = [
     features: [],
     startingPosition: {
       rows: [
-        'R.P.S.P.R',
-        '.S.R.P.S.',
         '.........',
         '.........',
         '.........',
+        '.R.....s.',
+        '.P.....p.',
+        '.S.....r.',
         '.........',
         '.........',
-        '.s.p.r.s.',
-        'r.p.s.p.r',
+        '.........',
       ],
     },
   },
@@ -44,15 +44,15 @@ const BASE_MODES = [
     features: ['territory'],
     startingPosition: {
       rows: [
-        'R.S.P.S.R',
-        '.P.R.P.S.',
+        '...SSS...',
+        '...PPP...',
+        '...RRR...',
         '.........',
         '.........',
         '.........',
-        '.........',
-        '.........',
-        '.s.p.r.p.',
-        'r.s.p.s.r',
+        '...rrr...',
+        '...ppp...',
+        '...sss...',
       ],
     },
   },
@@ -66,15 +66,15 @@ const BASE_MODES = [
     features: [],
     startingPosition: {
       rows: [
-        'R..P..S.R',
-        '..S..P...',
+        '...SSS...',
+        '...PPP...',
+        '...RRR...',
         '.........',
         '.........',
         '.........',
-        '.........',
-        '.........',
-        '...p..s..',
-        'r.s..p..r',
+        '...rrr...',
+        '...ppp...',
+        '...sss...',
       ],
     },
   },
@@ -115,6 +115,40 @@ const send = (socket, payload) => {
   return true;
 };
 
+const inferLastMove = (previousGame, nextGame) => {
+  if (
+    !previousGame?.grid ||
+    !nextGame?.grid ||
+    previousGame.gameId !== nextGame.gameId ||
+    nextGame.moveNumber !== previousGame.moveNumber + 1
+  ) {
+    return null;
+  }
+
+  let from = null;
+  let to = null;
+  for (let y = 0; y < nextGame.grid.length; y += 1) {
+    for (let x = 0; x < nextGame.grid[y].length; x += 1) {
+      const before = previousGame.grid[y]?.[x];
+      const after = nextGame.grid[y][x];
+      if (!before || !after) continue;
+
+      if (before.occupant !== 'Empty' && after.occupant === 'Empty') {
+        from = { x, y };
+      }
+      if (
+        after.occupant !== 'Empty' &&
+        (before.occupant !== after.occupant ||
+          before.occupantOwner !== after.occupantOwner)
+      ) {
+        to = { x, y };
+      }
+    }
+  }
+
+  return from && to ? { from, to } : null;
+};
+
 export const useGameStore = create((set, get) => ({
   socket: null,
   accountId,
@@ -126,6 +160,7 @@ export const useGameStore = create((set, get) => ({
   queue: initialQueue,
   playerColor: null,
   gameState: null,
+  lastMove: null,
   selectedTile: null,
   validMoves: [],
   opponentReconnectDeadline: null,
@@ -223,6 +258,7 @@ export const useGameStore = create((set, get) => ({
         set({
           playerColor: message.color,
           gameState: message.gameState,
+          lastMove: null,
           gameSessionId,
           connectionStatus: 'connected',
           queue: initialQueue,
@@ -241,6 +277,7 @@ export const useGameStore = create((set, get) => ({
         set({
           playerColor: message.color,
           gameState: message.gameState,
+          lastMove: null,
           gameSessionId,
           connectionStatus: 'connected',
           queue: initialQueue,
@@ -255,6 +292,7 @@ export const useGameStore = create((set, get) => ({
         set({
           playerColor: null,
           gameState: null,
+          lastMove: null,
           gameSessionId: clearPersistedGame(),
           connectionStatus: 'connected',
           selectedTile: null,
@@ -265,14 +303,15 @@ export const useGameStore = create((set, get) => ({
         break;
       case 'game_state': {
         const isFinished = message.gameState?.status === 'Finished';
-        set({
+        set((state) => ({
           gameState: message.gameState,
           gameSessionId: isFinished ? clearPersistedGame() : persistGame(message.gameState),
+          lastMove: inferLastMove(state.gameState, message.gameState) ?? state.lastMove,
           selectedTile: null,
           validMoves: [],
-          opponentReconnectDeadline: isFinished ? null : get().opponentReconnectDeadline,
+          opponentReconnectDeadline: isFinished ? null : state.opponentReconnectDeadline,
           error: null,
-        });
+        }));
         break;
       }
       case 'opponent_disconnected':
@@ -400,6 +439,7 @@ export const useGameStore = create((set, get) => ({
     set({
       playerColor: null,
       gameState: null,
+      lastMove: null,
       gameSessionId: null,
       selectedTile: null,
       validMoves: [],

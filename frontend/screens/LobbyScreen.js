@@ -70,16 +70,10 @@ export default function LobbyScreen({ navigation }) {
               const playerCount = modePlayerCounts[mode.id] ?? 0;
               const isSelected = queue.isSearching && queue.modeId === mode.id;
               const isMuted = queue.isSearching && !isSelected;
-              const isDisabled = !isConnected || isMuted;
-              const accessibilityLabel =
-                `Play ${mode.name}. ` +
-                `${playerCount} ${playerCount === 1 ? 'player is' : 'players are'} currently ` +
-                'playing or looking for a match.';
               const cardStyle = [
                 styles.modeCard,
                 isSelected && styles.modeCardSearching,
                 isMuted && styles.modeCardMuted,
-                !isConnected && styles.modeCardDisconnected,
               ];
               const cardContent = (
                 <>
@@ -127,43 +121,47 @@ export default function LobbyScreen({ navigation }) {
                           </Pressable>
                         </>
                       ) : (
-                        <>
-                          <Text style={styles.tapLabel}>
-                            {isConnected ? 'TAP TO PLAY' : 'CONNECTING'}
-                          </Text>
-                          <View style={styles.playIcon}>
-                            <Text style={styles.playIconText}>▶</Text>
-                          </View>
-                        </>
+                        <View style={styles.modeButtons}>
+                          <Pressable
+                            accessibilityLabel={`Analyze ${mode.name} with RPSFish`}
+                            accessibilityRole="button"
+                            disabled={isMuted}
+                            onPress={() => navigation.navigate('Analysis', { mode })}
+                            style={({ pressed }) => [
+                              styles.analysisButton,
+                              isMuted && styles.modeButtonDisabled,
+                              pressed && styles.modeButtonPressed,
+                            ]}
+                          >
+                            <Text style={styles.analysisButtonText}>ANALYZE</Text>
+                          </Pressable>
+                          <Pressable
+                            accessibilityLabel={`Play ${mode.name} online`}
+                            accessibilityRole="button"
+                            disabled={!isConnected || isMuted}
+                            onPress={() => joinQueue(mode.id)}
+                            style={({ pressed }) => [
+                              styles.playButton,
+                              (!isConnected || isMuted) && styles.modeButtonDisabled,
+                              pressed && styles.modeButtonPressed,
+                            ]}
+                          >
+                            <Text style={styles.playButtonText}>
+                              {isConnected ? 'PLAY' : 'CONNECTING'}
+                            </Text>
+                            <Text style={styles.playButtonIcon}>▶</Text>
+                          </Pressable>
+                        </View>
                       )}
                     </View>
                   </View>
                 </>
               );
 
-              if (isSelected) {
-                return (
-                  <View key={mode.id} style={cardStyle}>
-                    {cardContent}
-                  </View>
-                );
-              }
-
               return (
-                <Pressable
-                  key={mode.id}
-                  accessibilityRole="button"
-                  accessibilityLabel={accessibilityLabel}
-                  accessibilityState={{ disabled: isDisabled }}
-                  disabled={isDisabled}
-                  onPress={() => joinQueue(mode.id)}
-                  style={({ pressed }) => [
-                    ...cardStyle,
-                    pressed && styles.modeCardPressed,
-                  ]}
-                >
+                <View key={mode.id} style={cardStyle}>
                   {cardContent}
-                </Pressable>
+                </View>
               );
             })}
           </View>
@@ -221,10 +219,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#4a4742',
     backgroundColor: '#262522',
-    shadowColor: '#171613',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.34,
-    shadowRadius: 7,
+    boxShadow: [
+      { offsetX: 0, offsetY: 4, blurRadius: 7, color: 'rgba(23, 22, 19, 0.34)' },
+    ],
     elevation: 5,
   },
   modeCardSearching: {
@@ -232,8 +229,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#2b2c25',
   },
   modeCardMuted: { opacity: 0.28 },
-  modeCardDisconnected: { opacity: 0.62 },
-  modeCardPressed: { transform: [{ scale: 0.988 }], backgroundColor: '#2d2b27' },
   modeContent: { flex: 1, alignSelf: 'stretch', paddingLeft: 15 },
   modeTopRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   versionBadge: {
@@ -254,20 +249,32 @@ const styles = StyleSheet.create({
   },
   playerCountDot: { width: 5, height: 5, borderRadius: 3, backgroundColor: '#81b64c' },
   playerCountText: { color: '#b8d993', fontSize: 8, fontWeight: '900', letterSpacing: 0.65 },
-  playIcon: {
-    width: 28,
-    height: 28,
+  modeButtons: { width: '100%', flexDirection: 'row', gap: 7 },
+  analysisButton: {
+    flex: 1,
+    height: 30,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: 8,
-    backgroundColor: '#81b64c',
-    shadowColor: '#000000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 2,
-    elevation: 2,
+    borderRadius: 7,
+    borderWidth: 1,
+    borderColor: '#5a7d78',
+    backgroundColor: '#293a37',
   },
-  playIconText: { color: '#ffffff', fontSize: 11, marginLeft: 2 },
+  analysisButtonText: { color: '#9be6d5', fontSize: 8, fontWeight: '900', letterSpacing: 0.9 },
+  playButton: {
+    flex: 1,
+    height: 30,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    borderRadius: 7,
+    backgroundColor: '#81b64c',
+  },
+  playButtonText: { color: '#ffffff', fontSize: 8, fontWeight: '900', letterSpacing: 0.9 },
+  playButtonIcon: { color: '#ffffff', fontSize: 8 },
+  modeButtonDisabled: { opacity: 0.35 },
+  modeButtonPressed: { opacity: 0.7, transform: [{ scale: 0.98 }] },
   modeTitle: { color: '#ffffff', fontSize: 20, fontWeight: '900', marginTop: 8 },
   modeObjective: { color: '#aaa7a2', fontSize: 12, lineHeight: 17, marginTop: 4 },
   modeFooter: {
@@ -278,7 +285,6 @@ const styles = StyleSheet.create({
     marginTop: 'auto',
     paddingTop: 7,
   },
-  tapLabel: { color: '#81b64c', fontSize: 9, fontWeight: '900', letterSpacing: 1.25 },
   searchStatus: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   searchTitle: { color: '#f5f5f5', fontSize: 11, fontWeight: '800' },
   searchTime: { color: '#9c9993', fontSize: 9, marginTop: 1 },

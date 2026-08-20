@@ -22,9 +22,17 @@
   },
   "scripts": {
     "start": "expo start",
-    "android": "expo start --android",
-    "ios": "expo start --ios",
-    "web": "expo start --web"
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "web": "expo start --web",
+    "build:rpsfish": "../RPSFish/scripts/build_web.sh",
+    "prebuild:web": "npm run build:rpsfish",
+    "build:web": "expo export -p web --clear",
+    "predeploy": "npm run build:web",
+    "deploy": "gh-pages --nojekyll --remove '{**/*,.claude/**/*,.gitignore,.nojekyll}' -d dist -b dist"
   },
-  "private": true
+  "private": true,
+  "devDependencies": {
+    "gh-pages": "^6.3.0"
+  }
 }

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Modal,
   Pressable,
@@ -10,6 +10,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import Board from '../components/Board';
+import TerritoryMeter from '../components/TerritoryMeter';
 import { useGameStore } from '../store/gameStore';
 
 const BOARD_SIZE = 9;
@@ -69,6 +70,14 @@ const outcomeFor = (gameState, playerColor) => {
     draw_agreement: {
       method: 'AGREEMENT',
       detail: 'Both players agreed to a draw.',
+    },
+    repetition: {
+      method: 'REPETITION',
+      detail: 'The same position occurred three times.',
+    },
+    stalemate: {
+      method: 'STALEMATE',
+      detail: 'A player had no legal move, which is a draw.',
     },
     infiltration: {
       method: 'INFILTRATION',
@@ -167,36 +176,6 @@ function PlayerBar({ clock, color, gameStatus, isYou, profile }) {
         </Text>
       </View>
       <LiveClock clock={clock} color={color} gameStatus={gameStatus} />
-    </View>
-  );
-}
-
-function TerritoryMeter({ grid }) {
-  const counts = useMemo(
-    () =>
-      grid.flat().reduce(
-        (result, tile) => {
-          if (tile.ownerColor === 'Red') result.red += 1;
-          if (tile.ownerColor === 'Blue') result.blue += 1;
-          return result;
-        },
-        { red: 0, blue: 0 },
-      ),
-    [grid],
-  );
-
-  return (
-    <View style={styles.territoryCard}>
-      <View style={styles.territoryLabels}>
-        <Text style={styles.territoryTitle}>TERRITORY</Text>
-        <Text style={styles.territoryCount}>
-          {counts.red} red · {counts.blue} blue
-        </Text>
-      </View>
-      <View style={styles.territoryTrack}>
-        <View style={[styles.redProgress, { width: `${(counts.red / 81) * 100}%` }]} />
-        <View style={[styles.blueProgress, { width: `${(counts.blue / 81) * 100}%` }]} />
-      </View>
     </View>
   );
 }
@@ -470,6 +449,7 @@ export default function GameScreen({ navigation }) {
   const [reviewedResultId, setReviewedResultId] = useState(null);
   const [showResignConfirmation, setShowResignConfirmation] = useState(false);
   const gameState = useGameStore((state) => state.gameState);
+  const lastMove = useGameStore((state) => state.lastMove);
   const playerColor = useGameStore((state) => state.playerColor);
   const connectionStatus = useGameStore((state) => state.connectionStatus);
   const opponentReconnectDeadline = useGameStore(
@@ -580,6 +560,8 @@ export default function GameScreen({ navigation }) {
         boardSize={boardSize}
         canMove={isMyTurn}
         grid={gameState.grid}
+        lastMove={lastMove}
+        modeId={gameState.mode.id}
         onPieceDrop={movePiece}
         onTilePress={selectTile}
         playerColor={playerColor}
@@ -802,27 +784,6 @@ const styles = StyleSheet.create({
   },
   clockTextActive: { color: '#192127' },
   clockTextLow: { color: '#a63232' },
-  territoryCard: {
-    width: '100%',
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-    borderRadius: 9,
-    borderWidth: 1,
-    borderColor: '#29313c',
-    backgroundColor: '#171b22',
-  },
-  territoryLabels: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 5 },
-  territoryTitle: { color: '#778290', fontSize: 7, fontWeight: '900', letterSpacing: 1.1 },
-  territoryCount: { color: '#aab1ba', fontSize: 8, fontWeight: '700' },
-  territoryTrack: {
-    height: 5,
-    flexDirection: 'row',
-    overflow: 'hidden',
-    borderRadius: 3,
-    backgroundColor: '#323944',
-  },
-  redProgress: { height: '100%', backgroundColor: '#be6d67' },
-  blueProgress: { height: '100%', backgroundColor: '#6491b8' },
   selfReconnectNotice: {
     width: '100%',
     alignItems: 'center',
@@ -979,10 +940,9 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: 9,
     backgroundColor: '#733b3f',
-    shadowColor: '#000000',
-    shadowOffset: { width: 0, height: 5 },
-    shadowOpacity: 0.32,
-    shadowRadius: 8,
+    boxShadow: [
+      { offsetX: 0, offsetY: 5, blurRadius: 8, color: 'rgba(0, 0, 0, 0.32)' },
+    ],
     elevation: 9,
   },
   errorText: { flex: 1, color: '#ffe2df', fontSize: 11, fontWeight: '700' },
@@ -1002,10 +962,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#39414c',
     backgroundColor: '#181d25',
-    shadowColor: '#000000',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.45,
-    shadowRadius: 18,
+    boxShadow: [
+      { offsetX: 0, offsetY: 10, blurRadius: 18, color: 'rgba(0, 0, 0, 0.45)' },
+    ],
     elevation: 18,
   },
   confirmTitle: { color: '#f4f6f8', fontSize: 20, fontWeight: '900' },
@@ -1038,10 +997,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#3a434f',
     backgroundColor: '#181d25',
-    shadowColor: '#000000',
-    shadowOffset: { width: 0, height: 12 },
-    shadowOpacity: 0.5,
-    shadowRadius: 22,
+    boxShadow: [
+      { offsetX: 0, offsetY: 12, blurRadius: 22, color: 'rgba(0, 0, 0, 0.5)' },
+    ],
     elevation: 20,
   },
   outcomeEyebrow: { color: '#737f8d', fontSize: 8, fontWeight: '900', letterSpacing: 1.7 },
