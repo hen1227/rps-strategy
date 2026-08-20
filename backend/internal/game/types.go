@@ -74,6 +74,8 @@ const (
 	EndReasonTimeout       GameEndReason = "timeout"
 	EndReasonResignation   GameEndReason = "resignation"
 	EndReasonDrawAgreement GameEndReason = "draw_agreement"
+	EndReasonRepetition    GameEndReason = "repetition"
+	EndReasonStalemate     GameEndReason = "stalemate"
 	EndReasonAbandonment   GameEndReason = "abandonment"
 )
 

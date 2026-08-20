@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -17,13 +18,16 @@ import (
 )
 
 func main() {
+	if err := run(); err != nil {
+		log.Printf("RPS strategy server stopped: %v", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
-	}
 	allowedOrigins := strings.Split(os.Getenv("RPS_ALLOWED_ORIGINS"), ",")
 	databasePath := os.Getenv("RPS_DATABASE_PATH")
 	if databasePath == "" {
@@ -31,38 +35,61 @@ func main() {
 	}
 	if directory := filepath.Dir(databasePath); directory != "." {
 		if err := os.MkdirAll(directory, 0o755); err != nil {
-			log.Fatalf("create database directory: %v", err)
+			return fmt.Errorf("create database directory: %w", err)
 		}
 	}
 	dataStore, err := persistence.Open(databasePath)
 	if err != nil {
-		log.Fatalf("initialize persistent data: %v", err)
+		return fmt.Errorf("initialize persistent data: %w", err)
 	}
 	defer func() {
 		if err := dataStore.Close(); err != nil {
 			log.Printf("close persistent data: %v", err)
 		}
 	}()
+
+	listener, err := openListenerFromEnvironment()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := listener.cleanup(); err != nil {
+			log.Printf("listener cleanup: %v", err)
+		}
+	}()
+
 	gameServer := serverpkg.NewWithStore(dataStore, allowedOrigins)
 	httpServer := &http.Server{
-		Addr:              ":" + port,
+		Addr:              listener.description,
 		Handler:           gameServer.Routes(),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
 
 	go gameServer.Run(ctx)
+	serveErrors := make(chan error, 1)
 	go func() {
 		log.Printf("RPS strategy server listening on %s", httpServer.Addr)
-		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Fatalf("listen: %v", err)
-		}
+		serveErrors <- httpServer.Serve(listener.Listener)
 	}()
 
-	<-ctx.Done()
+	select {
+	case err := <-serveErrors:
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return fmt.Errorf("serve HTTP: %w", err)
+	case <-ctx.Done():
+	}
+
 	shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := httpServer.Shutdown(shutdownContext); err != nil {
-		log.Printf("shutdown: %v", err)
+		_ = httpServer.Close()
+		return fmt.Errorf("gracefully shut down HTTP server: %w", err)
 	}
+	if err := <-serveErrors; err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return fmt.Errorf("serve HTTP during shutdown: %w", err)
+	}
+	return nil
 }

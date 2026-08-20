@@ -48,7 +48,8 @@ func TestCustomClockChargesElapsedTimeAndAddsIncrement(t *testing.T) {
 	useFakeGameTime(game, &now)
 
 	now = now.Add(1500 * time.Millisecond)
-	state, err := game.Move(Red, Position{X: 0, Y: 8}, Position{X: 0, Y: 7})
+	redFrom, redTo := anyLegalMove(t, game)
+	state, err := game.Move(Red, redFrom, redTo)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +61,8 @@ func TestCustomClockChargesElapsedTimeAndAddsIncrement(t *testing.T) {
 	}
 
 	now = now.Add(4 * time.Second)
-	state, err = game.Move(Blue, Position{X: 0, Y: 0}, Position{X: 0, Y: 1})
+	blueFrom, blueTo := anyLegalMove(t, game)
+	state, err = game.Move(Blue, blueFrom, blueTo)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +90,8 @@ func TestInvalidMoveConsumesTimeWithoutAddingIncrement(t *testing.T) {
 	useFakeGameTime(game, &now)
 
 	now = now.Add(2 * time.Second)
-	state, err := game.Move(Red, Position{X: 0, Y: 8}, Position{X: 0, Y: 6})
+	invalidFrom := firstPieceOf(t, game, Red, Rock)
+	state, err := game.Move(Red, invalidFrom, Position{X: invalidFrom.X - 2, Y: invalidFrom.Y})
 	if !errors.Is(err, ErrInvalidMovement) {
 		t.Fatalf("expected invalid movement, got %v", err)
 	}

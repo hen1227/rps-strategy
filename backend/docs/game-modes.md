@@ -1,5 +1,24 @@
 # Adding a game mode
 
+All modes inherit two automatic draw rules from the engine, and a new mode gets
+both without writing any code:
+
+1. **Repetition.** A game ends in a draw when the same board position,
+   including territory ownership and the side to move, occurs for the third
+   time.
+2. **Stalemate.** A game ends in a draw when the player to move has no legal
+   move. `Game` decides this by asking the active mode for its own legal moves,
+   so a mode with custom movement, blocking, or immobile pieces is covered
+   automatically. The resulting `endReason` is `stalemate` and the winner is
+   `Neutral`.
+
+Because stalemate is a draw, a mode does not need an annihilation rule to
+handle a wiped-out army: a player with no pieces has no legal move, so the game
+ends in a draw rather than hanging. Infiltration relies on exactly this — it has
+no annihilation win condition, so losing every piece is a stalemate draw, not a
+loss. A mode that wants a wipeout to be a *loss* must say so in its own `Move`,
+as Annihilation and Total War do.
+
 The engine, WebSocket layer, matchmaking queue, and lobby do not contain mode-specific switch statements. A mode is one Go type implementing `GameMode` in a self-registering file.
 
 ## Contract

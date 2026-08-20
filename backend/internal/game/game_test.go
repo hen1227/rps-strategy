@@ -14,40 +14,98 @@ func testGame(t *testing.T, modeID ModeID) *Game {
 	return game
 }
 
+// firstPieceOf locates a piece on the live board.
+//
+// Tests derive their squares from the mode's own starting position instead of
+// hard-coding coordinates, so changing a mode's opening layout does not
+// silently invalidate unrelated tests.
+func firstPieceOf(t *testing.T, game *Game, owner PlayerColor, piece Piece) Position {
+	t.Helper()
+	for y := 0; y < BoardSize; y++ {
+		for x := 0; x < BoardSize; x++ {
+			tile := game.state.Grid[y][x]
+			if tile.OccupantOwner == owner && tile.Occupant == piece {
+				return Position{X: x, Y: y}
+			}
+		}
+	}
+	t.Fatalf("no %s %s on the board", owner, piece)
+	return Position{}
+}
+
+// anyLegalMove returns some legal move for the player whose turn it is, asking
+// the active mode rather than assuming standard movement.
+func anyLegalMove(t *testing.T, game *Game) (Position, Position) {
+	t.Helper()
+	player := game.state.CurrentTurn
+	for y := 0; y < BoardSize; y++ {
+		for x := 0; x < BoardSize; x++ {
+			if game.state.Grid[y][x].OccupantOwner != player {
+				continue
+			}
+			from := Position{X: x, Y: y}
+			if moves := game.mode.ValidMoves(game.state, player, from); len(moves) > 0 {
+				return from, moves[0]
+			}
+		}
+	}
+	t.Fatalf("%s has no legal move", player)
+	return Position{}, Position{}
+}
+
+func clearTiles(game *Game, rows ...int) {
+	for _, y := range rows {
+		for x := 0; x < BoardSize; x++ {
+			game.state.Grid[y][x].Occupant = Empty
+			game.state.Grid[y][x].OccupantOwner = Neutral
+		}
+	}
+}
+
 func TestMoveRequiresOneTile(t *testing.T) {
 	game := testGame(t, ModeAnnihilation)
-	_, err := game.Move(Red, Position{X: 0, Y: 8}, Position{X: 0, Y: 6})
+	from := firstPieceOf(t, game, Red, Rock)
+	_, err := game.Move(Red, from, Position{X: from.X - 2, Y: from.Y})
 	if !errors.Is(err, ErrInvalidMovement) {
 		t.Fatalf("expected ErrInvalidMovement, got %v", err)
 	}
 }
 
 func TestCombatHierarchy(t *testing.T) {
+	place := func(game *Game, at Position, piece Piece) {
+		game.state.Grid[at.Y][at.X] = Tile{
+			X:             at.X,
+			Y:             at.Y,
+			Occupant:      piece,
+			OccupantOwner: Blue,
+			OwnerColor:    Neutral,
+		}
+	}
+
 	game := testGame(t, ModeAnnihilation)
-	game.state.Grid[7][0] = Tile{X: 0, Y: 7, Occupant: Scissors, OccupantOwner: Blue, OwnerColor: Neutral}
-	_, err := game.Move(Red, Position{X: 0, Y: 8}, Position{X: 0, Y: 7})
-	if err != nil {
+	from := firstPieceOf(t, game, Red, Rock)
+	target := Position{X: from.X - 1, Y: from.Y + 1}
+	place(game, target, Scissors)
+	if _, err := game.Move(Red, from, target); err != nil {
 		t.Fatalf("rock should capture scissors: %v", err)
 	}
 
 	game = testGame(t, ModeAnnihilation)
-	game.state.Grid[7][0] = Tile{X: 0, Y: 7, Occupant: Paper, OccupantOwner: Blue, OwnerColor: Neutral}
-	_, err = game.Move(Red, Position{X: 0, Y: 8}, Position{X: 0, Y: 7})
-	if !errors.Is(err, ErrInvalidCapture) {
+	place(game, target, Paper)
+	if _, err := game.Move(Red, from, target); !errors.Is(err, ErrInvalidCapture) {
 		t.Fatalf("rock should not capture paper, got %v", err)
 	}
 }
 
+// Modes may deliberately share an opening layout: Total War and Infiltration
+// both use the large-army setup and differ only in their win condition. The
+// contract tested here is that each mode's board matches the layout it
+// declares, not that every layout is unique.
 func TestStandardModesUseTheirConfiguredStartingPositions(t *testing.T) {
-	seen := make(map[StartingPosition]ModeID)
 	for _, modeID := range []ModeID{ModeAnnihilation, ModeTotalWar, ModeInfiltration} {
 		game := testGame(t, modeID)
 		state := game.Snapshot()
 		startingPosition := state.Mode.StartingPosition
-		if previousMode, exists := seen[startingPosition]; exists {
-			t.Fatalf("%s and %s unexpectedly share the same starting position", modeID, previousMode)
-		}
-		seen[startingPosition] = modeID
 
 		for y, row := range startingPosition.Rows {
 			for x := 0; x < BoardSize; x++ {
@@ -81,22 +139,25 @@ func TestStandardModesUseTheirConfiguredStartingPositions(t *testing.T) {
 
 func TestVersion5PaintsNeutralDestinationAndPreservesHomeTerritory(t *testing.T) {
 	game := testGame(t, ModeTotalWar)
-	state, err := game.Move(Red, Position{X: 0, Y: 8}, Position{X: 0, Y: 7})
+	from := firstPieceOf(t, game, Red, Rock)
+	to := Position{X: from.X, Y: from.Y - 1}
+	if owner := game.state.Grid[to.Y][to.X].OwnerColor; owner != Neutral {
+		t.Fatalf("expected a neutral destination, got %s", owner)
+	}
+	state, err := game.Move(Red, from, to)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Grid[7][0].OwnerColor != Red {
-		t.Fatalf("expected red territory, got %s", state.Grid[7][0].OwnerColor)
+	if state.Grid[to.Y][to.X].OwnerColor != Red {
+		t.Fatalf("expected red territory, got %s", state.Grid[to.Y][to.X].OwnerColor)
 	}
-	if state.Grid[8][0].OwnerColor != Red {
+	if state.Grid[from.Y][from.X].OwnerColor != Red {
 		t.Fatal("moving away should preserve the starting square as red territory")
 	}
 }
 
 func TestVersion3BoundaryWin(t *testing.T) {
 	game := testGame(t, ModeInfiltration)
-	game.state.Grid[8][0].Occupant = Empty
-	game.state.Grid[8][0].OccupantOwner = Neutral
 	game.state.Grid[1][0] = Tile{X: 0, Y: 1, Occupant: Rock, OccupantOwner: Red, OwnerColor: Neutral}
 	game.state.Grid[0][0] = Tile{X: 0, Y: 0, Occupant: Scissors, OccupantOwner: Blue, OwnerColor: Neutral}
 
@@ -111,17 +172,70 @@ func TestVersion3BoundaryWin(t *testing.T) {
 
 func TestVersion3DoesNotUseAnnihilationWinCondition(t *testing.T) {
 	game := testGame(t, ModeInfiltration)
-	for x := 0; x < BoardSize; x++ {
-		game.state.Grid[0][x].Occupant = Empty
-		game.state.Grid[0][x].OccupantOwner = Neutral
-	}
+	clearTiles(game, 0, 1)
 
-	state, err := game.Move(Red, Position{X: 0, Y: 8}, Position{X: 0, Y: 7})
+	from, to := anyLegalMove(t, game)
+	state, err := game.Move(Red, from, to)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if state.Status != InProgress {
 		t.Fatalf("V3 must end only at the opponent boundary, got %s", state.Status)
+	}
+}
+
+// Infiltration has no annihilation win condition, so a side with no pieces
+// simply has no legal move. Under the stalemate rule that is a draw rather
+// than a win for the surviving player.
+func TestInfiltrationWipeoutIsAStalemateDrawNotAWin(t *testing.T) {
+	game := testGame(t, ModeInfiltration)
+	clearTiles(game, 0, 1, 2)
+
+	from, to := anyLegalMove(t, game)
+	state, err := game.Move(Red, from, to)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Status != Finished {
+		t.Fatalf("expected the game to end, got %s", state.Status)
+	}
+	if state.Winner != Neutral {
+		t.Fatalf("expected a draw, got winner %s", state.Winner)
+	}
+	if state.EndReason != EndReasonStalemate {
+		t.Fatalf("expected a stalemate draw, got %s", state.EndReason)
+	}
+}
+
+func TestStalemateEndsTheGameInADraw(t *testing.T) {
+	// A Red Rock ringed by Blue Papers can neither move nor capture, because
+	// Paper beats Rock. Every mode inherits this rule from the engine.
+	game := testGame(t, ModeAnnihilation)
+	clearTiles(game, 3, 4, 5)
+	game.state.Grid[4][4] = Tile{X: 4, Y: 4, Occupant: Rock, OccupantOwner: Red, OwnerColor: Neutral}
+	for y := 3; y <= 5; y++ {
+		for x := 3; x <= 5; x++ {
+			if x == 4 && y == 4 {
+				continue
+			}
+			game.state.Grid[y][x] = Tile{X: x, Y: y, Occupant: Paper, OccupantOwner: Blue, OwnerColor: Neutral}
+		}
+	}
+	game.state.Grid[6][6] = Tile{X: 6, Y: 6, Occupant: Rock, OccupantOwner: Blue, OwnerColor: Neutral}
+	game.state.CurrentTurn = Blue
+
+	if game.HasLegalMove() != true {
+		t.Fatal("Blue must still have a move before the stalemate is created")
+	}
+	state, err := game.Move(Blue, Position{X: 6, Y: 6}, Position{X: 7, Y: 7})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Status != Finished || state.Winner != Neutral {
+		t.Fatalf("expected a draw, got status=%s winner=%s", state.Status, state.Winner)
+	}
+	if state.EndReason != EndReasonStalemate {
+		t.Fatalf("expected a stalemate draw, got %s", state.EndReason)
 	}
 }
 
@@ -141,7 +255,8 @@ func TestDrawOfferCanOnlyBeMadeOncePerTurn(t *testing.T) {
 		t.Fatalf("expected a repeated offer on the same turn to fail, got %v", err)
 	}
 
-	state, err = game.Move(Red, Position{X: 0, Y: 8}, Position{X: 0, Y: 7})
+	redFrom, redTo := anyLegalMove(t, game)
+	state, err = game.Move(Red, redFrom, redTo)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,14 +273,16 @@ func TestDrawOfferPersistsForOpponentAndMoveDeclinesIt(t *testing.T) {
 	if _, err := game.OfferDraw(Red); err != nil {
 		t.Fatal(err)
 	}
-	state, err := game.Move(Red, Position{X: 0, Y: 8}, Position{X: 0, Y: 7})
+	redFrom, redTo := anyLegalMove(t, game)
+	state, err := game.Move(Red, redFrom, redTo)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if state.DrawOfferedBy != Red {
 		t.Fatalf("expected offer to remain for Blue, got %#v", state)
 	}
-	state, err = game.Move(Blue, Position{X: 0, Y: 0}, Position{X: 0, Y: 1})
+	blueFrom, blueTo := anyLegalMove(t, game)
+	state, err = game.Move(Blue, blueFrom, blueTo)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,5 +313,99 @@ func TestAcceptDrawAndResignRecordExactEndReasons(t *testing.T) {
 	if state.Status != Finished || state.Winner != Blue ||
 		state.EndReason != EndReasonResignation {
 		t.Fatalf("expected Blue to win by resignation, got %#v", state)
+	}
+}
+
+func TestThirdPositionOccurrenceIsDrawInEveryMode(t *testing.T) {
+	type repetitionMove struct {
+		player PlayerColor
+		from   Position
+		to     Position
+	}
+	tests := []struct {
+		name  string
+		mode  ModeID
+		setup []repetitionMove
+		cycle []repetitionMove
+	}{
+		{
+			name: "annihilation",
+			mode: ModeAnnihilation,
+			cycle: []repetitionMove{
+				{Red, Position{X: 7, Y: 3}, Position{X: 6, Y: 3}},
+				{Blue, Position{X: 1, Y: 3}, Position{X: 2, Y: 3}},
+				{Red, Position{X: 6, Y: 3}, Position{X: 7, Y: 3}},
+				{Blue, Position{X: 2, Y: 3}, Position{X: 1, Y: 3}},
+			},
+		},
+		{
+			name: "total war",
+			mode: ModeTotalWar,
+			setup: []repetitionMove{
+				{Red, Position{X: 3, Y: 6}, Position{X: 2, Y: 5}},
+				{Blue, Position{X: 3, Y: 2}, Position{X: 2, Y: 3}},
+				{Red, Position{X: 2, Y: 5}, Position{X: 3, Y: 6}},
+				{Blue, Position{X: 2, Y: 3}, Position{X: 3, Y: 2}},
+			},
+			cycle: []repetitionMove{
+				{Red, Position{X: 3, Y: 6}, Position{X: 2, Y: 5}},
+				{Blue, Position{X: 3, Y: 2}, Position{X: 2, Y: 3}},
+				{Red, Position{X: 2, Y: 5}, Position{X: 3, Y: 6}},
+				{Blue, Position{X: 2, Y: 3}, Position{X: 3, Y: 2}},
+			},
+		},
+		{
+			name: "infiltration",
+			mode: ModeInfiltration,
+			cycle: []repetitionMove{
+				{Red, Position{X: 3, Y: 6}, Position{X: 2, Y: 5}},
+				{Blue, Position{X: 3, Y: 2}, Position{X: 2, Y: 3}},
+				{Red, Position{X: 2, Y: 5}, Position{X: 3, Y: 6}},
+				{Blue, Position{X: 2, Y: 3}, Position{X: 3, Y: 2}},
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			game := testGame(t, test.mode)
+			play := func(moves []repetitionMove) GameState {
+				t.Helper()
+				var state GameState
+				for _, move := range moves {
+					var err error
+					state, err = game.Move(move.player, move.from, move.to)
+					if err != nil {
+						t.Fatalf("move %s %v-%v failed: %v", move.player, move.from, move.to, err)
+					}
+				}
+				return state
+			}
+
+			if len(test.setup) > 0 {
+				state := play(test.setup)
+				if state.Status != InProgress {
+					t.Fatalf("setup unexpectedly ended the game: %#v", state)
+				}
+			}
+			state := play(test.cycle)
+			if state.Status != InProgress {
+				t.Fatalf("second occurrence must not end the game: %#v", state)
+			}
+			for _, move := range test.cycle {
+				var err error
+				state, err = game.Move(move.player, move.from, move.to)
+				if err != nil {
+					t.Fatalf("move %s %v-%v failed: %v", move.player, move.from, move.to, err)
+				}
+				if state.Status == Finished {
+					break
+				}
+			}
+			if state.Status != Finished || state.Winner != Neutral ||
+				state.EndReason != EndReasonRepetition {
+				t.Fatalf("expected draw on third occurrence, got %#v", state)
+			}
+		})
 	}
 }
