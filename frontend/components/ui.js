@@ -7,7 +7,7 @@ import {
   View,
 } from 'react-native';
 
-import { colors, radius } from '../theme';
+import { colors, players, radius } from '../theme';
 
 // Shared building blocks for the lobby and tournament surfaces. Keeping them
 // here means a new panel matches the rest of the app without copying styles.
@@ -190,8 +190,8 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     backgroundColor: colors.surface,
   },
-  panelAccent: { borderColor: colors.accentBorder, backgroundColor: '#2b3026' },
-  panelLive: { borderColor: '#7a4b3c', backgroundColor: colors.liveSurface },
+  panelAccent: { borderColor: colors.accentBorder, backgroundColor: colors.accentSurfaceQuiet },
+  panelLive: { borderColor: colors.liveBorder, backgroundColor: colors.liveSurface },
 
   headingRow: {
     flexDirection: 'row',
@@ -216,18 +216,18 @@ const styles = StyleSheet.create({
     paddingHorizontal: 7,
     paddingVertical: 4,
     borderRadius: radius.small,
-    backgroundColor: '#3d3a36',
+    backgroundColor: colors.surfaceMuted,
   },
-  badgeAccent: { backgroundColor: '#35462e' },
+  badgeAccent: { backgroundColor: colors.accentSurfaceRaised },
   badgeLive: { backgroundColor: colors.liveSurface },
   badgeGold: { backgroundColor: colors.goldSurface },
-  badgeWarm: { backgroundColor: '#51442b' },
-  badgeCool: { backgroundColor: '#38404b' },
+  badgeWarm: { backgroundColor: colors.goldSurface },
+  badgeCool: { backgroundColor: players.Blue.surface },
   badgeDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.live },
-  badgeText: { color: '#c2bfb9', fontSize: 8, fontWeight: '900', letterSpacing: 0.7 },
+  badgeText: { color: colors.textSubtle, fontSize: 8, fontWeight: '900', letterSpacing: 0.7 },
   badgeTextAccent: { color: colors.accentSoft },
-  badgeTextLive: { color: '#f0b8a5' },
-  badgeTextGold: { color: '#f4dda3' },
+  badgeTextLive: { color: colors.liveSoft },
+  badgeTextGold: { color: colors.goldSoft },
 
   primaryButton: {
     minHeight: 42,
@@ -245,7 +245,7 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     letterSpacing: 0.9,
   },
-  primaryButtonTextQuiet: { color: '#d3d0ca' },
+  primaryButtonTextQuiet: { color: colors.textSoft },
 
   ghostButton: {
     minHeight: 42,
@@ -259,7 +259,7 @@ const styles = StyleSheet.create({
   },
   ghostButtonCompact: { minHeight: 34, paddingHorizontal: 10 },
   ghostButtonText: {
-    color: '#cbc8c2',
+    color: colors.textSubtle,
     fontSize: 9,
     fontWeight: '900',
     letterSpacing: 0.8,
@@ -293,12 +293,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     borderRadius: 5,
     borderWidth: 1,
-    borderColor: '#68645e',
+    borderColor: colors.borderLight,
     backgroundColor: colors.surfaceSunken,
   },
   checkboxChecked: { borderColor: colors.accent, backgroundColor: colors.accent },
   checkboxMark: { color: colors.textStrong, fontSize: 13, fontWeight: '900' },
-  checkboxLabel: { flex: 1, color: '#c0bdb7', fontSize: 11, lineHeight: 17 },
+  checkboxLabel: { flex: 1, color: colors.textSubtle, fontSize: 11, lineHeight: 17 },
 
   banner: {
     flexDirection: 'row',
@@ -310,7 +310,7 @@ const styles = StyleSheet.create({
   bannerError: { backgroundColor: colors.dangerSurface },
   bannerText: { flex: 1, color: colors.noticeText, fontSize: 12 },
   bannerTextError: { color: colors.dangerText },
-  bannerClose: { color: '#e3e1dc', fontSize: 18, paddingHorizontal: 5 },
+  bannerClose: { color: colors.textSoft, fontSize: 18, paddingHorizontal: 5 },
 
   emptyState: { paddingVertical: 18, alignItems: 'flex-start', gap: 4 },
   emptyTitle: { color: colors.text, fontSize: 13, fontWeight: '900' },

@@ -1,6 +1,15 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import {
   Animated as NativeAnimated,
+  Easing,
   PanResponder,
   Platform,
   Pressable,
@@ -8,10 +17,10 @@ import {
   Text,
   View,
 } from 'react-native';
-import Animated, { FadeIn, FadeOut, LinearTransition } from 'react-native-reanimated';
 import Svg, { Defs, Line, Marker, Polygon } from 'react-native-svg';
 
 import PieceIcon from './PieceIcon';
+import { board, players, shadows } from '../theme';
 
 const BOARD_SIZE = 9;
 const FILES = 'ABCDEFGHI';
@@ -19,10 +28,12 @@ const MODE_ANNIHILATION = 'V1';
 const MODE_INFILTRATION = 'V3';
 const MODE_TOTAL_WAR = 'V5';
 const TILE_PERCENTAGE = 100 / BOARD_SIZE;
-const ANNOTATION_COLOR = '#f2811d';
+const ANNOTATION_COLOR = board.annotation;
 const RIGHT_BUTTON = 2;
 const RIGHT_BUTTON_MASK = 2;
 const IS_WEB = Platform.OS === 'web';
+const BOARD_BORDER_WIDTH = 3;
+const MOVE_ANIMATION_DURATION = 230;
 
 const samePosition = (first, second) => first?.x === second?.x && first?.y === second?.y;
 
@@ -31,6 +42,11 @@ const sameArrow = (first, second) =>
 
 const displayCenter = (value, isFlipped) =>
   (isFlipped ? BOARD_SIZE - 1 - value : value) + 0.5;
+
+const displayCoordinate = (value, isFlipped) =>
+  isFlipped ? BOARD_SIZE - 1 - value : value;
+
+const pieceSizeForBoard = (boardSize) => Math.max(20, Math.min(46, boardSize / 12));
 
 const tintForTile = (modeId, tile) => {
   if (modeId === MODE_ANNIHILATION) return null;
@@ -52,7 +68,7 @@ const tintForTile = (modeId, tile) => {
 };
 
 const positionFromDrag = (from, dx, dy, boardSize, isFlipped) => {
-  const squareSize = boardSize / BOARD_SIZE;
+  const squareSize = (boardSize - BOARD_BORDER_WIDTH * 2) / BOARD_SIZE;
   const displayXOffset = Math.round(dx / squareSize);
   const displayYOffset = Math.round(dy / squareSize);
   const direction = isFlipped ? -1 : 1;
@@ -88,19 +104,21 @@ const positionFromClientPoint = (rect, clientX, clientY, isFlipped) => {
 
 const DraggablePiece = memo(function DraggablePiece({
   boardSize,
+  boardX,
+  boardY,
   dragEnabled,
   displayX,
   displayY,
   isFlipped,
+  isMovingDestination,
   isSelected,
   onDragEnd,
   onDragStart,
-  position,
   tile,
 }) {
   const translation = useRef(new NativeAnimated.ValueXY()).current;
   const [isDragging, setIsDragging] = useState(false);
-  const pieceSize = Math.max(20, Math.min(46, boardSize / 12));
+  const pieceSize = pieceSizeForBoard(boardSize);
 
   const resetPosition = useCallback(() => {
     NativeAnimated.spring(translation, {
@@ -112,29 +130,47 @@ const DraggablePiece = memo(function DraggablePiece({
     }).start();
   }, [translation]);
 
+  // A PanResponder accumulates `gesture.dx`/`dy` on the instance it granted
+  // with, so rebuilding one mid-drag restarts the offset at zero and snaps the
+  // piece back to its square. The board re-renders for reasons that have
+  // nothing to do with the drag (the server broadcasts player counts every two
+  // seconds), so the responder is built once and reads everything it needs from
+  // a ref instead of from the closure.
+  const latest = useRef(null);
+  latest.current = {
+    boardSize,
+    dragEnabled,
+    isFlipped,
+    onDragEnd,
+    onDragStart,
+    position: { x: boardX, y: boardY },
+  };
+
   const panResponder = useMemo(
     () =>
       PanResponder.create({
-        onStartShouldSetPanResponder: () => dragEnabled,
+        onStartShouldSetPanResponder: () => latest.current.dragEnabled,
         onMoveShouldSetPanResponder: (_, gesture) =>
-          dragEnabled && Math.abs(gesture.dx) + Math.abs(gesture.dy) > 4,
+          latest.current.dragEnabled &&
+          Math.abs(gesture.dx) + Math.abs(gesture.dy) > 4,
         onPanResponderGrant: () => {
           setIsDragging(true);
-          onDragStart(position);
+          latest.current.onDragStart(latest.current.position);
         },
         onPanResponderMove: (_, gesture) => {
           translation.setValue({ x: gesture.dx, y: gesture.dy });
         },
         onPanResponderRelease: (_, gesture) => {
+          const { position } = latest.current;
           const to = positionFromDrag(
             position,
             gesture.dx,
             gesture.dy,
-            boardSize,
-            isFlipped,
+            latest.current.boardSize,
+            latest.current.isFlipped,
           );
           setIsDragging(false);
-          onDragEnd(position, to);
+          latest.current.onDragEnd(position, to);
           resetPosition();
         },
         onPanResponderTerminate: () => {
@@ -143,23 +179,11 @@ const DraggablePiece = memo(function DraggablePiece({
         },
         onPanResponderTerminationRequest: () => false,
       }),
-    [
-      boardSize,
-      dragEnabled,
-      isFlipped,
-      onDragEnd,
-      onDragStart,
-      position,
-      resetPosition,
-      translation,
-    ],
+    [resetPosition, translation],
   );
 
   return (
-    <Animated.View
-      entering={FadeIn.duration(160)}
-      exiting={FadeOut.duration(140)}
-      layout={LinearTransition.springify().damping(19)}
+    <View
       style={[
         styles.pieceLayout,
         {
@@ -169,6 +193,7 @@ const DraggablePiece = memo(function DraggablePiece({
           width: `${TILE_PERCENTAGE}%`,
         },
         isSelected && styles.selectedPieceLayout,
+        isMovingDestination && styles.movingDestinationPieceLayout,
         isDragging && styles.draggingPieceLayout,
       ]}
     >
@@ -189,7 +214,70 @@ const DraggablePiece = memo(function DraggablePiece({
       >
         <PieceIcon piece={tile.occupant} color={tile.occupantOwner} size={pieceSize} />
       </NativeAnimated.View>
-    </Animated.View>
+    </View>
+  );
+});
+
+const MovingPiece = memo(function MovingPiece({
+  boardSize,
+  move,
+  isFlipped,
+  onComplete,
+}) {
+  const progress = useRef(new NativeAnimated.Value(0)).current;
+  const pieceSize = pieceSizeForBoard(boardSize);
+  const destinationX = displayCoordinate(move.to.x, isFlipped);
+  const destinationY = displayCoordinate(move.to.y, isFlipped);
+  const squareSize = (boardSize - BOARD_BORDER_WIDTH * 2) / BOARD_SIZE;
+  const offsetX =
+    (displayCoordinate(move.from.x, isFlipped) - destinationX) * squareSize;
+  const offsetY =
+    (displayCoordinate(move.from.y, isFlipped) - destinationY) * squareSize;
+
+  useEffect(() => {
+    progress.setValue(0);
+    const animation = NativeAnimated.timing(progress, {
+      toValue: 1,
+      duration: MOVE_ANIMATION_DURATION,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    });
+    animation.start(({ finished }) => {
+      if (finished) onComplete(move.key);
+    });
+    return () => animation.stop();
+  }, [move.key, onComplete, progress]);
+
+  return (
+    <NativeAnimated.View
+      pointerEvents="none"
+      style={[
+        styles.pieceLayout,
+        styles.movingPieceLayout,
+        {
+          height: `${TILE_PERCENTAGE}%`,
+          left: `${destinationX * TILE_PERCENTAGE}%`,
+          top: `${destinationY * TILE_PERCENTAGE}%`,
+          width: `${TILE_PERCENTAGE}%`,
+          transform: [
+            {
+              translateX: progress.interpolate({
+                inputRange: [0, 1],
+                outputRange: [offsetX, 0],
+              }),
+            },
+            {
+              translateY: progress.interpolate({
+                inputRange: [0, 1],
+                outputRange: [offsetY, 0],
+              }),
+            },
+          ],
+        },
+      ]}
+    >
+      <PieceIcon piece={move.piece} color={move.color} size={pieceSize} />
+    </NativeAnimated.View>
   );
 });
 
@@ -242,6 +330,34 @@ export default function Board({
         .join('|'),
     [grid],
   );
+  const previousPositionSignature = useRef(positionSignature);
+  const [moveAnimation, setMoveAnimation] = useState(null);
+
+  useLayoutEffect(() => {
+    const previousSignature = previousPositionSignature.current;
+    previousPositionSignature.current = positionSignature;
+    if (previousSignature === positionSignature) return;
+
+    const destination = grid
+      .flat()
+      .find((tile) => samePosition(tile, lastMove?.to));
+    if (!lastMove?.from || !lastMove?.to || destination?.occupant === 'Empty') {
+      setMoveAnimation(null);
+      return;
+    }
+
+    setMoveAnimation({
+      key: `${positionSignature}:${lastMove.from.x}:${lastMove.from.y}:${lastMove.to.x}:${lastMove.to.y}`,
+      from: lastMove.from,
+      to: lastMove.to,
+      piece: destination.occupant,
+      color: destination.occupantOwner,
+    });
+  }, [grid, lastMove, positionSignature]);
+
+  const handleMoveAnimationComplete = useCallback((key) => {
+    setMoveAnimation((current) => (current?.key === key ? null : current));
+  }, []);
 
   const clearAnnotations = useCallback(() => {
     arrowOrigin.current = null;
@@ -472,7 +588,7 @@ export default function Board({
           >
             <Defs>
               {analysisArrows.slice(0, 3).map((arrow, index) => {
-                const color = ['#51d6a9', '#55a9ff', '#f0b857'][index];
+                const color = board.analysisArrows[index];
                 return (
                   <Marker
                     id={`analysis-arrow-${index}`}
@@ -491,7 +607,7 @@ export default function Board({
               })}
             </Defs>
             {analysisArrows.slice(0, 3).map((arrow, index) => {
-              const color = ['#51d6a9', '#55a9ff', '#f0b857'][index];
+              const color = board.analysisArrows[index];
               const fromX = displayCenter(arrow.from.x, isFlipped);
               const fromY = displayCenter(arrow.from.y, isFlipped);
               const toX = displayCenter(arrow.to.x, isFlipped);
@@ -552,23 +668,36 @@ export default function Board({
             if (tile.occupant === 'Empty') return null;
             const position = { x: tile.x, y: tile.y };
             const dragEnabled = canMove && tile.occupantOwner === activeMoveColor;
+            const isMovingDestination = samePosition(moveAnimation?.to, position);
 
             return (
               <DraggablePiece
                 boardSize={boardSize}
+                boardX={tile.x}
+                boardY={tile.y}
                 displayX={displayX}
                 displayY={displayY}
                 dragEnabled={dragEnabled}
                 isFlipped={isFlipped}
+                isMovingDestination={isMovingDestination}
                 isSelected={samePosition(selectedTile, position)}
                 key={`${tile.x}-${tile.y}`}
                 onDragEnd={handleDragEnd}
                 onDragStart={handleDragStart}
-                position={position}
                 tile={tile}
               />
             );
           }),
+        )}
+
+        {moveAnimation && (
+          <MovingPiece
+            boardSize={boardSize}
+            isFlipped={isFlipped}
+            key={moveAnimation.key}
+            move={moveAnimation}
+            onComplete={handleMoveAnimationComplete}
+          />
         )}
       </View>
     </View>
@@ -577,13 +706,11 @@ export default function Board({
 
 const styles = StyleSheet.create({
   boardFrame: {
-    borderWidth: 3,
-    borderColor: '#202631',
+    borderWidth: BOARD_BORDER_WIDTH,
+    borderColor: board.frame,
     borderRadius: 10,
-    backgroundColor: '#202631',
-    boxShadow: [
-      { offsetX: 0, offsetY: 10, blurRadius: 16, color: 'rgba(0, 0, 0, 0.32)' },
-    ],
+    backgroundColor: board.frame,
+    boxShadow: shadows.board,
     elevation: 8,
   },
   boardSurface: {
@@ -602,37 +729,47 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     overflow: 'hidden',
   },
-  lightTile: { backgroundColor: '#d8d1c1' },
-  darkTile: { backgroundColor: '#6f8f8c' },
-  tileTint: { ...StyleSheet.absoluteFillObject, pointerEvents: 'none' },
-  redTint: { backgroundColor: 'rgba(190, 56, 65, 0.42)' },
-  blueTint: { backgroundColor: 'rgba(47, 111, 174, 0.42)' },
+  lightTile: { backgroundColor: board.lightTile },
+  darkTile: { backgroundColor: board.darkTile },
+  tileTint: {
+    ...StyleSheet.absoluteFillObject,
+    pointerEvents: 'none',
+    borderWidth: 1,
+  },
+  redTint: {
+    backgroundColor: players.Red.tint,
+    borderColor: players.Red.tintBorder,
+  },
+  blueTint: {
+    backgroundColor: players.Blue.tint,
+    borderColor: players.Blue.tintBorder,
+  },
   goalTint: {
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.28)',
+    borderColor: board.goalOutline,
   },
   lastMoveTint: { ...StyleSheet.absoluteFillObject, zIndex: 1, pointerEvents: 'none' },
-  lastMoveFromTint: { backgroundColor: 'rgba(45, 204, 165, 0.17)' },
+  lastMoveFromTint: { backgroundColor: board.lastMoveFrom },
   lastMoveToTint: {
-    backgroundColor: 'rgba(45, 204, 165, 0.3)',
+    backgroundColor: board.lastMoveTo,
     borderWidth: 1,
-    borderColor: 'rgba(220, 255, 247, 0.42)',
+    borderColor: board.lastMoveOutline,
   },
   selectedTile: {
-    borderWidth: 2,
-    borderColor: '#ffe497',
+    borderWidth: 1,
+    borderColor: board.selectionBorder,
   },
   selectionTint: {
     ...StyleSheet.absoluteFillObject,
     zIndex: 1,
     pointerEvents: 'none',
-    backgroundColor: 'rgba(242, 192, 67, 0.38)',
+    backgroundColor: board.selectionTint,
   },
   annotationTint: {
     ...StyleSheet.absoluteFillObject,
     zIndex: 2,
     pointerEvents: 'none',
-    backgroundColor: 'rgba(242, 129, 29, 0.78)',
+    backgroundColor: board.annotationTint,
   },
   validDot: {
     position: 'absolute',
@@ -641,7 +778,7 @@ const styles = StyleSheet.create({
     width: '24%',
     aspectRatio: 1,
     borderRadius: 30,
-    backgroundColor: 'rgba(21, 39, 38, 0.42)',
+    backgroundColor: board.moveHint,
   },
   captureRing: {
     position: 'absolute',
@@ -651,24 +788,30 @@ const styles = StyleSheet.create({
     aspectRatio: 1,
     borderRadius: 50,
     borderWidth: 4,
-    borderColor: 'rgba(21, 39, 38, 0.42)',
+    borderColor: board.moveHint,
   },
   pieceLayout: {
     position: 'absolute',
     zIndex: 3,
-    pointerEvents: 'box-none',
+    // Reanimated writes this style inline on web, so it never reaches the
+    // react-native-web compiler that expands 'box-none' into real CSS. Spell
+    // out the equivalent instead: the wrapper ignores clicks and the piece
+    // inside re-enables itself when it is draggable. Left as 'box-none' the
+    // wrapper swallows every click on an occupied square, so clicking a
+    // destination that holds an enemy piece never reaches the tile below.
+    pointerEvents: IS_WEB ? 'none' : 'box-none',
     alignItems: 'center',
     justifyContent: 'center',
   },
   selectedPieceLayout: { zIndex: 3 },
+  movingDestinationPieceLayout: { opacity: 0 },
   draggingPieceLayout: { zIndex: 100, elevation: 24 },
+  movingPieceLayout: { zIndex: 6 },
   piece: { alignItems: 'center', justifyContent: 'center' },
   draggablePiece: { cursor: 'grab' },
   draggingPiece: {
     cursor: 'grabbing',
-    boxShadow: [
-      { offsetX: 0, offsetY: 7, blurRadius: 7, color: 'rgba(0, 0, 0, 0.4)' },
-    ],
+    boxShadow: shadows.piece,
     elevation: 12,
   },
   rankLabel: {
@@ -687,6 +830,6 @@ const styles = StyleSheet.create({
     fontSize: 7,
     fontWeight: '900',
   },
-  labelOnLight: { color: '#547774' },
-  labelOnDark: { color: '#e5ded0' },
+  labelOnLight: { color: board.labelOnLight },
+  labelOnDark: { color: board.labelOnDark },
 });

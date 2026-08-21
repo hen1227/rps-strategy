@@ -632,7 +632,7 @@ const styles = StyleSheet.create({
   },
   subtitle: { color: colors.textMuted, fontSize: 13, lineHeight: 20, marginTop: 6 },
 
-  adminPanel: { borderColor: '#665f40', backgroundColor: '#2d2b22', marginBottom: 16 },
+  adminPanel: { borderColor: colors.goldBorder, backgroundColor: colors.goldSurfaceDeep, marginBottom: 16 },
   unlockedRow: { flexDirection: 'row', alignItems: 'center', gap: 7, marginTop: 12 },
   unlockedDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: colors.accent },
   unlockedText: { color: colors.accentSoft, fontSize: 11, fontWeight: '800' },
@@ -653,9 +653,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.borderStrong,
   },
-  modeChipSelected: { backgroundColor: '#3b4a30', borderColor: colors.accent },
+  modeChipSelected: { backgroundColor: colors.accentSurfaceStrong, borderColor: colors.accent },
   modeChipText: { color: colors.textMuted, fontSize: 10, fontWeight: '800' },
-  modeChipTextSelected: { color: '#d9efc3' },
+  modeChipTextSelected: { color: colors.accentSoft },
 
   banners: { gap: 8, marginBottom: 14 },
   helpText: { color: colors.textMuted, fontSize: 11, lineHeight: 17, marginTop: 8 },
@@ -667,16 +667,16 @@ const styles = StyleSheet.create({
     borderRadius: radius.large,
     borderWidth: 1,
     borderColor: colors.border,
-    backgroundColor: '#292824',
+    backgroundColor: colors.surface,
   },
-  tournamentCardSelected: { borderColor: colors.accent, backgroundColor: '#2e3329' },
+  tournamentCardSelected: { borderColor: colors.accent, backgroundColor: colors.accentSurfaceQuiet },
   tournamentCardTop: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
   },
   tournamentName: { color: colors.textStrong, fontSize: 18, fontWeight: '900', marginTop: 9 },
-  tournamentMeta: { color: '#99958f', fontSize: 10, marginTop: 4 },
+  tournamentMeta: { color: colors.textDim, fontSize: 10, marginTop: 4 },
 
   detailStack: { gap: 12 },
   championCard: {
@@ -689,8 +689,8 @@ const styles = StyleSheet.create({
     marginTop: 14,
   },
   championCrown: { color: colors.gold, fontSize: 26 },
-  championLabel: { color: '#d9bd74', fontSize: 8, fontWeight: '900', letterSpacing: 1 },
-  championName: { color: '#fff6db', fontSize: 17, fontWeight: '900', marginTop: 2 },
+  championLabel: { color: colors.gold, fontSize: 8, fontWeight: '900', letterSpacing: 1 },
+  championName: { color: colors.goldBright, fontSize: 17, fontWeight: '900', marginTop: 2 },
 
   signupSection: {
     paddingTop: 16,
@@ -704,13 +704,13 @@ const styles = StyleSheet.create({
     gap: 10,
     padding: 12,
     borderRadius: radius.medium,
-    backgroundColor: '#30422b',
+    backgroundColor: colors.accentSurfaceRaised,
     marginTop: 15,
   },
   signedUpCheck: { color: colors.accentBright, fontSize: 18, fontWeight: '900' },
   signedUpCopy: { flex: 1 },
-  signedUpTitle: { color: '#e5f4d9', fontSize: 12, fontWeight: '900' },
-  signedUpMeta: { color: '#a9c497', fontSize: 10, marginTop: 2 },
+  signedUpTitle: { color: colors.accentTextStrong, fontSize: 12, fontWeight: '900' },
+  signedUpMeta: { color: colors.accentText, fontSize: 10, marginTop: 2 },
 
   hostAction: {
     flexDirection: 'row',
@@ -725,7 +725,7 @@ const styles = StyleSheet.create({
 
   roundBlock: { marginTop: 15 },
   roundTitle: {
-    color: '#8d8983',
+    color: colors.textDim,
     fontSize: 8,
     fontWeight: '900',
     letterSpacing: 1.2,
@@ -746,18 +746,18 @@ const styles = StyleSheet.create({
     borderRadius: radius.small,
     borderWidth: 1,
     borderColor: colors.borderStrong,
-    backgroundColor: '#292824',
+    backgroundColor: colors.surface,
   },
-  resultButtonSelected: { borderColor: colors.accent, backgroundColor: '#3b4a30' },
-  resultButtonText: { color: '#99958f', fontSize: 7, fontWeight: '900', letterSpacing: 0.35 },
-  resultButtonTextSelected: { color: '#dcf0c8' },
+  resultButtonSelected: { borderColor: colors.accent, backgroundColor: colors.accentSurfaceStrong },
+  resultButtonText: { color: colors.textDim, fontSize: 7, fontWeight: '900', letterSpacing: 0.35 },
+  resultButtonTextSelected: { color: colors.accentSoft },
 
   standingRow: {
     minHeight: 38,
     flexDirection: 'row',
     alignItems: 'center',
     borderTopWidth: 1,
-    borderTopColor: '#3b3935',
+    borderTopColor: colors.borderSoft,
   },
   standingHeader: { minHeight: 30, marginTop: 10, borderTopWidth: 0 },
   standingHeaderText: {
@@ -785,12 +785,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     borderTopWidth: 1,
-    borderTopColor: '#3b3935',
+    borderTopColor: colors.borderSoft,
   },
   seedNumber: { width: 28, color: colors.textFaint, fontSize: 11, fontWeight: '900' },
   rosterIdentity: { flex: 1 },
   rosterIGN: { color: colors.text, fontSize: 13, fontWeight: '800' },
-  rosterDiscord: { color: '#8f8b85', fontSize: 10, marginTop: 1 },
+  rosterDiscord: { color: colors.textDim, fontSize: 10, marginTop: 1 },
 
   disabled: { opacity: 0.35 },
   pressed: { opacity: 0.7 },

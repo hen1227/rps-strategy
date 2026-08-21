@@ -14,6 +14,7 @@ import AccountScreen from './screens/AccountScreen';
 import AnalysisScreen from './screens/AnalysisScreen';
 import GameScreen from './screens/GameScreen';
 import LobbyScreen from './screens/LobbyScreen';
+import PolicyScreen from './screens/PolicyScreen';
 import TournamentScreen from './screens/TournamentScreen';
 import { useGameStore } from './store/gameStore';
 import { colors } from './theme';
@@ -92,6 +93,11 @@ export default function App() {
             <Stack.Screen
               name="Account"
               component={AccountScreen}
+              options={{ headerShown: false }}
+            />
+            <Stack.Screen
+              name="Policy"
+              component={PolicyScreen}
               options={{ headerShown: false }}
             />
           </Stack.Navigator>

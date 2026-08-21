@@ -1,6 +1,7 @@
 import { StyleSheet, Text, View } from 'react-native';
 
 import PieceIcon from './PieceIcon';
+import { board, colors, players, radius } from '../theme';
 
 const BOARD_SIZE = 9;
 const MODE_INFILTRATION = 'V3';
@@ -104,10 +105,10 @@ const styles = StyleSheet.create({
   frame: {
     width: 116,
     padding: 8,
-    borderRadius: 11,
-    backgroundColor: '#1f1e1b',
+    borderRadius: radius.large,
+    backgroundColor: colors.surfaceWell,
     borderWidth: 1,
-    borderColor: '#45433f',
+    borderColor: colors.border,
   },
   previewHeader: {
     height: 12,
@@ -115,17 +116,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 6,
   },
-  previewDot: { width: 5, height: 5, borderRadius: 3, backgroundColor: '#81b64c' },
+  previewDot: { width: 5, height: 5, borderRadius: 3, backgroundColor: colors.accent },
   previewLine: {
     width: 20,
     height: 3,
     marginLeft: 5,
     borderRadius: 2,
-    backgroundColor: '#53514c',
+    backgroundColor: colors.borderFaint,
   },
   previewLabel: {
     marginLeft: 'auto',
-    color: '#8f8c86',
+    color: colors.textDim,
     fontSize: 5,
     fontWeight: '800',
     letterSpacing: 0.8,
@@ -136,30 +137,19 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     borderRadius: 4,
     borderWidth: 1,
-    borderColor: '#171613',
+    borderColor: board.frame,
   },
   row: { flex: 1, flexDirection: 'row' },
   square: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  squareLight: { backgroundColor: '#d7c5a3' },
-  squareDark: { backgroundColor: '#769656' },
-  redTerritory: { backgroundColor: '#a85d52' },
-  blueTerritory: { backgroundColor: '#527da1' },
+  squareLight: { backgroundColor: board.lightTile },
+  squareDark: { backgroundColor: board.darkTile },
+  redTerritory: { backgroundColor: players.Red.territory },
+  blueTerritory: { backgroundColor: players.Blue.territory },
   goalTint: {
     ...StyleSheet.absoluteFillObject,
     borderWidth: 0.5,
-    borderColor: 'rgba(255, 255, 255, 0.28)',
+    borderColor: board.goalOutline,
   },
-  redGoalTint: { backgroundColor: 'rgba(190, 56, 65, 0.42)' },
-  blueGoalTint: { backgroundColor: 'rgba(47, 111, 174, 0.42)' },
-  piece: {
-    width: '76%',
-    aspectRatio: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 20,
-    borderWidth: 0.75,
-  },
-  redPiece: { backgroundColor: '#c84b44', borderColor: '#ffe0d2' },
-  bluePiece: { backgroundColor: '#3f77aa', borderColor: '#d8ecff' },
-  pieceText: { color: '#ffffff', fontSize: 5, fontWeight: '900' },
+  redGoalTint: { backgroundColor: players.Red.tint },
+  blueGoalTint: { backgroundColor: players.Blue.tint },
 });

@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
+import { colors, players, radius } from '../theme';
+
 const senderLabel = (message, accountId) => {
   const name = message.senderName?.trim() || 'Guest';
   return message.senderUserId === accountId ? `${name} (you)` : name;
@@ -30,7 +32,10 @@ export default function GameChat({
     [isSpectating, messages, showSpectatorMessages],
   );
   const hiddenCount = messages.length - visibleMessages.length;
-  const canSend = connected && gameStatus === 'InProgress' && draft.trim().length > 0;
+  // The room outlives the result, so the composer stays open after the game
+  // ends and closes only when the server stops accepting messages.
+  const isFinished = gameStatus === 'Finished';
+  const canSend = connected && draft.trim().length > 0;
   const spectatorLabel =
     spectatorCount === 1 ? '1 spectator' : `${spectatorCount} spectators`;
 
@@ -50,7 +55,9 @@ export default function GameChat({
       <View style={styles.closedCard}>
         <View>
           <Text style={styles.eyebrow}>GAME CHAT</Text>
-          <Text style={styles.closedCopy}>Chat hidden · {spectatorLabel}</Text>
+          <Text style={styles.closedCopy}>
+            Chat hidden · {isFinished ? 'game over' : spectatorLabel}
+          </Text>
         </View>
         <Pressable
           accessibilityLabel="Show game chat"
@@ -72,7 +79,7 @@ export default function GameChat({
           <View>
             <Text style={styles.eyebrow}>GAME CHAT</Text>
             <Text style={styles.messageCount}>
-              {spectatorLabel} ·{' '}
+              {isFinished ? 'Game over' : spectatorLabel} ·{' '}
               {messages.length === 1 ? '1 message' : `${messages.length} messages`}
             </Text>
           </View>
@@ -121,7 +128,11 @@ export default function GameChat({
         {visibleMessages.length === 0 ? (
           <View style={styles.emptyState}>
             <Text style={styles.emptyTitle}>No messages yet</Text>
-            <Text style={styles.emptyCopy}>Say hello to everyone watching the game.</Text>
+            <Text style={styles.emptyCopy}>
+              {isFinished
+                ? 'The room stays open until everyone leaves.'
+                : 'Say hello to everyone watching the game.'}
+            </Text>
           </View>
         ) : (
           visibleMessages.map((message) => (
@@ -160,15 +171,17 @@ export default function GameChat({
         <TextInput
           accessibilityLabel="Game chat message"
           blurOnSubmit
-          editable={connected && gameStatus === 'InProgress'}
+          editable={connected}
           enterKeyHint="send"
           maxLength={300}
           multiline
           onChangeText={setDraft}
           onSubmitEditing={send}
-          placeholder={gameStatus === 'InProgress' ? 'Message players and spectators…' : 'Game chat has ended'}
-          placeholderTextColor="#58636f"
-          selectionColor="#72d4bf"
+          placeholder={
+            isFinished ? 'Message everyone still here…' : 'Message players and spectators…'
+          }
+          placeholderTextColor={colors.textFaint}
+          selectionColor={colors.accent}
           style={styles.input}
           submitBehavior="submit"
           value={draft}
@@ -196,10 +209,10 @@ const styles = StyleSheet.create({
   chatCard: {
     width: '100%',
     overflow: 'hidden',
-    borderRadius: 11,
+    borderRadius: radius.large,
     borderWidth: 1,
-    borderColor: '#29313c',
-    backgroundColor: '#141920',
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceWell,
   },
   chatCardWide: { flex: 1, minHeight: 190 },
   chatCardCompact: { height: 180 },
@@ -211,10 +224,10 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: 11,
     paddingVertical: 8,
-    borderRadius: 10,
+    borderRadius: radius.large,
     borderWidth: 1,
-    borderColor: '#29313c',
-    backgroundColor: '#171b22',
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
   },
   header: {
     minHeight: 43,
@@ -224,46 +237,56 @@ const styles = StyleSheet.create({
     gap: 7,
     paddingHorizontal: 9,
     borderBottomWidth: 1,
-    borderBottomColor: '#29313c',
-    backgroundColor: '#191f27',
+    borderBottomColor: colors.border,
+    backgroundColor: colors.surface,
   },
   headerIdentity: { flexDirection: 'row', alignItems: 'center', gap: 7 },
   headerActions: { flexDirection: 'row', alignItems: 'center', gap: 5 },
-  statusDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#596472' },
-  statusDotConnected: { backgroundColor: '#72d4bf' },
-  eyebrow: { color: '#cdd4da', fontSize: 8, fontWeight: '900', letterSpacing: 1 },
-  messageCount: { color: '#65707d', fontSize: 7, marginTop: 1 },
-  closedCopy: { color: '#65707d', fontSize: 8, marginTop: 2 },
+  statusDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.textFaint },
+  statusDotConnected: { backgroundColor: colors.accent },
+  eyebrow: { color: colors.textSoft, fontSize: 8, fontWeight: '900', letterSpacing: 1 },
+  messageCount: { color: colors.textFaint, fontSize: 7, marginTop: 1 },
+  closedCopy: { color: colors.textFaint, fontSize: 8, marginTop: 2 },
   headerButton: {
     paddingHorizontal: 7,
     paddingVertical: 6,
-    borderRadius: 6,
-    backgroundColor: '#29313b',
+    borderRadius: radius.small,
+    backgroundColor: colors.surfaceMuted,
   },
-  headerButtonText: { color: '#aab3bc', fontSize: 7, fontWeight: '900', letterSpacing: 0.7 },
+  headerButtonText: {
+    color: colors.textMuted,
+    fontSize: 7,
+    fontWeight: '900',
+    letterSpacing: 0.7,
+  },
   spectatorToggle: {
     paddingHorizontal: 6,
     paddingVertical: 6,
-    borderRadius: 6,
-    backgroundColor: '#272b31',
+    borderRadius: radius.small,
+    backgroundColor: colors.surfaceRaised,
   },
-  spectatorToggleOn: { backgroundColor: '#213b36' },
-  spectatorToggleText: { color: '#77818c', fontSize: 6, fontWeight: '900', letterSpacing: 0.4 },
-  spectatorToggleTextOn: { color: '#8edbc9' },
+  spectatorToggleOn: { backgroundColor: colors.accentSurfaceRaised },
+  spectatorToggleText: {
+    color: colors.textFaint,
+    fontSize: 6,
+    fontWeight: '900',
+    letterSpacing: 0.4,
+  },
+  spectatorToggleTextOn: { color: colors.accentSoft },
   messageList: { flexGrow: 1, paddingHorizontal: 10, paddingVertical: 8 },
   messageRow: { marginBottom: 8 },
   messageMeta: { flexDirection: 'row', alignItems: 'center', gap: 5 },
-  senderName: { maxWidth: '72%', color: '#dce2e7', fontSize: 9, fontWeight: '900' },
+  senderName: { maxWidth: '72%', color: colors.textSoft, fontSize: 9, fontWeight: '900' },
   roleBadge: { paddingHorizontal: 5, paddingVertical: 2, borderRadius: 4 },
-  spectatorBadge: { backgroundColor: '#3a3345' },
-  redBadge: { backgroundColor: '#563238' },
-  blueBadge: { backgroundColor: '#293f59' },
-  roleText: { color: '#c5ccd3', fontSize: 5, fontWeight: '900', letterSpacing: 0.5 },
-  messageText: { color: '#aeb7c0', fontSize: 10, lineHeight: 14, marginTop: 3 },
+  spectatorBadge: { backgroundColor: colors.surfaceMuted },
+  redBadge: { backgroundColor: players.Red.surface },
+  blueBadge: { backgroundColor: players.Blue.surface },
+  roleText: { color: colors.textSubtle, fontSize: 5, fontWeight: '900', letterSpacing: 0.5 },
+  messageText: { color: colors.textMuted, fontSize: 10, lineHeight: 14, marginTop: 3 },
   emptyState: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 12 },
-  emptyTitle: { color: '#89939f', fontSize: 10, fontWeight: '800' },
-  emptyCopy: { color: '#596472', fontSize: 8, marginTop: 3, textAlign: 'center' },
-  hiddenNotice: { color: '#756985', fontSize: 7, fontWeight: '700', textAlign: 'center' },
+  emptyTitle: { color: colors.textMuted, fontSize: 10, fontWeight: '800' },
+  emptyCopy: { color: colors.textFaint, fontSize: 8, marginTop: 3, textAlign: 'center' },
+  hiddenNotice: { color: colors.textFaint, fontSize: 7, fontWeight: '700', textAlign: 'center' },
   composer: {
     minHeight: 46,
     flexDirection: 'row',
@@ -271,8 +294,8 @@ const styles = StyleSheet.create({
     gap: 6,
     padding: 7,
     borderTopWidth: 1,
-    borderTopColor: '#29313c',
-    backgroundColor: '#191f27',
+    borderTopColor: colors.border,
+    backgroundColor: colors.surface,
   },
   input: {
     flex: 1,
@@ -280,11 +303,11 @@ const styles = StyleSheet.create({
     minHeight: 32,
     paddingHorizontal: 9,
     paddingVertical: 7,
-    borderRadius: 7,
+    borderRadius: radius.small,
     borderWidth: 1,
-    borderColor: '#343d48',
-    backgroundColor: '#10141a',
-    color: '#eef1f4',
+    borderColor: colors.borderStrong,
+    backgroundColor: colors.surfaceSunken,
+    color: colors.text,
     fontSize: 10,
   },
   sendButton: {
@@ -292,10 +315,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 10,
-    borderRadius: 7,
-    backgroundColor: '#72d4bf',
+    borderRadius: radius.small,
+    backgroundColor: colors.accent,
   },
   sendButtonDisabled: { opacity: 0.34 },
-  sendText: { color: '#10201d', fontSize: 7, fontWeight: '900', letterSpacing: 0.7 },
+  sendText: { color: colors.textStrong, fontSize: 7, fontWeight: '900', letterSpacing: 0.7 },
   pressed: { opacity: 0.7 },
 });

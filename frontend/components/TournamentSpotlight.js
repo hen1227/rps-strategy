@@ -222,7 +222,7 @@ const styles = StyleSheet.create({
     gap: 12,
     marginTop: 13,
   },
-  enterCopy: { flex: 1, color: '#c0bdb7', fontSize: 11, lineHeight: 17 },
+  enterCopy: { flex: 1, color: colors.textSubtle, fontSize: 11, lineHeight: 17 },
 
   signedUp: {
     flexDirection: 'row',
@@ -231,12 +231,12 @@ const styles = StyleSheet.create({
     marginTop: 13,
     padding: 11,
     borderRadius: 9,
-    backgroundColor: '#30422b',
+    backgroundColor: colors.accentSurfaceRaised,
   },
   signedUpCheck: { color: colors.accentBright, fontSize: 18, fontWeight: '900' },
   signedUpCopy: { flex: 1 },
-  signedUpTitle: { color: '#e5f4d9', fontSize: 12, fontWeight: '900' },
-  signedUpMeta: { color: '#a9c497', fontSize: 10, marginTop: 2 },
+  signedUpTitle: { color: colors.accentTextStrong, fontSize: 12, fontWeight: '900' },
+  signedUpMeta: { color: colors.accentText, fontSize: 10, marginTop: 2 },
 
   group: { marginTop: 15, gap: 7 },
   groupLabel: {

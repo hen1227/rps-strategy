@@ -149,10 +149,13 @@ export const applyAnalysisMove = (game, from, to) => {
     }
   }
 
+  // Stalemate is a draw in every mode. The server and RPSFish both score a
+  // player with no legal move as a shared result, so a mode needs no
+  // annihilation rule to handle a wiped-out army.
   if (next.status === 'InProgress' && !hasAnyMove(next)) {
     next.status = 'Finished';
-    next.winner = mover;
-    next.endReason = 'no_legal_move';
+    next.winner = 'Neutral';
+    next.endReason = 'stalemate';
   }
 
   const key = repetitionKey(next);
@@ -167,6 +170,31 @@ export const applyAnalysisMove = (game, from, to) => {
   }
 
   return { captured, game: next, mover };
+};
+
+// The shape RPSFish expects. The worker needs the mode, the side to move, and
+// the move number alongside the grid, so every caller — analysis board, bot,
+// arena — builds its request the same way.
+export const enginePosition = (game) => ({
+  currentTurn: game.currentTurn,
+  grid: game.grid,
+  modeId: game.mode.id,
+  moveNumber: game.moveNumber,
+});
+
+// Every move the side to move may play, in board order. Bots use this to pick
+// a deliberately random move, and the arena uses it to detect stalemate.
+export const allValidMoves = (game) => {
+  if (!game || game.status !== 'InProgress') return [];
+  const moves = [];
+  for (const row of game.grid) {
+    for (const tile of row) {
+      if (tile.occupantOwner !== game.currentTurn) continue;
+      const from = { x: tile.x, y: tile.y };
+      for (const to of validMovesFor(game, from)) moves.push({ from, to });
+    }
+  }
+  return moves;
 };
 
 export const moveLabel = ({ from, to }) =>

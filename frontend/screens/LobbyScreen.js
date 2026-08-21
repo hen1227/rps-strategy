@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -11,6 +12,9 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { BOT_PROFILES, DEFAULT_BOT_PROFILE_ID } from '../engine/botProfiles';
+import BotIcon from '../components/BotIcon';
+import HowToPlayModal from '../components/HowToPlayModal';
 import ModePreview from '../components/ModePreview';
 import TournamentSpotlight from '../components/TournamentSpotlight';
 import {
@@ -36,6 +40,8 @@ export default function LobbyScreen({ navigation }) {
   const connectionStatus = useGameStore((state) => state.connectionStatus);
   const modes = useGameStore((state) => state.modes);
   const modePlayerCounts = useGameStore((state) => state.modePlayerCounts);
+  const botPlayerCount = useGameStore((state) => state.botPlayerCount);
+  const startBotGame = useGameStore((state) => state.startBotGame);
   const account = useGameStore((state) => state.account);
   const liveGames = useGameStore((state) => state.liveGames);
   const queue = useGameStore((state) => state.queue);
@@ -55,6 +61,9 @@ export default function LobbyScreen({ navigation }) {
   const error = useGameStore((state) => state.error);
   const clearError = useGameStore((state) => state.clearError);
 
+  const [howToPlayMode, setHowToPlayMode] = useState(null);
+  const [botProfileId, setBotProfileId] = useState(DEFAULT_BOT_PROFILE_ID);
+  const [botModeId, setBotModeId] = useState(null);
   const [challengeOpen, setChallengeOpen] = useState(false);
   const [challengeUsername, setChallengeUsername] = useState('');
   const [challengeModeId, setChallengeModeId] = useState(null);
@@ -221,6 +230,14 @@ export default function LobbyScreen({ navigation }) {
                 <Text style={styles.modeObjective} numberOfLines={2}>
                   {mode.objective}
                 </Text>
+                <Pressable
+                  accessibilityLabel={`How to play ${mode.name}`}
+                  accessibilityRole="button"
+                  onPress={() => setHowToPlayMode(mode)}
+                  style={({ pressed }) => [styles.howToLink, pressed && styles.pressed]}
+                >
+                  <Text style={styles.howToLinkText}>? How to play</Text>
+                </Pressable>
                 <View style={styles.modeFooter}>
                   {isSearchingThisMode ? (
                     <>
@@ -265,6 +282,104 @@ export default function LobbyScreen({ navigation }) {
         })}
       </View>
     </View>
+  );
+
+  const selectedBotModeId = botModeId ?? playableModes[0]?.id ?? null;
+  const selectedBotMode = playableModes.find((mode) => mode.id === selectedBotModeId) ?? null;
+  const selectedBotProfile =
+    BOT_PROFILES.find((profile) => profile.id === botProfileId) ?? BOT_PROFILES[0];
+  // RPSFish runs in a browser Worker, so bots are a website feature for now —
+  // the same limit the analysis board already has.
+  const botsSupported = Platform.OS === 'web';
+  const botLaunchBlocked = !botsSupported || !selectedBotMode || Boolean(gameState);
+
+  // Bots run on this device, so this panel works with the server unreachable
+  // and never touches a rating.
+  const botSection = (
+    <Panel>
+      <SectionHeading
+        eyebrow="PRACTICE"
+        title="Play a bot"
+        trailing={
+          <Badge
+            label={`${botPlayerCount} PLAYING BOTS`}
+            tone={botPlayerCount > 0 ? 'live' : 'neutral'}
+          />
+        }
+      />
+      <Text style={styles.helpText}>
+        {botsSupported
+          ? 'RPSFish plays the other side in your browser. No clock, no rating, and the hint and undo buttons stay switched on.'
+          : 'Bots run on the RPSFish web engine, so this practice board is available on the website.'}
+      </Text>
+      <View style={styles.botLevels}>
+        {BOT_PROFILES.map((profile) => {
+          const selected = profile.id === selectedBotProfile.id;
+          return (
+            <Pressable
+              accessibilityLabel={`Play ${profile.name}, level ${profile.rating}`}
+              accessibilityRole="radio"
+              accessibilityState={{ checked: selected }}
+              key={profile.id}
+              onPress={() => setBotProfileId(profile.id)}
+              style={({ pressed }) => [
+                styles.botLevel,
+                selected && styles.botLevelSelected,
+                pressed && styles.pressed,
+              ]}
+            >
+              <View style={styles.botLevelArt}>
+                <BotIcon profileId={profile.id} />
+              </View>
+              <Text style={[styles.botLevelName, selected && styles.botLevelNameSelected]}>
+                {profile.name}
+              </Text>
+              <Text style={[styles.botLevelRating, selected && styles.botLevelRatingSelected]}>
+                {profile.rating}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+      <Text style={styles.botBlurb}>{selectedBotProfile.blurb}</Text>
+      <View style={styles.modeChips}>
+        {playableModes.map((mode) => {
+          const selected = selectedBotModeId === mode.id;
+          return (
+            <Pressable
+              accessibilityLabel={`Play a bot in ${mode.name}`}
+              accessibilityRole="radio"
+              accessibilityState={{ checked: selected }}
+              key={mode.id}
+              onPress={() => setBotModeId(mode.id)}
+              style={({ pressed }) => [
+                styles.modeChip,
+                selected && styles.modeChipSelected,
+                pressed && styles.pressed,
+              ]}
+            >
+              <Text style={[styles.modeChipText, selected && styles.modeChipTextSelected]}>
+                {mode.name}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+      <View style={styles.botLaunch}>
+        <PrimaryButton
+          accessibilityLabel={`Start a ${selectedBotMode?.name ?? 'bot'} game against ${selectedBotProfile.name}`}
+          disabled={botLaunchBlocked}
+          label={
+            Boolean(gameState) && botsSupported
+              ? 'FINISH YOUR GAME FIRST'
+              : `PLAY ${selectedBotProfile.name.toUpperCase()} ▶`
+          }
+          onPress={() =>
+            startBotGame({ mode: selectedBotMode, profileId: selectedBotProfile.id })
+          }
+        />
+      </View>
+    </Panel>
   );
 
   const friendSection = (
@@ -396,6 +511,22 @@ export default function LobbyScreen({ navigation }) {
     <TournamentSpotlight onOpenBoard={() => navigation.navigate('Tournaments')} />
   );
 
+  // Every online game is stored against both accounts, so the lobby always
+  // carries the link that says so.
+  const policyFooter = (
+    <Pressable
+      accessibilityLabel="Read the privacy policy and online play agreement"
+      accessibilityRole="button"
+      onPress={() => navigation.navigate('Policy')}
+      style={({ pressed }) => [styles.policyFooter, pressed && styles.policyFooterPressed]}
+    >
+      <Text style={styles.policyFooterText}>
+        Playing online stores every game against your account. Be nice, do not cheat —{' '}
+        <Text style={styles.policyFooterLink}>Privacy & play agreement</Text>
+      </Text>
+    </Pressable>
+  );
+
   const errorBanner = error ? (
     <Pressable
       accessibilityLabel="Dismiss error"
@@ -424,6 +555,7 @@ export default function LobbyScreen({ navigation }) {
                 {tournamentSection}
                 {challengeInbox}
                 {playSection}
+                {botSection}
               </View>
               <View style={styles.sideColumn}>
                 {liveSection}
@@ -435,12 +567,19 @@ export default function LobbyScreen({ navigation }) {
               {tournamentSection}
               {challengeInbox}
               {playSection}
+              {botSection}
               {liveSection}
               {friendSection}
             </View>
           )}
+          {policyFooter}
         </View>
       </ScrollView>
+      <HowToPlayModal
+        mode={howToPlayMode}
+        onClose={() => setHowToPlayMode(null)}
+        visible={Boolean(howToPlayMode)}
+      />
     </SafeAreaView>
   );
 }
@@ -458,6 +597,16 @@ const styles = StyleSheet.create({
     paddingBottom: 96,
   },
   screenWide: { maxWidth: 1180 },
+
+  policyFooter: { marginTop: 18, paddingVertical: 10, paddingHorizontal: 4 },
+  policyFooterPressed: { opacity: 0.7 },
+  policyFooterText: {
+    color: colors.textFaint,
+    fontSize: 10,
+    lineHeight: 16,
+    textAlign: 'center',
+  },
+  policyFooterLink: { color: colors.textMuted, fontWeight: '900' },
 
   topBar: {
     flexDirection: 'row',
@@ -511,11 +660,11 @@ const styles = StyleSheet.create({
     gap: 10,
     padding: 11,
     borderRadius: radius.medium,
-    backgroundColor: '#31382b',
+    backgroundColor: colors.accentSurface,
   },
   inboxCopy: { flex: 1 },
   inboxTitle: { color: colors.textStrong, fontSize: 12, fontWeight: '900' },
-  inboxMeta: { color: '#a9c497', fontSize: 10, marginTop: 2 },
+  inboxMeta: { color: colors.accentText, fontSize: 10, marginTop: 2 },
   inboxActions: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   inboxNotice: { color: colors.accentSoft, fontSize: 11 },
 
@@ -529,7 +678,7 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     backgroundColor: colors.surface,
   },
-  modeCardSearching: { borderColor: colors.accent, backgroundColor: '#2b2c25' },
+  modeCardSearching: { borderColor: colors.accent, backgroundColor: colors.accentSurfaceQuiet },
   modeCardMuted: { opacity: 0.4 },
   modeContent: { flex: 1, alignSelf: 'stretch', paddingLeft: 14 },
   modeTopRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
@@ -541,6 +690,13 @@ const styles = StyleSheet.create({
     marginTop: 10,
   },
   modeObjective: { color: colors.textMuted, fontSize: 11, lineHeight: 17, marginTop: 4 },
+  howToLink: { alignSelf: 'flex-start', marginTop: 7, paddingVertical: 2 },
+  howToLinkText: {
+    color: colors.accentSoft,
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0.4,
+  },
   modeFooter: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -556,6 +712,35 @@ const styles = StyleSheet.create({
 
   challengeForm: { marginTop: 12 },
   helpText: { color: colors.textMuted, fontSize: 11, lineHeight: 17 },
+  // Six difficulty tiles wrap into as many rows as the column allows, so the
+  // whole ladder is visible at a glance on a phone and in one row on desktop.
+  botLevels: { flexDirection: 'row', flexWrap: 'wrap', gap: 7, marginTop: 13 },
+  botLevel: {
+    minWidth: 78,
+    flexGrow: 1,
+    alignItems: 'center',
+    paddingHorizontal: 9,
+    paddingTop: 8,
+    paddingBottom: 9,
+    borderRadius: radius.medium,
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
+    backgroundColor: colors.surfaceSunken,
+  },
+  botLevelSelected: { borderColor: colors.accent, backgroundColor: colors.accentSurfaceStrong },
+  botLevelArt: {
+    width: 56,
+    height: 56,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 5,
+  },
+  botLevelName: { color: colors.textSubtle, fontSize: 11, fontWeight: '900' },
+  botLevelNameSelected: { color: colors.accentTextStrong },
+  botLevelRating: { color: colors.textFaint, fontSize: 9, fontWeight: '800', marginTop: 2 },
+  botLevelRatingSelected: { color: colors.accentSoft },
+  botBlurb: { color: colors.textDim, fontSize: 11, lineHeight: 17, marginTop: 11 },
+  botLaunch: { marginTop: 13 },
   modeChips: { flexDirection: 'row', flexWrap: 'wrap', gap: 7, marginTop: 12 },
   modeChip: {
     paddingHorizontal: 10,
@@ -564,9 +749,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.borderStrong,
   },
-  modeChipSelected: { backgroundColor: '#3b4a30', borderColor: colors.accent },
+  modeChipSelected: { backgroundColor: colors.accentSurfaceStrong, borderColor: colors.accent },
   modeChipText: { color: colors.textMuted, fontSize: 10, fontWeight: '800' },
-  modeChipTextSelected: { color: '#d9efc3' },
+  modeChipTextSelected: { color: colors.accentSoft },
   challengeInputRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 12 },
   challengeInput: {
     flex: 1,
@@ -587,13 +772,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 10,
     borderTopWidth: 1,
-    borderTopColor: '#3b3935',
+    borderTopColor: colors.borderSoft,
   },
   liveCopy: { flex: 1 },
   liveMatchup: { color: colors.text, fontSize: 12, fontWeight: '800' },
   liveMeta: { color: colors.textFaint, fontSize: 10, marginTop: 2 },
   eloText: { color: colors.textFaint, fontSize: 10, fontWeight: '600' },
-  versusText: { color: '#69655f', fontSize: 10 },
+  versusText: { color: colors.textFaint, fontSize: 10 },
 
   retiredList: { gap: 1, marginTop: 8 },
   retiredRow: {
@@ -602,7 +787,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 10,
     borderTopWidth: 1,
-    borderTopColor: '#3b3935',
+    borderTopColor: colors.borderSoft,
   },
   retiredCopy: { flex: 1 },
   retiredName: { color: colors.text, fontSize: 13, fontWeight: '800' },
@@ -617,7 +802,7 @@ const styles = StyleSheet.create({
     marginBottom: 14,
   },
   errorText: { flex: 1, color: colors.dangerText, fontSize: 12 },
-  errorDismiss: { color: '#ffe6e2', fontSize: 18, paddingHorizontal: 5 },
+  errorDismiss: { color: colors.dangerText, fontSize: 18, paddingHorizontal: 5 },
 
   disabled: { opacity: 0.35 },
   pressed: { opacity: 0.7 },

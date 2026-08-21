@@ -106,7 +106,7 @@ export default function TournamentSignupForm({ compact, onSignedUp, tournamentId
       )}
       <Checkbox
         checked={agreed}
-        label="I understand tournament chat may be unfiltered and agree to take part."
+        label="I understand tournament chat may be unfiltered, agree to take part, and accept the privacy policy and play agreement."
         onToggle={() => setAgreed((current) => !current)}
       />
       <View style={styles.submit}>

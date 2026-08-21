@@ -7,7 +7,9 @@ import {
   readGameSessionId,
   saveGameSessionId,
 } from './localIdentity';
+import { createBotSlice, initialBotState } from './botSession';
 import { WS_URL } from './serverConfig';
+import { send } from './socketSend';
 import { listTournaments } from './tournamentApi';
 
 // This fallback is visible only before the server catalog arrives. The backend
@@ -131,12 +133,14 @@ const mergeTournament = (tournaments, next) => {
 const mergeTournamentList = (tournaments, incoming) =>
   incoming.map((next) => carryLiveState(next, findTournament(tournaments, next.tournamentId)));
 
-const send = (socket, payload) => {
-  if (!socket || socket.readyState !== WebSocket.OPEN) {
-    return false;
-  }
-  socket.send(JSON.stringify(payload));
-  return true;
+// The server republishes the lobby counts every couple of seconds whether or
+// not they moved, so they are compared before they are stored: a fresh object
+// re-renders every screen watching them, which is wasted work in the lobby and
+// noise for anyone in the middle of a game.
+const sameCounts = (current, next) => {
+  const keys = Object.keys(next);
+  if (keys.length !== Object.keys(current).length) return false;
+  return keys.every((key) => current[key] === next[key]);
 };
 
 const inferLastMove = (previousGame, nextGame) => {
@@ -174,6 +178,7 @@ const inferLastMove = (previousGame, nextGame) => {
 };
 
 export const useGameStore = create((set, get) => ({
+  ...createBotSlice(set, get),
   socket: null,
   accountId,
   profileKey,
@@ -183,6 +188,11 @@ export const useGameStore = create((set, get) => ({
   error: null,
   modes: BASE_MODES,
   modePlayerCounts: {},
+  // Players waiting in matchmaking right now, per mode. The bot board watches
+  // this so someone practising against a bot still hears the door knock.
+  modeQueueCounts: {},
+  // Everyone on the site currently playing a bot instead of a person.
+  botPlayerCount: 0,
   liveGames: [],
   tournaments: [],
   incomingChallenges: [],
@@ -292,6 +302,8 @@ export const useGameStore = create((set, get) => ({
             spectatedGameId,
             modes,
             modePlayerCounts: message.modePlayerCounts ?? state.modePlayerCounts,
+            modeQueueCounts: message.modeQueueCounts ?? state.modeQueueCounts,
+            botPlayerCount: message.botPlayerCount ?? 0,
             liveGames: message.liveGames ?? [],
             tournaments: message.tournaments ?? [],
             incomingChallenges: message.challenges ?? [],
@@ -299,6 +311,9 @@ export const useGameStore = create((set, get) => ({
             acceptingChallengeId: null,
           };
         });
+        // The server forgets a bot session when the socket drops, so a
+        // reconnected bot player announces themselves again.
+        get().announceBotPresence();
         break;
       case 'authentication_failed':
         shouldReconnect = false;
@@ -307,9 +322,21 @@ export const useGameStore = create((set, get) => ({
           error: message.message ?? 'This device could not authenticate the local account.',
         });
         break;
-      case 'mode_player_counts':
-        set({ modePlayerCounts: message.modePlayerCounts ?? {} });
+      case 'mode_player_counts': {
+        const modePlayerCounts = message.modePlayerCounts ?? {};
+        const modeQueueCounts = message.modeQueueCounts ?? {};
+        const botPlayerCount = message.botPlayerCount ?? 0;
+        const state = get();
+        if (
+          state.botPlayerCount === botPlayerCount &&
+          sameCounts(state.modePlayerCounts, modePlayerCounts) &&
+          sameCounts(state.modeQueueCounts, modeQueueCounts)
+        ) {
+          break;
+        }
+        set({ modePlayerCounts, modeQueueCounts, botPlayerCount });
         break;
+      }
       case 'live_games':
         set({ liveGames: message.liveGames ?? [] });
         break;
@@ -404,7 +431,11 @@ export const useGameStore = create((set, get) => ({
         break;
       case 'match_found': {
         const gameSessionId = persistGame(message.gameState);
+        // A found opponent takes the board: the bot game is local and
+        // unrated, so it is dropped rather than queued behind the match.
+        get().endBotSession();
         set({
+          ...initialBotState,
           playerColor: message.color,
           isSpectating: false,
           spectatedGameId: null,
@@ -426,10 +457,7 @@ export const useGameStore = create((set, get) => ({
         break;
       }
       case 'game_rejoined': {
-        const isFinished = message.gameState?.status === 'Finished';
-        const gameSessionId = isFinished
-          ? clearPersistedGame()
-          : persistGame(message.gameState);
+        const gameSessionId = persistGame(message.gameState);
         set({
           playerColor: message.color,
           isSpectating: false,
@@ -505,11 +533,9 @@ export const useGameStore = create((set, get) => ({
         const isSpectating = current.isSpectating;
         set((state) => ({
           gameState: message.gameState,
-          gameSessionId: isSpectating
-            ? null
-            : isFinished
-              ? clearPersistedGame()
-              : persistGame(message.gameState),
+          // The result does not end the session: the chat room stays open
+          // until we leave it, and rejoining is how a reconnect gets back in.
+          gameSessionId: isSpectating ? null : persistGame(message.gameState),
           spectatedGameId: isSpectating && isFinished ? null : state.spectatedGameId,
           lastMove: inferLastMove(state.gameState, message.gameState) ?? state.lastMove,
           selectedTile: null,
@@ -685,6 +711,12 @@ export const useGameStore = create((set, get) => ({
     if (!gameState || gameState.status !== 'InProgress') {
       return;
     }
+    // A bot game has no server session behind it: the rules, the legal moves,
+    // and the opponent all run here.
+    if (gameState.bot) {
+      get().botSelectTile(position);
+      return;
+    }
 
     if (selectedTile && validMoves.some((move) => samePosition(move, position))) {
       if (send(socket, { type: 'make_move', from: selectedTile, to: position })) {
@@ -715,6 +747,10 @@ export const useGameStore = create((set, get) => ({
     if (!gameState || gameState.status !== 'InProgress' || gameState.currentTurn !== playerColor) {
       return;
     }
+    if (gameState.bot) {
+      get().botMovePiece(from, to);
+      return;
+    }
 
     const source = gameState.grid[from.y]?.[from.x];
     const destinationExists = Boolean(gameState.grid[to.y]?.[to.x]);
@@ -728,6 +764,10 @@ export const useGameStore = create((set, get) => ({
   },
 
   offerDraw: () => {
+    if (get().gameState?.bot) {
+      get().offerBotDraw();
+      return;
+    }
     if (!send(get().socket, { type: 'offer_draw' })) {
       set({ error: 'Reconnect to the server before offering a draw.' });
     }
@@ -745,7 +785,29 @@ export const useGameStore = create((set, get) => ({
     }
   },
 
+  offerTimeExtension: () => {
+    if (!send(get().socket, { type: 'offer_time' })) {
+      set({ error: 'Reconnect to the server before asking for more time.' });
+    }
+  },
+
+  acceptTimeExtension: () => {
+    if (!send(get().socket, { type: 'accept_time' })) {
+      set({ error: 'Reconnect to the server before granting more time.' });
+    }
+  },
+
+  declineTimeExtension: () => {
+    if (!send(get().socket, { type: 'decline_time' })) {
+      set({ error: 'Reconnect to the server before declining the extra time.' });
+    }
+  },
+
   resignGame: () => {
+    if (get().gameState?.bot) {
+      get().resignBotGame();
+      return;
+    }
     if (!send(get().socket, { type: 'resign_game' })) {
       set({ error: 'Reconnect to the server before resigning.' });
     }
@@ -766,8 +828,15 @@ export const useGameStore = create((set, get) => ({
     set((state) => ({ showSpectatorMessages: !state.showSpectatorMessages })),
 
   clearGame: () => {
-    const { isSpectating, socket } = get();
-    if (isSpectating) send(socket, { type: 'stop_spectating' });
+    // A bot game exists only in this tab, so leaving it just tells the lobby
+    // this player is available again.
+    if (get().gameState?.bot) {
+      get().endBotSession();
+      return;
+    }
+    // Leaving the screen is what closes a finished game's chat room, so the
+    // server hears about it whether we were playing or watching.
+    send(get().socket, { type: 'leave_game' });
     clearPersistedGame();
     set({
       playerColor: null,

@@ -316,6 +316,17 @@ export default function AccountScreen({ navigation }) {
                   </Text>
                 </View>
               </Panel>
+
+              <Pressable
+                accessibilityLabel="Read the privacy policy and online play agreement"
+                accessibilityRole="button"
+                onPress={() => navigation.navigate('Policy')}
+                style={({ pressed }) => [styles.policyLink, pressed && styles.pressed]}
+              >
+                <Text style={styles.policyLinkText}>
+                  What gets stored about you, and the rules of online play ›
+                </Text>
+              </Pressable>
             </View>
           )}
         </View>
@@ -419,6 +430,9 @@ const styles = StyleSheet.create({
   keyTitle: { color: colors.text, fontSize: 12, fontWeight: '900' },
   keyBody: { color: colors.textMuted, fontSize: 10, lineHeight: 16, marginTop: 4 },
   accountId: { color: colors.textFaint, fontSize: 9, marginTop: 8 },
+
+  policyLink: { alignItems: 'center', paddingVertical: 10 },
+  policyLinkText: { color: colors.textMuted, fontSize: 10, fontWeight: '900', lineHeight: 16 },
 
   pressed: { opacity: 0.7 },
 });

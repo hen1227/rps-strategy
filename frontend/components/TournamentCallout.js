@@ -78,15 +78,15 @@ const styles = StyleSheet.create({
     borderRadius: radius.large,
     borderWidth: 1,
     borderColor: colors.accentBorder,
-    backgroundColor: '#2b3026',
+    backgroundColor: colors.accentSurfaceQuiet,
     // Keeps the bar readable over the board on web and native alike.
-    shadowColor: '#000000',
+    shadowColor: colors.surfaceDeep,
     shadowOffset: { width: 0, height: 6 },
     shadowOpacity: 0.4,
     shadowRadius: 12,
     elevation: 8,
   },
-  cardUrgent: { borderColor: colors.accentBright, backgroundColor: '#35402c' },
+  cardUrgent: { borderColor: colors.accentBright, backgroundColor: colors.accentSurfaceRaised },
   pulse: {
     width: 9,
     height: 9,

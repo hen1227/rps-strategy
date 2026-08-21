@@ -28,7 +28,7 @@ const MAX_ENGINE_TIME_MS = 120_000;
 const RESPONSE_GRACE_MS = 5_000;
 // The worker and WASM are copied from public/ without hashed filenames. Keep
 // this in step with engine/worker releases so browsers cannot combine builds.
-const RPSFISH_ASSET_VERSION = 'abi3-rules2';
+const RPSFISH_ASSET_VERSION = 'abi3-rules2-mpv8';
 
 const abortError = () => {
   const error = new Error('RPSFish analysis was cancelled.');
@@ -162,4 +162,30 @@ export const analyzePosition = (position, options = {}, onUpdate) => {
     });
     requestWorker.postMessage({ type: 'analyze', requestId, position, options: engineOptions });
   });
+};
+
+// One worker serves the whole app, and cancelling a request terminates it
+// (the WASM search is synchronous). That is what the analysis board wants —
+// a new position should abandon the old search immediately — but it is wrong
+// for a bot game, where the bot's move and the player's hint are both wanted
+// and neither should destroy the other. Requests queued here run one at a
+// time instead of pre-empting each other.
+let engineQueue = Promise.resolve();
+
+export const analyzeExclusive = (position, options = {}, onUpdate) => {
+  const run = engineQueue.then(() => {
+    if (options.signal?.aborted) {
+      const error = new Error('RPSFish analysis was cancelled.');
+      error.name = 'AbortError';
+      throw error;
+    }
+    return analyzePosition(position, options, onUpdate);
+  });
+  // The queue must survive a failed or cancelled request, so it tracks
+  // completion only.
+  engineQueue = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
 };

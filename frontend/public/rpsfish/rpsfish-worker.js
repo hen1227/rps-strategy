@@ -22,7 +22,7 @@ const ENGINE_CAPS = {
   maxDepth: 127,
   maxNodes: 100_000_000,
   maxTimeMs: 120_000,
-  maxVariations: 3,
+  maxVariations: 8,
   maxThrottleMs: 250,
 };
 

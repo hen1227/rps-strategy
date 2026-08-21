@@ -1,6 +1,8 @@
 import { useMemo } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
+import { colors, players, radius } from '../theme';
+
 export default function TerritoryMeter({ grid }) {
   const counts = useMemo(
     () =>
@@ -52,21 +54,21 @@ const styles = StyleSheet.create({
     width: '100%',
     paddingHorizontal: 10,
     paddingVertical: 7,
-    borderRadius: 9,
+    borderRadius: radius.medium,
     borderWidth: 1,
-    borderColor: '#29313c',
-    backgroundColor: '#171b22',
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
   },
   labels: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 5 },
-  title: { color: '#778290', fontSize: 7, fontWeight: '900', letterSpacing: 1.1 },
-  count: { color: '#aab1ba', fontSize: 8, fontWeight: '700' },
+  title: { color: colors.textFaint, fontSize: 7, fontWeight: '900', letterSpacing: 1.1 },
+  count: { color: colors.textMuted, fontSize: 8, fontWeight: '700' },
   track: {
     height: 5,
     flexDirection: 'row',
     overflow: 'hidden',
     borderRadius: 3,
-    backgroundColor: '#323944',
+    backgroundColor: colors.surfaceSunken,
   },
-  redProgress: { height: '100%', backgroundColor: '#be6d67' },
-  blueProgress: { height: '100%', backgroundColor: '#6491b8' },
+  redProgress: { height: '100%', backgroundColor: players.Red.territory },
+  blueProgress: { height: '100%', backgroundColor: players.Blue.territory },
 });

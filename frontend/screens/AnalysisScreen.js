@@ -16,28 +16,23 @@ import {
   applyAnalysisMove,
   classifyMove,
   createAnalysisGame,
+  enginePosition,
   moveLabel,
   validMovesFor,
 } from '../engine/analysisGame';
 import { ANALYSIS_PRESETS, analyzePosition } from '../engine/rpsfishClient';
+import { board, colors, evalBar, moveQuality, players, radius } from '../theme';
 
 const QUALITY_COLORS = {
-  best: '#51d6a9',
-  excellent: '#74c8ff',
-  good: '#a7cf78',
-  inaccuracy: '#e6c15a',
-  mistake: '#ef9858',
-  blunder: '#ef6565',
+  best: moveQuality.best,
+  excellent: moveQuality.excellent,
+  good: moveQuality.good,
+  inaccuracy: moveQuality.inaccuracy,
+  mistake: moveQuality.mistake,
+  blunder: moveQuality.blunder,
 };
 
 const samePosition = (first, second) => first?.x === second?.x && first?.y === second?.y;
-
-const positionForEngine = (game) => ({
-  currentTurn: game.currentTurn,
-  grid: game.grid,
-  modeId: game.mode.id,
-  moveNumber: game.moveNumber,
-});
 
 const formatScore = (score) => {
   if (score === undefined || score === null) return '—';
@@ -113,7 +108,7 @@ function AnalysisPanel({
                 : `${activeColor} to move`}
             </Text>
           </View>
-          {engineState === 'thinking' && <ActivityIndicator color="#51d6a9" size="small" />}
+          {engineState === 'thinking' && <ActivityIndicator color={colors.accent} size="small" />}
         </View>
         <Text style={styles.cardBody}>
           {engineState === 'thinking'
@@ -198,7 +193,7 @@ function AnalysisPanel({
                 <Text style={styles.qualityText}>{lastMove.quality.label}</Text>
               </View>
             ) : (
-              <ActivityIndicator color="#b6bec8" size="small" />
+              <ActivityIndicator color={colors.textMuted} size="small" />
             )}
           </View>
           <Text style={styles.bestMoveCopy}>
@@ -225,7 +220,7 @@ function AnalysisPanel({
               <View
                 style={[
                   styles.lineRank,
-                  { backgroundColor: ['#51d6a9', '#55a9ff', '#f0b857'][index] },
+                  { backgroundColor: board.analysisArrows[index] },
                 ]}
               >
                 <Text style={styles.lineRankText}>{index + 1}</Text>
@@ -302,8 +297,8 @@ export default function AnalysisScreen({ navigation, route }) {
 
     analyzePosition(
       {
-        ...positionForEngine(game),
-        history: pastGames.map(positionForEngine),
+        ...enginePosition(game),
+        history: pastGames.map(enginePosition),
       },
       {
         ...ANALYSIS_PRESETS[analysisMode],
@@ -658,7 +653,7 @@ export default function AnalysisScreen({ navigation, route }) {
 }
 
 const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: '#0e1116' },
+  safeArea: { flex: 1, backgroundColor: colors.background },
   screen: {
     flex: 1,
     width: '100%',
@@ -672,7 +667,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     borderBottomWidth: 1,
-    borderBottomColor: '#242b34',
+    borderBottomColor: colors.border,
     marginBottom: 12,
   },
   backButton: {
@@ -680,24 +675,24 @@ const styles = StyleSheet.create({
     height: 38,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: 10,
-    backgroundColor: '#1b212a',
+    borderRadius: radius.large,
+    backgroundColor: colors.surface,
   },
-  backIcon: { color: '#e9edf1', fontSize: 31, lineHeight: 31, marginTop: -3 },
+  backIcon: { color: colors.text, fontSize: 31, lineHeight: 31, marginTop: -3 },
   titleCopy: { flex: 1, minWidth: 0, paddingHorizontal: 10 },
-  kicker: { color: '#51d6a9', fontSize: 8, fontWeight: '900', letterSpacing: 1.35 },
-  title: { color: '#f4f6f8', fontSize: 20, fontWeight: '900', marginTop: 2 },
+  kicker: { color: colors.accentBright, fontSize: 8, fontWeight: '900', letterSpacing: 1.35 },
+  title: { color: colors.textStrong, fontSize: 20, fontWeight: '900', marginTop: 2 },
   resetButton: {
     minHeight: 38,
     justifyContent: 'center',
     paddingHorizontal: 14,
     paddingVertical: 9,
-    borderRadius: 9,
+    borderRadius: radius.medium,
     borderWidth: 1,
-    borderColor: '#37414d',
-    backgroundColor: '#1b212a',
+    borderColor: colors.borderStrong,
+    backgroundColor: colors.surface,
   },
-  resetText: { color: '#cbd2d9', fontSize: 10, fontWeight: '900' },
+  resetText: { color: colors.textSoft, fontSize: 10, fontWeight: '900' },
   headerActions: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   historyButton: {
     minWidth: 54,
@@ -707,14 +702,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 4,
     paddingHorizontal: 7,
-    borderRadius: 9,
+    borderRadius: radius.medium,
     borderWidth: 1,
-    borderColor: '#37414d',
-    backgroundColor: '#1b212a',
+    borderColor: colors.borderStrong,
+    backgroundColor: colors.surface,
   },
   headerButtonDisabled: { opacity: 0.35 },
-  historyButtonArrow: { color: '#8da0ae', fontSize: 14, fontWeight: '900' },
-  historyButtonText: { color: '#cbd2d9', fontSize: 9, fontWeight: '900' },
+  historyButtonArrow: { color: colors.textMuted, fontSize: 14, fontWeight: '900' },
+  historyButtonText: { color: colors.textSoft, fontSize: 9, fontWeight: '900' },
   buttonPressed: { opacity: 0.68 },
   wideLayout: {
     flex: 1,
@@ -729,16 +724,16 @@ const styles = StyleSheet.create({
     position: 'relative',
     width: 31,
     overflow: 'hidden',
-    borderRadius: 7,
+    borderRadius: radius.small,
     borderWidth: 2,
-    borderColor: '#202631',
-    backgroundColor: '#202631',
+    borderColor: board.frame,
+    backgroundColor: board.frame,
   },
-  blueEval: { width: '100%', alignItems: 'center', paddingTop: 5, backgroundColor: '#3f77aa' },
-  redEval: { width: '100%', alignItems: 'center', justifyContent: 'flex-end', paddingBottom: 5, backgroundColor: '#c84b44' },
-  blueEvalSide: { color: '#dcecff', fontSize: 8, fontWeight: '900' },
-  redEvalSide: { color: '#ffe1df', fontSize: 8, fontWeight: '900' },
-  evalDivider: { position: 'absolute', left: 0, width: '100%', height: 2, backgroundColor: '#f5f7f8' },
+  blueEval: { width: '100%', alignItems: 'center', paddingTop: 5, backgroundColor: players.Blue.strong },
+  redEval: { width: '100%', alignItems: 'center', justifyContent: 'flex-end', paddingBottom: 5, backgroundColor: players.Red.strong },
+  blueEvalSide: { color: players.Blue.contrast, fontSize: 8, fontWeight: '900' },
+  redEvalSide: { color: players.Red.contrast, fontSize: 8, fontWeight: '900' },
+  evalDivider: { position: 'absolute', left: 0, width: '100%', height: 2, backgroundColor: evalBar.divider },
   evalBadge: {
     position: 'absolute',
     right: 2,
@@ -747,40 +742,40 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: 3,
     borderRadius: 4,
-    backgroundColor: 'rgba(255,255,255,0.9)',
+    backgroundColor: evalBar.badgeOnRed,
   },
-  evalBadgeOnBlue: { top: 19, bottom: 'auto', backgroundColor: 'rgba(11,18,26,0.86)' },
-  evalValue: { color: '#a33531', fontSize: 7, fontWeight: '900', fontVariant: ['tabular-nums'] },
-  evalValueOnBlue: { color: '#dcecff' },
+  evalBadgeOnBlue: { top: 19, bottom: 'auto', backgroundColor: evalBar.badgeOnBlue },
+  evalValue: { color: evalBar.badgeOnRedText, fontSize: 7, fontWeight: '900', fontVariant: ['tabular-nums'] },
+  evalValueOnBlue: { color: evalBar.badgeOnBlueText },
   widePanel: { width: 350 },
   widePanelContent: { paddingBottom: 18 },
   mobileContent: { alignItems: 'center', paddingBottom: 24, gap: 14 },
   panelStack: { width: '100%', gap: 10 },
   coachCard: {
     padding: 14,
-    borderRadius: 12,
+    borderRadius: radius.large,
     borderWidth: 1,
-    borderColor: '#2e3d3a',
-    backgroundColor: '#15221f',
+    borderColor: colors.accentBorder,
+    backgroundColor: colors.accentSurface,
   },
   cardHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  cardEyebrow: { color: '#71808e', fontSize: 8, fontWeight: '900', letterSpacing: 1.2 },
-  cardTitle: { color: '#f2f5f6', fontSize: 17, fontWeight: '900', marginTop: 5 },
-  cardBody: { color: '#8fa49f', fontSize: 10, lineHeight: 15, marginTop: 8 },
+  cardEyebrow: { color: colors.textFaint, fontSize: 8, fontWeight: '900', letterSpacing: 1.2 },
+  cardTitle: { color: colors.textStrong, fontSize: 17, fontWeight: '900', marginTop: 5 },
+  cardBody: { color: colors.accentSoft, fontSize: 10, lineHeight: 15, marginTop: 8 },
   analysisModeRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 11 },
-  analysisModeLabel: { color: '#65736f', fontSize: 7, fontWeight: '900', letterSpacing: 1 },
+  analysisModeLabel: { color: colors.textFaint, fontSize: 7, fontWeight: '900', letterSpacing: 1 },
   analysisModeButton: {
     minHeight: 28,
     justifyContent: 'center',
     paddingHorizontal: 9,
-    borderRadius: 7,
+    borderRadius: radius.small,
     borderWidth: 1,
-    borderColor: '#34453f',
-    backgroundColor: '#182a25',
+    borderColor: colors.accentBorder,
+    backgroundColor: colors.surfaceRaised,
   },
-  analysisModeButtonActive: { borderColor: '#51d6a9', backgroundColor: '#24453b' },
-  analysisModeButtonText: { color: '#799087', fontSize: 7, fontWeight: '900' },
-  analysisModeButtonTextActive: { color: '#85e9c9' },
+  analysisModeButtonActive: { borderColor: colors.accent, backgroundColor: colors.accentSurfaceRaised },
+  analysisModeButtonText: { color: colors.textMuted, fontSize: 7, fontWeight: '900' },
+  analysisModeButtonTextActive: { color: colors.accentSoft },
   bestMoveButton: {
     minHeight: 47,
     flexDirection: 'row',
@@ -788,67 +783,67 @@ const styles = StyleSheet.create({
     marginTop: 12,
     paddingHorizontal: 12,
     paddingVertical: 8,
-    borderRadius: 9,
-    backgroundColor: '#51d6a9',
+    borderRadius: radius.medium,
+    backgroundColor: colors.accent,
   },
   bestMoveButtonDisabled: { opacity: 0.4 },
   bestMoveButtonCopy: { flex: 1 },
-  bestMoveButtonText: { color: '#10201d', fontSize: 11, fontWeight: '900' },
-  bestMoveButtonDetail: { color: '#296758', fontSize: 8, fontWeight: '800', marginTop: 2 },
-  bestMoveButtonArrow: { color: '#10201d', fontSize: 20, fontWeight: '900' },
+  bestMoveButtonText: { color: colors.textStrong, fontSize: 11, fontWeight: '900' },
+  bestMoveButtonDetail: { color: colors.accentSurface, fontSize: 8, fontWeight: '800', marginTop: 2 },
+  bestMoveButtonArrow: { color: colors.textStrong, fontSize: 20, fontWeight: '900' },
   lastMoveCard: {
     padding: 13,
     borderRadius: 11,
     borderWidth: 1,
-    borderColor: '#303945',
-    backgroundColor: '#171c23',
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
   },
   lastMoveTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  lastMoveNotation: { color: '#f1f4f6', fontSize: 16, fontWeight: '900', marginTop: 4 },
-  qualityBadge: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 7 },
-  qualityText: { color: '#10201d', fontSize: 9, fontWeight: '900' },
-  bestMoveCopy: { color: '#89939f', fontSize: 9, marginTop: 8 },
+  lastMoveNotation: { color: colors.textStrong, fontSize: 16, fontWeight: '900', marginTop: 4 },
+  qualityBadge: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: radius.small },
+  qualityText: { color: colors.textInverse, fontSize: 9, fontWeight: '900' },
+  bestMoveCopy: { color: colors.textMuted, fontSize: 9, marginTop: 8 },
   linesCard: {
     overflow: 'hidden',
     borderRadius: 11,
     borderWidth: 1,
-    borderColor: '#303945',
-    backgroundColor: '#171c23',
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
   },
   linesHeader: { paddingHorizontal: 13, paddingTop: 12, paddingBottom: 9 },
-  engineMeta: { color: '#566270', fontSize: 7, fontWeight: '800', marginTop: 4 },
+  engineMeta: { color: colors.textFaint, fontSize: 7, fontWeight: '800', marginTop: 4 },
   lineRow: {
     minHeight: 45,
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 12,
     borderTopWidth: 1,
-    borderTopColor: '#252c36',
+    borderTopColor: colors.border,
   },
   lineRank: { width: 23, height: 23, alignItems: 'center', justifyContent: 'center', borderRadius: 12 },
-  lineRankText: { color: '#10201d', fontSize: 10, fontWeight: '900' },
+  lineRankText: { color: colors.textInverse, fontSize: 10, fontWeight: '900' },
   lineCopy: { flex: 1, minWidth: 0, marginLeft: 10 },
-  lineMove: { color: '#e5e9ed', fontSize: 13, fontWeight: '900' },
-  lineVariation: { color: '#64717e', fontSize: 7, fontWeight: '700', marginTop: 2 },
-  lineScore: { color: '#abb5bf', fontSize: 11, fontWeight: '900', fontVariant: ['tabular-nums'] },
-  emptyLines: { minHeight: 48, alignItems: 'center', justifyContent: 'center', borderTopWidth: 1, borderTopColor: '#252c36' },
-  emptyLinesText: { color: '#6f7a87', fontSize: 10 },
+  lineMove: { color: colors.text, fontSize: 13, fontWeight: '900' },
+  lineVariation: { color: colors.textFaint, fontSize: 7, fontWeight: '700', marginTop: 2 },
+  lineScore: { color: colors.textMuted, fontSize: 11, fontWeight: '900', fontVariant: ['tabular-nums'] },
+  emptyLines: { minHeight: 48, alignItems: 'center', justifyContent: 'center', borderTopWidth: 1, borderTopColor: colors.border },
+  emptyLinesText: { color: colors.textFaint, fontSize: 10 },
   historyCard: {
     padding: 13,
     borderRadius: 11,
     borderWidth: 1,
-    borderColor: '#303945',
-    backgroundColor: '#171c23',
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
   },
-  historyEmpty: { color: '#6f7a87', fontSize: 10, marginTop: 10 },
+  historyEmpty: { color: colors.textFaint, fontSize: 10, marginTop: 10 },
   historyList: { marginTop: 8 },
-  historyRow: { minHeight: 32, flexDirection: 'row', alignItems: 'center', borderTopWidth: 1, borderTopColor: '#252c36' },
-  historyNumber: { width: 24, color: '#687381', fontSize: 9, fontWeight: '800' },
+  historyRow: { minHeight: 32, flexDirection: 'row', alignItems: 'center', borderTopWidth: 1, borderTopColor: colors.border },
+  historyNumber: { width: 24, color: colors.textFaint, fontSize: 9, fontWeight: '800' },
   historyColor: { width: 7, height: 7, borderRadius: 4, marginRight: 8 },
-  redDot: { backgroundColor: '#c84b44' },
-  blueDot: { backgroundColor: '#3f77aa' },
-  historyMove: { flex: 1, color: '#cbd2d9', fontSize: 10, fontWeight: '800' },
-  historyQuality: { color: '#7c8793', fontSize: 9, fontWeight: '900' },
-  errorBanner: { position: 'absolute', right: 12, bottom: 12, left: 12, padding: 11, borderRadius: 9, backgroundColor: '#6f3539' },
-  errorText: { color: '#ffe0de', fontSize: 10, fontWeight: '700', textAlign: 'center' },
+  redDot: { backgroundColor: players.Red.strong },
+  blueDot: { backgroundColor: players.Blue.strong },
+  historyMove: { flex: 1, color: colors.textSoft, fontSize: 10, fontWeight: '800' },
+  historyQuality: { color: colors.textMuted, fontSize: 9, fontWeight: '900' },
+  errorBanner: { position: 'absolute', right: 12, bottom: 12, left: 12, padding: 11, borderRadius: radius.medium, backgroundColor: colors.dangerSurface },
+  errorText: { color: colors.dangerText, fontSize: 10, fontWeight: '700', textAlign: 'center' },
 });
