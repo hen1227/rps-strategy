@@ -1,6 +1,9 @@
 import { StyleSheet, Text, View } from 'react-native';
 
+import PieceIcon from './PieceIcon';
+
 const BOARD_SIZE = 9;
+const MODE_INFILTRATION = 'V3';
 
 const DEFAULT_ROWS = [
   'R.P.S.P.R',
@@ -15,12 +18,24 @@ const DEFAULT_ROWS = [
 ];
 
 const PIECES_BY_SYMBOL = {
-  R: { owner: 'blue', piece: 'R' },
-  P: { owner: 'blue', piece: 'P' },
-  S: { owner: 'blue', piece: 'S' },
-  r: { owner: 'red', piece: 'R' },
-  p: { owner: 'red', piece: 'P' },
-  s: { owner: 'red', piece: 'S' },
+  R: { owner: 'blue', piece: 'Rock' },
+  P: { owner: 'blue', piece: 'Paper' },
+  S: { owner: 'blue', piece: 'Scissors' },
+  r: { owner: 'red', piece: 'Rock' },
+  p: { owner: 'red', piece: 'Paper' },
+  s: { owner: 'red', piece: 'Scissors' },
+};
+
+// The preview board is a fixed 116pt wide with 8pt of padding around it.
+const PREVIEW_PIECE_SIZE = 11;
+
+// Mirrors tintForTile in Board.js: in Infiltration the far ranks are the goal
+// each side is running at, so the thumbnail marks them the same way.
+const goalOwnerFor = (modeId, y) => {
+  if (modeId !== MODE_INFILTRATION) return null;
+  if (y === 0) return 'red';
+  if (y === BOARD_SIZE - 1) return 'blue';
+  return null;
 };
 
 const keyFor = (x, y) => `${x}:${y}`;
@@ -49,6 +64,7 @@ export default function ModePreview({ mode }) {
             {Array.from({ length: BOARD_SIZE }, (_, x) => {
               const key = keyFor(x, y);
               const piece = PIECES_BY_SYMBOL[rows[y][x]];
+              const goalOwner = goalOwnerFor(mode?.id, y);
               return (
                 <View
                   key={key}
@@ -59,15 +75,20 @@ export default function ModePreview({ mode }) {
                     showsTerritory && piece?.owner === 'blue' && styles.blueTerritory,
                   ]}
                 >
-                  {piece && (
+                  {goalOwner && (
                     <View
                       style={[
-                        styles.piece,
-                        piece.owner === 'red' ? styles.redPiece : styles.bluePiece,
+                        styles.goalTint,
+                        goalOwner === 'red' ? styles.redGoalTint : styles.blueGoalTint,
                       ]}
-                    >
-                      <Text style={styles.pieceText}>{piece.piece}</Text>
-                    </View>
+                    />
+                  )}
+                  {piece && (
+                    <PieceIcon
+                      piece={piece.piece}
+                      color={piece.owner === 'red' ? 'Red' : 'Blue'}
+                      size={PREVIEW_PIECE_SIZE}
+                    />
                   )}
                 </View>
               );
@@ -123,6 +144,13 @@ const styles = StyleSheet.create({
   squareDark: { backgroundColor: '#769656' },
   redTerritory: { backgroundColor: '#a85d52' },
   blueTerritory: { backgroundColor: '#527da1' },
+  goalTint: {
+    ...StyleSheet.absoluteFillObject,
+    borderWidth: 0.5,
+    borderColor: 'rgba(255, 255, 255, 0.28)',
+  },
+  redGoalTint: { backgroundColor: 'rgba(190, 56, 65, 0.42)' },
+  blueGoalTint: { backgroundColor: 'rgba(47, 111, 174, 0.42)' },
   piece: {
     width: '76%',
     aspectRatio: 1,

@@ -1,4 +1,5 @@
 const USER_ID_KEY = 'rps.userAccountId.v1';
+const PROFILE_KEY_KEY = 'rps.localProfileKey.v1';
 const GAME_SESSION_ID_KEY = 'rps.activeGameSessionId.v1';
 
 const UUID_PATTERN =
@@ -30,6 +31,16 @@ export const createUUID = () => {
   )}-${hex.slice(20)}`;
 };
 
+export const createProfileKey = () => {
+  const bytes = new Uint8Array(32);
+  if (globalThis.crypto?.getRandomValues) {
+    globalThis.crypto.getRandomValues(bytes);
+  } else {
+    for (let index = 0; index < bytes.length; index += 1) bytes[index] = randomByte();
+  }
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+};
+
 export const getOrCreateUserId = () => {
   const storage = localStorage();
   try {
@@ -46,6 +57,24 @@ export const getOrCreateUserId = () => {
     // localStorage can be unavailable in private or restricted contexts.
   }
   return userId;
+};
+
+export const getOrCreateProfileKey = () => {
+  const storage = localStorage();
+  try {
+    const existing = storage?.getItem(PROFILE_KEY_KEY);
+    if (existing && existing.length >= 32 && existing.length <= 256) return existing;
+  } catch {
+    // An in-memory key still authenticates this tab in restricted contexts.
+  }
+
+  const profileKey = createProfileKey();
+  try {
+    storage?.setItem(PROFILE_KEY_KEY, profileKey);
+  } catch {
+    // The account will last only for this tab when localStorage is unavailable.
+  }
+  return profileKey;
 };
 
 export const readGameSessionId = () => {

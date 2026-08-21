@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import {
   Modal,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   useWindowDimensions,
@@ -10,8 +11,10 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import Board from '../components/Board';
+import GameChat from '../components/GameChat';
 import TerritoryMeter from '../components/TerritoryMeter';
 import { useGameStore } from '../store/gameStore';
+import { useTournamentCall } from '../store/useTournamentCall';
 
 const BOARD_SIZE = 9;
 const LOW_TIME_MS = 20_000;
@@ -155,9 +158,11 @@ function LiveClock({ clock, color, gameStatus }) {
   );
 }
 
-function PlayerBar({ clock, color, gameStatus, isYou, profile }) {
+function PlayerBar({ clock, color, fallbackLabel, gameStatus, isYou, profile }) {
   const isActive = gameStatus === 'InProgress' && clock?.activeColor === color;
-  const label = isYou ? 'You' : 'Opponent';
+  const label = fallbackLabel ?? (isYou ? 'You' : 'Opponent');
+  const discord = profile?.discord?.trim();
+  const activity = isActive ? 'Thinking' : color;
 
   return (
     <View style={[styles.playerBar, isActive && styles.playerBarActive]}>
@@ -172,7 +177,7 @@ function PlayerBar({ clock, color, gameStatus, isYou, profile }) {
           {isYou && <Text style={styles.youLabel}>YOU</Text>}
         </View>
         <Text style={[styles.playerMeta, isActive && styles.playerMetaActive]}>
-          {isActive ? 'Thinking' : color}
+          {discord ? `Discord: ${discord} · ${activity}` : activity}
         </Text>
       </View>
       <LiveClock clock={clock} color={color} gameStatus={gameStatus} />
@@ -374,7 +379,24 @@ function OutcomeModal({ gameState, onReview, onReturn, playerColor, visible }) {
   );
 }
 
-function StatusContent({ gameState, isMyTurn, playerColor, selectedTile }) {
+function StatusContent({ gameState, isMyTurn, isSpectating, playerColor, selectedTile }) {
+  if (isSpectating) {
+    if (gameState.status === 'Finished') {
+      return gameState.winner === 'Neutral'
+        ? { title: 'Game drawn', detail: 'The live match has ended.', tone: 'neutral' }
+        : {
+            title: `${gameState.winner} won`,
+            detail: 'The live match has ended.',
+            tone: 'positive',
+          };
+    }
+    return {
+      title: `${gameState.currentTurn} to move`,
+      detail: 'You are watching this game live.',
+      tone: 'neutral',
+    };
+  }
+
   if (gameState.status === 'Finished') {
     const isDraw = gameState.winner === 'Neutral';
     const didWin = gameState.winner === playerColor;
@@ -402,8 +424,14 @@ function StatusContent({ gameState, isMyTurn, playerColor, selectedTile }) {
   };
 }
 
-function StatusCard({ gameState, isMyTurn, onReturn, playerColor, selectedTile, wide }) {
-  const status = StatusContent({ gameState, isMyTurn, playerColor, selectedTile });
+function StatusCard({ gameState, isMyTurn, isSpectating, onReturn, playerColor, selectedTile, wide }) {
+  const status = StatusContent({
+    gameState,
+    isMyTurn,
+    isSpectating,
+    playerColor,
+    selectedTile,
+  });
   const isFinished = gameState.status === 'Finished';
 
   return (
@@ -426,13 +454,13 @@ function StatusCard({ gameState, isMyTurn, onReturn, playerColor, selectedTile, 
         </View>
       </View>
 
-      {isFinished ? (
+      {isFinished || isSpectating ? (
         <Pressable
           accessibilityRole="button"
           onPress={onReturn}
           style={({ pressed }) => [styles.returnButton, pressed && styles.buttonPressed]}
         >
-          <Text style={styles.returnButtonText}>Modes</Text>
+          <Text style={styles.returnButtonText}>{isSpectating && !isFinished ? 'Leave' : 'Modes'}</Text>
         </Pressable>
       ) : (
         <View style={styles.moveBadge}>
@@ -451,6 +479,7 @@ export default function GameScreen({ navigation }) {
   const gameState = useGameStore((state) => state.gameState);
   const lastMove = useGameStore((state) => state.lastMove);
   const playerColor = useGameStore((state) => state.playerColor);
+  const isSpectating = useGameStore((state) => state.isSpectating);
   const connectionStatus = useGameStore((state) => state.connectionStatus);
   const opponentReconnectDeadline = useGameStore(
     (state) => state.opponentReconnectDeadline,
@@ -463,9 +492,20 @@ export default function GameScreen({ navigation }) {
   const acceptDraw = useGameStore((state) => state.acceptDraw);
   const declineDraw = useGameStore((state) => state.declineDraw);
   const resignGame = useGameStore((state) => state.resignGame);
+  const accountId = useGameStore((state) => state.accountId);
+  const chatMessages = useGameStore((state) => state.chatMessages);
+  const liveGames = useGameStore((state) => state.liveGames);
+  const chatVisible = useGameStore((state) => state.chatVisible);
+  const showSpectatorMessages = useGameStore((state) => state.showSpectatorMessages);
+  const sendChat = useGameStore((state) => state.sendChat);
+  const toggleChat = useGameStore((state) => state.toggleChat);
+  const toggleSpectatorMessages = useGameStore(
+    (state) => state.toggleSpectatorMessages,
+  );
   const clearGame = useGameStore((state) => state.clearGame);
   const error = useGameStore((state) => state.error);
   const clearError = useGameStore((state) => state.clearError);
+  const tournamentCall = useTournamentCall();
 
   if (!gameState) {
     return (
@@ -494,23 +534,33 @@ export default function GameScreen({ navigation }) {
       Math.min(620, width - horizontalAllowance, height - verticalAllowance),
     ),
   );
-  const opponentColor = otherColor(playerColor);
-  const myProfile = playerColor === 'Red' ? gameState.redPlayer : gameState.bluePlayer;
-  const opponentProfile = playerColor === 'Red' ? gameState.bluePlayer : gameState.redPlayer;
+  const viewColor = isSpectating ? 'Red' : playerColor;
+  const topColor = isSpectating ? 'Blue' : otherColor(playerColor);
+  const bottomColor = isSpectating ? 'Red' : playerColor;
+  const topProfile = topColor === 'Red' ? gameState.redPlayer : gameState.bluePlayer;
+  const bottomProfile = bottomColor === 'Red' ? gameState.redPlayer : gameState.bluePlayer;
   const isConnected = connectionStatus === 'connected';
   const isMyTurn =
-    isConnected && gameState.status === 'InProgress' && gameState.currentTurn === playerColor;
+    !isSpectating &&
+    isConnected &&
+    gameState.status === 'InProgress' &&
+    gameState.currentTurn === playerColor;
   const timeControlLabel = formatTimeControl(gameState.timeControl);
+  const spectatorCount =
+    liveGames.find((liveGame) => liveGame.gameId === gameState.gameId)?.spectatorCount ?? 0;
   const hasOpponentDrawOffer =
+    !isSpectating &&
     gameState.status === 'InProgress' &&
     gameState.drawOfferedBy &&
     gameState.drawOfferedBy !== playerColor;
   const showOutcome =
-    gameState.status === 'Finished' && reviewedResultId !== gameState.gameId;
+    !isSpectating &&
+    gameState.status === 'Finished' &&
+    reviewedResultId !== gameState.gameId;
 
   const returnToModes = () => {
     clearGame();
-    navigation.goBack();
+    navigation.navigate('Lobby');
   };
 
   const confirmResign = () => {
@@ -522,10 +572,12 @@ export default function GameScreen({ navigation }) {
     <>
       {!isConnected && gameState.status === 'InProgress' && (
         <View style={styles.selfReconnectNotice}>
-          <Text style={styles.selfReconnectText}>Reconnecting to your match…</Text>
+          <Text style={styles.selfReconnectText}>
+            {isSpectating ? 'Reconnecting to the live game…' : 'Reconnecting to your match…'}
+          </Text>
         </View>
       )}
-      <OpponentReconnectNotice deadline={opponentReconnectDeadline} />
+      {!isSpectating && <OpponentReconnectNotice deadline={opponentReconnectDeadline} />}
       {hasOpponentDrawOffer && (
         <DrawOfferNotice
           disabled={!isConnected}
@@ -536,7 +588,7 @@ export default function GameScreen({ navigation }) {
     </>
   );
 
-  const gameActions = gameState.status === 'InProgress' ? (
+  const gameActions = !isSpectating && gameState.status === 'InProgress' ? (
     <GameActions
       connected={isConnected}
       gameState={gameState}
@@ -551,10 +603,11 @@ export default function GameScreen({ navigation }) {
     <>
       <PlayerBar
         clock={gameState.clock}
-        color={opponentColor}
+        color={topColor}
+        fallbackLabel={isSpectating ? `${topColor} player` : 'Opponent'}
         gameStatus={gameState.status}
         isYou={false}
-        profile={opponentProfile}
+        profile={topProfile}
       />
       <Board
         boardSize={boardSize}
@@ -564,18 +617,36 @@ export default function GameScreen({ navigation }) {
         modeId={gameState.mode.id}
         onPieceDrop={movePiece}
         onTilePress={selectTile}
-        playerColor={playerColor}
+        playerColor={viewColor}
         selectedTile={selectedTile}
         validMoves={validMoves}
       />
       <PlayerBar
         clock={gameState.clock}
-        color={playerColor}
+        color={bottomColor}
+        fallbackLabel={isSpectating ? `${bottomColor} player` : 'You'}
         gameStatus={gameState.status}
-        isYou
-        profile={myProfile}
+        isYou={!isSpectating}
+        profile={bottomProfile}
       />
     </>
+  );
+
+  const gameChat = (
+    <GameChat
+      accountId={accountId}
+      chatVisible={chatVisible}
+      connected={isConnected}
+      gameStatus={gameState.status}
+      isSpectating={isSpectating}
+      messages={chatMessages}
+      onSend={sendChat}
+      onToggleChat={toggleChat}
+      onToggleSpectatorMessages={toggleSpectatorMessages}
+      showSpectatorMessages={showSpectatorMessages}
+      spectatorCount={spectatorCount}
+      wide={isWide}
+    />
   );
 
   return (
@@ -584,7 +655,12 @@ export default function GameScreen({ navigation }) {
         <View style={styles.topBar}>
           <View style={styles.matchIdentity}>
             <Text style={styles.matchKicker}>
-              {gameState.mode.shortCode} · {gameState.status === 'InProgress' ? 'LIVE MATCH' : 'FINAL'}
+              {gameState.mode.shortCode} ·{' '}
+              {gameState.status === 'Finished'
+                ? 'FINAL'
+                : isSpectating
+                  ? 'SPECTATING LIVE'
+                  : 'LIVE MATCH'}
             </Text>
             <Text style={styles.modeName}>{gameState.mode.name}</Text>
           </View>
@@ -597,10 +673,19 @@ export default function GameScreen({ navigation }) {
         {isWide ? (
           <View style={styles.wideLayout}>
             <View style={styles.playColumn}>{playerBars}</View>
-            <View style={[styles.sidePanel, { height: boardSize + 120 }]}>
+            <ScrollView
+              contentContainerStyle={[
+                styles.sidePanelContent,
+                Boolean(tournamentCall) && styles.calloutClearance,
+              ]}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+              style={[styles.sidePanel, { height: boardSize + 120 }]}
+            >
               <StatusCard
                 gameState={gameState}
                 isMyTurn={isMyTurn}
+                isSpectating={isSpectating}
                 onReturn={returnToModes}
                 playerColor={playerColor}
                 selectedTile={selectedTile}
@@ -610,41 +695,56 @@ export default function GameScreen({ navigation }) {
               {matchNotices}
               {gameActions}
 
-              <View style={styles.detailCard}>
-                <Text style={styles.detailEyebrow}>OBJECTIVE</Text>
-                <Text style={styles.detailTitle}>{gameState.mode.description}</Text>
-                <Text style={styles.detailBody}>{gameState.mode.objective}</Text>
-              </View>
-
               {hasTerritory && <TerritoryMeter grid={gameState.grid} />}
 
-              <View style={styles.matchFacts}>
-                <View>
-                  <Text style={styles.factLabel}>MOVE</Text>
-                  <Text style={styles.factValue}>{gameState.moveNumber + 1}</Text>
-                </View>
-                <View style={styles.factDivider} />
-                <View>
-                  <Text style={styles.factLabel}>CLOCK</Text>
-                  <Text style={styles.factValue}>{timeControlLabel}</Text>
-                </View>
-              </View>
-            </View>
+              {gameChat}
+
+              {!chatVisible && (
+                <>
+                  <View style={styles.detailCard}>
+                    <Text style={styles.detailEyebrow}>OBJECTIVE</Text>
+                    <Text style={styles.detailTitle}>{gameState.mode.description}</Text>
+                    <Text style={styles.detailBody}>{gameState.mode.objective}</Text>
+                  </View>
+
+                  <View style={styles.matchFacts}>
+                    <View>
+                      <Text style={styles.factLabel}>MOVE</Text>
+                      <Text style={styles.factValue}>{gameState.moveNumber + 1}</Text>
+                    </View>
+                    <View style={styles.factDivider} />
+                    <View>
+                      <Text style={styles.factLabel}>CLOCK</Text>
+                      <Text style={styles.factValue}>{timeControlLabel}</Text>
+                    </View>
+                  </View>
+                </>
+              )}
+            </ScrollView>
           </View>
         ) : (
-          <View style={styles.mobileLayout}>
+          <ScrollView
+            contentContainerStyle={[
+              styles.mobileLayout,
+              Boolean(tournamentCall) && styles.calloutClearance,
+            ]}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+          >
             {playerBars}
             {hasTerritory && <TerritoryMeter grid={gameState.grid} />}
             {matchNotices}
             {gameActions}
+            {gameChat}
             <StatusCard
               gameState={gameState}
               isMyTurn={isMyTurn}
+              isSpectating={isSpectating}
               onReturn={returnToModes}
               playerColor={playerColor}
               selectedTile={selectedTile}
             />
-          </View>
+          </ScrollView>
         )}
 
         {error && (
@@ -659,18 +759,22 @@ export default function GameScreen({ navigation }) {
           </Pressable>
         )}
 
-        <ConfirmResignModal
-          onCancel={() => setShowResignConfirmation(false)}
-          onConfirm={confirmResign}
-          visible={showResignConfirmation}
-        />
-        <OutcomeModal
-          gameState={gameState}
-          onReview={() => setReviewedResultId(gameState.gameId)}
-          onReturn={returnToModes}
-          playerColor={playerColor}
-          visible={showOutcome}
-        />
+        {!isSpectating && (
+          <>
+            <ConfirmResignModal
+              onCancel={() => setShowResignConfirmation(false)}
+              onConfirm={confirmResign}
+              visible={showResignConfirmation}
+            />
+            <OutcomeModal
+              gameState={gameState}
+              onReview={() => setReviewedResultId(gameState.gameId)}
+              onReturn={returnToModes}
+              playerColor={playerColor}
+              visible={showOutcome}
+            />
+          </>
+        )}
       </View>
     </SafeAreaView>
   );
@@ -688,6 +792,8 @@ const styles = StyleSheet.create({
     paddingBottom: 8,
   },
   centered: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 },
+  // Room for the floating tournament call to action.
+  calloutClearance: { paddingBottom: 88 },
   emptyTitle: { color: '#f4f6f8', fontSize: 25, fontWeight: '900' },
   emptyBody: { color: '#929ba8', marginTop: 8, textAlign: 'center' },
   emptyButton: {
@@ -721,7 +827,7 @@ const styles = StyleSheet.create({
   },
   timeControlLabel: { color: '#6f7a88', fontSize: 7, fontWeight: '900', letterSpacing: 1.1 },
   timeControlValue: { color: '#f4f6f8', fontSize: 15, fontWeight: '900', marginTop: 1 },
-  mobileLayout: { flex: 1, alignItems: 'center', gap: 7 },
+  mobileLayout: { flexGrow: 1, alignItems: 'center', gap: 7, paddingBottom: 4 },
   wideLayout: {
     flex: 1,
     flexDirection: 'row',
@@ -730,7 +836,8 @@ const styles = StyleSheet.create({
     gap: 18,
   },
   playColumn: { alignItems: 'center', gap: 7 },
-  sidePanel: { width: 310, gap: 10 },
+  sidePanel: { width: 310 },
+  sidePanelContent: { gap: 10, paddingBottom: 2 },
   playerBar: {
     width: '100%',
     minHeight: 50,

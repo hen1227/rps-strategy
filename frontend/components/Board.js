@@ -1,7 +1,8 @@
-import { memo, useCallback, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated as NativeAnimated,
   PanResponder,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -18,8 +19,18 @@ const MODE_ANNIHILATION = 'V1';
 const MODE_INFILTRATION = 'V3';
 const MODE_TOTAL_WAR = 'V5';
 const TILE_PERCENTAGE = 100 / BOARD_SIZE;
+const ANNOTATION_COLOR = '#f2811d';
+const RIGHT_BUTTON = 2;
+const RIGHT_BUTTON_MASK = 2;
+const IS_WEB = Platform.OS === 'web';
 
 const samePosition = (first, second) => first?.x === second?.x && first?.y === second?.y;
+
+const sameArrow = (first, second) =>
+  samePosition(first?.from, second?.from) && samePosition(first?.to, second?.to);
+
+const displayCenter = (value, isFlipped) =>
+  (isFlipped ? BOARD_SIZE - 1 - value : value) + 0.5;
 
 const tintForTile = (modeId, tile) => {
   if (modeId === MODE_ANNIHILATION) return null;
@@ -54,6 +65,25 @@ const positionFromDrag = (from, dx, dy, boardSize, isFlipped) => {
     return from;
   }
   return to;
+};
+
+const positionFromClientPoint = (rect, clientX, clientY, isFlipped) => {
+  if (!rect || rect.width <= 0 || rect.height <= 0) return null;
+
+  const displayX = Math.floor(((clientX - rect.left) / rect.width) * BOARD_SIZE);
+  const displayY = Math.floor(((clientY - rect.top) / rect.height) * BOARD_SIZE);
+  if (
+    displayX < 0 ||
+    displayX >= BOARD_SIZE ||
+    displayY < 0 ||
+    displayY >= BOARD_SIZE
+  ) {
+    return null;
+  }
+
+  return isFlipped
+    ? { x: BOARD_SIZE - 1 - displayX, y: BOARD_SIZE - 1 - displayY }
+    : { x: displayX, y: displayY };
 };
 
 const DraggablePiece = memo(function DraggablePiece({
@@ -199,12 +229,151 @@ export default function Board({
     [onPieceDrop],
   );
 
+  const surfaceRef = useRef(null);
+  const arrowOrigin = useRef(null);
+  const [highlights, setHighlights] = useState([]);
+  const [arrows, setArrows] = useState([]);
+  const [pendingArrow, setPendingArrow] = useState(null);
+
+  const positionSignature = useMemo(
+    () =>
+      grid
+        .map((row) => row.map((tile) => `${tile.occupant}${tile.occupantOwner}`).join())
+        .join('|'),
+    [grid],
+  );
+
+  const clearAnnotations = useCallback(() => {
+    arrowOrigin.current = null;
+    setPendingArrow(null);
+    setHighlights((current) => (current.length ? [] : current));
+    setArrows((current) => (current.length ? [] : current));
+  }, []);
+
+  // Chess.com behaviour: annotations survive only until the next move is played.
+  useEffect(() => {
+    clearAnnotations();
+  }, [clearAnnotations, positionSignature]);
+
+  const positionFromEvent = useCallback(
+    (event) => {
+      const rect = surfaceRef.current?.getBoundingClientRect?.();
+      return positionFromClientPoint(rect, event.clientX, event.clientY, isFlipped);
+    },
+    [isFlipped],
+  );
+
+  const handleMouseDown = useCallback(
+    (event) => {
+      const source = event.nativeEvent ?? event;
+      if (source.button === RIGHT_BUTTON) {
+        const position = positionFromEvent(source);
+        arrowOrigin.current = position;
+        setPendingArrow(position ? { from: position, to: position } : null);
+        return;
+      }
+      // Any left press on the board wipes the annotations, move or not.
+      clearAnnotations();
+    },
+    [clearAnnotations, positionFromEvent],
+  );
+
+  const handleMouseMove = useCallback(
+    (event) => {
+      if (!arrowOrigin.current) return;
+      const source = event.nativeEvent ?? event;
+      if ((source.buttons & RIGHT_BUTTON_MASK) === 0) {
+        arrowOrigin.current = null;
+        setPendingArrow(null);
+        return;
+      }
+
+      const from = arrowOrigin.current;
+      const to = positionFromEvent(source) ?? from;
+      setPendingArrow((current) =>
+        samePosition(current?.to, to) ? current : { from, to },
+      );
+    },
+    [positionFromEvent],
+  );
+
+  const handleMouseUp = useCallback(
+    (event) => {
+      const source = event.nativeEvent ?? event;
+      if (source.button !== RIGHT_BUTTON) return;
+
+      const from = arrowOrigin.current;
+      arrowOrigin.current = null;
+      setPendingArrow(null);
+      if (!from) return;
+
+      const to = positionFromEvent(source);
+      if (!to) return;
+
+      if (samePosition(from, to)) {
+        setHighlights((current) =>
+          current.some((tile) => samePosition(tile, to))
+            ? current.filter((tile) => !samePosition(tile, to))
+            : [...current, to],
+        );
+        return;
+      }
+
+      const arrow = { from, to };
+      setArrows((current) =>
+        current.some((candidate) => sameArrow(candidate, arrow))
+          ? current.filter((candidate) => !sameArrow(candidate, arrow))
+          : [...current, arrow],
+      );
+    },
+    [positionFromEvent],
+  );
+
+  // A release outside the board, or losing focus mid-drag, abandons the arrow.
+  useEffect(() => {
+    if (!IS_WEB || !pendingArrow) return undefined;
+
+    const abandonArrow = () => {
+      arrowOrigin.current = null;
+      setPendingArrow(null);
+    };
+
+    window.addEventListener('mouseup', abandonArrow);
+    window.addEventListener('blur', abandonArrow);
+    return () => {
+      window.removeEventListener('mouseup', abandonArrow);
+      window.removeEventListener('blur', abandonArrow);
+    };
+  }, [pendingArrow]);
+
+  const annotationHandlers = IS_WEB
+    ? {
+        onContextMenu: (event) => event.preventDefault(),
+        onMouseDown: handleMouseDown,
+        onMouseMove: handleMouseMove,
+        onMouseUp: handleMouseUp,
+      }
+    : {};
+
+  const highlightKeys = useMemo(
+    () => new Set(highlights.map(({ x, y }) => `${x}:${y}`)),
+    [highlights],
+  );
+
+  const annotationArrows = useMemo(() => {
+    if (!pendingArrow || samePosition(pendingArrow.from, pendingArrow.to)) return arrows;
+    return [
+      ...arrows.filter((candidate) => !sameArrow(candidate, pendingArrow)),
+      pendingArrow,
+    ];
+  }, [arrows, pendingArrow]);
+
   return (
     <View
       accessibilityLabel="Nine by nine game board"
       style={[styles.boardFrame, { width: boardSize, height: boardSize }]}
     >
-      <View style={styles.boardSurface}>
+      <View ref={surfaceRef} style={styles.boardSurface} {...annotationHandlers}>
         {displayedGrid.map((row, displayY) => (
           <View key={`row-${displayY}`} style={styles.row}>
             {row.map((tile, displayX) => {
@@ -213,6 +382,7 @@ export default function Board({
               const isValid = validMoveKeys.has(`${tile.x}:${tile.y}`);
               const isCapture = isValid && tile.occupant !== 'Empty';
               const isLight = (tile.x + tile.y) % 2 === 0;
+              const isHighlighted = highlightKeys.has(`${tile.x}:${tile.y}`);
               const isLastMoveFrom = samePosition(lastMove?.from, position);
               const isLastMoveTo = samePosition(lastMove?.to, position);
               const tint = tintForTile(modeId, tile);
@@ -221,6 +391,7 @@ export default function Board({
                   ? `, ${tint.color} goal tile`
                   : `, captured by ${tint.color}`
                 : '';
+              const highlightLabel = isHighlighted ? ', marked' : '';
               const lastMoveLabel = isLastMoveFrom
                 ? ', previous move origin'
                 : isLastMoveTo
@@ -233,7 +404,7 @@ export default function Board({
                   accessibilityRole="button"
                   accessibilityLabel={`${tile.occupantOwner} ${tile.occupant} on ${
                     FILES[tile.x]
-                  }${BOARD_SIZE - tile.y}${tintLabel}${lastMoveLabel}`}
+                  }${BOARD_SIZE - tile.y}${tintLabel}${highlightLabel}${lastMoveLabel}`}
                   onPress={() => onTilePress(position)}
                   style={[
                     styles.tile,
@@ -259,6 +430,7 @@ export default function Board({
                     />
                   )}
                   {isSelected && <View style={styles.selectionTint} />}
+                  {isHighlighted && <View style={styles.annotationTint} />}
                   {isValid &&
                     (isCapture ? (
                       <View style={styles.captureRing} />
@@ -320,10 +492,10 @@ export default function Board({
             </Defs>
             {analysisArrows.slice(0, 3).map((arrow, index) => {
               const color = ['#51d6a9', '#55a9ff', '#f0b857'][index];
-              const fromX = (isFlipped ? 8 - arrow.from.x : arrow.from.x) + 0.5;
-              const fromY = (isFlipped ? 8 - arrow.from.y : arrow.from.y) + 0.5;
-              const toX = (isFlipped ? 8 - arrow.to.x : arrow.to.x) + 0.5;
-              const toY = (isFlipped ? 8 - arrow.to.y : arrow.to.y) + 0.5;
+              const fromX = displayCenter(arrow.from.x, isFlipped);
+              const fromY = displayCenter(arrow.from.y, isFlipped);
+              const toX = displayCenter(arrow.to.x, isFlipped);
+              const toY = displayCenter(arrow.to.y, isFlipped);
               return (
                 <Line
                   key={`${arrow.from.x}:${arrow.from.y}-${arrow.to.x}:${arrow.to.y}`}
@@ -339,6 +511,39 @@ export default function Board({
                 />
               );
             })}
+          </Svg>
+        )}
+
+        {annotationArrows.length > 0 && (
+          <Svg aria-hidden style={styles.annotationLayer} viewBox="0 0 9 9">
+            <Defs>
+              <Marker
+                id="board-annotation-arrow"
+                markerHeight="5"
+                markerUnits="strokeWidth"
+                markerWidth="5"
+                orient="auto"
+                refX="8"
+                refY="5"
+                viewBox="0 0 10 10"
+              >
+                <Polygon fill={ANNOTATION_COLOR} points="0,0 10,5 0,10 2.5,5" />
+              </Marker>
+            </Defs>
+            {annotationArrows.map((arrow) => (
+              <Line
+                key={`${arrow.from.x}:${arrow.from.y}-${arrow.to.x}:${arrow.to.y}`}
+                markerEnd="url(#board-annotation-arrow)"
+                opacity={0.68}
+                stroke={ANNOTATION_COLOR}
+                strokeLinecap="round"
+                strokeWidth={0.12}
+                x1={displayCenter(arrow.from.x, isFlipped)}
+                x2={displayCenter(arrow.to.x, isFlipped)}
+                y1={displayCenter(arrow.from.y, isFlipped)}
+                y2={displayCenter(arrow.to.y, isFlipped)}
+              />
+            ))}
           </Svg>
         )}
 
@@ -381,9 +586,16 @@ const styles = StyleSheet.create({
     ],
     elevation: 8,
   },
-  boardSurface: { flex: 1, position: 'relative', overflow: 'hidden', borderRadius: 6 },
+  boardSurface: {
+    flex: 1,
+    position: 'relative',
+    overflow: 'hidden',
+    borderRadius: 6,
+    userSelect: 'none',
+  },
   row: { flex: 1, flexDirection: 'row' },
   analysisLayer: { ...StyleSheet.absoluteFillObject, zIndex: 4, pointerEvents: 'none' },
+  annotationLayer: { ...StyleSheet.absoluteFillObject, zIndex: 5, pointerEvents: 'none' },
   tile: {
     flex: 1,
     alignItems: 'center',
@@ -415,6 +627,12 @@ const styles = StyleSheet.create({
     zIndex: 1,
     pointerEvents: 'none',
     backgroundColor: 'rgba(242, 192, 67, 0.38)',
+  },
+  annotationTint: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 2,
+    pointerEvents: 'none',
+    backgroundColor: 'rgba(242, 129, 29, 0.78)',
   },
   validDot: {
     position: 'absolute',

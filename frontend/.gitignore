@@ -2,7 +2,7 @@
 
 .env.development
 
-public/rpsfish/*
+public/rpsfish/*.wasm
 
 # dependencies
 node_modules/

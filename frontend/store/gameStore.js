@@ -2,12 +2,13 @@ import { create } from 'zustand';
 
 import {
   clearGameSessionId,
+  getOrCreateProfileKey,
   getOrCreateUserId,
   readGameSessionId,
   saveGameSessionId,
 } from './localIdentity';
-
-const DEFAULT_WS_URL = process.env.EXPO_PUBLIC_WS_URL ?? 'ws://localhost:8080/ws';
+import { WS_URL } from './serverConfig';
+import { listTournaments } from './tournamentApi';
 
 // This fallback is visible only before the server catalog arrives. The backend
 // registry remains authoritative and replaces it on connection.
@@ -19,6 +20,7 @@ const BASE_MODES = [
     description: 'Leave no survivors.',
     objective: 'Capture every opposing piece.',
     displayOrder: 1,
+    playable: false,
     features: [],
     startingPosition: {
       rows: [
@@ -41,6 +43,7 @@ const BASE_MODES = [
     description: 'Pieces and territory.',
     objective: 'Annihilate the enemy or control most territory when the board is filled.',
     displayOrder: 2,
+    playable: true,
     features: ['territory'],
     startingPosition: {
       rows: [
@@ -63,6 +66,7 @@ const BASE_MODES = [
     description: 'Reach their boundary.',
     objective: "Move any piece onto the opponent's home boundary.",
     displayOrder: 3,
+    playable: true,
     features: [],
     startingPosition: {
       rows: [
@@ -88,13 +92,9 @@ const initialQueue = {
 };
 
 const accountId = getOrCreateUserId();
+const profileKey = getOrCreateProfileKey();
 let shouldReconnect = true;
 let reconnectTimer = null;
-
-const withIdentity = (url, userId) => {
-  const separator = url.includes('?') ? '&' : '?';
-  return `${url}${separator}userId=${encodeURIComponent(userId)}`;
-};
 
 const persistGame = (gameState) => {
   const gameId = gameState?.gameId ?? null;
@@ -106,6 +106,30 @@ const clearPersistedGame = () => {
   clearGameSessionId();
   return null;
 };
+
+// An HTTP payload has no live match state, so both merges keep whatever the
+// socket already told us about readiness and running games.
+const carryLiveState = (next, existing) => ({
+  ...next,
+  matchStates: next.matchStates ?? existing?.matchStates ?? [],
+});
+
+const findTournament = (tournaments, tournamentId) =>
+  tournaments.find((tournament) => tournament.tournamentId === tournamentId);
+
+const mergeTournament = (tournaments, next) => {
+  if (!next?.tournamentId) return tournaments;
+  const existing = findTournament(tournaments, next.tournamentId);
+  const merged = carryLiveState(next, existing);
+  return existing
+    ? tournaments.map((tournament) =>
+        tournament.tournamentId === merged.tournamentId ? merged : tournament,
+      )
+    : [merged, ...tournaments];
+};
+
+const mergeTournamentList = (tournaments, incoming) =>
+  incoming.map((next) => carryLiveState(next, findTournament(tournaments, next.tournamentId)));
 
 const send = (socket, payload) => {
   if (!socket || socket.readyState !== WebSocket.OPEN) {
@@ -152,18 +176,31 @@ const inferLastMove = (previousGame, nextGame) => {
 export const useGameStore = create((set, get) => ({
   socket: null,
   accountId,
+  profileKey,
+  account: null,
   gameSessionId: readGameSessionId(),
   connectionStatus: 'disconnected',
   error: null,
   modes: BASE_MODES,
   modePlayerCounts: {},
+  liveGames: [],
+  tournaments: [],
+  incomingChallenges: [],
+  outgoingChallenge: null,
+  acceptingChallengeId: null,
+  challengeNotice: null,
   queue: initialQueue,
   playerColor: null,
+  isSpectating: false,
+  spectatedGameId: null,
   gameState: null,
   lastMove: null,
   selectedTile: null,
   validMoves: [],
   opponentReconnectDeadline: null,
+  chatMessages: [],
+  chatVisible: true,
+  showSpectatorMessages: true,
 
   connect: () => {
     const existing = get().socket;
@@ -179,11 +216,17 @@ export const useGameStore = create((set, get) => ({
       clearTimeout(reconnectTimer);
       reconnectTimer = null;
     }
-    const socket = new WebSocket(withIdentity(DEFAULT_WS_URL, get().accountId));
+    const socket = new WebSocket(WS_URL);
     set({ socket, connectionStatus: 'connecting', error: null });
 
     socket.onopen = () => {
-      if (get().socket === socket) set({ error: null });
+      if (get().socket !== socket) return;
+      set({ error: null });
+      send(socket, {
+        type: 'authenticate',
+        userId: get().accountId,
+        profileKey: get().profileKey,
+      });
     };
     socket.onerror = () => {
       if (get().socket === socket) set({ error: 'Could not reach the game server.' });
@@ -194,6 +237,9 @@ export const useGameStore = create((set, get) => ({
         socket: null,
         connectionStatus: 'disconnected',
         queue: initialQueue,
+        incomingChallenges: [],
+        outgoingChallenge: null,
+        acceptingChallengeId: null,
       });
       if (shouldReconnect && !reconnectTimer) {
         reconnectTimer = setTimeout(() => {
@@ -217,7 +263,14 @@ export const useGameStore = create((set, get) => ({
     if (reconnectTimer) clearTimeout(reconnectTimer);
     reconnectTimer = null;
     get().socket?.close();
-    set({ socket: null, connectionStatus: 'disconnected', queue: initialQueue });
+    set({
+      socket: null,
+      connectionStatus: 'disconnected',
+      queue: initialQueue,
+      incomingChallenges: [],
+      outgoingChallenge: null,
+      acceptingChallengeId: null,
+    });
   },
 
   handleServerMessage: (message) => {
@@ -226,19 +279,45 @@ export const useGameStore = create((set, get) => ({
         set((state) => {
           const modes = message.modes?.length ? message.modes : state.modes;
           const gameSessionId = state.gameSessionId ?? readGameSessionId();
+          const spectatedGameId = gameSessionId ? null : state.spectatedGameId;
           if (gameSessionId) {
             send(state.socket, { type: 'rejoin_game', gameId: gameSessionId });
+          } else if (spectatedGameId) {
+            send(state.socket, { type: 'spectate_game', gameId: spectatedGameId });
           }
           return {
-            connectionStatus: gameSessionId ? 'rejoining' : 'connected',
+            connectionStatus: gameSessionId || spectatedGameId ? 'rejoining' : 'connected',
+            account: message.account ?? state.account,
             gameSessionId,
+            spectatedGameId,
             modes,
             modePlayerCounts: message.modePlayerCounts ?? state.modePlayerCounts,
+            liveGames: message.liveGames ?? [],
+            tournaments: message.tournaments ?? [],
+            incomingChallenges: message.challenges ?? [],
+            outgoingChallenge: null,
+            acceptingChallengeId: null,
           };
+        });
+        break;
+      case 'authentication_failed':
+        shouldReconnect = false;
+        set({
+          connectionStatus: 'disconnected',
+          error: message.message ?? 'This device could not authenticate the local account.',
         });
         break;
       case 'mode_player_counts':
         set({ modePlayerCounts: message.modePlayerCounts ?? {} });
+        break;
+      case 'live_games':
+        set({ liveGames: message.liveGames ?? [] });
+        break;
+      case 'tournaments':
+        set({ tournaments: message.tournaments ?? [] });
+        break;
+      case 'tournament_rejected':
+        set({ error: message.message ?? 'That tournament match is not available.' });
         break;
       case 'queue_update':
         set((state) => ({
@@ -253,18 +332,95 @@ export const useGameStore = create((set, get) => ({
       case 'queue_left':
         set({ queue: initialQueue });
         break;
+      case 'challenge_received':
+        if (message.challenge) {
+          set((state) => ({
+            incomingChallenges: state.incomingChallenges.some(
+              (challenge) => challenge.id === message.challenge.id,
+            )
+              ? state.incomingChallenges
+              : [...state.incomingChallenges, message.challenge],
+            challengeNotice: null,
+          }));
+        }
+        break;
+      case 'challenge_sent':
+        set({
+          outgoingChallenge: message.challenge ?? null,
+          acceptingChallengeId: null,
+          challengeNotice: null,
+          error: null,
+        });
+        break;
+      case 'challenge_removed':
+        set((state) => ({
+          incomingChallenges: state.incomingChallenges.filter(
+            (challenge) => challenge.id !== message.challenge?.id,
+          ),
+          acceptingChallengeId:
+            state.acceptingChallengeId === message.challenge?.id
+              ? null
+              : state.acceptingChallengeId,
+        }));
+        break;
+      case 'challenge_declined':
+      case 'challenge_cancelled':
+        set((state) => ({
+          incomingChallenges: state.incomingChallenges.filter(
+            (challenge) => challenge.id !== message.challenge?.id,
+          ),
+          outgoingChallenge:
+            state.outgoingChallenge?.id === message.challenge?.id
+              ? null
+              : state.outgoingChallenge,
+          acceptingChallengeId:
+            state.acceptingChallengeId === message.challenge?.id
+              ? null
+              : state.acceptingChallengeId,
+          challengeNotice: message.message ?? null,
+        }));
+        break;
+      case 'challenge_unavailable':
+        set((state) => {
+          const challengeId = message.challenge?.id ?? state.acceptingChallengeId;
+          return {
+            incomingChallenges: challengeId
+              ? state.incomingChallenges.filter((challenge) => challenge.id !== challengeId)
+              : state.incomingChallenges,
+            outgoingChallenge:
+              challengeId && state.outgoingChallenge?.id === challengeId
+                ? null
+                : state.outgoingChallenge,
+            acceptingChallengeId: null,
+            challengeNotice: message.message ?? 'That challenge is no longer available.',
+          };
+        });
+        break;
+      case 'challenge_rejected':
+        set({
+          acceptingChallengeId: null,
+          error: message.message ?? 'The challenge could not be completed.',
+        });
+        break;
       case 'match_found': {
         const gameSessionId = persistGame(message.gameState);
         set({
           playerColor: message.color,
+          isSpectating: false,
+          spectatedGameId: null,
           gameState: message.gameState,
           lastMove: null,
           gameSessionId,
           connectionStatus: 'connected',
           queue: initialQueue,
+          incomingChallenges: [],
+          outgoingChallenge: null,
+          acceptingChallengeId: null,
+          challengeNotice: null,
           selectedTile: null,
           validMoves: [],
           opponentReconnectDeadline: null,
+          chatMessages: [],
           error: null,
         });
         break;
@@ -276,6 +432,8 @@ export const useGameStore = create((set, get) => ({
           : persistGame(message.gameState);
         set({
           playerColor: message.color,
+          isSpectating: false,
+          spectatedGameId: null,
           gameState: message.gameState,
           lastMove: null,
           gameSessionId,
@@ -284,13 +442,34 @@ export const useGameStore = create((set, get) => ({
           selectedTile: null,
           validMoves: [],
           opponentReconnectDeadline: message.reconnectDeadlineUnixMs || null,
+          chatMessages: message.chatMessages ?? [],
           error: null,
         });
         break;
       }
+      case 'spectator_joined':
+        clearPersistedGame();
+        set({
+          playerColor: 'Neutral',
+          isSpectating: true,
+          spectatedGameId: message.gameState?.gameId ?? null,
+          gameState: message.gameState,
+          lastMove: null,
+          gameSessionId: null,
+          connectionStatus: 'connected',
+          queue: initialQueue,
+          selectedTile: null,
+          validMoves: [],
+          opponentReconnectDeadline: null,
+          chatMessages: message.chatMessages ?? [],
+          error: null,
+        });
+        break;
       case 'game_unavailable':
         set({
           playerColor: null,
+          isSpectating: false,
+          spectatedGameId: null,
           gameState: null,
           lastMove: null,
           gameSessionId: clearPersistedGame(),
@@ -298,14 +477,40 @@ export const useGameStore = create((set, get) => ({
           selectedTile: null,
           validMoves: [],
           opponentReconnectDeadline: null,
+          chatMessages: [],
           error: null,
         });
         break;
+      case 'spectate_unavailable':
+        set({
+          playerColor: null,
+          isSpectating: false,
+          spectatedGameId: null,
+          gameState: null,
+          lastMove: null,
+          selectedTile: null,
+          validMoves: [],
+          opponentReconnectDeadline: null,
+          chatMessages: [],
+          connectionStatus: 'connected',
+          error: message.message ?? 'That game is no longer available to spectate.',
+        });
+        break;
       case 'game_state': {
+        const current = get();
+        if (!current.gameState || current.gameState.gameId !== message.gameState?.gameId) {
+          break;
+        }
         const isFinished = message.gameState?.status === 'Finished';
+        const isSpectating = current.isSpectating;
         set((state) => ({
           gameState: message.gameState,
-          gameSessionId: isFinished ? clearPersistedGame() : persistGame(message.gameState),
+          gameSessionId: isSpectating
+            ? null
+            : isFinished
+              ? clearPersistedGame()
+              : persistGame(message.gameState),
+          spectatedGameId: isSpectating && isFinished ? null : state.spectatedGameId,
           lastMove: inferLastMove(state.gameState, message.gameState) ?? state.lastMove,
           selectedTile: null,
           validMoves: [],
@@ -314,6 +519,28 @@ export const useGameStore = create((set, get) => ({
         }));
         break;
       }
+      case 'chat_message':
+        set((state) => {
+          const chatMessage = message.chatMessage;
+          if (!chatMessage || chatMessage.gameId !== state.gameState?.gameId) return {};
+          if (state.chatMessages.some((candidate) => candidate.id === chatMessage.id)) return {};
+          return { chatMessages: [...state.chatMessages, chatMessage].slice(-100) };
+        });
+        break;
+      case 'spectator_left':
+        if (get().isSpectating) {
+          set({
+            playerColor: null,
+            isSpectating: false,
+            spectatedGameId: null,
+            gameState: null,
+            lastMove: null,
+            selectedTile: null,
+            validMoves: [],
+            chatMessages: [],
+          });
+        }
+        break;
       case 'opponent_disconnected':
         set({ opponentReconnectDeadline: message.reconnectDeadlineUnixMs || null });
         break;
@@ -333,6 +560,7 @@ export const useGameStore = create((set, get) => ({
         break;
       case 'move_rejected':
       case 'action_rejected':
+      case 'chat_rejected':
       case 'error':
         set({ error: message.message ?? 'Something went wrong.' });
         break;
@@ -361,6 +589,95 @@ export const useGameStore = create((set, get) => ({
   leaveQueue: () => {
     send(get().socket, { type: 'leave_queue' });
     set({ queue: initialQueue });
+  },
+
+  challengePlayer: (username, requestedModeId) => {
+    const { socket, modes } = get();
+    const modeId = requestedModeId ?? modes[0]?.id;
+    const trimmedUsername = username?.trim();
+    if (!trimmedUsername) {
+      set({ error: 'Enter the username you want to challenge.' });
+      return false;
+    }
+    if (!modeId) {
+      set({ error: 'No game modes are available.' });
+      return false;
+    }
+    if (!send(socket, { type: 'send_challenge', username: trimmedUsername, modeId })) {
+      set({ error: 'Connect to the server before sending a challenge.' });
+      return false;
+    }
+    set({ error: null, challengeNotice: null });
+    return true;
+  },
+
+  acceptChallenge: (challengeId) => {
+    if (!challengeId || !send(get().socket, { type: 'accept_challenge', challengeId })) {
+      set({ error: 'Connect to the server before accepting a challenge.' });
+      return;
+    }
+    set({ acceptingChallengeId: challengeId, error: null, challengeNotice: null });
+  },
+
+  declineChallenge: (challengeId) => {
+    if (!challengeId || !send(get().socket, { type: 'decline_challenge', challengeId })) {
+      set({ error: 'Connect to the server before declining a challenge.' });
+      return;
+    }
+    set((state) => ({
+      incomingChallenges: state.incomingChallenges.filter(
+        (challenge) => challenge.id !== challengeId,
+      ),
+      acceptingChallengeId:
+        state.acceptingChallengeId === challengeId ? null : state.acceptingChallengeId,
+    }));
+  },
+
+  cancelChallenge: (challengeId) => {
+    if (!challengeId || !send(get().socket, { type: 'cancel_challenge', challengeId })) {
+      set({ error: 'Connect to the server before cancelling the challenge.' });
+    }
+  },
+
+  spectateGame: (gameId) => {
+    if (!gameId || !send(get().socket, { type: 'spectate_game', gameId })) {
+      set({ error: 'Connect to the server before spectating a game.' });
+      return;
+    }
+    set({ spectatedGameId: gameId, error: null });
+  },
+
+  // The tournament board also loads over HTTP so it is on screen before the
+  // socket finishes authenticating.
+  loadTournaments: async () => {
+    try {
+      const tournaments = await listTournaments();
+      if (!Array.isArray(tournaments)) return;
+      set((state) => ({ tournaments: mergeTournamentList(state.tournaments, tournaments) }));
+    } catch {
+      // The socket delivers the same board once it connects.
+    }
+  },
+
+  // Applies a tournament returned by an HTTP mutation right away; the server
+  // broadcast that follows keeps every other client in step.
+  applyTournamentUpdate: (tournament) =>
+    set((state) => ({ tournaments: mergeTournament(state.tournaments, tournament) })),
+
+  // Readying up is the only tournament play action: the server starts the game
+  // once both players are present, or returns a player to a running board.
+  readyForTournamentMatch: (tournamentId, matchId) => {
+    if (!send(get().socket, { type: 'tournament_ready', tournamentId, matchId })) {
+      set({ error: 'Connect to the server before starting your tournament match.' });
+      return;
+    }
+    set({ error: null });
+  },
+
+  withdrawFromTournamentMatch: (tournamentId, matchId) => {
+    if (!send(get().socket, { type: 'tournament_withdraw', tournamentId, matchId })) {
+      set({ error: 'Connect to the server before leaving the match queue.' });
+    }
   },
 
   selectTile: (position) => {
@@ -434,18 +751,45 @@ export const useGameStore = create((set, get) => ({
     }
   },
 
+  sendChat: (text) => {
+    const trimmed = text.trim();
+    if (!trimmed) return false;
+    if (!send(get().socket, { type: 'send_chat', text: trimmed })) {
+      set({ error: 'Reconnect to the server before chatting.' });
+      return false;
+    }
+    return true;
+  },
+
+  toggleChat: () => set((state) => ({ chatVisible: !state.chatVisible })),
+  toggleSpectatorMessages: () =>
+    set((state) => ({ showSpectatorMessages: !state.showSpectatorMessages })),
+
   clearGame: () => {
+    const { isSpectating, socket } = get();
+    if (isSpectating) send(socket, { type: 'stop_spectating' });
     clearPersistedGame();
     set({
       playerColor: null,
+      isSpectating: false,
+      spectatedGameId: null,
       gameState: null,
       lastMove: null,
       gameSessionId: null,
       selectedTile: null,
       validMoves: [],
       opponentReconnectDeadline: null,
+      chatMessages: [],
       error: null,
     });
+  },
+
+  applyAccountUpdate: (account) => {
+    set({ account, error: null });
+    shouldReconnect = true;
+    const socket = get().socket;
+    if (socket) socket.close();
+    else get().connect();
   },
 
   clearError: () => set({ error: null }),

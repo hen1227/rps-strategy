@@ -26,6 +26,9 @@ const pending = new Map();
 const DEFAULT_MAX_TIME_MS = 3_000;
 const MAX_ENGINE_TIME_MS = 120_000;
 const RESPONSE_GRACE_MS = 5_000;
+// The worker and WASM are copied from public/ without hashed filenames. Keep
+// this in step with engine/worker releases so browsers cannot combine builds.
+const RPSFISH_ASSET_VERSION = 'abi3-rules2';
 
 const abortError = () => {
   const error = new Error('RPSFish analysis was cancelled.');
@@ -59,6 +62,7 @@ const createWorker = () => {
     `${normalizedBase}rpsfish/rpsfish-worker.js`,
     window.location.origin,
   );
+  workerUrl.searchParams.set('v', RPSFISH_ASSET_VERSION);
   const nextWorker = new Worker(workerUrl);
 
   nextWorker.onmessage = ({ data }) => {

@@ -1,181 +1,443 @@
-import { useEffect } from 'react';
+import { useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import ModePreview from '../components/ModePreview';
+import TournamentSpotlight from '../components/TournamentSpotlight';
+import {
+  Badge,
+  EmptyState,
+  GhostButton,
+  Panel,
+  PrimaryButton,
+  SectionHeading,
+} from '../components/ui';
 import { useGameStore } from '../store/gameStore';
+import { colors, radius, WIDE_LAYOUT_WIDTH } from '../theme';
 
 const formatSearchTime = (milliseconds) => `${Math.floor(milliseconds / 1000)}s`;
 
+const playerName = (profile, fallback) => {
+  const username = profile?.username?.trim();
+  return username && username.toLowerCase() !== 'guest' ? username : fallback;
+};
+
 export default function LobbyScreen({ navigation }) {
+  const { width } = useWindowDimensions();
   const connectionStatus = useGameStore((state) => state.connectionStatus);
-  const connect = useGameStore((state) => state.connect);
   const modes = useGameStore((state) => state.modes);
   const modePlayerCounts = useGameStore((state) => state.modePlayerCounts);
+  const account = useGameStore((state) => state.account);
+  const liveGames = useGameStore((state) => state.liveGames);
   const queue = useGameStore((state) => state.queue);
+  const incomingChallenges = useGameStore((state) => state.incomingChallenges);
+  const outgoingChallenge = useGameStore((state) => state.outgoingChallenge);
+  const acceptingChallengeId = useGameStore((state) => state.acceptingChallengeId);
+  const challengeNotice = useGameStore((state) => state.challengeNotice);
   const joinQueue = useGameStore((state) => state.joinQueue);
   const leaveQueue = useGameStore((state) => state.leaveQueue);
+  const challengePlayer = useGameStore((state) => state.challengePlayer);
+  const acceptChallenge = useGameStore((state) => state.acceptChallenge);
+  const declineChallenge = useGameStore((state) => state.declineChallenge);
+  const cancelChallenge = useGameStore((state) => state.cancelChallenge);
+  const spectateGame = useGameStore((state) => state.spectateGame);
+  const spectatedGameId = useGameStore((state) => state.spectatedGameId);
   const gameState = useGameStore((state) => state.gameState);
   const error = useGameStore((state) => state.error);
   const clearError = useGameStore((state) => state.clearError);
 
-  useEffect(() => {
-    connect();
-  }, [connect]);
+  const [challengeOpen, setChallengeOpen] = useState(false);
+  const [challengeUsername, setChallengeUsername] = useState('');
+  const [challengeModeId, setChallengeModeId] = useState(null);
 
-  useEffect(() => {
-    if (gameState) navigation.navigate('Game');
-  }, [gameState, navigation]);
-
+  const isWide = width >= WIDE_LAYOUT_WIDTH;
   const isConnected = connectionStatus === 'connected';
+
+  // A retired mode keeps its analysis board but accepts no new matches.
+  const playableModes = useMemo(
+    () => modes.filter((mode) => mode.playable !== false),
+    [modes],
+  );
+  const retiredModes = useMemo(
+    () => modes.filter((mode) => mode.playable === false),
+    [modes],
+  );
+
+  const selectedChallengeModeId = challengeModeId ?? playableModes[0]?.id ?? null;
+  const challengeActionsDisabled =
+    !isConnected || queue.isSearching || Boolean(gameState) || Boolean(outgoingChallenge);
+  const spectateDisabled =
+    !isConnected ||
+    queue.isSearching ||
+    Boolean(spectatedGameId) ||
+    Boolean(outgoingChallenge);
+
+  const submitChallenge = () => {
+    if (challengeActionsDisabled || !challengeUsername.trim()) return;
+    if (challengePlayer(challengeUsername, selectedChallengeModeId)) {
+      setChallengeUsername('');
+    }
+  };
+
+  const topBar = (
+    <View style={styles.topBar}>
+      <View style={styles.brandMark}>
+        <Text style={styles.brandMarkText}>R</Text>
+        <Text style={styles.brandMarkSlash}>/</Text>
+        <Text style={styles.brandMarkText}>P</Text>
+        <Text style={styles.brandMarkSlash}>/</Text>
+        <Text style={styles.brandMarkText}>S</Text>
+      </View>
+      <View style={styles.topBarActions}>
+        <View style={styles.statusChip}>
+          <View
+            style={[
+              styles.connectionDot,
+              isConnected ? styles.connectionDotOnline : styles.connectionDotOffline,
+            ]}
+          />
+          <Text style={styles.statusChipText}>{isConnected ? 'ONLINE' : 'CONNECTING'}</Text>
+        </View>
+        <GhostButton
+          accessibilityLabel="Open tournaments"
+          compact
+          label="TOURNAMENTS"
+          onPress={() => navigation.navigate('Tournaments')}
+        />
+        <GhostButton
+          accessibilityLabel="Edit account settings"
+          compact
+          label="ACCOUNT"
+          onPress={() => navigation.navigate('Account')}
+        />
+      </View>
+    </View>
+  );
+
+  const challengeInbox =
+    incomingChallenges.length > 0 || outgoingChallenge || challengeNotice ? (
+      <Panel tone="accent">
+        <SectionHeading eyebrow="INVITES" title="Player challenges" />
+        <View style={styles.inboxList}>
+          {incomingChallenges.map((challenge) => {
+            const challengerName = playerName(challenge.challenger, 'Another player');
+            const isAccepting = acceptingChallengeId === challenge.id;
+            return (
+              <View key={challenge.id} style={styles.inboxRow}>
+                <View style={styles.inboxCopy}>
+                  <Text style={styles.inboxTitle}>{challengerName} challenged you</Text>
+                  <Text style={styles.inboxMeta}>{challenge.modeName} · unranked</Text>
+                </View>
+                <View style={styles.inboxActions}>
+                  <GhostButton
+                    accessibilityLabel={`Decline challenge from ${challengerName}`}
+                    compact
+                    disabled={isAccepting}
+                    label="DECLINE"
+                    onPress={() => declineChallenge(challenge.id)}
+                  />
+                  <PrimaryButton
+                    accessibilityLabel={`Accept challenge from ${challengerName}`}
+                    compact
+                    disabled={challengeActionsDisabled}
+                    label="ACCEPT"
+                    loading={isAccepting}
+                    onPress={() => acceptChallenge(challenge.id)}
+                  />
+                </View>
+              </View>
+            );
+          })}
+          {Boolean(outgoingChallenge) && (
+            <View style={styles.inboxRow}>
+              <View style={styles.inboxCopy}>
+                <Text style={styles.inboxTitle}>
+                  Waiting for {outgoingChallenge.targetUsername}
+                </Text>
+                <Text style={styles.inboxMeta}>
+                  {outgoingChallenge.modeName} · they see this when they connect
+                </Text>
+              </View>
+              <GhostButton
+                accessibilityLabel="Cancel player challenge"
+                compact
+                label="CANCEL"
+                onPress={() => cancelChallenge(outgoingChallenge.id)}
+              />
+            </View>
+          )}
+          {Boolean(challengeNotice) && <Text style={styles.inboxNotice}>{challengeNotice}</Text>}
+        </View>
+      </Panel>
+    ) : null;
+
+  const playSection = (
+    <View>
+      <SectionHeading
+        eyebrow="RANKED PLAY"
+        title="Choose your battle"
+        trailing={
+          queue.isSearching ? (
+            <Badge label={`SEARCHING ${formatSearchTime(queue.queuedForMs)}`} tone="warm" />
+          ) : null
+        }
+      />
+      <View style={styles.modeGrid}>
+        {playableModes.map((mode) => {
+          const playerCount = modePlayerCounts[mode.id] ?? 0;
+          // Ratings are per mode, so the card shows the one this queue uses.
+          const modeElo = account?.modeRatings?.[mode.id]?.elo ?? account?.elo ?? null;
+          const isSearchingThisMode = queue.isSearching && queue.modeId === mode.id;
+          const isMuted = queue.isSearching && !isSearchingThisMode;
+
+          return (
+            <View
+              key={mode.id}
+              style={[
+                styles.modeCard,
+                isSearchingThisMode && styles.modeCardSearching,
+                isMuted && styles.modeCardMuted,
+              ]}
+            >
+              <ModePreview mode={mode} />
+              <View style={styles.modeContent}>
+                <View style={styles.modeTopRow}>
+                  <View style={styles.modeBadges}>
+                    <Badge label={mode.shortCode} />
+                    {modeElo !== null && <Badge label={`${modeElo} ELO`} tone="accent" />}
+                  </View>
+                  <Badge label={`${playerCount} PLAYING`} tone={playerCount > 0 ? 'live' : 'neutral'} />
+                </View>
+                <Text style={styles.modeTitle}>{mode.name}</Text>
+                <Text style={styles.modeObjective} numberOfLines={2}>
+                  {mode.objective}
+                </Text>
+                <View style={styles.modeFooter}>
+                  {isSearchingThisMode ? (
+                    <>
+                      <View style={styles.searchStatus}>
+                        <ActivityIndicator color={colors.accentBright} size="small" />
+                        <View>
+                          <Text style={styles.searchTitle}>Finding opponent</Text>
+                          <Text style={styles.searchTime}>
+                            Searching · {formatSearchTime(queue.queuedForMs)}
+                          </Text>
+                        </View>
+                      </View>
+                      <GhostButton
+                        accessibilityLabel="Cancel matchmaking search"
+                        compact
+                        label="CANCEL"
+                        onPress={leaveQueue}
+                      />
+                    </>
+                  ) : (
+                    <View style={styles.modeButtons}>
+                      <GhostButton
+                        accessibilityLabel={`Analyze ${mode.name} with RPSFish`}
+                        compact
+                        disabled={isMuted}
+                        label="ANALYZE"
+                        onPress={() => navigation.navigate('Analysis', { mode })}
+                      />
+                      <PrimaryButton
+                        accessibilityLabel={`Play ${mode.name} online`}
+                        compact
+                        disabled={!isConnected || isMuted || Boolean(outgoingChallenge)}
+                        label={isConnected ? 'PLAY ▶' : 'CONNECTING'}
+                        onPress={() => joinQueue(mode.id)}
+                      />
+                    </View>
+                  )}
+                </View>
+              </View>
+            </View>
+          );
+        })}
+      </View>
+    </View>
+  );
+
+  const friendSection = (
+    <Panel>
+      <SectionHeading
+        eyebrow="PLAY WITH A FRIEND"
+        title="Challenge by username"
+        trailing={
+          <GhostButton
+            accessibilityLabel={
+              challengeOpen ? 'Hide the challenge form' : 'Show the challenge form'
+            }
+            compact
+            label={challengeOpen ? 'HIDE' : 'OPEN'}
+            onPress={() => setChallengeOpen((open) => !open)}
+          />
+        }
+      />
+      {challengeOpen && (
+        <View style={styles.challengeForm}>
+          <Text style={styles.helpText}>
+            Pick a mode and invite them. The challenge waits until they connect.
+          </Text>
+          <View style={styles.modeChips}>
+            {playableModes.map((mode) => {
+              const selected = selectedChallengeModeId === mode.id;
+              return (
+                <Pressable
+                  accessibilityLabel={`Challenge in ${mode.name}`}
+                  accessibilityRole="radio"
+                  accessibilityState={{ checked: selected }}
+                  disabled={Boolean(outgoingChallenge)}
+                  key={mode.id}
+                  onPress={() => setChallengeModeId(mode.id)}
+                  style={({ pressed }) => [
+                    styles.modeChip,
+                    selected && styles.modeChipSelected,
+                    Boolean(outgoingChallenge) && styles.disabled,
+                    pressed && styles.pressed,
+                  ]}
+                >
+                  <Text style={[styles.modeChipText, selected && styles.modeChipTextSelected]}>
+                    {mode.name}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+          <View style={styles.challengeInputRow}>
+            <TextInput
+              accessibilityLabel="Username to challenge"
+              autoCapitalize="none"
+              autoCorrect={false}
+              editable={!outgoingChallenge}
+              maxLength={40}
+              onChangeText={setChallengeUsername}
+              onSubmitEditing={submitChallenge}
+              placeholder="Enter a username"
+              placeholderTextColor={colors.textFaint}
+              returnKeyType="send"
+              selectionColor={colors.accent}
+              style={[styles.challengeInput, Boolean(outgoingChallenge) && styles.disabled]}
+              value={challengeUsername}
+            />
+            <PrimaryButton
+              accessibilityLabel="Send player challenge"
+              disabled={challengeActionsDisabled || !challengeUsername.trim()}
+              label="CHALLENGE"
+              onPress={submitChallenge}
+            />
+          </View>
+        </View>
+      )}
+    </Panel>
+  );
+
+  const liveSection = (
+    <Panel>
+      <SectionHeading
+        eyebrow="WATCH THE ARENA"
+        title="Live games"
+        trailing={
+          <Badge
+            label={`${liveGames.length} LIVE`}
+            tone={liveGames.length > 0 ? 'live' : 'neutral'}
+          />
+        }
+      />
+      {liveGames.length === 0 ? (
+        <EmptyState
+          detail="Start a match or watch a tournament board when one opens."
+          title="No games are live right now"
+        />
+      ) : (
+        <View style={styles.liveList}>
+          {liveGames.map((liveGame) => {
+            const redName = playerName(liveGame.redPlayer, 'Red player');
+            const blueName = playerName(liveGame.bluePlayer, 'Blue player');
+            const spectators = liveGame.spectatorCount ?? 0;
+            return (
+              <View key={liveGame.gameId} style={styles.liveRow}>
+                <View style={styles.liveCopy}>
+                  <Text style={styles.liveMatchup} numberOfLines={1}>
+                    {redName} <Text style={styles.eloText}>({liveGame.redElo})</Text>
+                    <Text style={styles.versusText}> vs </Text>
+                    {blueName} <Text style={styles.eloText}>({liveGame.blueElo})</Text>
+                  </Text>
+                  <Text style={styles.liveMeta}>
+                    {liveGame.modeName} ·{' '}
+                    {spectators === 1 ? '1 spectator' : `${spectators} spectators`}
+                  </Text>
+                </View>
+                <GhostButton
+                  accessibilityLabel={`Spectate ${redName} versus ${blueName}`}
+                  compact
+                  disabled={spectateDisabled}
+                  label={spectatedGameId === liveGame.gameId ? 'OPENING' : '◉ WATCH'}
+                  onPress={() => spectateGame(liveGame.gameId)}
+                />
+              </View>
+            );
+          })}
+        </View>
+      )}
+    </Panel>
+  );
+
+  const tournamentSection = (
+    <TournamentSpotlight onOpenBoard={() => navigation.navigate('Tournaments')} />
+  );
+
+  const errorBanner = error ? (
+    <Pressable
+      accessibilityLabel="Dismiss error"
+      accessibilityRole="button"
+      onPress={clearError}
+      style={styles.errorBanner}
+    >
+      <Text style={styles.errorText}>{error}</Text>
+      <Text style={styles.errorDismiss}>×</Text>
+    </Pressable>
+  ) : null;
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'right', 'bottom', 'left']}>
       <ScrollView
         contentContainerStyle={styles.scrollContent}
+        keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
-        <View style={styles.screen}>
-          <View style={styles.header}>
-            <View style={styles.brandRow}>
-              <View style={styles.brandMark}>
-                <Text style={styles.brandMarkText}>R</Text>
-                <Text style={styles.brandMarkSlash}>/</Text>
-                <Text style={styles.brandMarkText}>P</Text>
-                <Text style={styles.brandMarkSlash}>/</Text>
-                <Text style={styles.brandMarkText}>S</Text>
+        <View style={[styles.screen, isWide && styles.screenWide]}>
+          {topBar}
+          {errorBanner}
+          {isWide ? (
+            <View style={styles.columns}>
+              <View style={styles.mainColumn}>
+                {tournamentSection}
+                {challengeInbox}
+                {playSection}
               </View>
-              <View
-                style={[
-                  styles.connectionDot,
-                  isConnected ? styles.connectionDotOnline : styles.connectionDotOffline,
-                ]}
-              />
+              <View style={styles.sideColumn}>
+                {liveSection}
+                {friendSection}
+              </View>
             </View>
-            <Text style={styles.title}>Choose your battle</Text>
-            <Text style={styles.subtitle}>
-              {isConnected ? 'Tap a game mode to find an opponent.' : 'Connecting to the arena…'}
-            </Text>
-          </View>
-
-          <View style={styles.modeList}>
-            {modes.map((mode) => {
-              const playerCount = modePlayerCounts[mode.id] ?? 0;
-              const isSelected = queue.isSearching && queue.modeId === mode.id;
-              const isMuted = queue.isSearching && !isSelected;
-              const cardStyle = [
-                styles.modeCard,
-                isSelected && styles.modeCardSearching,
-                isMuted && styles.modeCardMuted,
-              ];
-              const cardContent = (
-                <>
-                  <ModePreview mode={mode} />
-
-                  <View style={styles.modeContent}>
-                    <View style={styles.modeTopRow}>
-                      <View style={styles.versionBadge}>
-                        <Text style={styles.versionText}>{mode.shortCode}</Text>
-                      </View>
-                      <View style={styles.playerCountBadge}>
-                        <View style={styles.playerCountDot} />
-                        <Text style={styles.playerCountText}>{playerCount} PLAYING</Text>
-                      </View>
-                    </View>
-
-                    <Text style={styles.modeTitle}>{mode.name}</Text>
-                    <Text style={styles.modeObjective} numberOfLines={2}>
-                      {mode.objective}
-                    </Text>
-
-                    <View style={styles.modeFooter}>
-                      {isSelected ? (
-                        <>
-                          <View style={styles.searchStatus}>
-                            <ActivityIndicator color="#a3d160" size="small" />
-                            <View>
-                              <Text style={styles.searchTitle}>Finding opponent</Text>
-                              <Text style={styles.searchTime}>
-                                Searching · {formatSearchTime(queue.queuedForMs)}
-                              </Text>
-                            </View>
-                          </View>
-                          <Pressable
-                            accessibilityRole="button"
-                            accessibilityLabel="Cancel matchmaking search"
-                            hitSlop={8}
-                            onPress={leaveQueue}
-                            style={({ pressed }) => [
-                              styles.cancelButton,
-                              pressed && styles.cancelButtonPressed,
-                            ]}
-                          >
-                            <Text style={styles.cancelText}>Cancel</Text>
-                          </Pressable>
-                        </>
-                      ) : (
-                        <View style={styles.modeButtons}>
-                          <Pressable
-                            accessibilityLabel={`Analyze ${mode.name} with RPSFish`}
-                            accessibilityRole="button"
-                            disabled={isMuted}
-                            onPress={() => navigation.navigate('Analysis', { mode })}
-                            style={({ pressed }) => [
-                              styles.analysisButton,
-                              isMuted && styles.modeButtonDisabled,
-                              pressed && styles.modeButtonPressed,
-                            ]}
-                          >
-                            <Text style={styles.analysisButtonText}>ANALYZE</Text>
-                          </Pressable>
-                          <Pressable
-                            accessibilityLabel={`Play ${mode.name} online`}
-                            accessibilityRole="button"
-                            disabled={!isConnected || isMuted}
-                            onPress={() => joinQueue(mode.id)}
-                            style={({ pressed }) => [
-                              styles.playButton,
-                              (!isConnected || isMuted) && styles.modeButtonDisabled,
-                              pressed && styles.modeButtonPressed,
-                            ]}
-                          >
-                            <Text style={styles.playButtonText}>
-                              {isConnected ? 'PLAY' : 'CONNECTING'}
-                            </Text>
-                            <Text style={styles.playButtonIcon}>▶</Text>
-                          </Pressable>
-                        </View>
-                      )}
-                    </View>
-                  </View>
-                </>
-              );
-
-              return (
-                <View key={mode.id} style={cardStyle}>
-                  {cardContent}
-                </View>
-              );
-            })}
-          </View>
-
-          {error && (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Dismiss error"
-              onPress={clearError}
-              style={styles.errorBanner}
-            >
-              <Text style={styles.errorText}>{error}</Text>
-              <Text style={styles.dismiss}>×</Text>
-            </Pressable>
+          ) : (
+            <View style={styles.stack}>
+              {tournamentSection}
+              {challengeInbox}
+              {playSection}
+              {liveSection}
+              {friendSection}
+            </View>
           )}
         </View>
       </ScrollView>
@@ -184,127 +446,179 @@ export default function LobbyScreen({ navigation }) {
 }
 
 const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: '#312e2b' },
+  safeArea: { flex: 1, backgroundColor: colors.background },
   scrollContent: { flexGrow: 1 },
   screen: {
     width: '100%',
-    maxWidth: 620,
+    maxWidth: 640,
     alignSelf: 'center',
     paddingHorizontal: 18,
-    paddingTop: 18,
-    paddingBottom: 24,
+    paddingTop: 16,
+    // Leaves room for the floating tournament call to action.
+    paddingBottom: 96,
   },
-  header: { marginBottom: 22 },
-  brandRow: {
+  screenWide: { maxWidth: 1180 },
+
+  topBar: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    gap: 12,
     marginBottom: 18,
   },
   brandMark: { flexDirection: 'row', alignItems: 'center' },
-  brandMarkText: { color: '#a3d160', fontSize: 13, fontWeight: '900', letterSpacing: 0.5 },
-  brandMarkSlash: { color: '#77736d', fontSize: 11, fontWeight: '700', marginHorizontal: 3 },
-  connectionDot: { width: 8, height: 8, borderRadius: 4 },
-  connectionDotOnline: { backgroundColor: '#81b64c' },
-  connectionDotOffline: { backgroundColor: '#77736d' },
-  title: { color: '#f5f5f5', fontSize: 30, fontWeight: '900', letterSpacing: -0.7 },
-  subtitle: { color: '#aaa7a2', fontSize: 14, lineHeight: 20, marginTop: 5 },
-  modeList: { gap: 13 },
+  brandMarkText: {
+    color: colors.accentBright,
+    fontSize: 15,
+    fontWeight: '900',
+    letterSpacing: 0.5,
+  },
+  brandMarkSlash: {
+    color: colors.textFaint,
+    fontSize: 12,
+    fontWeight: '700',
+    marginHorizontal: 3,
+  },
+  topBarActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  statusChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 9,
+    paddingVertical: 7,
+    borderRadius: radius.medium,
+    backgroundColor: colors.surface,
+  },
+  statusChipText: {
+    color: colors.textMuted,
+    fontSize: 8,
+    fontWeight: '900',
+    letterSpacing: 0.8,
+  },
+  connectionDot: { width: 7, height: 7, borderRadius: 4 },
+  connectionDotOnline: { backgroundColor: colors.accent },
+  connectionDotOffline: { backgroundColor: colors.textFaint },
+
+  columns: { flexDirection: 'row', gap: 16, alignItems: 'flex-start' },
+  mainColumn: { flex: 1.35, gap: 14 },
+  sideColumn: { flex: 1, minWidth: 300, maxWidth: 420, gap: 14 },
+  stack: { gap: 14 },
+
+  inboxList: { gap: 8, marginTop: 12 },
+  inboxRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    padding: 11,
+    borderRadius: radius.medium,
+    backgroundColor: '#31382b',
+  },
+  inboxCopy: { flex: 1 },
+  inboxTitle: { color: colors.textStrong, fontSize: 12, fontWeight: '900' },
+  inboxMeta: { color: '#a9c497', fontSize: 10, marginTop: 2 },
+  inboxActions: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  inboxNotice: { color: colors.accentSoft, fontSize: 11 },
+
+  modeGrid: { gap: 12, marginTop: 12 },
   modeCard: {
-    minHeight: 154,
     flexDirection: 'row',
     alignItems: 'center',
     padding: 13,
-    borderRadius: 15,
+    borderRadius: radius.large,
     borderWidth: 1,
-    borderColor: '#4a4742',
-    backgroundColor: '#262522',
-    boxShadow: [
-      { offsetX: 0, offsetY: 4, blurRadius: 7, color: 'rgba(23, 22, 19, 0.34)' },
-    ],
-    elevation: 5,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
   },
-  modeCardSearching: {
-    borderColor: '#81b64c',
-    backgroundColor: '#2b2c25',
-  },
-  modeCardMuted: { opacity: 0.28 },
-  modeContent: { flex: 1, alignSelf: 'stretch', paddingLeft: 15 },
+  modeCardSearching: { borderColor: colors.accent, backgroundColor: '#2b2c25' },
+  modeCardMuted: { opacity: 0.4 },
+  modeContent: { flex: 1, alignSelf: 'stretch', paddingLeft: 14 },
   modeTopRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  versionBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 6,
-    backgroundColor: '#3b3935',
+  modeBadges: { flexDirection: 'row', alignItems: 'center', gap: 6, flexShrink: 1 },
+  modeTitle: {
+    color: colors.textStrong,
+    fontSize: 19,
+    fontWeight: '900',
+    marginTop: 10,
   },
-  versionText: { color: '#bbb8b2', fontSize: 9, fontWeight: '900', letterSpacing: 1 },
-  playerCountBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    paddingHorizontal: 7,
-    paddingVertical: 4,
-    borderRadius: 6,
-    backgroundColor: '#343a2f',
-  },
-  playerCountDot: { width: 5, height: 5, borderRadius: 3, backgroundColor: '#81b64c' },
-  playerCountText: { color: '#b8d993', fontSize: 8, fontWeight: '900', letterSpacing: 0.65 },
-  modeButtons: { width: '100%', flexDirection: 'row', gap: 7 },
-  analysisButton: {
-    flex: 1,
-    height: 30,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 7,
-    borderWidth: 1,
-    borderColor: '#5a7d78',
-    backgroundColor: '#293a37',
-  },
-  analysisButtonText: { color: '#9be6d5', fontSize: 8, fontWeight: '900', letterSpacing: 0.9 },
-  playButton: {
-    flex: 1,
-    height: 30,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    borderRadius: 7,
-    backgroundColor: '#81b64c',
-  },
-  playButtonText: { color: '#ffffff', fontSize: 8, fontWeight: '900', letterSpacing: 0.9 },
-  playButtonIcon: { color: '#ffffff', fontSize: 8 },
-  modeButtonDisabled: { opacity: 0.35 },
-  modeButtonPressed: { opacity: 0.7, transform: [{ scale: 0.98 }] },
-  modeTitle: { color: '#ffffff', fontSize: 20, fontWeight: '900', marginTop: 8 },
-  modeObjective: { color: '#aaa7a2', fontSize: 12, lineHeight: 17, marginTop: 4 },
+  modeObjective: { color: colors.textMuted, fontSize: 11, lineHeight: 17, marginTop: 4 },
   modeFooter: {
-    minHeight: 34,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    gap: 10,
     marginTop: 'auto',
-    paddingTop: 7,
+    paddingTop: 14,
   },
-  searchStatus: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  searchTitle: { color: '#f5f5f5', fontSize: 11, fontWeight: '800' },
-  searchTime: { color: '#9c9993', fontSize: 9, marginTop: 1 },
-  cancelButton: {
-    paddingHorizontal: 11,
-    paddingVertical: 7,
-    borderRadius: 7,
-    backgroundColor: '#46433e',
+  modeButtons: { flex: 1, flexDirection: 'row', justifyContent: 'flex-end', gap: 8 },
+  searchStatus: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 9 },
+  searchTitle: { color: colors.text, fontSize: 12, fontWeight: '900' },
+  searchTime: { color: colors.textMuted, fontSize: 10, marginTop: 1 },
+
+  challengeForm: { marginTop: 12 },
+  helpText: { color: colors.textMuted, fontSize: 11, lineHeight: 17 },
+  modeChips: { flexDirection: 'row', flexWrap: 'wrap', gap: 7, marginTop: 12 },
+  modeChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: radius.small,
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
   },
-  cancelButtonPressed: { opacity: 0.7 },
-  cancelText: { color: '#deddd9', fontSize: 10, fontWeight: '800' },
+  modeChipSelected: { backgroundColor: '#3b4a30', borderColor: colors.accent },
+  modeChipText: { color: colors.textMuted, fontSize: 10, fontWeight: '800' },
+  modeChipTextSelected: { color: '#d9efc3' },
+  challengeInputRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 12 },
+  challengeInput: {
+    flex: 1,
+    height: 42,
+    paddingHorizontal: 12,
+    borderRadius: radius.medium,
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
+    backgroundColor: colors.surfaceSunken,
+    color: colors.textStrong,
+    fontSize: 14,
+  },
+
+  liveList: { gap: 1, marginTop: 8 },
+  liveRow: {
+    minHeight: 54,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#3b3935',
+  },
+  liveCopy: { flex: 1 },
+  liveMatchup: { color: colors.text, fontSize: 12, fontWeight: '800' },
+  liveMeta: { color: colors.textFaint, fontSize: 10, marginTop: 2 },
+  eloText: { color: colors.textFaint, fontSize: 10, fontWeight: '600' },
+  versusText: { color: '#69655f', fontSize: 10 },
+
+  retiredList: { gap: 1, marginTop: 8 },
+  retiredRow: {
+    minHeight: 52,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#3b3935',
+  },
+  retiredCopy: { flex: 1 },
+  retiredName: { color: colors.text, fontSize: 13, fontWeight: '800' },
+  retiredMeta: { color: colors.textFaint, fontSize: 10, marginTop: 2 },
+
   errorBanner: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 14,
-    paddingHorizontal: 13,
-    paddingVertical: 11,
-    borderRadius: 9,
-    backgroundColor: '#5a302d',
+    padding: 12,
+    borderRadius: radius.medium,
+    backgroundColor: colors.dangerSurface,
+    marginBottom: 14,
   },
-  errorText: { flex: 1, color: '#ffd2ce', fontSize: 12 },
-  dismiss: { color: '#ffd2ce', fontSize: 19, paddingHorizontal: 5 },
+  errorText: { flex: 1, color: colors.dangerText, fontSize: 12 },
+  errorDismiss: { color: '#ffe6e2', fontSize: 18, paddingHorizontal: 5 },
+
+  disabled: { opacity: 0.35 },
+  pressed: { opacity: 0.7 },
 });
