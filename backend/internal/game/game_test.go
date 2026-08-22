@@ -3,6 +3,7 @@ package game
 import (
 	"errors"
 	"testing"
+	"time"
 )
 
 func testGame(t *testing.T, modeID ModeID) *Game {
@@ -407,5 +408,123 @@ func TestThirdPositionOccurrenceIsDrawInEveryMode(t *testing.T) {
 				t.Fatalf("expected draw on third occurrence, got %#v", state)
 			}
 		})
+	}
+}
+
+func TestAcceptedTimeExtensionAddsThreeMinutesToBothClocks(t *testing.T) {
+	game := testGame(t, ModeAnnihilation)
+	before := game.Snapshot().Clock
+	if _, err := game.OfferTimeExtension(Red); err != nil {
+		t.Fatal(err)
+	}
+	state, err := game.AcceptTimeExtension(Blue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Status != InProgress {
+		t.Fatalf("expected the game to continue, got %s", state.Status)
+	}
+	if state.TimeOfferedBy != "" {
+		t.Fatalf("expected the offer to be consumed, got %#v", state)
+	}
+	// Red's clock is running, so it may have lost a few milliseconds between
+	// the two snapshots; only the extension should have grown it.
+	if grown := state.Clock.RedRemainingMs - before.RedRemainingMs; grown > TimeExtensionMs ||
+		grown < TimeExtensionMs-time.Second.Milliseconds() {
+		t.Fatalf("expected Red to gain three minutes, gained %dms", grown)
+	}
+	if grown := state.Clock.BlueRemainingMs - before.BlueRemainingMs; grown != TimeExtensionMs {
+		t.Fatalf("expected Blue to gain three minutes, gained %dms", grown)
+	}
+}
+
+func TestTimeExtensionCanBeAskedForOffTurnAndSurvivesAMove(t *testing.T) {
+	game := testGame(t, ModeAnnihilation)
+	// Red is to move, so Blue is asking while its own clock is stopped.
+	state, err := game.OfferTimeExtension(Blue)
+	if err != nil {
+		t.Fatalf("expected Blue to be able to ask off-turn: %v", err)
+	}
+	if state.TimeOfferedBy != Blue || state.TimeOfferUsedBy != Blue {
+		t.Fatalf("expected Blue's request to be recorded, got %#v", state)
+	}
+	if _, err := game.AcceptTimeExtension(Blue); !errors.Is(err, ErrCannotRespondOwnOffer) {
+		t.Fatalf("expected Blue to be unable to accept its own request, got %v", err)
+	}
+	if _, err := game.OfferTimeExtension(Red); !errors.Is(err, ErrTimeOfferExists) {
+		t.Fatalf("expected one live request at a time, got %v", err)
+	}
+
+	// Red plays on. The request is not a move substitute, so playing does not
+	// answer it and Red can still grant it afterwards.
+	redFrom, redTo := anyLegalMove(t, game)
+	state, err = game.Move(Red, redFrom, redTo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.TimeOfferedBy != Blue {
+		t.Fatalf("expected the request to survive Red's move, got %#v", state)
+	}
+	if state.TimeOfferUsedBy != "" {
+		t.Fatalf("expected the allowance to reset after a move, got %#v", state)
+	}
+	before := state.Clock
+	state, err = game.AcceptTimeExtension(Red)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.TimeOfferedBy != "" {
+		t.Fatalf("expected the request to be consumed, got %#v", state)
+	}
+	if state.Clock.RedRemainingMs <= before.RedRemainingMs ||
+		state.Clock.BlueRemainingMs <= before.BlueRemainingMs {
+		t.Fatalf("expected both clocks to grow, got %#v", state.Clock)
+	}
+}
+
+func TestTimeExtensionIsLimitedToOnePerPlayerPerMove(t *testing.T) {
+	game := testGame(t, ModeAnnihilation)
+	if _, err := game.OfferTimeExtension(Red); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := game.DeclineTimeExtension(Blue); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := game.OfferTimeExtension(Red); !errors.Is(err, ErrTimeOfferUnavailable) {
+		t.Fatalf("expected a second request before any move to fail, got %v", err)
+	}
+	// Blue has not used its own allowance, so a declined request does not
+	// silence the other player.
+	if _, err := game.OfferTimeExtension(Blue); err != nil {
+		t.Fatalf("expected Blue to still have its own request: %v", err)
+	}
+	if _, err := game.DeclineTimeExtension(Red); err != nil {
+		t.Fatal(err)
+	}
+
+	// A draw offer is tracked separately and remains available on Red's turn.
+	if _, err := game.OfferDraw(Red); err != nil {
+		t.Fatalf("expected a draw offer to remain available: %v", err)
+	}
+	if _, err := game.OfferDraw(Blue); !errors.Is(err, ErrDrawOfferUnavailable) {
+		t.Fatalf("expected a draw offer off-turn to still be refused, got %v", err)
+	}
+
+	redFrom, redTo := anyLegalMove(t, game)
+	if _, err := game.Move(Red, redFrom, redTo); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := game.OfferTimeExtension(Red); err != nil {
+		t.Fatalf("expected the allowance to refresh after a move: %v", err)
+	}
+}
+
+func TestTimeExtensionIsUnavailableAfterTheGameEnds(t *testing.T) {
+	game := testGame(t, ModeAnnihilation)
+	if _, err := game.Resign(Red); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := game.OfferTimeExtension(Blue); !errors.Is(err, ErrGameFinished) {
+		t.Fatalf("expected a finished game to refuse the offer, got %v", err)
 	}
 }

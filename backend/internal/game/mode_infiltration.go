@@ -12,6 +12,7 @@ func (mode *InfiltrationMode) Definition() ModeDefinition {
 		Description:      "Reach their boundary.",
 		Objective:        "Move any piece onto the opponent's home boundary.",
 		DisplayOrder:     3,
+		Playable:         true,
 		Features:         []ModeFeature{},
 		StartingPosition: infiltrationStartingPosition,
 	}

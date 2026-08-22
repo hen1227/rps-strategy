@@ -6,12 +6,14 @@ type AnnihilationMode struct {
 
 func (mode *AnnihilationMode) Definition() ModeDefinition {
 	return ModeDefinition{
-		ID:               ModeAnnihilation,
-		ShortCode:        "V1",
-		Name:             "Annihilation",
-		Description:      "Leave no survivors.",
-		Objective:        "Capture every opposing piece.",
-		DisplayOrder:     1,
+		ID:           ModeAnnihilation,
+		ShortCode:    "V1",
+		Name:         "Annihilation",
+		Description:  "Leave no survivors.",
+		Objective:    "Capture every opposing piece.",
+		DisplayOrder: 1,
+		// Retired from matchmaking: existing games and analysis still work.
+		Playable:         false,
 		Features:         []ModeFeature{},
 		StartingPosition: annihilationStartingPosition,
 	}

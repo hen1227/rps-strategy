@@ -10,6 +10,9 @@ import (
 const (
 	DefaultInitialTimeMs int64 = 5 * 60 * 1000
 	DefaultIncrementMs   int64 = 3 * 1000
+	// TimeExtensionMs is added to both clocks when the players agree to keep
+	// playing a position neither wants to lose on time.
+	TimeExtensionMs int64 = 3 * 60 * 1000
 )
 
 var ErrInvalidTimeControl = errors.New("invalid time control")

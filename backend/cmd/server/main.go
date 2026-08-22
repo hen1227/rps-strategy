@@ -29,6 +29,10 @@ func run() error {
 	defer stop()
 
 	allowedOrigins := strings.Split(os.Getenv("RPS_ALLOWED_ORIGINS"), ",")
+	adminToken := strings.TrimSpace(os.Getenv("RPS_ADMIN_TOKEN"))
+	if adminToken != "" && len(adminToken) < 32 {
+		return errors.New("RPS_ADMIN_TOKEN must contain at least 32 characters")
+	}
 	databasePath := os.Getenv("RPS_DATABASE_PATH")
 	if databasePath == "" {
 		databasePath = "data/rps-strategy.sqlite"
@@ -58,7 +62,11 @@ func run() error {
 		}
 	}()
 
-	gameServer := serverpkg.NewWithStore(dataStore, allowedOrigins)
+	gameServer := serverpkg.NewWithStoreAndAdminToken(
+		dataStore,
+		allowedOrigins,
+		adminToken,
+	)
 	httpServer := &http.Server{
 		Addr:              listener.description,
 		Handler:           gameServer.Routes(),
@@ -90,6 +98,11 @@ func run() error {
 	}
 	if err := <-serveErrors; err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("serve HTTP during shutdown: %w", err)
+	}
+	// Games still on the board when the process stops are archived unfinished
+	// rather than discarded, so a restart never loses the moves already played.
+	if archived := gameServer.ArchiveLiveGames(shutdownContext); archived > 0 {
+		log.Printf("archived %d unfinished game(s) during shutdown", archived)
 	}
 	return nil
 }

@@ -36,7 +36,9 @@ const (
 )
 
 // ModeDefinition is shared with the frontend, allowing the lobby to render
-// registered modes without duplicating a hard-coded mode list.
+// registered modes without duplicating a hard-coded mode list. Playable
+// separates the modes that accept new matches from the ones that remain
+// registered only for analysis and replay of existing games.
 type ModeDefinition struct {
 	ID               ModeID           `json:"id"`
 	ShortCode        string           `json:"shortCode"`
@@ -44,6 +46,7 @@ type ModeDefinition struct {
 	Description      string           `json:"description"`
 	Objective        string           `json:"objective"`
 	DisplayOrder     int              `json:"displayOrder"`
+	Playable         bool             `json:"playable"`
 	Features         []ModeFeature    `json:"features"`
 	StartingPosition StartingPosition `json:"startingPosition"`
 }
@@ -82,6 +85,7 @@ const (
 type PlayerProfile struct {
 	UserID   string `json:"userId"`
 	Username string `json:"username"`
+	Discord  string `json:"discord,omitempty"`
 }
 
 type Tile struct {
@@ -109,7 +113,11 @@ type GameState struct {
 	EndReason       GameEndReason              `json:"endReason,omitempty"`
 	DrawOfferedBy   PlayerColor                `json:"drawOfferedBy,omitempty"`
 	DrawOfferUsedBy PlayerColor                `json:"drawOfferUsedBy,omitempty"`
-	MoveNumber      int                        `json:"moveNumber"`
-	RedPlayer       PlayerProfile              `json:"redPlayer"`
-	BluePlayer      PlayerProfile              `json:"bluePlayer"`
+	// A time extension follows the same offer/accept/decline lifecycle as a
+	// draw, so both players must agree before either clock grows.
+	TimeOfferedBy   PlayerColor   `json:"timeOfferedBy,omitempty"`
+	TimeOfferUsedBy PlayerColor   `json:"timeOfferUsedBy,omitempty"`
+	MoveNumber      int           `json:"moveNumber"`
+	RedPlayer       PlayerProfile `json:"redPlayer"`
+	BluePlayer      PlayerProfile `json:"bluePlayer"`
 }

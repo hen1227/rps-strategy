@@ -130,6 +130,44 @@ func TestClockTimeoutFinishesGame(t *testing.T) {
 	}
 }
 
+func TestClockTimeoutMakesBlueLoseAfterRedMoves(t *testing.T) {
+	control := TimeControl{InitialTimeMs: 1_000, IncrementMs: 0}
+	game, err := NewGameWithTimeControl(
+		"blue-timeout",
+		ModeAnnihilation,
+		PlayerProfile{UserID: "red"},
+		PlayerProfile{UserID: "blue"},
+		control,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseTime := time.Date(2026, time.August, 17, 12, 0, 0, 0, time.UTC)
+	now := baseTime
+	useFakeGameTime(game, &now)
+
+	now = now.Add(100 * time.Millisecond)
+	from, to := anyLegalMove(t, game)
+	state, err := game.Move(Red, from, to)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.CurrentTurn != Blue {
+		t.Fatalf("expected Blue's turn after Red moved, got %s", state.CurrentTurn)
+	}
+
+	state, expired := game.Tick(now.Add(time.Second))
+	if !expired {
+		t.Fatal("expected Blue's clock to expire")
+	}
+	if state.Status != Finished || state.Winner != Red || state.EndReason != EndReasonTimeout {
+		t.Fatalf("expected Red to win when Blue ran out of time, got %#v", state)
+	}
+	if state.Clock.BlueRemainingMs != 0 || state.Clock.ActiveColor != Neutral {
+		t.Fatalf("expected a stopped, exhausted Blue clock, got %#v", state.Clock)
+	}
+}
+
 func TestTickReportsTimeoutObservedByValidMoveRequest(t *testing.T) {
 	control := TimeControl{InitialTimeMs: 1_000, IncrementMs: 0}
 	game, err := NewGameWithTimeControl(
@@ -152,6 +190,30 @@ func TestTickReportsTimeoutObservedByValidMoveRequest(t *testing.T) {
 	state, expired := game.Tick(now)
 	if !expired || state.EndReason != EndReasonTimeout {
 		t.Fatalf("expected tick to publish the observed timeout, got expired=%t state=%#v", expired, state)
+	}
+}
+
+func TestTickContinuesReportingTimeoutUntilServerHandlesIt(t *testing.T) {
+	control := TimeControl{InitialTimeMs: 1_000, IncrementMs: 0}
+	game, err := NewGameWithTimeControl(
+		"repeated-timeout-report",
+		ModeAnnihilation,
+		PlayerProfile{UserID: "red"},
+		PlayerProfile{UserID: "blue"},
+		control,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseTime := time.Date(2026, time.August, 17, 12, 0, 0, 0, time.UTC)
+	useFakeGameTime(game, &baseTime)
+	expiredAt := baseTime.Add(time.Second)
+
+	if _, expired := game.Tick(expiredAt); !expired {
+		t.Fatal("expected the first tick to report timeout")
+	}
+	if state, expired := game.Tick(expiredAt.Add(time.Second)); !expired || state.Winner != Blue {
+		t.Fatalf("expected timeout loss to remain reportable, got expired=%t state=%#v", expired, state)
 	}
 }
 

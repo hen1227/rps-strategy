@@ -124,4 +124,4 @@ That file is sufficient for the mode to appear in `GET /api/modes`, the WebSocke
 and movement directly, as demonstrated by the test-only teleport mode in
 `internal/game/mode_test.go`.
 
-Guest matchmaking is currently unranked. The server reports a temporary ±10,000 compatibility range but does not read, calculate, or persist Elo until accounts exist.
+Ratings are per mode, so a new mode arrives with its own rating pool and needs no rating code of its own. The first ranked game an account finishes in the mode creates its rating row from that account's shared starting rating, and ranked matchmaking then compares only ratings earned in that mode.

@@ -83,6 +83,16 @@ func (registry *ModeRegistry) Has(modeID ModeID) bool {
 	return exists
 }
 
+// Playable reports whether a registered mode still accepts new games.
+// Matchmaking, challenges, and tournaments all gate on this, so retiring a
+// mode is a one-line change to its definition.
+func (registry *ModeRegistry) Playable(modeID ModeID) bool {
+	registry.mu.RLock()
+	factory, exists := registry.factories[modeID]
+	registry.mu.RUnlock()
+	return exists && factory().Definition().Playable
+}
+
 func (registry *ModeRegistry) Definitions() []ModeDefinition {
 	registry.mu.RLock()
 	definitions := make([]ModeDefinition, 0, len(registry.factories))

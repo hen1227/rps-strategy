@@ -12,6 +12,7 @@ func (mode *TotalWarMode) Definition() ModeDefinition {
 		Description:      "Pieces and territory.",
 		Objective:        "Annihilate the enemy or control most territory when the board is filled.",
 		DisplayOrder:     2,
+		Playable:         true,
 		Features:         []ModeFeature{FeatureTerritory},
 		StartingPosition: totalWarStartingPosition,
 	}

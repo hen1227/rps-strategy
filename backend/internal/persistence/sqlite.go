@@ -21,24 +21,73 @@ const (
 )
 
 var (
-	ErrAccountNotFound = errors.New("account not found")
-	memoryDatabaseID   atomic.Uint64
+	ErrAccountNotFound       = errors.New("account not found")
+	ErrInvalidProfileKey     = errors.New("invalid profile key")
+	ErrInvalidAccountProfile = errors.New("invalid account profile")
+	memoryDatabaseID         atomic.Uint64
 )
 
 type Store struct {
 	db *sql.DB
 }
 
+// Account holds one player's identity and lifetime totals across every mode.
+// Ranked play moves ModeRatings; Elo is only the shared seed a mode inherits
+// the first time this account finishes a game in it.
 type Account struct {
-	UserID          string `json:"userId"`
-	Username        string `json:"username"`
-	Elo             int    `json:"elo"`
-	Wins            int    `json:"wins"`
-	Losses          int    `json:"losses"`
-	Draws           int    `json:"draws"`
-	GamesPlayed     int    `json:"gamesPlayed"`
-	CreatedAtUnixMs int64  `json:"createdAtUnixMs"`
-	UpdatedAtUnixMs int64  `json:"updatedAtUnixMs"`
+	UserID          string                     `json:"userId"`
+	Username        string                     `json:"username"`
+	Discord         string                     `json:"discord"`
+	Elo             int                        `json:"elo"`
+	Wins            int                        `json:"wins"`
+	Losses          int                        `json:"losses"`
+	Draws           int                        `json:"draws"`
+	GamesPlayed     int                        `json:"gamesPlayed"`
+	ModeRatings     map[game.ModeID]ModeRating `json:"modeRatings"`
+	CreatedAtUnixMs int64                      `json:"createdAtUnixMs"`
+	UpdatedAtUnixMs int64                      `json:"updatedAtUnixMs"`
+}
+
+// ModeRating is an account's rating and record inside a single game mode. Every
+// mode rates independently, so a strong Total War player entering Infiltration
+// is not seeded by Total War results beyond the shared starting rating.
+type ModeRating struct {
+	ModeID          game.ModeID `json:"modeId"`
+	Elo             int         `json:"elo"`
+	Wins            int         `json:"wins"`
+	Losses          int         `json:"losses"`
+	Draws           int         `json:"draws"`
+	GamesPlayed     int         `json:"gamesPlayed"`
+	UpdatedAtUnixMs int64       `json:"updatedAtUnixMs"`
+}
+
+// ModeElo is the rating that decides ranked play in one mode. A mode this
+// account has never finished a game in inherits the shared seed rating, so a
+// player's first game in a new mode starts where the rest of their play left
+// off instead of at the default.
+func (account Account) ModeElo(modeID game.ModeID) int {
+	if rating, found := account.ModeRatings[modeID]; found {
+		return rating.Elo
+	}
+	if account.Elo <= 0 {
+		return DefaultElo
+	}
+	return account.Elo
+}
+
+// RecordRatedGame applies a finished game to an in-memory account copy, so a
+// connection that stays in the lobby keeps queueing at its new mode rating
+// without reloading the account.
+func (account *Account) RecordRatedGame(modeID game.ModeID, elo int) {
+	account.GamesPlayed++
+	if account.ModeRatings == nil {
+		account.ModeRatings = make(map[game.ModeID]ModeRating)
+	}
+	rating := account.ModeRatings[modeID]
+	rating.ModeID = modeID
+	rating.Elo = elo
+	rating.GamesPlayed++
+	account.ModeRatings[modeID] = rating
 }
 
 type RecordedPlayer struct {
@@ -76,12 +125,13 @@ type HeadToHeadRecord struct {
 }
 
 type RatingUpdate struct {
-	Recorded      bool `json:"recorded"`
-	Ranked        bool `json:"ranked"`
-	RedEloBefore  int  `json:"redEloBefore"`
-	RedEloAfter   int  `json:"redEloAfter"`
-	BlueEloBefore int  `json:"blueEloBefore"`
-	BlueEloAfter  int  `json:"blueEloAfter"`
+	Recorded      bool        `json:"recorded"`
+	Ranked        bool        `json:"ranked"`
+	ModeID        game.ModeID `json:"modeId"`
+	RedEloBefore  int         `json:"redEloBefore"`
+	RedEloAfter   int         `json:"redEloAfter"`
+	BlueEloBefore int         `json:"blueEloBefore"`
+	BlueEloAfter  int         `json:"blueEloAfter"`
 }
 
 func Open(path string) (*Store, error) {
@@ -135,6 +185,8 @@ func (store *Store) initialize(ctx context.Context) error {
 CREATE TABLE IF NOT EXISTS accounts (
     user_id TEXT PRIMARY KEY,
     username TEXT NOT NULL,
+    discord TEXT NOT NULL DEFAULT '',
+    profile_key_hash TEXT NOT NULL DEFAULT '',
     elo INTEGER NOT NULL DEFAULT 1200 CHECK (elo >= 0),
     wins INTEGER NOT NULL DEFAULT 0 CHECK (wins >= 0),
     losses INTEGER NOT NULL DEFAULT 0 CHECK (losses >= 0),
@@ -176,9 +228,80 @@ CREATE INDEX IF NOT EXISTS game_history_blue_finished_idx
     ON game_history(blue_player_id, finished_at_unix_ms DESC);
 CREATE INDEX IF NOT EXISTS game_history_head_to_head_idx
     ON game_history(red_player_id, blue_player_id, finished_at_unix_ms DESC);
+
+CREATE TABLE IF NOT EXISTS account_mode_ratings (
+    user_id TEXT NOT NULL REFERENCES accounts(user_id) ON DELETE CASCADE,
+    mode_id TEXT NOT NULL,
+    elo INTEGER NOT NULL CHECK (elo >= 0),
+    wins INTEGER NOT NULL DEFAULT 0 CHECK (wins >= 0),
+    losses INTEGER NOT NULL DEFAULT 0 CHECK (losses >= 0),
+    draws INTEGER NOT NULL DEFAULT 0 CHECK (draws >= 0),
+    games_played INTEGER NOT NULL DEFAULT 0 CHECK (games_played >= 0),
+    created_at_unix_ms INTEGER NOT NULL,
+    updated_at_unix_ms INTEGER NOT NULL,
+    PRIMARY KEY (user_id, mode_id)
+);
+
+CREATE TABLE IF NOT EXISTS tournaments (
+    tournament_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    mode_id TEXT NOT NULL,
+    mode_name TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'registration'
+        CHECK (status IN ('registration', 'in_progress', 'completed')),
+    created_at_unix_ms INTEGER NOT NULL,
+    started_at_unix_ms INTEGER,
+    completed_at_unix_ms INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS tournament_players (
+    player_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tournament_id TEXT NOT NULL REFERENCES tournaments(tournament_id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL,
+    ign TEXT NOT NULL COLLATE NOCASE,
+    discord TEXT NOT NULL,
+    agreed_to_unfiltered_chat INTEGER NOT NULL
+        CHECK (agreed_to_unfiltered_chat = 1),
+    signup_order INTEGER NOT NULL,
+    joined_at_unix_ms INTEGER NOT NULL,
+    UNIQUE (tournament_id, user_id),
+    UNIQUE (tournament_id, ign),
+    UNIQUE (tournament_id, signup_order)
+);
+
+CREATE TABLE IF NOT EXISTS tournament_matches (
+    match_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tournament_id TEXT NOT NULL REFERENCES tournaments(tournament_id) ON DELETE CASCADE,
+    round_number INTEGER NOT NULL CHECK (round_number > 0),
+    match_order INTEGER NOT NULL CHECK (match_order > 0),
+    player1_id INTEGER NOT NULL REFERENCES tournament_players(player_id),
+    player2_id INTEGER NOT NULL REFERENCES tournament_players(player_id),
+    result TEXT NOT NULL DEFAULT 'pending'
+        CHECK (result IN ('pending', 'player1_win', 'player2_win', 'draw')),
+    winner_player_id INTEGER REFERENCES tournament_players(player_id),
+    game_id TEXT,
+    updated_at_unix_ms INTEGER NOT NULL,
+    CHECK (player1_id <> player2_id),
+    CHECK (winner_player_id IS NULL OR winner_player_id IN (player1_id, player2_id)),
+    UNIQUE (tournament_id, match_order)
+);
+
+CREATE INDEX IF NOT EXISTS tournament_players_tournament_idx
+    ON tournament_players(tournament_id, signup_order);
+CREATE INDEX IF NOT EXISTS tournament_matches_tournament_idx
+    ON tournament_matches(tournament_id, match_order);
 `
 	if _, err := store.db.ExecContext(ctx, schema); err != nil {
 		return fmt.Errorf("migrate sqlite database: %w", err)
+	}
+	if err := store.ensureAccountProfileColumns(ctx); err != nil {
+		return err
+	}
+	if err := store.ensureTournamentMatchColumns(ctx); err != nil {
+		return err
+	}
+	if err := store.ensureArchiveSchema(ctx); err != nil {
+		return err
 	}
 	return nil
 }
@@ -211,13 +334,57 @@ ON CONFLICT(user_id) DO UPDATE SET
 }
 
 func (store *Store) Account(ctx context.Context, userID string) (Account, error) {
-	row := store.db.QueryRowContext(ctx, `
-SELECT user_id, username, elo, wins, losses, draws, games_played,
+	userID = strings.TrimSpace(userID)
+	account, err := scanAccount(store.db.QueryRowContext(ctx, `
+SELECT user_id, username, discord, elo, wins, losses, draws, games_played,
        created_at_unix_ms, updated_at_unix_ms
 FROM accounts
 WHERE user_id = ?
-`, strings.TrimSpace(userID))
-	return scanAccount(row)
+`, userID))
+	if err != nil {
+		return Account{}, err
+	}
+	account.ModeRatings, err = store.modeRatings(ctx, userID)
+	if err != nil {
+		return Account{}, err
+	}
+	return account, nil
+}
+
+func (store *Store) modeRatings(
+	ctx context.Context,
+	userID string,
+) (map[game.ModeID]ModeRating, error) {
+	rows, err := store.db.QueryContext(ctx, `
+SELECT mode_id, elo, wins, losses, draws, games_played, updated_at_unix_ms
+FROM account_mode_ratings
+WHERE user_id = ?
+`, userID)
+	if err != nil {
+		return nil, fmt.Errorf("read account mode ratings: %w", err)
+	}
+	defer rows.Close()
+
+	ratings := make(map[game.ModeID]ModeRating)
+	for rows.Next() {
+		var rating ModeRating
+		if err := rows.Scan(
+			&rating.ModeID,
+			&rating.Elo,
+			&rating.Wins,
+			&rating.Losses,
+			&rating.Draws,
+			&rating.GamesPlayed,
+			&rating.UpdatedAtUnixMs,
+		); err != nil {
+			return nil, fmt.Errorf("read account mode ratings: %w", err)
+		}
+		ratings[rating.ModeID] = rating
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read account mode ratings: %w", err)
+	}
+	return ratings, nil
 }
 
 func (store *Store) RecordCompletedGame(
@@ -267,11 +434,18 @@ func (store *Store) RecordCompletedGame(
 		return RatingUpdate{}, err
 	}
 
-	redElo, err := accountEloTx(ctx, transaction, redID)
+	for _, userID := range []string{redID, blueID} {
+		if err := ensureModeRatingTx(
+			ctx, transaction, userID, state.Mode.ID, finishedAt.UnixMilli(),
+		); err != nil {
+			return RatingUpdate{}, err
+		}
+	}
+	redElo, err := modeEloTx(ctx, transaction, redID, state.Mode.ID)
 	if err != nil {
 		return RatingUpdate{}, err
 	}
-	blueElo, err := accountEloTx(ctx, transaction, blueID)
+	blueElo, err := modeEloTx(ctx, transaction, blueID, state.Mode.ID)
 	if err != nil {
 		return RatingUpdate{}, err
 	}
@@ -311,15 +485,28 @@ INSERT INTO game_history (
 		return RatingUpdate{}, fmt.Errorf("record game: insert history: %w", err)
 	}
 
-	if err := updateAccountResult(
-		ctx, transaction, redID, redAfter, redWins, redLosses, redDraws, finishedAt.UnixMilli(),
-	); err != nil {
-		return RatingUpdate{}, err
-	}
-	if err := updateAccountResult(
-		ctx, transaction, blueID, blueAfter, blueWins, blueLosses, blueDraws, finishedAt.UnixMilli(),
-	); err != nil {
-		return RatingUpdate{}, err
+	for _, result := range []struct {
+		userID string
+		elo    int
+		wins   int
+		losses int
+		draws  int
+	}{
+		{userID: redID, elo: redAfter, wins: redWins, losses: redLosses, draws: redDraws},
+		{userID: blueID, elo: blueAfter, wins: blueWins, losses: blueLosses, draws: blueDraws},
+	} {
+		if err := updateAccountResult(
+			ctx, transaction, result.userID,
+			result.wins, result.losses, result.draws, finishedAt.UnixMilli(),
+		); err != nil {
+			return RatingUpdate{}, err
+		}
+		if err := updateModeRating(
+			ctx, transaction, result.userID, state.Mode.ID, result.elo,
+			result.wins, result.losses, result.draws, finishedAt.UnixMilli(),
+		); err != nil {
+			return RatingUpdate{}, err
+		}
 	}
 	if err := transaction.Commit(); err != nil {
 		return RatingUpdate{}, fmt.Errorf("record game: commit transaction: %w", err)
@@ -328,6 +515,7 @@ INSERT INTO game_history (
 	return RatingUpdate{
 		Recorded:      true,
 		Ranked:        ranked,
+		ModeID:        state.Mode.ID,
 		RedEloBefore:  redElo,
 		RedEloAfter:   redAfter,
 		BlueEloBefore: blueElo,
@@ -433,6 +621,7 @@ func scanAccount(scanner interface{ Scan(...any) error }) (Account, error) {
 	err := scanner.Scan(
 		&account.UserID,
 		&account.Username,
+		&account.Discord,
 		&account.Elo,
 		&account.Wins,
 		&account.Losses,
@@ -469,12 +658,44 @@ ON CONFLICT(user_id) DO NOTHING
 	return nil
 }
 
-func accountEloTx(ctx context.Context, transaction *sql.Tx, userID string) (int, error) {
+// ensureModeRatingTx creates the rating row for one account and mode. A mode a
+// player has never finished copies the account's shared rating, so switching
+// modes does not reset a player to the default.
+func ensureModeRatingTx(
+	ctx context.Context,
+	transaction *sql.Tx,
+	userID string,
+	modeID game.ModeID,
+	now int64,
+) error {
+	_, err := transaction.ExecContext(ctx, `
+INSERT INTO account_mode_ratings (
+    user_id, mode_id, elo, created_at_unix_ms, updated_at_unix_ms
+)
+SELECT user_id, ?, elo, ?, ?
+FROM accounts
+WHERE user_id = ?
+ON CONFLICT(user_id, mode_id) DO NOTHING
+`, modeID, now, now, userID)
+	if err != nil {
+		return fmt.Errorf("record game: ensure mode rating: %w", err)
+	}
+	return nil
+}
+
+func modeEloTx(
+	ctx context.Context,
+	transaction *sql.Tx,
+	userID string,
+	modeID game.ModeID,
+) (int, error) {
 	var elo int
 	if err := transaction.QueryRowContext(
-		ctx, "SELECT elo FROM accounts WHERE user_id = ?", userID,
+		ctx,
+		"SELECT elo FROM account_mode_ratings WHERE user_id = ? AND mode_id = ?",
+		userID, modeID,
 	).Scan(&elo); err != nil {
-		return 0, fmt.Errorf("record game: read Elo: %w", err)
+		return 0, fmt.Errorf("record game: read mode Elo: %w", err)
 	}
 	return elo, nil
 }
@@ -487,11 +708,12 @@ func existingRatingUpdate(
 	var update RatingUpdate
 	var ranked int
 	err := transaction.QueryRowContext(ctx, `
-SELECT ranked, red_elo_before, red_elo_after, blue_elo_before, blue_elo_after
+SELECT ranked, mode_id, red_elo_before, red_elo_after, blue_elo_before, blue_elo_after
 FROM game_history
 WHERE game_id = ?
 `, gameID).Scan(
 		&ranked,
+		&update.ModeID,
 		&update.RedEloBefore,
 		&update.RedEloAfter,
 		&update.BlueEloBefore,
@@ -551,7 +773,6 @@ func updateAccountResult(
 	ctx context.Context,
 	transaction *sql.Tx,
 	userID string,
-	elo int,
 	wins int,
 	losses int,
 	draws int,
@@ -559,16 +780,42 @@ func updateAccountResult(
 ) error {
 	_, err := transaction.ExecContext(ctx, `
 UPDATE accounts
+SET wins = wins + ?,
+    losses = losses + ?,
+    draws = draws + ?,
+    games_played = games_played + 1,
+    updated_at_unix_ms = ?
+WHERE user_id = ?
+`, wins, losses, draws, now, userID)
+	if err != nil {
+		return fmt.Errorf("record game: update account: %w", err)
+	}
+	return nil
+}
+
+func updateModeRating(
+	ctx context.Context,
+	transaction *sql.Tx,
+	userID string,
+	modeID game.ModeID,
+	elo int,
+	wins int,
+	losses int,
+	draws int,
+	now int64,
+) error {
+	_, err := transaction.ExecContext(ctx, `
+UPDATE account_mode_ratings
 SET elo = ?,
     wins = wins + ?,
     losses = losses + ?,
     draws = draws + ?,
     games_played = games_played + 1,
     updated_at_unix_ms = ?
-WHERE user_id = ?
-`, elo, wins, losses, draws, now, userID)
+WHERE user_id = ? AND mode_id = ?
+`, elo, wins, losses, draws, now, userID, modeID)
 	if err != nil {
-		return fmt.Errorf("record game: update account: %w", err)
+		return fmt.Errorf("record game: update mode rating: %w", err)
 	}
 	return nil
 }

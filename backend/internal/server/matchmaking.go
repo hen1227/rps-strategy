@@ -74,7 +74,7 @@ func (queue *MatchmakingQueue) AddWithTimeControl(
 		Client:      client,
 		ModeID:      modeID,
 		TimeControl: timeControl,
-		Elo:         matchmakingElo(client),
+		Elo:         matchmakingElo(client, modeID),
 		JoinedAt:    queue.now(),
 	}
 	queue.entries[client] = entry
@@ -173,11 +173,13 @@ func (entry QueueEntry) searchIsFullyOpen(now time.Time) bool {
 	return now.Sub(entry.JoinedAt) >= matchmakingFullyOpenAfter
 }
 
-func matchmakingElo(client *Client) int {
+// matchmakingElo reads the rating for the mode being queued, so a player's
+// results in one mode never decide who they meet in another.
+func matchmakingElo(client *Client, modeID game.ModeID) int {
 	if client.account.UserID == "" {
 		return persistence.DefaultElo
 	}
-	return client.account.Elo
+	return client.account.ModeElo(modeID)
 }
 
 func absoluteDifference(first int, second int) int {

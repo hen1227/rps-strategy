@@ -203,3 +203,18 @@ func ratedClient(userID string, elo int) *Client {
 		account: persistence.Account{UserID: userID, Elo: elo},
 	}
 }
+
+func TestMatchmakingQueuesAtTheRatingOfTheChosenMode(t *testing.T) {
+	client := ratedClient("mode-rated", 1200)
+	client.account.ModeRatings = map[game.ModeID]persistence.ModeRating{
+		game.ModeTotalWar: {ModeID: game.ModeTotalWar, Elo: 1500},
+	}
+	queue := NewMatchmakingQueue(func(QueueEntry, QueueEntry) {})
+
+	if entry := queue.Add(client, game.ModeTotalWar); entry.Elo != 1500 {
+		t.Fatalf("expected the Total War rating, got %d", entry.Elo)
+	}
+	if entry := queue.Add(client, game.ModeInfiltration); entry.Elo != 1200 {
+		t.Fatalf("an unplayed mode should queue at the shared seed, got %d", entry.Elo)
+	}
+}

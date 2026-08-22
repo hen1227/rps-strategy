@@ -5,9 +5,16 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"rps-strategy/backend/internal/persistence"
 )
+
+type updateAccountRequest struct {
+	DisplayName      string `json:"displayName"`
+	Discord          string `json:"discord"`
+	ReservationToken string `json:"reservationToken"`
+}
 
 func (server *Server) getAccount(writer http.ResponseWriter, request *http.Request) {
 	account, err := server.data.Account(request.Context(), request.PathValue("userID"))
@@ -16,6 +23,59 @@ func (server *Server) getAccount(writer http.ResponseWriter, request *http.Reque
 		return
 	}
 	writeJSON(writer, http.StatusOK, account)
+}
+
+func (server *Server) updateAccount(writer http.ResponseWriter, request *http.Request) {
+	profileKey := bearerToken(request)
+	if profileKey == "" {
+		writer.Header().Set("WWW-Authenticate", `Bearer realm="account-profile"`)
+		writeAPIError(writer, http.StatusUnauthorized, "local account key is required")
+		return
+	}
+	var input updateAccountRequest
+	if err := decodeAPIRequest(writer, request, &input); err != nil {
+		writeAPIError(writer, http.StatusBadRequest, err.Error())
+		return
+	}
+	if usesReservedIdentity(input.DisplayName, input.Discord) &&
+		!server.hasValidAdminTokenValue(input.ReservationToken) {
+		writeAPIError(writer, http.StatusForbidden, "this username or Discord handle is reserved; paste the special token")
+		return
+	}
+	account, err := server.data.UpdateAccountProfile(
+		request.Context(),
+		request.PathValue("userID"),
+		profileKey,
+		input.DisplayName,
+		input.Discord,
+	)
+	if err != nil {
+		switch {
+		case errors.Is(err, persistence.ErrInvalidProfileKey):
+			writeAPIError(writer, http.StatusUnauthorized, "local account key is invalid")
+		case errors.Is(err, persistence.ErrAccountNotFound):
+			writeAPIError(writer, http.StatusNotFound, err.Error())
+		case errors.Is(err, persistence.ErrInvalidAccountProfile):
+			message := strings.TrimPrefix(
+				err.Error(),
+				persistence.ErrInvalidAccountProfile.Error()+": ",
+			)
+			writeAPIError(writer, http.StatusBadRequest, message)
+		default:
+			writeAPIError(writer, http.StatusInternalServerError, "account profile is unavailable")
+		}
+		return
+	}
+	writeJSON(writer, http.StatusOK, account)
+}
+
+func bearerToken(request *http.Request) string {
+	authorization := strings.TrimSpace(request.Header.Get("Authorization"))
+	scheme, token, found := strings.Cut(authorization, " ")
+	if !found || !strings.EqualFold(scheme, "Bearer") {
+		return ""
+	}
+	return strings.TrimSpace(token)
 }
 
 func (server *Server) getGameHistory(writer http.ResponseWriter, request *http.Request) {
