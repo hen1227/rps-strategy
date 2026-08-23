@@ -4,12 +4,20 @@ import { useEffect, useRef } from 'react';
 import { useGameStore } from '../store/gameStore';
 
 const SOUND_SOURCES = {
-  capture: require('../assets/sounds/capture.mp3'),
+  capturePaper: require('../assets/sounds/paper_captures.mp3'),
+  captureRock: require('../assets/sounds/rock_captures.mp3'),
+  captureScissors: require('../assets/sounds/scissor_captures.mp3'),
   moveCheck: require('../assets/sounds/move-check.mp3'),
   moveOpponent: require('../assets/sounds/move-opponent.mp3'),
   moveSelf: require('../assets/sounds/move-self.mp3'),
   notify: require('../assets/sounds/notify.mp3'),
   promote: require('../assets/sounds/promote.mp3'),
+};
+
+const CAPTURE_SOUND_BY_PIECE = {
+  Paper: 'capturePaper',
+  Rock: 'captureRock',
+  Scissors: 'captureScissors',
 };
 
 const occupiedTileCount = (gameState) =>
@@ -18,6 +26,25 @@ const occupiedTileCount = (gameState) =>
       count + row.filter((tile) => tile.occupant && tile.occupant !== 'Empty').length,
     0,
   );
+
+const captureSoundForTransition = (previous, next) => {
+  if (occupiedTileCount(next) >= occupiedTileCount(previous)) return null;
+
+  for (let y = 0; y < previous.grid.length; y += 1) {
+    for (let x = 0; x < previous.grid[y].length; x += 1) {
+      const before = previous.grid[y][x];
+      const after = next.grid[y]?.[x];
+      if (
+        after?.occupant === 'Empty' &&
+        before.occupantOwner === previous.currentTurn
+      ) {
+        return CAPTURE_SOUND_BY_PIECE[before.occupant] ?? null;
+      }
+    }
+  }
+
+  return null;
+};
 
 export const getGameSoundForTransition = (previous, next, playerColor) => {
   if (!next) return null;
@@ -36,9 +63,8 @@ export const getGameSoundForTransition = (previous, next, playerColor) => {
     return reachedBackRank ? 'promote' : 'moveCheck';
   }
 
-  if (occupiedTileCount(next) < occupiedTileCount(previous)) {
-    return 'capture';
-  }
+  const captureSound = captureSoundForTransition(previous, next);
+  if (captureSound) return captureSound;
 
   return previous.currentTurn === playerColor ? 'moveSelf' : 'moveOpponent';
 };
@@ -59,7 +85,9 @@ const useGameSounds = () => {
   const playerColor = useGameStore((state) => state.playerColor);
   const previousGameState = useRef(null);
 
-  const capturePlayer = useAudioPlayer(SOUND_SOURCES.capture);
+  const capturePaperPlayer = useAudioPlayer(SOUND_SOURCES.capturePaper);
+  const captureRockPlayer = useAudioPlayer(SOUND_SOURCES.captureRock);
+  const captureScissorsPlayer = useAudioPlayer(SOUND_SOURCES.captureScissors);
   const moveCheckPlayer = useAudioPlayer(SOUND_SOURCES.moveCheck);
   const moveOpponentPlayer = useAudioPlayer(SOUND_SOURCES.moveOpponent);
   const moveSelfPlayer = useAudioPlayer(SOUND_SOURCES.moveSelf);
@@ -75,7 +103,9 @@ const useGameSounds = () => {
     previousGameState.current = gameState;
 
     const player = {
-      capture: capturePlayer,
+      capturePaper: capturePaperPlayer,
+      captureRock: captureRockPlayer,
+      captureScissors: captureScissorsPlayer,
       moveCheck: moveCheckPlayer,
       moveOpponent: moveOpponentPlayer,
       moveSelf: moveSelfPlayer,
@@ -85,7 +115,9 @@ const useGameSounds = () => {
 
     if (player) replay(player);
   }, [
-    capturePlayer,
+    capturePaperPlayer,
+    captureRockPlayer,
+    captureScissorsPlayer,
     gameState,
     moveCheckPlayer,
     moveOpponentPlayer,

@@ -4,6 +4,7 @@ import {
   enginePosition,
   validMovesFor,
 } from '../engine/analysisGame';
+import { encodePGN, encodePosition, resultFor } from '../engine/pgn';
 import { createBot, createSeededRandom } from '../engine/botEngine';
 import { BOT_TUNING, botProfile } from '../engine/botProfiles';
 import { analyzeExclusive } from '../engine/rpsfishClient';
@@ -86,6 +87,10 @@ export const initialBotState = {
   botSession: null,
   botGame: null,
   botHistory: [],
+  // The moves as played, so a finished bot game can be written out as a
+  // record. Nothing on the server knows this game happened, so if the browser
+  // does not keep the move list there is nothing to review.
+  botMoves: [],
 };
 
 export const createBotSlice = (set, get) => {
@@ -100,6 +105,7 @@ export const createBotSlice = (set, get) => {
       botSession: session,
       botGame: game,
       ...(patch.botHistory ? { botHistory: patch.botHistory } : {}),
+      ...(patch.botMoves ? { botMoves: patch.botMoves } : {}),
       gameState: toGameState(game, session, {
         bot: botPlayerProfile(activeBot ?? { id: session.profileId, name: session.botName }),
         human: humanPlayerProfile(accountId, account),
@@ -123,12 +129,22 @@ export const createBotSlice = (set, get) => {
   // Applies a legal move for whichever side is to move and, when the bot is
   // next, starts it thinking.
   const applyMove = (from, to) => {
-    const { botGame, botHistory } = get();
+    const { botGame, botHistory, botMoves } = get();
     const result = applyAnalysisMove(botGame, from, to);
     if (!result) return false;
     publish({
       botGame: result.game,
       botHistory: [...botHistory, botGame],
+      botMoves: [
+        ...botMoves,
+        {
+          from,
+          to,
+          player: result.mover,
+          piece: botGame.grid[from.y][from.x].occupant,
+          captured: botGame.grid[to.y][to.x].occupant,
+        },
+      ],
       lastMove: { from, to },
       selectedTile: null,
       validMoves: [],
@@ -253,6 +269,7 @@ export const createBotSlice = (set, get) => {
         botSession: session,
         botGame: game,
         botHistory: [],
+        botMoves: [],
         playerColor: humanColor,
         isSpectating: false,
         spectatedGameId: null,
@@ -323,7 +340,9 @@ export const createBotSlice = (set, get) => {
       if (!game) return;
 
       const previous = history[history.length - 1];
-      set({ botHistory: history });
+      // One move per history entry, so the record stays a description of the
+      // board that is actually on screen.
+      set({ botHistory: history, botMoves: get().botMoves.slice(0, history.length) });
       publish({
         botGame: game,
         lastMove: previous ? lastMoveBetween(previous, game) : null,
@@ -453,6 +472,53 @@ export const createBotSlice = (set, get) => {
         playerColor: null,
         selectedTile: null,
         validMoves: [],
+      });
+    },
+
+    /**
+     * The finished bot game as a record, in the archive's own dialect.
+     *
+     * A bot game never reaches the server, so this is the only record it will
+     * ever have. Writing it in the same format the archive uses means the
+     * review screen reads one format rather than two.
+     */
+    botGamePGN: () => {
+      const { botGame, botHistory, botMoves, botSession, account, accountId } = get();
+      if (!botSession || !botGame || botMoves.length === 0) return null;
+      const start = botHistory[0] ?? botGame;
+      // 'Guest' is the placeholder the rest of the app already knows how to
+      // read as "the person at this browser".
+      const human = account?.username?.trim() || 'Guest';
+      const names = {
+        [botSession.playerColor]: human,
+        [botSession.botColor]: botSession.botName,
+      };
+      const ids = { [botSession.playerColor]: accountId, [botSession.botColor]: `bot:${botSession.profileId}` };
+      return encodePGN({
+        tags: [
+          { name: 'Event', value: 'Bot practice' },
+          { name: 'Site', value: 'RPS Strategy' },
+          { name: 'Date', value: new Date(botSession.startedAtUnixMs).toISOString().slice(0, 10).replace(/-/g, '.') },
+          { name: 'Red', value: names.Red },
+          { name: 'Blue', value: names.Blue },
+          { name: 'Result', value: resultFor(botGame.status, botGame.winner) },
+          { name: 'GameId', value: botSession.gameId },
+          { name: 'Variant', value: botGame.mode.name },
+          { name: 'ModeId', value: botGame.mode.id },
+          { name: 'BoardSize', value: '9' },
+          { name: 'SetUp', value: '1' },
+          { name: 'FEN', value: encodePosition(start.grid, 'Red') },
+          { name: 'RedId', value: ids.Red },
+          { name: 'BlueId', value: ids.Blue },
+          { name: 'Ranked', value: 'false' },
+          { name: 'EndReason', value: botGame.endReason ?? '' },
+          { name: 'BotProfile', value: botSession.profileId },
+          { name: 'BotRating', value: String(botSession.botRating) },
+        ],
+        moves: botMoves,
+        endReason: botGame.endReason,
+        winner: botGame.winner,
+        result: resultFor(botGame.status, botGame.winner),
       });
     },
 

@@ -8,6 +8,7 @@ import {
   saveGameSessionId,
 } from './localIdentity';
 import { createBotSlice, initialBotState } from './botSession';
+import { createSessionSlice } from './accountSession';
 import { WS_URL } from './serverConfig';
 import { send } from './socketSend';
 import { listTournaments } from './tournamentApi';
@@ -93,7 +94,10 @@ const initialQueue = {
   queuedForMs: 0,
 };
 
-const accountId = getOrCreateUserId();
+// This browser's own identity, as distinct from the store's `accountId`,
+// which is whoever the server says we are right now. The two differ on a
+// browser where somebody has signed in to an account claimed elsewhere.
+const localUserId = getOrCreateUserId();
 const profileKey = getOrCreateProfileKey();
 let shouldReconnect = true;
 let reconnectTimer = null;
@@ -179,14 +183,20 @@ const inferLastMove = (previousGame, nextGame) => {
 
 export const useGameStore = create((set, get) => ({
   ...createBotSlice(set, get),
+  ...createSessionSlice(set, get),
   socket: null,
-  accountId,
+  accountId: localUserId,
   profileKey,
   account: null,
   gameSessionId: readGameSessionId(),
   connectionStatus: 'disconnected',
   error: null,
   modes: BASE_MODES,
+  // Engines connected from someone's machine. Deliberately *not* named after
+  // botPlayerCount below, which counts people practising against a browser
+  // bot and means very nearly the opposite thing.
+  engineBots: [],
+  botFault: null,
   modePlayerCounts: {},
   // Players waiting in matchmaking right now, per mode. The bot board watches
   // this so someone practising against a bot still hears the door knock.
@@ -234,8 +244,11 @@ export const useGameStore = create((set, get) => ({
       set({ error: null });
       send(socket, {
         type: 'authenticate',
-        userId: get().accountId,
+        userId: localUserId,
         profileKey: get().profileKey,
+        // A signed-in player is their account here rather than whatever this
+        // browser is called. The server prefers the token when it is set.
+        sessionToken: get().sessionToken ?? '',
       });
     };
     socket.onerror = () => {
@@ -298,6 +311,10 @@ export const useGameStore = create((set, get) => ({
           return {
             connectionStatus: gameSessionId || spectatedGameId ? 'rejoining' : 'connected',
             account: message.account ?? state.account,
+            // Who the server just said we are. On a browser where somebody has
+            // signed in, that is their account rather than this browser's.
+            accountId: message.account?.userId ?? state.accountId,
+            engineBots: message.engineBots ?? [],
             gameSessionId,
             spectatedGameId,
             modes,
@@ -316,6 +333,14 @@ export const useGameStore = create((set, get) => ({
         get().announceBotPresence();
         break;
       case 'authentication_failed':
+        // A session the server no longer accepts is the one failure the client
+        // can resolve by itself: drop it, and the reconnect that follows this
+        // socket closing comes back as this browser's anonymous identity.
+        if (get().sessionToken) {
+          get().clearSession();
+          set({ error: message.message ?? 'Your session has expired. Sign in again.' });
+          break;
+        }
         shouldReconnect = false;
         set({
           connectionStatus: 'disconnected',
@@ -342,6 +367,17 @@ export const useGameStore = create((set, get) => ({
         break;
       case 'tournaments':
         set({ tournaments: message.tournaments ?? [] });
+        break;
+      case 'engine_bots':
+        set({ engineBots: message.engineBots ?? [] });
+        break;
+      case 'bot_unavailable':
+        set({ error: message.message ?? 'That bot is not available right now.' });
+        break;
+      case 'bot_fault':
+        // Only the owner of a bot receives this, and it is the only place the
+        // real reason an engine broke is visible to them.
+        set({ botFault: { message: message.message, botName: message.botName } });
         break;
       case 'tournament_rejected':
         set({ error: message.message ?? 'That tournament match is not available.' });
@@ -617,7 +653,7 @@ export const useGameStore = create((set, get) => ({
     set({ queue: initialQueue });
   },
 
-  challengePlayer: (username, requestedModeId) => {
+  challengePlayer: (username, requestedModeId, startingPosition = null) => {
     const { socket, modes } = get();
     const modeId = requestedModeId ?? modes[0]?.id;
     const trimmedUsername = username?.trim();
@@ -629,7 +665,14 @@ export const useGameStore = create((set, get) => ({
       set({ error: 'No game modes are available.' });
       return false;
     }
-    if (!send(socket, { type: 'send_challenge', username: trimmedUsername, modeId })) {
+    if (
+      !send(socket, {
+        type: 'send_challenge',
+        username: trimmedUsername,
+        modeId,
+        ...(startingPosition ? { startingPosition } : {}),
+      })
+    ) {
       set({ error: 'Connect to the server before sending a challenge.' });
       return false;
     }
@@ -664,6 +707,16 @@ export const useGameStore = create((set, get) => ({
       set({ error: 'Connect to the server before cancelling the challenge.' });
     }
   },
+
+  challengeBot: (botId, modeId) => {
+    if (!botId || !send(get().socket, { type: 'challenge_bot', botId, modeId })) {
+      set({ error: 'Connect to the server before challenging a bot.' });
+      return;
+    }
+    set({ error: null });
+  },
+
+  dismissBotFault: () => set({ botFault: null }),
 
   spectateGame: (gameId) => {
     if (!gameId || !send(get().socket, { type: 'spectate_game', gameId })) {
@@ -854,7 +907,7 @@ export const useGameStore = create((set, get) => ({
   },
 
   applyAccountUpdate: (account) => {
-    set({ account, error: null });
+    set({ account, accountId: account?.userId ?? localUserId, error: null });
     shouldReconnect = true;
     const socket = get().socket;
     if (socket) socket.close();

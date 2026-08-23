@@ -18,18 +18,12 @@
 // and executed as-is inside a vm context with the three browser globals it
 // touches, so what this measures is the shipped path rather than a model of it.
 
-import { readFile } from 'node:fs/promises';
-import { createContext, runInContext } from 'node:vm';
 import { register } from 'node:module';
 import { performance } from 'node:perf_hooks';
-import { fileURLToPath } from 'node:url';
-import { dirname, resolve as resolvePath } from 'node:path';
+
+import { startEngineWorker } from './engineWorker.mjs';
 
 register('./arena-loader.mjs', import.meta.url);
-
-const HERE = dirname(fileURLToPath(import.meta.url));
-const WORKER_PATH = resolvePath(HERE, '../public/rpsfish/rpsfish-worker.js');
-const WASM_PATH = resolvePath(HERE, '../public/rpsfish/rpsfish.wasm');
 
 const argument = (name, fallback) => {
   const index = process.argv.indexOf(`--${name}`);
@@ -38,72 +32,6 @@ const argument = (name, fallback) => {
     : fallback;
 };
 const flag = (name) => process.argv.includes(`--${name}`);
-
-// Load the shipped worker into a vm context and expose it as an `analyze`
-// function shaped like `rpsfishClient.analyzeExclusive`.
-const startWorker = async () => {
-  const [source, wasmBytes] = await Promise.all([
-    readFile(WORKER_PATH, 'utf8'),
-    readFile(WASM_PATH),
-  ]);
-
-  let onMessage;
-  const listeners = new Map();
-  const sandbox = {
-    WebAssembly,
-    performance,
-    setTimeout,
-    clearTimeout,
-    console,
-    URL,
-    BigInt,
-    Error,
-    // The worker fetches `./rpsfish.wasm` relative to its own location; in this
-    // context every fetch resolves to the one file it can possibly want.
-    fetch: async () => ({
-      ok: true,
-      status: 200,
-      clone() {
-        return this;
-      },
-      arrayBuffer: async () => wasmBytes,
-    }),
-  };
-  sandbox.self = sandbox;
-  sandbox.globalThis = sandbox;
-  Object.defineProperty(sandbox, 'onmessage', {
-    get: () => onMessage,
-    set: (handler) => {
-      onMessage = handler;
-    },
-  });
-  sandbox.location = { href: 'https://arena.invalid/rpsfish/rpsfish-worker.js', search: '' };
-  sandbox.postMessage = (data) => {
-    const listener = listeners.get(data?.requestId);
-    if (listener) listener(data);
-  };
-  // `WebAssembly.instantiateStreaming` needs a real Response; skipping it sends
-  // the worker down its own documented fallback path.
-  sandbox.WebAssembly = { instantiate: WebAssembly.instantiate.bind(WebAssembly) };
-
-  createContext(sandbox);
-  runInContext(source, sandbox, { filename: WORKER_PATH });
-
-  let nextRequestId = 1;
-  return (position, options = {}) => {
-    const requestId = nextRequestId++;
-    const { signal, ...engineOptions } = options;
-    return new Promise((resolvePromise, rejectPromise) => {
-      listeners.set(requestId, (data) => {
-        if (data.type === 'analysis-update') return;
-        listeners.delete(requestId);
-        if (data.type === 'analysis') resolvePromise(data.analysis);
-        else rejectPromise(new Error(data.message ?? 'analysis failed'));
-      });
-      onMessage({ data: { type: 'analyze', requestId, position, options: engineOptions } });
-    });
-  };
-};
 
 const MODE_ROWS = {
   V1: [
@@ -129,7 +57,7 @@ const MODES = {
 const pad = (value, width) => String(value).padStart(width);
 
 const main = async () => {
-  const analyze = await startWorker();
+  const { analyze } = await startEngineWorker();
   const { createBot } = await import('../engine/botEngine.js');
   const { BOT_PROFILES, botProfile } = await import('../engine/botProfiles.js');
   const { createSeededRandom, playBotMatch } = await import('../engine/botArena.js');

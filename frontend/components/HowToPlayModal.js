@@ -2,6 +2,7 @@ import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-nati
 
 import ModePreview from './ModePreview';
 import PieceIcon from './PieceIcon';
+import TileMark from './TileMark';
 import { board, colors, overlay, players, radius, shadows } from '../theme';
 
 // Small rules card for a single mode. Everything the two playable modes share
@@ -74,7 +75,13 @@ function MiniBoard({ goalRow = null, rows, territory = false, tileSize = 26 }) {
                   owner === 'Blue' && styles.tileBlueOwned,
                 ]}
               >
-                {goalRow === y && <View style={styles.goalTint} />}
+                {goalRow === y && (
+                  <>
+                    <View style={styles.goalTint} />
+                    <TileMark compact owner="Red" variant="goal" />
+                  </>
+                )}
+                {owner && <TileMark compact owner={owner} variant="territory" />}
                 {Boolean(piece) && (
                   <PieceIcon color={piece.owner} piece={piece.piece} size={tileSize - 7} />
                 )}

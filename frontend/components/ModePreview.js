@@ -1,6 +1,7 @@
 import { StyleSheet, Text, View } from 'react-native';
 
 import PieceIcon from './PieceIcon';
+import TileMark from './TileMark';
 import { board, colors, players, radius } from '../theme';
 
 const BOARD_SIZE = 9;
@@ -77,11 +78,25 @@ export default function ModePreview({ mode }) {
                   ]}
                 >
                   {goalOwner && (
-                    <View
-                      style={[
-                        styles.goalTint,
-                        goalOwner === 'red' ? styles.redGoalTint : styles.blueGoalTint,
-                      ]}
+                    <>
+                      <View
+                        style={[
+                          styles.goalTint,
+                          goalOwner === 'red' ? styles.redGoalTint : styles.blueGoalTint,
+                        ]}
+                      />
+                      <TileMark
+                        compact
+                        owner={goalOwner === 'red' ? 'Red' : 'Blue'}
+                        variant="goal"
+                      />
+                    </>
+                  )}
+                  {showsTerritory && piece?.owner && (
+                    <TileMark
+                      compact
+                      owner={piece.owner === 'red' ? 'Red' : 'Blue'}
+                      variant="territory"
                     />
                   )}
                   {piece && (

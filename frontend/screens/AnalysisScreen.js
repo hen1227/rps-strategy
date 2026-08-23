@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -11,37 +11,34 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import Board from '../components/Board';
+import EngineLinesCard from '../components/EngineLinesCard';
+import EvalBar from '../components/EvalBar';
+import MoveQualityBadge from '../components/MoveQualityBadge';
+import PGNImportModal from '../components/PGNImportModal';
+import PositionSetupModal from '../components/PositionSetupModal';
 import TerritoryMeter from '../components/TerritoryMeter';
 import {
   applyAnalysisMove,
-  classifyMove,
   createAnalysisGame,
   enginePosition,
   moveLabel,
+  startingPositionFromGrid,
   validMovesFor,
 } from '../engine/analysisGame';
+import { reviewSourceFromPGN } from '../engine/gameReview';
 import { ANALYSIS_PRESETS, analyzePosition } from '../engine/rpsfishClient';
-import { board, colors, evalBar, moveQuality, players, radius } from '../theme';
-
-const QUALITY_COLORS = {
-  best: moveQuality.best,
-  excellent: moveQuality.excellent,
-  good: moveQuality.good,
-  inaccuracy: moveQuality.inaccuracy,
-  mistake: moveQuality.mistake,
-  blunder: moveQuality.blunder,
-};
+import useGameAnalysis from '../hooks/useGameAnalysis';
+import useReplayKeyboard from '../hooks/useReplayKeyboard';
+import { useGameStore } from '../store/gameStore';
+import { colors, players, radius } from '../theme';
 
 const samePosition = (first, second) => first?.x === second?.x && first?.y === second?.y;
 
-const formatScore = (score) => {
-  if (score === undefined || score === null) return '—';
-  if (Math.abs(score) >= 29_000) {
-    return `${score >= 0 ? '' : '−'}M${Math.max(1, 30_000 - Math.abs(score))}`;
-  }
-  const value = score / 100;
-  return `${value >= 0 ? '+' : '−'}${Math.abs(value).toFixed(2)}`;
-};
+// The board's own search budget and the budget its grades are measured at are
+// two different things: one is redone every time the position changes and only
+// has to keep up with a person clicking, the other has to be worth writing a
+// grade down from. They move together so that "GO DEEP" deepens both.
+const GRADE_PRESETS = Object.freeze({ standard: 'standard', deep: 'deep' });
 
 const confidenceLabel = (confidence) => {
   if (confidence >= 80) return 'HIGH';
@@ -49,37 +46,18 @@ const confidenceLabel = (confidence) => {
   return 'LOW';
 };
 
-const variationLabel = (line) =>
-  line.principalVariation
-    ?.slice(1, 5)
-    .map(moveLabel)
-    .join(' · ');
-
-function EvalBar({ height, redScore }) {
-  const score = redScore ?? 0;
-  const redShare = Math.max(2, Math.min(98, 50 + 48 * Math.tanh(score / 900)));
-  const blueShare = 100 - redShare;
-
-  return (
-    <View
-      accessibilityLabel={`Evaluation ${formatScore(score)} for Red`}
-      style={[styles.evalBar, { height }]}
-    >
-      <View style={[styles.blueEval, { height: `${blueShare}%` }]}>
-        <Text style={styles.blueEvalSide}>B</Text>
-      </View>
-      <View style={[styles.redEval, { height: `${redShare}%` }]}>
-        <Text style={styles.redEvalSide}>R</Text>
-      </View>
-      <View style={[styles.evalDivider, { top: `${blueShare}%` }]} />
-      <View style={[styles.evalBadge, score < 0 && styles.evalBadgeOnBlue]}>
-        <Text style={[styles.evalValue, score < 0 && styles.evalValueOnBlue]}>
-          {formatScore(score)}
-        </Text>
-      </View>
-    </View>
-  );
-}
+// A move can give up nothing without being the move the engine named, so
+// "best was X" is only said when playing X would actually have been better.
+const lastMoveVerdict = (entry) => {
+  if (!entry.grade) return 'RPSFish is grading this move…';
+  const best = entry.bestMove ? moveLabel(entry.bestMove) : 'not available';
+  if (entry.grade.key === 'great') {
+    return 'The only move that stayed within the Good threshold.';
+  }
+  if (entry.isTopMove) return `The engine's own choice at depth ${entry.depth}.`;
+  if (entry.lossPercent < 0.05) return `As strong as ${best}.`;
+  return `Best was ${best} · ${entry.lossPercent.toFixed(1)} points of expected score lost`;
+};
 
 function AnalysisPanel({
   analysis,
@@ -87,11 +65,13 @@ function AnalysisPanel({
   canMakeBestMove,
   engineState,
   game,
-  history,
+  gradeError,
+  gradedMoves,
   onAnalysisModeChange,
   onMakeBestMove,
+  onSetPosition,
 }) {
-  const lastMove = history[history.length - 1];
+  const lastMove = gradedMoves[gradedMoves.length - 1];
   const activeColor = game.currentTurn;
 
   return (
@@ -146,6 +126,17 @@ function AnalysisPanel({
               </Text>
             </Pressable>
           ))}
+          <Pressable
+            accessibilityLabel="Set up a custom analysis position"
+            accessibilityRole="button"
+            onPress={onSetPosition}
+            style={({ pressed }) => [
+              styles.setPositionButton,
+              pressed && styles.buttonPressed,
+            ]}
+          >
+            <Text style={styles.setPositionButtonText}>SET POSITION</Text>
+          </Pressable>
         </View>
         <Pressable
           accessibilityRole="button"
@@ -180,90 +171,49 @@ function AnalysisPanel({
             <View>
               <Text style={styles.cardEyebrow}>LAST MOVE</Text>
               <Text style={styles.lastMoveNotation}>
-                {lastMove.number}. {moveLabel(lastMove.move)}
+                {lastMove.index + 1}. {moveLabel(lastMove)}
               </Text>
             </View>
-            {lastMove.quality ? (
-              <View
-                style={[
-                  styles.qualityBadge,
-                  { backgroundColor: QUALITY_COLORS[lastMove.quality.key] },
-                ]}
-              >
-                <Text style={styles.qualityText}>{lastMove.quality.label}</Text>
-              </View>
+            {lastMove.grade ? (
+              <MoveQualityBadge grade={lastMove.grade} />
             ) : (
               <ActivityIndicator color={colors.textMuted} size="small" />
             )}
           </View>
-          <Text style={styles.bestMoveCopy}>
-            Best was {lastMove.bestMove ? moveLabel(lastMove.bestMove) : 'not available'}
-            {lastMove.quality ? ` · ${formatScore(lastMove.quality.loss)} lost` : ''}
-          </Text>
+          <Text style={styles.bestMoveCopy}>{lastMoveVerdict(lastMove)}</Text>
         </View>
       )}
 
-      <View style={styles.linesCard}>
-        <View style={styles.linesHeader}>
-          <Text style={styles.cardEyebrow}>TOP MOVES FOR {activeColor.toUpperCase()}</Text>
-          {analysis && (
-            <Text style={styles.engineMeta}>
-              {analysisMode.toUpperCase()} · DEPTH {analysis.depth}/{analysis.selectiveDepth} ·{' '}
-              {analysis.nodes.toLocaleString()} NODES · {confidenceLabel(analysis.confidence)}{' '}
-              CONFIDENCE
-            </Text>
-          )}
-        </View>
-        {analysis?.lines.length ? (
-          analysis.lines.map((line, index) => (
-            <View key={`${line.from.x}:${line.from.y}-${line.to.x}:${line.to.y}`} style={styles.lineRow}>
-              <View
-                style={[
-                  styles.lineRank,
-                  { backgroundColor: board.analysisArrows[index] },
-                ]}
-              >
-                <Text style={styles.lineRankText}>{index + 1}</Text>
-              </View>
-              <View style={styles.lineCopy}>
-                <Text style={styles.lineMove}>{moveLabel(line)}</Text>
-                {variationLabel(line) ? (
-                  <Text numberOfLines={1} style={styles.lineVariation}>
-                    then {variationLabel(line)}
-                  </Text>
-                ) : null}
-              </View>
-              <Text style={styles.lineScore}>{formatScore(line.score)}</Text>
-            </View>
-          ))
-        ) : (
-          <View style={styles.emptyLines}>
-            <Text style={styles.emptyLinesText}>
-              {engineState === 'error' ? 'Engine analysis unavailable.' : 'No legal continuation.'}
-            </Text>
-          </View>
-        )}
-      </View>
+      <EngineLinesCard
+        analysis={analysis}
+        emptyMessage={
+          engineState === 'error' ? 'Engine analysis unavailable.' : 'No legal continuation.'
+        }
+        meta={
+          analysis
+            ? `${analysisMode.toUpperCase()} · DEPTH ${analysis.depth}/${analysis.selectiveDepth} · ${analysis.nodes.toLocaleString()} NODES · ${confidenceLabel(analysis.confidence)} CONFIDENCE`
+            : null
+        }
+        turn={activeColor}
+      />
 
       <View style={styles.historyCard}>
         <Text style={styles.cardEyebrow}>MOVE QUALITY</Text>
-        {history.length === 0 ? (
+        {gradeError ? <Text style={styles.historyEmpty}>{gradeError}</Text> : null}
+        {gradedMoves.length === 0 ? (
           <Text style={styles.historyEmpty}>Your move-by-move report will appear here.</Text>
         ) : (
           <View style={styles.historyList}>
-            {[...history].reverse().map((entry) => (
-              <View key={entry.number} style={styles.historyRow}>
-                <Text style={styles.historyNumber}>{entry.number}</Text>
-                <View style={[styles.historyColor, entry.mover === 'Red' ? styles.redDot : styles.blueDot]} />
-                <Text style={styles.historyMove}>{moveLabel(entry.move)}</Text>
-                <Text
-                  style={[
-                    styles.historyQuality,
-                    entry.quality && { color: QUALITY_COLORS[entry.quality.key] },
-                  ]}
-                >
-                  {entry.quality?.label ?? 'Analyzing'}
-                </Text>
+            {[...gradedMoves].reverse().map((entry) => (
+              <View key={entry.index} style={styles.historyRow}>
+                <Text style={styles.historyNumber}>{entry.index + 1}</Text>
+                <View style={[styles.historyColor, entry.player === 'Red' ? styles.redDot : styles.blueDot]} />
+                <Text style={styles.historyMove}>{moveLabel(entry)}</Text>
+                {entry.grade ? (
+                  <MoveQualityBadge compact grade={entry.grade} />
+                ) : (
+                  <Text style={styles.historyQuality}>Analyzing</Text>
+                )}
               </View>
             ))}
           </View>
@@ -276,6 +226,7 @@ function AnalysisPanel({
 export default function AnalysisScreen({ navigation, route }) {
   const { height, width } = useWindowDimensions();
   const mode = route.params?.mode;
+  const modes = useGameStore((state) => state.modes);
   const [game, setGame] = useState(() => createAnalysisGame(mode));
   const [selectedTile, setSelectedTile] = useState(null);
   const [validMoves, setValidMoves] = useState([]);
@@ -284,11 +235,19 @@ export default function AnalysisScreen({ navigation, route }) {
   const [engineState, setEngineState] = useState('thinking');
   const [engineError, setEngineError] = useState(null);
   const [history, setHistory] = useState([]);
-  const [pendingReview, setPendingReview] = useState(null);
   const [pastGames, setPastGames] = useState([]);
   const [redoMoves, setRedoMoves] = useState([]);
+  const [startingPosition, setStartingPosition] = useState(() => mode.startingPosition);
+  const [positionModalOpen, setPositionModalOpen] = useState(false);
+  const [positionModalInitial, setPositionModalInitial] = useState(() => mode.startingPosition);
+  const [pgnModalOpen, setPgnModalOpen] = useState(false);
   const requestSequence = useRef(0);
 
+  // The interactive search: what the engine thinks of the position on screen
+  // right now, redone from scratch whenever that position changes. It drives
+  // the arrows, the eval bar and the ranked lines, and it grades nothing —
+  // grades come from the walk below, which measures a played move against the
+  // best move of the same search rather than across two of them.
   useEffect(() => {
     const requestId = ++requestSequence.current;
     const controller = new AbortController();
@@ -317,34 +276,36 @@ export default function AnalysisScreen({ navigation, route }) {
           current && current.depth > result.depth ? current : result,
         );
         setEngineState('ready');
-        if (pendingReview) {
-          const playedScore = pendingReview.lineScore ?? -result.score;
-          const quality = classifyMove(pendingReview.bestScore, playedScore);
-          setHistory((entries) =>
-            entries.map((entry) =>
-              entry.number === pendingReview.number ? { ...entry, playedScore, quality } : entry,
-            ),
-          );
-          setPendingReview(null);
-        }
       })
       .catch((error) => {
         if (requestSequence.current !== requestId) return;
         if (error.name === 'AbortError') return;
         setEngineState('error');
         setEngineError(error.message);
-        if (pendingReview?.lineScore !== undefined) {
-          const quality = classifyMove(pendingReview.bestScore, pendingReview.lineScore);
-          setHistory((entries) =>
-            entries.map((entry) =>
-              entry.number === pendingReview.number ? { ...entry, quality } : entry,
-            ),
-          );
-          setPendingReview(null);
-        }
       });
     return () => controller.abort();
   }, [analysisMode, game, pastGames]);
+
+  // The grades. This is the same walk the review screen and the bot battle
+  // run, over the line played on this board: take a move back and the grades
+  // for the moves before it survive, play a different one and only that move
+  // is regraded.
+  const positions = useMemo(() => [...pastGames, game], [game, pastGames]);
+  const moves = useMemo(
+    () => history.map((entry) => ({ ...entry.move, player: entry.mover })),
+    [history],
+  );
+  const gradeAnalysis = useGameAnalysis({
+    mode: game.mode,
+    moves,
+    positions,
+    preset: GRADE_PRESETS[analysisMode],
+    // Another move can always arrive on a board somebody is playing on, so the
+    // position on screen is not graded here — the search above already covers
+    // it, and grading it now would cost the move played out of it its grade.
+    streaming: game.status === 'InProgress',
+  });
+  const gradedMoves = gradeAnalysis.report?.moves ?? [];
 
   const isWide = width >= 900 && width > height;
   const boardSize = Math.floor(
@@ -364,53 +325,17 @@ export default function AnalysisScreen({ navigation, route }) {
     const result = applyAnalysisMove(game, from, to);
     if (!result) return;
 
-    const chosenLine = analysis.lines.find(
-      (line) => samePosition(line.from, from) && samePosition(line.to, to),
-    );
-    const number = result.game.moveNumber;
-    const bestMove = analysis.lines[0]
-      ? { from: analysis.lines[0].from, to: analysis.lines[0].to }
-      : null;
-    const bestScore = analysis.lines[0]?.score ?? analysis.score;
-    const playedScore = chosenLine?.score;
-    const quality = playedScore === undefined ? null : classifyMove(bestScore, playedScore);
     requestSequence.current += 1;
     setEngineState('thinking');
     setAnalysis(null);
     setPastGames((positions) => [...positions, game]);
     setRedoMoves([]);
-    setHistory((entries) => {
-      const reviewedEntries = pendingReview
-        ? entries.map((entry) => {
-            if (entry.number !== pendingReview.number) return entry;
-            const reviewedScore = pendingReview.lineScore ?? -analysis.score;
-            return {
-              ...entry,
-              playedScore: reviewedScore,
-              quality: classifyMove(pendingReview.bestScore, reviewedScore),
-            };
-          })
-        : entries;
-      return [
-        ...reviewedEntries,
-        {
-          bestMove,
-          move: { from, to },
-          mover: result.mover,
-          number,
-          playedScore,
-          quality,
-        },
-      ];
-    });
-    setPendingReview(
-      playedScore === undefined
-        ? {
-            bestScore,
-            number,
-          }
-        : null,
-    );
+    // Only what the move was. Its grade is the analysis walk's business, and
+    // the walk is looking at the position this move was played from.
+    setHistory((entries) => [
+      ...entries,
+      { move: { from, to }, mover: result.mover },
+    ]);
     setSelectedTile(null);
     setValidMoves([]);
     setGame(result.game);
@@ -432,11 +357,10 @@ export default function AnalysisScreen({ navigation, route }) {
     const historyEntry = history[history.length - 1] ?? null;
     prepareForPositionChange();
     setPastGames(pastGames.slice(0, -1));
-    setRedoMoves((moves) => [...moves, { game, historyEntry, pendingReview }]);
+    setRedoMoves((taken) => [...taken, { game, historyEntry }]);
     setHistory(history.slice(0, -1));
-    setPendingReview(null);
     setGame(previousGame);
-  }, [game, history, pastGames, pendingReview, prepareForPositionChange]);
+  }, [game, history, pastGames, prepareForPositionChange]);
 
   const redoMove = useCallback(() => {
     if (redoMoves.length === 0) return;
@@ -448,46 +372,16 @@ export default function AnalysisScreen({ navigation, route }) {
     setHistory((entries) =>
       nextMove.historyEntry ? [...entries, nextMove.historyEntry] : entries,
     );
-    setPendingReview(nextMove.pendingReview);
     setGame(nextMove.game);
   }, [game, prepareForPositionChange, redoMoves]);
 
   const canUndo = pastGames.length > 0;
   const canRedo = redoMoves.length > 0;
 
-  useEffect(() => {
-    if (typeof window === 'undefined') return undefined;
-
-    const handleKeyDown = (event) => {
-      const target = event.target;
-      const isEditing =
-        target?.isContentEditable ||
-        target?.tagName === 'INPUT' ||
-        target?.tagName === 'TEXTAREA' ||
-        target?.tagName === 'SELECT';
-      if (
-        event.defaultPrevented ||
-        event.altKey ||
-        event.ctrlKey ||
-        event.metaKey ||
-        event.shiftKey ||
-        isEditing
-      ) {
-        return;
-      }
-
-      if (event.key === 'ArrowLeft' && canUndo) {
-        event.preventDefault();
-        undoMove();
-      } else if (event.key === 'ArrowRight' && canRedo) {
-        event.preventDefault();
-        redoMove();
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [canRedo, canUndo, redoMove, undoMove]);
+  useReplayKeyboard({
+    onNext: canRedo ? redoMove : undefined,
+    onPrevious: canUndo ? undoMove : undefined,
+  });
 
   const makeBestMove = () => {
     const bestMove = analysis?.lines[0];
@@ -511,18 +405,23 @@ export default function AnalysisScreen({ navigation, route }) {
     setValidMoves(moves);
   };
 
-  const reset = () => {
+  const startFromPosition = (position) => {
     requestSequence.current += 1;
     setSelectedTile(null);
     setValidMoves([]);
     setAnalysis(null);
     setHistory([]);
-    setPendingReview(null);
     setPastGames([]);
     setRedoMoves([]);
     setEngineState('thinking');
     setEngineError(null);
-    setGame(createAnalysisGame(mode));
+    setStartingPosition(position);
+    setGame(createAnalysisGame(mode, position));
+    setPositionModalOpen(false);
+  };
+
+  const reset = () => {
+    startFromPosition(startingPosition);
   };
 
   const board = (
@@ -534,6 +433,7 @@ export default function AnalysisScreen({ navigation, route }) {
         canMove={canMove}
         grid={game.grid}
         lastMove={history[history.length - 1]?.move ?? null}
+        lastMoveGrade={gradedMoves[gradedMoves.length - 1]?.grade ?? null}
         modeId={game.mode.id}
         movableColor={game.currentTurn}
         onPieceDrop={performMove}
@@ -552,9 +452,14 @@ export default function AnalysisScreen({ navigation, route }) {
       canMakeBestMove={game.status === 'InProgress' && Boolean(analysis?.lines[0])}
       engineState={engineState}
       game={game}
-      history={history}
+      gradeError={gradeAnalysis.error}
+      gradedMoves={gradedMoves}
       onAnalysisModeChange={setAnalysisMode}
       onMakeBestMove={makeBestMove}
+      onSetPosition={() => {
+        setPositionModalInitial(startingPositionFromGrid(game.grid));
+        setPositionModalOpen(true);
+      }}
     />
   );
 
@@ -563,7 +468,7 @@ export default function AnalysisScreen({ navigation, route }) {
       <View style={styles.screen}>
         <View style={styles.topBar}>
           <Pressable
-            accessibilityLabel="Back to game modes"
+            accessibilityLabel="Return to lobby"
             accessibilityRole="button"
             onPress={() => navigation.goBack()}
             style={({ pressed }) => [styles.backButton, pressed && styles.buttonPressed]}
@@ -579,6 +484,14 @@ export default function AnalysisScreen({ navigation, route }) {
             </Text>
           </View>
           <View style={styles.headerActions}>
+            <Pressable
+              accessibilityLabel="Load a game analysis from PGN"
+              accessibilityRole="button"
+              onPress={() => setPgnModalOpen(true)}
+              style={({ pressed }) => [styles.resetButton, pressed && styles.buttonPressed]}
+            >
+              <Text style={styles.resetText}>LOAD PGN</Text>
+            </Pressable>
             <Pressable
               accessibilityHint="You can also press the left arrow key."
               accessibilityLabel="Undo move"
@@ -648,6 +561,22 @@ export default function AnalysisScreen({ navigation, route }) {
           </View>
         )}
       </View>
+      <PositionSetupModal
+        initialPosition={positionModalInitial}
+        mode={mode}
+        onApply={startFromPosition}
+        onClose={() => setPositionModalOpen(false)}
+        visible={positionModalOpen}
+      />
+      <PGNImportModal
+        onClose={() => setPgnModalOpen(false)}
+        onLoad={(pgn) => {
+          reviewSourceFromPGN(pgn, modes);
+          setPgnModalOpen(false);
+          navigation.navigate('Review', { pgn });
+        }}
+        visible={pgnModalOpen}
+      />
     </SafeAreaView>
   );
 }
@@ -720,33 +649,6 @@ const styles = StyleSheet.create({
   },
   boardColumn: { alignItems: 'center' },
   boardWithEval: { flexDirection: 'row', alignItems: 'stretch', gap: 7 },
-  evalBar: {
-    position: 'relative',
-    width: 31,
-    overflow: 'hidden',
-    borderRadius: radius.small,
-    borderWidth: 2,
-    borderColor: board.frame,
-    backgroundColor: board.frame,
-  },
-  blueEval: { width: '100%', alignItems: 'center', paddingTop: 5, backgroundColor: players.Blue.strong },
-  redEval: { width: '100%', alignItems: 'center', justifyContent: 'flex-end', paddingBottom: 5, backgroundColor: players.Red.strong },
-  blueEvalSide: { color: players.Blue.contrast, fontSize: 8, fontWeight: '900' },
-  redEvalSide: { color: players.Red.contrast, fontSize: 8, fontWeight: '900' },
-  evalDivider: { position: 'absolute', left: 0, width: '100%', height: 2, backgroundColor: evalBar.divider },
-  evalBadge: {
-    position: 'absolute',
-    right: 2,
-    bottom: 19,
-    left: 2,
-    alignItems: 'center',
-    paddingVertical: 3,
-    borderRadius: 4,
-    backgroundColor: evalBar.badgeOnRed,
-  },
-  evalBadgeOnBlue: { top: 19, bottom: 'auto', backgroundColor: evalBar.badgeOnBlue },
-  evalValue: { color: evalBar.badgeOnRedText, fontSize: 7, fontWeight: '900', fontVariant: ['tabular-nums'] },
-  evalValueOnBlue: { color: evalBar.badgeOnBlueText },
   widePanel: { width: 350 },
   widePanelContent: { paddingBottom: 18 },
   mobileContent: { alignItems: 'center', paddingBottom: 24, gap: 14 },
@@ -776,6 +678,16 @@ const styles = StyleSheet.create({
   analysisModeButtonActive: { borderColor: colors.accent, backgroundColor: colors.accentSurfaceRaised },
   analysisModeButtonText: { color: colors.textMuted, fontSize: 7, fontWeight: '900' },
   analysisModeButtonTextActive: { color: colors.accentSoft },
+  setPositionButton: {
+    minHeight: 28,
+    justifyContent: 'center',
+    marginLeft: 'auto',
+    paddingHorizontal: 9,
+    borderRadius: radius.small,
+    borderWidth: 1,
+    borderColor: colors.accent,
+  },
+  setPositionButtonText: { color: colors.accentSoft, fontSize: 7, fontWeight: '900' },
   bestMoveButton: {
     minHeight: 47,
     flexDirection: 'row',
@@ -800,34 +712,7 @@ const styles = StyleSheet.create({
   },
   lastMoveTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   lastMoveNotation: { color: colors.textStrong, fontSize: 16, fontWeight: '900', marginTop: 4 },
-  qualityBadge: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: radius.small },
-  qualityText: { color: colors.textInverse, fontSize: 9, fontWeight: '900' },
   bestMoveCopy: { color: colors.textMuted, fontSize: 9, marginTop: 8 },
-  linesCard: {
-    overflow: 'hidden',
-    borderRadius: 11,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surface,
-  },
-  linesHeader: { paddingHorizontal: 13, paddingTop: 12, paddingBottom: 9 },
-  engineMeta: { color: colors.textFaint, fontSize: 7, fontWeight: '800', marginTop: 4 },
-  lineRow: {
-    minHeight: 45,
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-  },
-  lineRank: { width: 23, height: 23, alignItems: 'center', justifyContent: 'center', borderRadius: 12 },
-  lineRankText: { color: colors.textInverse, fontSize: 10, fontWeight: '900' },
-  lineCopy: { flex: 1, minWidth: 0, marginLeft: 10 },
-  lineMove: { color: colors.text, fontSize: 13, fontWeight: '900' },
-  lineVariation: { color: colors.textFaint, fontSize: 7, fontWeight: '700', marginTop: 2 },
-  lineScore: { color: colors.textMuted, fontSize: 11, fontWeight: '900', fontVariant: ['tabular-nums'] },
-  emptyLines: { minHeight: 48, alignItems: 'center', justifyContent: 'center', borderTopWidth: 1, borderTopColor: colors.border },
-  emptyLinesText: { color: colors.textFaint, fontSize: 10 },
   historyCard: {
     padding: 13,
     borderRadius: 11,

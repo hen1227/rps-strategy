@@ -41,40 +41,55 @@ export const createProfileKey = () => {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
 };
 
+// Both identities are settled once per page load and then remembered. The
+// memo is not an optimisation: where localStorage is blocked the fallback is a
+// fresh random value, so without it a second caller would be issued a
+// different identity from the first.
+let cachedUserId = null;
+let cachedProfileKey = null;
+
 export const getOrCreateUserId = () => {
+  if (cachedUserId) return cachedUserId;
   const storage = localStorage();
   try {
     const existing = storage?.getItem(USER_ID_KEY);
-    if (existing && UUID_PATTERN.test(existing)) return existing;
+    if (existing && UUID_PATTERN.test(existing)) {
+      cachedUserId = existing;
+      return cachedUserId;
+    }
   } catch {
     // A usable in-memory UUID still lets restricted browser contexts connect.
   }
 
-  const userId = createUUID();
+  cachedUserId = createUUID();
   try {
-    storage?.setItem(USER_ID_KEY, userId);
+    storage?.setItem(USER_ID_KEY, cachedUserId);
   } catch {
     // localStorage can be unavailable in private or restricted contexts.
   }
-  return userId;
+  return cachedUserId;
 };
 
 export const getOrCreateProfileKey = () => {
+  if (cachedProfileKey) return cachedProfileKey;
   const storage = localStorage();
   try {
     const existing = storage?.getItem(PROFILE_KEY_KEY);
-    if (existing && existing.length >= 32 && existing.length <= 256) return existing;
+    if (existing && existing.length >= 32 && existing.length <= 256) {
+      cachedProfileKey = existing;
+      return cachedProfileKey;
+    }
   } catch {
     // An in-memory key still authenticates this tab in restricted contexts.
   }
 
-  const profileKey = createProfileKey();
+  cachedProfileKey = createProfileKey();
   try {
-    storage?.setItem(PROFILE_KEY_KEY, profileKey);
+    storage?.setItem(PROFILE_KEY_KEY, cachedProfileKey);
   } catch {
     // The account will last only for this tab when localStorage is unavailable.
   }
-  return profileKey;
+  return cachedProfileKey;
 };
 
 export const readGameSessionId = () => {

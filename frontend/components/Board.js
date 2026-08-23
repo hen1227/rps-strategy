@@ -19,11 +19,19 @@ import {
 } from 'react-native';
 import Svg, { Defs, Line, Marker, Polygon } from 'react-native-svg';
 
+import MoveQualityBadge from './MoveQualityBadge';
 import PieceIcon from './PieceIcon';
+import TileMark from './TileMark';
+import {
+  buildReplayPieceTracks,
+  replayGridSignature,
+} from '../engine/replayAnimation';
 import { board, players, shadows } from '../theme';
 
 const BOARD_SIZE = 9;
-const FILES = 'ABCDEFGHI';
+// Files and ranks as the archive writes them, so a square named on the
+// board is the square named in the game's PGN.
+const FILES = 'abcdefghi';
 const MODE_ANNIHILATION = 'V1';
 const MODE_INFILTRATION = 'V3';
 const MODE_TOTAL_WAR = 'V5';
@@ -34,6 +42,11 @@ const RIGHT_BUTTON_MASK = 2;
 const IS_WEB = Platform.OS === 'web';
 const BOARD_BORDER_WIDTH = 3;
 const MOVE_ANIMATION_DURATION = 230;
+// A catch-up finishes before even the fastest watched bot can make its next
+// move (250ms), so reaching the live edge never makes the board fall behind.
+const FAST_REPLAY_MAX_DURATION = 220;
+const FAST_REPLAY_MIN_DURATION = 72;
+const FAST_REPLAY_MOVE_DURATION = 12;
 
 const samePosition = (first, second) => first?.x === second?.x && first?.y === second?.y;
 
@@ -47,6 +60,13 @@ const displayCoordinate = (value, isFlipped) =>
   isFlipped ? BOARD_SIZE - 1 - value : value;
 
 const pieceSizeForBoard = (boardSize) => Math.max(20, Math.min(46, boardSize / 12));
+const moveBadgeSizeForBoard = (boardSize) =>
+  Math.round(
+    Math.max(
+      13,
+      Math.min(22, ((boardSize - BOARD_BORDER_WIDTH * 2) / BOARD_SIZE) * 0.36),
+    ),
+  );
 
 const tintForTile = (modeId, tile) => {
   if (modeId === MODE_ANNIHILATION) return null;
@@ -110,7 +130,6 @@ const DraggablePiece = memo(function DraggablePiece({
   displayX,
   displayY,
   isFlipped,
-  isMovingDestination,
   isSelected,
   onDragEnd,
   onDragStart,
@@ -193,7 +212,6 @@ const DraggablePiece = memo(function DraggablePiece({
           width: `${TILE_PERCENTAGE}%`,
         },
         isSelected && styles.selectedPieceLayout,
-        isMovingDestination && styles.movingDestinationPieceLayout,
         isDragging && styles.draggingPieceLayout,
       ]}
     >
@@ -212,41 +230,73 @@ const DraggablePiece = memo(function DraggablePiece({
           },
         ]}
       >
-        <PieceIcon piece={tile.occupant} color={tile.occupantOwner} size={pieceSize} />
+        <PieceIcon
+          color={tile.occupantOwner}
+          dropShadow={isDragging}
+          piece={tile.occupant}
+          size={pieceSize}
+        />
       </NativeAnimated.View>
     </View>
   );
 });
 
-const MovingPiece = memo(function MovingPiece({
-  boardSize,
-  move,
-  isFlipped,
-  onComplete,
-}) {
-  const progress = useRef(new NativeAnimated.Value(0)).current;
-  const pieceSize = pieceSizeForBoard(boardSize);
-  const destinationX = displayCoordinate(move.to.x, isFlipped);
-  const destinationY = displayCoordinate(move.to.y, isFlipped);
-  const squareSize = (boardSize - BOARD_BORDER_WIDTH * 2) / BOARD_SIZE;
-  const offsetX =
-    (displayCoordinate(move.from.x, isFlipped) - destinationX) * squareSize;
-  const offsetY =
-    (displayCoordinate(move.from.y, isFlipped) - destinationY) * squareSize;
+const replayPieceOpacity = (progress, track, steps) => {
+  const fade = 0.05;
+  const appears = track.startStep > 0;
+  const disappears = track.endStep < steps;
+  if (!appears && !disappears) return 1;
 
-  useEffect(() => {
-    progress.setValue(0);
-    const animation = NativeAnimated.timing(progress, {
-      toValue: 1,
-      duration: MOVE_ANIMATION_DURATION,
-      easing: Easing.out(Easing.cubic),
-      useNativeDriver: true,
+  if (appears && disappears) {
+    return progress.interpolate({
+      inputRange: [
+        0,
+        track.startStep - fade,
+        track.startStep,
+        track.endStep - fade,
+        track.endStep,
+        steps,
+      ],
+      outputRange: [0, 0, 1, 1, 0, 0],
     });
-    animation.start(({ finished }) => {
-      if (finished) onComplete(move.key);
+  }
+  if (appears) {
+    return progress.interpolate({
+      inputRange: [0, track.startStep - fade, track.startStep],
+      outputRange: [0, 0, 1],
+      extrapolate: 'clamp',
     });
-    return () => animation.stop();
-  }, [move.key, onComplete, progress]);
+  }
+  return progress.interpolate({
+    inputRange: [0, track.endStep - fade, track.endStep, steps],
+    outputRange: [1, 1, 0, 0],
+  });
+};
+
+const ReplayPiece = memo(function ReplayPiece({
+  boardSize,
+  isFlipped,
+  progress,
+  steps,
+  track,
+}) {
+  const pieceSize = pieceSizeForBoard(boardSize);
+  const squareSize = (boardSize - BOARD_BORDER_WIDTH * 2) / BOARD_SIZE;
+  const positions = track.positions.slice(track.startStep, track.endStep + 1);
+  const first = positions[0];
+  const inputRange = positions.map((unused, index) => track.startStep + index);
+  const offsetFor = (position, axis) =>
+    (displayCoordinate(position[axis], isFlipped) -
+      displayCoordinate(first[axis], isFlipped)) *
+    squareSize;
+  const translate = (axis) => {
+    if (inputRange.length < 2) return 0;
+    return progress.interpolate({
+      inputRange,
+      outputRange: positions.map((position) => offsetFor(position, axis)),
+      extrapolate: 'clamp',
+    });
+  };
 
   return (
     <NativeAnimated.View
@@ -256,29 +306,54 @@ const MovingPiece = memo(function MovingPiece({
         styles.movingPieceLayout,
         {
           height: `${TILE_PERCENTAGE}%`,
-          left: `${destinationX * TILE_PERCENTAGE}%`,
-          top: `${destinationY * TILE_PERCENTAGE}%`,
+          left: `${displayCoordinate(first.x, isFlipped) * TILE_PERCENTAGE}%`,
+          opacity: replayPieceOpacity(progress, track, steps),
+          top: `${displayCoordinate(first.y, isFlipped) * TILE_PERCENTAGE}%`,
           width: `${TILE_PERCENTAGE}%`,
           transform: [
-            {
-              translateX: progress.interpolate({
-                inputRange: [0, 1],
-                outputRange: [offsetX, 0],
-              }),
-            },
-            {
-              translateY: progress.interpolate({
-                inputRange: [0, 1],
-                outputRange: [offsetY, 0],
-              }),
-            },
+            { translateX: translate('x') },
+            { translateY: translate('y') },
           ],
         },
       ]}
     >
-      <PieceIcon piece={move.piece} color={move.color} size={pieceSize} />
+      <PieceIcon piece={track.piece} color={track.color} size={pieceSize} />
     </NativeAnimated.View>
   );
+});
+
+const ReplayTransition = memo(function ReplayTransition({
+  boardSize,
+  isFlipped,
+  onComplete,
+  transition,
+}) {
+  const progress = useRef(new NativeAnimated.Value(0)).current;
+
+  useEffect(() => {
+    progress.setValue(0);
+    const animation = NativeAnimated.timing(progress, {
+      toValue: transition.steps,
+      duration: transition.duration,
+      easing: transition.steps === 1 ? Easing.out(Easing.cubic) : Easing.linear,
+      useNativeDriver: true,
+    });
+    animation.start(({ finished }) => {
+      if (finished) onComplete(transition.key);
+    });
+    return () => animation.stop();
+  }, [onComplete, progress, transition]);
+
+  return transition.tracks.map((track) => (
+    <ReplayPiece
+      boardSize={boardSize}
+      isFlipped={isFlipped}
+      key={track.id}
+      progress={progress}
+      steps={transition.steps}
+      track={track}
+    />
+  ));
 });
 
 export default function Board({
@@ -287,15 +362,19 @@ export default function Board({
   canMove,
   grid,
   lastMove,
+  lastMoveGrade = null,
   modeId,
   movableColor,
   onPieceDrop,
   onTilePress,
   playerColor,
+  replayIndex = null,
+  replayPositions = null,
   selectedTile,
   validMoves,
 }) {
   const isFlipped = playerColor === 'Blue';
+  const moveBadgeSize = moveBadgeSizeForBoard(boardSize);
   const activeMoveColor = movableColor ?? playerColor;
   const validMoveKeys = new Set(validMoves.map(({ x, y }) => `${x}:${y}`));
   const displayedGrid = useMemo(() => {
@@ -324,39 +403,94 @@ export default function Board({
   const [pendingArrow, setPendingArrow] = useState(null);
 
   const positionSignature = useMemo(
-    () =>
-      grid
-        .map((row) => row.map((tile) => `${tile.occupant}${tile.occupantOwner}`).join())
-        .join('|'),
+    () => replayGridSignature(grid),
     [grid],
   );
-  const previousPositionSignature = useRef(positionSignature);
-  const [moveAnimation, setMoveAnimation] = useState(null);
+  const displayedPositionKey = Number.isInteger(replayIndex)
+    ? `${replayIndex}:${positionSignature}`
+    : positionSignature;
+  const previousGrid = useRef(grid);
+  const previousReplayIndex = useRef(replayIndex);
+  const [replayTransition, setReplayTransition] = useState(null);
 
-  useLayoutEffect(() => {
-    const previousSignature = previousPositionSignature.current;
-    previousPositionSignature.current = positionSignature;
-    if (previousSignature === positionSignature) return;
+  // Work out the requested transition during the render that receives the new
+  // grid. Waiting until an effect to do this lets the destination position
+  // flash first: on rewind that looks like B teleports back, then the previous
+  // move A animates. Rendering this request immediately keeps the old position
+  // on screen until B has actually travelled back to its origin.
+  const before = previousGrid.current;
+  const beforeIndex = previousReplayIndex.current;
+  const beforeSignature = replayGridSignature(before);
+  const replayIndexChanged =
+    Number.isInteger(beforeIndex) &&
+    Number.isInteger(replayIndex) &&
+    beforeIndex !== replayIndex;
+  const positionChanged =
+    beforeSignature !== positionSignature || replayIndexChanged;
+  let requestedReplayTransition = null;
 
-    const destination = grid
-      .flat()
-      .find((tile) => samePosition(tile, lastMove?.to));
-    if (!lastMove?.from || !lastMove?.to || destination?.occupant === 'Empty') {
-      setMoveAnimation(null);
-      return;
+  if (positionChanged) {
+    let grids = [before, grid];
+    if (
+      Number.isInteger(beforeIndex) &&
+      Number.isInteger(replayIndex) &&
+      Math.abs(replayIndex - beforeIndex) > 1 &&
+      Array.isArray(replayPositions)
+    ) {
+      const direction = replayIndex > beforeIndex ? 1 : -1;
+      const candidate = [];
+      for (
+        let index = beforeIndex;
+        direction > 0 ? index <= replayIndex : index >= replayIndex;
+        index += direction
+      ) {
+        const position = replayPositions[index];
+        const candidateGrid = position?.grid ?? position;
+        if (!Array.isArray(candidateGrid)) {
+          candidate.length = 0;
+          break;
+        }
+        candidate.push(candidateGrid);
+      }
+      if (
+        candidate.length > 1 &&
+        replayGridSignature(candidate[0]) === beforeSignature &&
+        replayGridSignature(candidate[candidate.length - 1]) === positionSignature
+      ) {
+        grids = candidate;
+      }
     }
 
-    setMoveAnimation({
-      key: `${positionSignature}:${lastMove.from.x}:${lastMove.from.y}:${lastMove.to.x}:${lastMove.to.y}`,
-      from: lastMove.from,
-      to: lastMove.to,
-      piece: destination.occupant,
-      color: destination.occupantOwner,
-    });
-  }, [grid, lastMove, positionSignature]);
+    const replay = buildReplayPieceTracks(grids);
+    if (replay) {
+      requestedReplayTransition = {
+        ...replay,
+        duration:
+          replay.steps === 1
+            ? MOVE_ANIMATION_DURATION
+            : Math.min(
+                FAST_REPLAY_MAX_DURATION,
+                Math.max(FAST_REPLAY_MIN_DURATION, replay.steps * FAST_REPLAY_MOVE_DURATION),
+              ),
+        key: `${beforeIndex ?? 'board'}:${replayIndex ?? 'board'}:${beforeSignature}:${positionSignature}`,
+      };
+    }
+  }
 
-  const handleMoveAnimationComplete = useCallback((key) => {
-    setMoveAnimation((current) => (current?.key === key ? null : current));
+  useLayoutEffect(() => {
+    previousGrid.current = grid;
+    previousReplayIndex.current = replayIndex;
+    if (positionChanged) setReplayTransition(requestedReplayTransition);
+    // `requestedReplayTransition` is deliberately captured from the render
+    // caused by these props. Adding it as a dependency would run this effect a
+    // second time after the refs advance and immediately clear the animation.
+  }, [grid, positionSignature, replayIndex, replayPositions]);
+
+  const visibleReplayTransition = requestedReplayTransition ?? replayTransition;
+  const displayedLastMove = visibleReplayTransition ? null : lastMove;
+
+  const handleReplayTransitionComplete = useCallback((key) => {
+    setReplayTransition((current) => (current?.key === key ? null : current));
   }, []);
 
   const clearAnnotations = useCallback(() => {
@@ -369,7 +503,7 @@ export default function Board({
   // Chess.com behaviour: annotations survive only until the next move is played.
   useEffect(() => {
     clearAnnotations();
-  }, [clearAnnotations, positionSignature]);
+  }, [clearAnnotations, displayedPositionKey]);
 
   const positionFromEvent = useCallback(
     (event) => {
@@ -499,19 +633,22 @@ export default function Board({
               const isCapture = isValid && tile.occupant !== 'Empty';
               const isLight = (tile.x + tile.y) % 2 === 0;
               const isHighlighted = highlightKeys.has(`${tile.x}:${tile.y}`);
-              const isLastMoveFrom = samePosition(lastMove?.from, position);
-              const isLastMoveTo = samePosition(lastMove?.to, position);
+              const isLastMoveFrom = samePosition(displayedLastMove?.from, position);
+              const isLastMoveTo = samePosition(displayedLastMove?.to, position);
               const tint = tintForTile(modeId, tile);
               const tintLabel = tint
                 ? tint.kind === 'goal'
                   ? `, ${tint.color} goal tile`
-                  : `, captured by ${tint.color}`
+                  : `, owned by ${tint.color}`
                 : '';
               const highlightLabel = isHighlighted ? ', marked' : '';
+              const selectionLabel = isSelected ? ', selected' : '';
               const lastMoveLabel = isLastMoveFrom
                 ? ', previous move origin'
                 : isLastMoveTo
-                  ? ', previous move destination'
+                  ? `, previous move destination${
+                      lastMoveGrade ? `, ${lastMoveGrade.label} move` : ''
+                    }`
                   : '';
 
               return (
@@ -520,33 +657,51 @@ export default function Board({
                   accessibilityRole="button"
                   accessibilityLabel={`${tile.occupantOwner} ${tile.occupant} on ${
                     FILES[tile.x]
-                  }${BOARD_SIZE - tile.y}${tintLabel}${highlightLabel}${lastMoveLabel}`}
+                  }${tile.y + 1}${tintLabel}${selectionLabel}${highlightLabel}${lastMoveLabel}`}
                   onPress={() => onTilePress(position)}
                   style={[
                     styles.tile,
                     isLight ? styles.lightTile : styles.darkTile,
-                    isSelected && styles.selectedTile,
                   ]}
                 >
                   {tint && (
-                    <View
-                      style={[
-                        styles.tileTint,
-                        tint.color === 'Red' ? styles.redTint : styles.blueTint,
-                        tint.kind === 'goal' && styles.goalTint,
-                      ]}
-                    />
+                    <>
+                      <View
+                        style={[
+                          styles.tileTint,
+                          tint.color === 'Red' ? styles.redTint : styles.blueTint,
+                          tint.kind === 'goal' && styles.goalTint,
+                        ]}
+                      />
+                      <TileMark owner={tint.color} variant={tint.kind} />
+                    </>
                   )}
                   {(isLastMoveFrom || isLastMoveTo) && (
-                    <View
-                      style={[
-                        styles.lastMoveTint,
-                        isLastMoveFrom ? styles.lastMoveFromTint : styles.lastMoveToTint,
-                      ]}
-                    />
+                    <>
+                      <View
+                        style={[
+                          styles.lastMoveTint,
+                          isLastMoveFrom ? styles.lastMoveFromTint : styles.lastMoveToTint,
+                        ]}
+                      />
+                      <TileMark
+                        style={styles.lastMoveMark}
+                        variant={isLastMoveFrom ? 'moveFrom' : 'moveTo'}
+                      />
+                    </>
                   )}
-                  {isSelected && <View style={styles.selectionTint} />}
-                  {isHighlighted && <View style={styles.annotationTint} />}
+                  {isSelected && (
+                    <>
+                      <View style={styles.selectionTint} />
+                      <TileMark style={styles.selectionMark} variant="selection" />
+                    </>
+                  )}
+                  {isHighlighted && (
+                    <>
+                      <View style={styles.annotationTint} />
+                      <TileMark style={styles.annotationMark} variant="annotation" />
+                    </>
+                  )}
                   {isValid &&
                     (isCapture ? (
                       <View style={styles.captureRing} />
@@ -561,7 +716,7 @@ export default function Board({
                         isLight ? styles.labelOnLight : styles.labelOnDark,
                       ]}
                     >
-                      {BOARD_SIZE - tile.y}
+                      {tile.y + 1}
                     </Text>
                   )}
                   {displayY === BOARD_SIZE - 1 && (
@@ -663,42 +818,64 @@ export default function Board({
           </Svg>
         )}
 
-        {displayedGrid.flatMap((row, displayY) =>
-          row.map((tile, displayX) => {
-            if (tile.occupant === 'Empty') return null;
-            const position = { x: tile.x, y: tile.y };
-            const dragEnabled = canMove && tile.occupantOwner === activeMoveColor;
-            const isMovingDestination = samePosition(moveAnimation?.to, position);
+        {!visibleReplayTransition &&
+          displayedGrid.flatMap((row, displayY) =>
+            row.map((tile, displayX) => {
+              if (tile.occupant === 'Empty') return null;
+              const position = { x: tile.x, y: tile.y };
+              const dragEnabled = canMove && tile.occupantOwner === activeMoveColor;
 
-            return (
-              <DraggablePiece
-                boardSize={boardSize}
-                boardX={tile.x}
-                boardY={tile.y}
-                displayX={displayX}
-                displayY={displayY}
-                dragEnabled={dragEnabled}
-                isFlipped={isFlipped}
-                isMovingDestination={isMovingDestination}
-                isSelected={samePosition(selectedTile, position)}
-                key={`${tile.x}-${tile.y}`}
-                onDragEnd={handleDragEnd}
-                onDragStart={handleDragStart}
-                tile={tile}
-              />
-            );
-          }),
-        )}
+              return (
+                <DraggablePiece
+                  boardSize={boardSize}
+                  boardX={tile.x}
+                  boardY={tile.y}
+                  displayX={displayX}
+                  displayY={displayY}
+                  dragEnabled={dragEnabled}
+                  isFlipped={isFlipped}
+                  isSelected={samePosition(selectedTile, position)}
+                  key={`${tile.x}-${tile.y}`}
+                  onDragEnd={handleDragEnd}
+                  onDragStart={handleDragStart}
+                  tile={tile}
+                />
+              );
+            }),
+          )}
 
-        {moveAnimation && (
-          <MovingPiece
+        {visibleReplayTransition && (
+          <ReplayTransition
             boardSize={boardSize}
             isFlipped={isFlipped}
-            key={moveAnimation.key}
-            move={moveAnimation}
-            onComplete={handleMoveAnimationComplete}
+            key={visibleReplayTransition.key}
+            onComplete={handleReplayTransitionComplete}
+            transition={visibleReplayTransition}
           />
         )}
+
+        {displayedLastMove?.to && lastMoveGrade ? (
+          <View
+            pointerEvents="none"
+            style={[
+              styles.moveQualityBadgeLayout,
+              {
+                height: `${TILE_PERCENTAGE}%`,
+                left: `${displayCoordinate(displayedLastMove.to.x, isFlipped) * TILE_PERCENTAGE}%`,
+                top: `${displayCoordinate(displayedLastMove.to.y, isFlipped) * TILE_PERCENTAGE}%`,
+                width: `${TILE_PERCENTAGE}%`,
+              },
+            ]}
+          >
+            <MoveQualityBadge
+              accessible={false}
+              compact
+              grade={lastMoveGrade}
+              showLabel={false}
+              size={moveBadgeSize}
+            />
+          </View>
+        ) : null}
       </View>
     </View>
   );
@@ -749,28 +926,23 @@ const styles = StyleSheet.create({
     borderColor: board.goalOutline,
   },
   lastMoveTint: { ...StyleSheet.absoluteFillObject, zIndex: 1, pointerEvents: 'none' },
+  lastMoveMark: { zIndex: 1 },
   lastMoveFromTint: { backgroundColor: board.lastMoveFrom },
-  lastMoveToTint: {
-    backgroundColor: board.lastMoveTo,
-    borderWidth: 1,
-    borderColor: board.lastMoveOutline,
-  },
-  selectedTile: {
-    borderWidth: 1,
-    borderColor: board.selectionBorder,
-  },
+  lastMoveToTint: { backgroundColor: board.lastMoveTo },
   selectionTint: {
     ...StyleSheet.absoluteFillObject,
     zIndex: 1,
     pointerEvents: 'none',
     backgroundColor: board.selectionTint,
   },
+  selectionMark: { zIndex: 1 },
   annotationTint: {
     ...StyleSheet.absoluteFillObject,
     zIndex: 2,
     pointerEvents: 'none',
     backgroundColor: board.annotationTint,
   },
+  annotationMark: { zIndex: 2 },
   validDot: {
     position: 'absolute',
     zIndex: 2,
@@ -804,15 +976,19 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   selectedPieceLayout: { zIndex: 3 },
-  movingDestinationPieceLayout: { opacity: 0 },
   draggingPieceLayout: { zIndex: 100, elevation: 24 },
   movingPieceLayout: { zIndex: 6 },
+  moveQualityBadgeLayout: {
+    position: 'absolute',
+    zIndex: 7,
+    alignItems: 'flex-end',
+    paddingTop: 1,
+    paddingRight: 1,
+  },
   piece: { alignItems: 'center', justifyContent: 'center' },
   draggablePiece: { cursor: 'grab' },
   draggingPiece: {
     cursor: 'grabbing',
-    boxShadow: shadows.piece,
-    elevation: 12,
   },
   rankLabel: {
     position: 'absolute',

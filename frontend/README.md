@@ -19,6 +19,54 @@ The deep preset is bounded to one worker thread, depth 127, 100 million nodes,
 and 30 seconds; the client API also accepts custom `maxDepth`, `maxNodes`,
 `maxTimeMs`, `variations`, and inter-iteration `throttleMs` values.
 
+Squares are written the way the game archive writes them: files `a` to `i` left
+to right, ranks `1` to `9` from Blue's home boundary to Red's. A square named on
+the board is therefore the square named in that game's PGN.
+
+## Game review
+
+Any finished game can be replayed and graded. Players get one inline result
+card with the finished board—never a post-game modal—with **Review game** opening
+the review directly and **Play again** / **Modes** alongside it. The screen shows
+the game's own move list — arrow keys walk it, and
+the record stays the main line even after you play your own moves off it — with
+a grade on every move, an evaluation chart across the whole game, RPSFish's top
+lines for whatever position is on screen, and an accuracy percentage for each
+player.
+
+Online games are reviewed from the record the server stored; bot games are
+reviewed from a record the browser writes itself, in the same dialect
+(`engine/pgn.js`), because the server never saw them. Reviewing an online game
+does not leave the session, so its chat room stays open under the board while
+both players go over it, and the reviewing player's own accuracy is stored with
+the game.
+
+The whole review is one request to the analysis worker, which walks the game
+keeping its transposition table and repetition history across positions rather
+than rebuilding both per position. Grades come from restricting one search to
+the best move and the played move, so the two scores being subtracted were
+produced under identical conditions. Depth is chosen with the **Quick /
+Standard / Deep** switch.
+
+The walk itself is shared. `engine/gameAnalysis.js` holds one analysis session —
+hand it a line of play as it currently stands and it keeps the engine grading
+whatever part of it is not graded yet — and `hooks/useGameAnalysis.js` binds it
+to a screen. The review, the bot battle, and the analysis board all run through
+it, so a move cannot be Good on one screen and a Mistake on another, and a
+request can pick up where the last one stopped instead of regrading a game from
+the beginning every time it gains a move.
+
+RPSFish runs in two workers rather than one. Because the WASM search is
+synchronous, everything sharing a worker takes turns, so one lane answers
+whoever is looking at a position right now — the analysis board, the hint
+button, a bot choosing its move — and a second lane grades whole games. That is
+what lets a game and the analysis of that game run at the same time.
+
+`scripts/reviewCalibration.mjs` fits the evaluation-to-expected-score curve the
+grades and accuracies are built on; re-run it after an evaluation change and
+put the result in `WIN_PROBABILITY_SCALE`. See
+[`../docs/review.md`](../docs/review.md) for the whole design.
+
 ## Bots
 
 The home screen's **Play a bot** panel opens a practice board where RPSFish
@@ -117,6 +165,27 @@ contract to play bots against each other — `playBotGame` for one game,
 seeded too, and the session records the seed, so a game that produced a strange
 move can be replayed rather than described.
 
+### Bot battles
+
+The lobby can also put two bots on the board and let you watch. The battle
+screen is a live game and a game review at once: the board plays itself while
+RPSFish grades it, with an evaluation bar and chart, a grade on every move,
+ranked lines for whatever position is on screen, and an accuracy for each bot.
+
+Every number there comes from an independent **Deep** analysis of the game, not
+from either bot's own search. That distinction is the whole point: a bot's
+search is how that bot chose its move — two plies deep for the bottom rung, and
+a different depth on each side of the board — so grading a battle with it would
+measure the bots against themselves. Deep costs more per position than any
+bot's move and far more than most, so the analysis runs *behind* the board: the
+status card says how many moves behind, ungraded moves say so rather than
+showing a grade, and the evaluation line stops where the analysis has reached.
+Accuracies fill in when the game ends, because a mean over the first ten moves
+of a game is not anybody's accuracy.
+
+The finished game can be copied as a PGN and reopened in the review screen,
+since a battle is recorded in the same dialect as everything else.
+
 While a player is on the bot board the lobby still counts them: the server is
 told `bot_session_start`, publishes the total as `botPlayerCount`, and the home
 screen shows **"N playing bots"**. The bot board watches the other direction
@@ -154,12 +223,20 @@ Shared visual tokens live in `theme.js` and shared controls in
 under **Retired modes** with analysis only; the server refuses matchmaking,
 challenges, and new tournaments for it.
 
-The lobby's **Account** button edits the server-side display name and Discord
-username shown in online games. The browser generates a 256-bit local profile
-key alongside its account UUID, keeps the raw key in `localStorage`, and sends
-it as the first WebSocket authentication message and as a Bearer credential for
-profile edits. The server stores only the key hash. Clearing site data therefore
-creates a new local account identity.
+The lobby's **Account** button leads with registration: a player is "Guest"
+until they claim a username and password there, and claiming one keeps the
+rating, record, and games the browser has already accumulated. A signed-in
+player can rename themselves and add a Discord handle from the same screen;
+nobody can set either without an account.
+
+`store/accountSession.js` owns the session token, holds it in `localStorage`,
+and reconnects the socket whenever it changes. The browser also generates a
+256-bit local profile key alongside its account UUID and keeps the raw key in
+`localStorage`; the socket authenticates with the session token when there is
+one and with the UUID and key otherwise, and the server stores only the key
+hash. Clearing site data loses the local identity but not the account — signing
+in restores it. A session the server rejects is dropped by the client, which
+reconnects as the browser's anonymous identity.
 
 ## Publish the web build
 

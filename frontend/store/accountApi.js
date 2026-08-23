@@ -24,10 +24,12 @@ export const getAccount = async (userId) => {
   }
 };
 
+// Editing a profile takes the session token rather than the browser's local
+// key: only a registered account has a name and a Discord handle of its own.
 export const updateAccount = async (
   userId,
-  profileKey,
-  displayName,
+  sessionToken,
+  username,
   discord,
   reservationToken = '',
 ) => {
@@ -36,10 +38,10 @@ export const updateAccount = async (
       method: 'PATCH',
       headers: {
         Accept: 'application/json',
-        Authorization: `Bearer ${profileKey}`,
+        Authorization: `Bearer ${sessionToken}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ displayName, discord, reservationToken }),
+      body: JSON.stringify({ username, discord, reservationToken }),
     });
     return parseResponse(response);
   } catch (error) {

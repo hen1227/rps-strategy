@@ -3,19 +3,15 @@ import { StyleSheet, Text, View } from 'react-native';
 
 import { colors } from '../theme';
 import { useGameStore } from '../store/gameStore';
+import { isReservedIn, useIdentityPolicy } from '../store/identityPolicy';
 import { signupForTournament } from '../store/tournamentApi';
 import { Banner, Checkbox, LabeledInput, PrimaryButton } from './ui';
-
-// Two handles are held for the organisers, so claiming one needs the host's
-// token. The server enforces the same rule.
-const RESERVED_HANDLES = ['henhen1227', 'webgoatguy'];
-
-const isReserved = (value) =>
-  RESERVED_HANDLES.includes(value.trim().replace(/^@/, '').toLowerCase());
 
 // The signup panel, shared by the home screen and the tournament board. It owns
 // its own request state so either surface can drop it in unchanged.
 export default function TournamentSignupForm({ compact, onSignedUp, tournamentId }) {
+  // Which handles are held for the organisers is the server's rule to state.
+  const policy = useIdentityPolicy();
   const accountId = useGameStore((state) => state.accountId);
   const account = useGameStore((state) => state.account);
   const applyTournamentUpdate = useGameStore((state) => state.applyTournamentUpdate);
@@ -34,7 +30,7 @@ export default function TournamentSignupForm({ compact, onSignedUp, tournamentId
     if (account?.discord) setDiscord((current) => current || account.discord);
   }, [account?.username, account?.discord]);
 
-  const needsToken = isReserved(ign) || isReserved(discord);
+  const needsToken = isReservedIn(policy, ign) || isReservedIn(policy, discord);
   const canSubmit =
     Boolean(ign.trim()) &&
     Boolean(discord.trim()) &&

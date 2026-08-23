@@ -11,10 +11,15 @@ import { View } from 'react-native';
 import TournamentCallout from './components/TournamentCallout';
 import { GameSoundEffects } from './hooks/useGameSounds';
 import AccountScreen from './screens/AccountScreen';
+import BotGuideScreen from './screens/BotGuideScreen';
+import AdminScreen from './screens/AdminScreen';
 import AnalysisScreen from './screens/AnalysisScreen';
+import BotBattleScreen from './screens/BotBattleScreen';
 import GameScreen from './screens/GameScreen';
 import LobbyScreen from './screens/LobbyScreen';
+import OpeningBookScreen from './screens/OpeningBookScreen';
 import PolicyScreen from './screens/PolicyScreen';
+import ReviewScreen from './screens/ReviewScreen';
 import TournamentScreen from './screens/TournamentScreen';
 import { useGameStore } from './store/gameStore';
 import { colors } from './theme';
@@ -48,7 +53,11 @@ function SessionBridge() {
 
   useEffect(() => {
     if (!gameId || !navigationRef.isReady()) return;
-    if (navigationRef.getCurrentRoute()?.name !== 'Game') navigationRef.navigate('Game');
+    // The review screen keeps the finished game in the store on purpose, so
+    // that its chat room stays open. Sending the reviewer back to the board
+    // would close the very thing they opened.
+    const route = navigationRef.getCurrentRoute()?.name;
+    if (route !== 'Game' && route !== 'Review') navigationRef.navigate('Game');
   }, [gameId]);
 
   return null;
@@ -86,13 +95,38 @@ export default function App() {
               options={{ headerShown: false }}
             />
             <Stack.Screen
+              name="BotBattle"
+              component={BotBattleScreen}
+              options={{ headerShown: false, gestureEnabled: false }}
+            />
+            <Stack.Screen
+              name="Review"
+              component={ReviewScreen}
+              options={{ headerShown: false }}
+            />
+            <Stack.Screen
               name="Tournaments"
               component={TournamentScreen}
               options={{ headerShown: false }}
             />
             <Stack.Screen
+              name="Openings"
+              component={OpeningBookScreen}
+              options={{ headerShown: false }}
+            />
+            <Stack.Screen
               name="Account"
               component={AccountScreen}
+              options={{ headerShown: false }}
+            />
+            <Stack.Screen
+              name="BotGuide"
+              component={BotGuideScreen}
+              options={{ headerShown: false }}
+            />
+            <Stack.Screen
+              name="Admin"
+              component={AdminScreen}
               options={{ headerShown: false }}
             />
             <Stack.Screen

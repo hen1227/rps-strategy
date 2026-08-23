@@ -8,6 +8,7 @@
     "@react-navigation/native-stack": "^7.18.8",
     "expo": "~57.0.14",
     "expo-audio": "~57.0.3",
+    "expo-clipboard": "~57.0.1",
     "expo-status-bar": "~57.0.1",
     "react": "19.2.3",
     "react-dom": "19.2.3",
@@ -27,10 +28,17 @@
     "web": "expo start --web",
     "build:rpsfish": "../RPSFish/scripts/build_web.sh",
     "arena": "node scripts/botArena.mjs",
+    "calibrate:review": "node scripts/reviewCalibration.mjs",
+    "test:openings": "node --test engine/openingBook.test.mjs",
+    "test:analysis": "node --loader ./scripts/arena-loader.mjs --test engine/gameAnalysis.test.mjs",
+    "test": "npm run test:openings && npm run test:markdown && npm run test:review && npm run test:analysis",
     "prebuild:web": "npm run build:rpsfish",
     "build:web": "expo export -p web --clear",
     "predeploy": "npm run build:web",
-    "deploy": "gh-pages --nojekyll --remove '{**/*,.claude/**/*,.gitignore,.nojekyll}' -d dist -b dist"
+    "deploy": "gh-pages --nojekyll --remove '{**/*,.claude/**/*,.gitignore,.nojekyll}' -d dist -b dist",
+    "test:review": "node --loader ./scripts/arena-loader.mjs --test engine/gameReview.test.mjs",
+    "test:replay": "node --test engine/replayAnimation.test.mjs",
+    "test:markdown": "node --test components/markdown.test.mjs"
   },
   "private": true,
   "devDependencies": {

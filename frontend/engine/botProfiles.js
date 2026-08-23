@@ -73,7 +73,15 @@
 //              fine" in another.
 export const MODE_SCORE_SCALE = Object.freeze({
   V1: Object.freeze({ army: 3, choice: 7, material: 220 }),
-  V5: Object.freeze({ army: 9, choice: 20, material: 70 }),
+  // Total War's `choice` was 20 until the mode's territory evaluation was
+  // re-priced (RPSFish EVAL_RESULTS.md H9): a territory lead used to be worth
+  // up to 1120cp on its own and is now bounded at 70, so every root score in
+  // the mode is smaller and the gaps between them with it. Re-measured at 15
+  // by `--spread` (p90 of best minus third best, 120 openings, depth 6). The
+  // other two modes re-measured at 6 and 44 against the 7 and 50 here, which
+  // is seed noise -- only `total_war_*` weights moved -- so they are left
+  // alone.
+  V5: Object.freeze({ army: 9, choice: 15, material: 70 }),
   V3: Object.freeze({ army: 9, choice: 50, material: 35 }),
 });
 
@@ -334,7 +342,16 @@ export const BOT_PROFILES = Object.freeze([
     // Depth is the target and the timeout is the real governor: Infiltration
     // reaches the full 16 in about a second, while Total War runs out of time
     // around depth 13–15. Lower the timeout first if four seconds feels long.
-    search: Object.freeze({ maxDepth: 16, maxTimeMs: 4_000 }),
+    // Measured against the WebAssembly build rather than guessed: on the
+    // reference machine Infiltration reaches depth 17 in 1.5s, 18 in 2.2s, 19
+    // in 3.0s, and 20 in 8.7s. Nineteen is the deepest rung that still fits
+    // inside the timeout, which keeps the timeout a backstop and the bot's
+    // strength reproducible instead of a function of how busy the device is.
+    // The old cap of 16 finished Infiltration in about a second and then
+    // returned, spending a quarter of the budget it had already asked for.
+    // Total War is time-limited at depth 13 either way, so this changes only
+    // Infiltration; Annihilation is retired from play.
+    search: Object.freeze({ maxDepth: 19, maxTimeMs: 4_000 }),
     choice: Object.freeze({
       candidateLines: 1,
       randomMoveChance: 0,

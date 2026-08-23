@@ -1,4 +1,4 @@
-import {useEffect, useState} from 'react';
+import {useEffect, useRef, useState} from 'react';
 import {
     Modal,
     Pressable,
@@ -11,31 +11,17 @@ import {
 import {SafeAreaView} from 'react-native-safe-area-context';
 
 import Board from '../components/Board';
-import CapturedPieces, {capturedPieces} from '../components/CapturedPieces';
+import {capturedPieces} from '../components/CapturedPieces';
 import GameChat from '../components/GameChat';
+import PlayerBar from '../components/PlayerBar';
 import TerritoryMeter from '../components/TerritoryMeter';
 import {useGameStore} from '../store/gameStore';
 import {useTournamentCall} from '../store/useTournamentCall';
-import {clock as clockColors, colors, overlay, players, radius, shadows} from '../theme';
+import {colors, overlay, radius, shadows} from '../theme';
 
 const BOARD_SIZE = 9;
-const LOW_TIME_MS = 20_000;
 
 const otherColor = (color) => (color === 'Red' ? 'Blue' : 'Red');
-
-const formatClock = (milliseconds) => {
-    const safeMilliseconds = Math.max(0, milliseconds);
-    if (safeMilliseconds < LOW_TIME_MS) {
-        const seconds = Math.floor(safeMilliseconds / 1000);
-        const tenths = Math.floor((safeMilliseconds % 1000) / 100);
-        return `0:${String(seconds).padStart(2, '0')}.${tenths}`;
-    }
-
-    const totalSeconds = Math.ceil(safeMilliseconds / 1000);
-    const minutes = Math.floor(totalSeconds / 60);
-    const seconds = totalSeconds % 60;
-    return `${minutes}:${String(seconds).padStart(2, '0')}`;
-};
 
 const formatTimeControl = (timeControl) => {
     if (!timeControl) return 'Live';
@@ -45,14 +31,6 @@ const formatTimeControl = (timeControl) => {
         ? initialMinutes.toString()
         : initialMinutes.toFixed(1);
     return `${initialLabel} + ${incrementSeconds}`;
-};
-
-const remainingForColor = (clock, color) =>
-    color === 'Red' ? clock?.redRemainingMs ?? 0 : clock?.blueRemainingMs ?? 0;
-
-const profileName = (profile, fallback) => {
-    const name = profile?.username?.trim();
-    return name && name.toLowerCase() !== 'guest' ? name : fallback;
 };
 
 const outcomeFor = (gameState, playerColor) => {
@@ -113,100 +91,6 @@ const outcomeFor = (gameState, playerColor) => {
 
     return {detail: reason.detail, didWin, isDraw, method: reason.method, result};
 };
-
-function LiveClock({clock, color, gameStatus}) {
-    const [now, setNow] = useState(() => Date.now());
-    const isActive = gameStatus === 'InProgress' && clock?.activeColor === color;
-
-    useEffect(() => {
-        setNow(Date.now());
-        if (!isActive) return undefined;
-
-        const interval = setInterval(() => setNow(Date.now()), 100);
-        return () => clearInterval(interval);
-    }, [clock?.activeColor, clock?.updatedAtUnixMs, isActive]);
-
-    const snapshot = remainingForColor(clock, color);
-    const elapsed = isActive ? Math.max(0, now - (clock?.updatedAtUnixMs ?? now)) : 0;
-    const remaining = Math.max(0, snapshot - elapsed);
-    const isLow = remaining < LOW_TIME_MS;
-
-    return (
-        <View
-            accessibilityLabel={`${color} clock, ${formatClock(remaining)}`}
-            style={[
-                styles.clock,
-                isActive && styles.clockActive,
-                isActive && isLow && styles.clockLow,
-            ]}
-        >
-            <View
-                style={[
-                    styles.clockPulse,
-                    isActive && styles.clockPulseActive,
-                    isActive && isLow && styles.clockPulseLow,
-                ]}
-            />
-            <Text
-                style={[
-                    styles.clockText,
-                    isActive && styles.clockTextActive,
-                    isActive && isLow && styles.clockTextLow,
-                ]}
-            >
-                {formatClock(remaining)}
-            </Text>
-        </View>
-    );
-}
-
-// `clock` is absent in a bot game, which has no time control at all, so whose
-// turn it is comes from the position instead and no clock face is rendered.
-function PlayerBar({
-                       badge,
-                       captured,
-                       clock,
-                       color,
-                       fallbackLabel,
-                       gameStatus,
-                       isYou,
-                       metaOverride,
-                       profile,
-                       turnColor,
-                   }) {
-    const isActive =
-        gameStatus === 'InProgress' &&
-        (clock ? clock.activeColor === color : turnColor === color);
-    const label = fallbackLabel ?? (isYou ? 'You' : 'Opponent');
-    const discord = profile?.discord?.trim();
-    const activity = metaOverride ?? (isActive ? 'Thinking' : color);
-
-    return (
-        <View style={[styles.playerBar, isActive && styles.playerBarActive]}>
-            <View style={[styles.avatar, color === 'Red' ? styles.redAvatar : styles.blueAvatar]}>
-                <Text style={styles.avatarText}>{color.slice(0, 1)}</Text>
-            </View>
-            <View style={styles.playerCopy}>
-                <View style={styles.playerNameRow}>
-                    <Text style={styles.playerName} numberOfLines={1}>
-                        {profileName(profile, label)}
-                    </Text>
-                    {isYou && <Text style={styles.youLabel}>YOU</Text>}
-                    {Boolean(badge) && <Text style={styles.botLabel}>{badge}</Text>}
-                </View>
-                <Text style={[styles.playerMeta, isActive && styles.playerMetaActive]}>
-                    {discord ? `Discord: ${discord} · ${activity}` : activity}
-                </Text>
-            </View>
-            <CapturedPieces
-                advantage={captured?.advantage ?? 0}
-                color={otherColor(color)}
-                tally={captured?.tally}
-            />
-            {Boolean(clock) && <LiveClock clock={clock} color={color} gameStatus={gameStatus}/>}
-        </View>
-    );
-}
 
 function OpponentReconnectNotice({deadline}) {
     const [now, setNow] = useState(() => Date.now());
@@ -547,7 +431,7 @@ function ConfirmResignModal({detail, onCancel, onConfirm, visible}) {
     );
 }
 
-function OutcomeModal({gameState, onRematch, onReview, onReturn, playerColor, visible}) {
+function FinishedGameCard({canReview, gameState, onRematch, onReviewGame, onReturn, playerColor, wide}) {
     const outcome = outcomeFor(gameState, playerColor);
     const score = outcome.isDraw
         ? '½  —  ½'
@@ -556,14 +440,12 @@ function OutcomeModal({gameState, onRematch, onReview, onReturn, playerColor, vi
             : '0  —  1';
 
     return (
-        <Modal
-            animationType="fade"
-            onRequestClose={onReview}
-            transparent
-            visible={visible}
+        <View
+            accessibilityLiveRegion="polite"
+            style={[styles.finishedCard, wide && styles.finishedCardWide]}
         >
-            <View style={styles.modalBackdrop}>
-                <View style={styles.outcomeCard}>
+            <View style={styles.finishedSummary}>
+                <View style={styles.finishedResult}>
                     <Text style={styles.outcomeEyebrow}>GAME OVER</Text>
                     <Text
                         style={[
@@ -574,48 +456,64 @@ function OutcomeModal({gameState, onRematch, onReview, onReturn, playerColor, vi
                     >
                         {outcome.result}
                     </Text>
+                </View>
+                <View style={styles.finishedScoreBlock}>
+                    <Text style={styles.finishedScoreLabel}>FINAL</Text>
                     <Text style={styles.outcomeScore}>{score}</Text>
-                    <View style={styles.outcomeMethodBadge}>
-                        <Text style={styles.outcomeMethod}>BY {outcome.method}</Text>
-                    </View>
-                    <Text style={styles.outcomeDetail}>{outcome.detail}</Text>
-                    {Boolean(gameState.bot) && (
-                        <Text style={styles.outcomeUnrated}>
-                            Bot games are unrated — nothing was added to your record.
-                        </Text>
-                    )}
-                    <View style={styles.outcomeButtons}>
-                        <Pressable
-                            accessibilityRole="button"
-                            onPress={onReview}
-                            style={({pressed}) => [styles.reviewButton, pressed && styles.buttonPressed]}
-                        >
-                            <Text style={styles.reviewButtonText}>Review board</Text>
-                        </Pressable>
-                        {Boolean(onRematch) && (
-                            <Pressable
-                                accessibilityLabel={`Play ${gameState.bot?.name} again`}
-                                accessibilityRole="button"
-                                onPress={onRematch}
-                                style={({pressed}) => [
-                                    styles.rematchButton,
-                                    pressed && styles.buttonPressed,
-                                ]}
-                            >
-                                <Text style={styles.rematchButtonText}>Play again</Text>
-                            </Pressable>
-                        )}
-                        <Pressable
-                            accessibilityRole="button"
-                            onPress={onReturn}
-                            style={({pressed}) => [styles.outcomeReturnButton, pressed && styles.buttonPressed]}
-                        >
-                            <Text style={styles.outcomeReturnText}>Back to modes</Text>
-                        </Pressable>
-                    </View>
                 </View>
             </View>
-        </Modal>
+            <View style={styles.outcomeReason}>
+                <View style={styles.outcomeMethodBadge}>
+                    <Text style={styles.outcomeMethod}>BY {outcome.method}</Text>
+                </View>
+                <Text style={styles.outcomeDetail}>{outcome.detail}</Text>
+            </View>
+            {Boolean(gameState.bot) && (
+                <Text style={styles.outcomeUnrated}>
+                    Bot games are unrated. Nothing was added to your record.
+                </Text>
+            )}
+            {canReview ? (
+                <Pressable
+                    accessibilityHint="Opens a move-by-move RPSFish analysis."
+                    accessibilityRole="button"
+                    onPress={onReviewGame}
+                    style={({pressed}) => [styles.reviewGameButton, pressed && styles.buttonPressed]}
+                >
+                    <View style={styles.reviewGameCopy}>
+                        <Text style={styles.reviewGameButtonText}>Review game</Text>
+                        <Text style={styles.reviewGameButtonDetail}>
+                            Move grades, evaluation chart, and accuracy
+                        </Text>
+                    </View>
+                    <Text style={styles.reviewGameButtonArrow}>→</Text>
+                </Pressable>
+            ) : (
+                <Text style={styles.noReviewDetail}>No moves were played, so there is nothing to review.</Text>
+            )}
+            <View style={styles.finishedActions}>
+                {Boolean(onRematch) && (
+                    <Pressable
+                        accessibilityLabel={`Play ${gameState.bot?.name} again`}
+                        accessibilityRole="button"
+                        onPress={onRematch}
+                        style={({pressed}) => [
+                            styles.rematchButton,
+                            pressed && styles.buttonPressed,
+                        ]}
+                    >
+                        <Text style={styles.rematchButtonText}>Play again</Text>
+                    </Pressable>
+                )}
+                <Pressable
+                    accessibilityRole="button"
+                    onPress={onReturn}
+                    style={({pressed}) => [styles.finishedModesButton, pressed && styles.buttonPressed]}
+                >
+                    <Text style={styles.finishedModesButtonText}>Return to lobby</Text>
+                </Pressable>
+            </View>
+        </View>
     );
 }
 
@@ -675,14 +573,31 @@ function StatusContent({botThinking, gameState, isMyTurn, isSpectating, playerCo
 
 function StatusCard({
                         botThinking,
+                        canReview,
                         gameState,
                         isMyTurn,
                         isSpectating,
+                        onRematch,
                         onReturn,
+                        onReviewGame,
                         playerColor,
                         selectedTile,
                         wide,
                     }) {
+    if (gameState.status === 'Finished' && !isSpectating) {
+        return (
+            <FinishedGameCard
+                canReview={canReview}
+                gameState={gameState}
+                onRematch={onRematch}
+                onReturn={onReturn}
+                onReviewGame={onReviewGame}
+                playerColor={playerColor}
+                wide={wide}
+            />
+        );
+    }
+
     const status = StatusContent({
         botThinking,
         gameState,
@@ -714,13 +629,25 @@ function StatusCard({
             </View>
 
             {isFinished || isSpectating ? (
-                <Pressable
-                    accessibilityRole="button"
-                    onPress={onReturn}
-                    style={({pressed}) => [styles.returnButton, pressed && styles.buttonPressed]}
-                >
-                    <Text style={styles.returnButtonText}>{isSpectating && !isFinished ? 'Leave' : 'Modes'}</Text>
-                </Pressable>
+                <View style={styles.statusActions}>
+                    {isFinished && canReview && (
+                        <Pressable
+                            accessibilityLabel="Review game with RPSFish"
+                            accessibilityRole="button"
+                            onPress={onReviewGame}
+                            style={({pressed}) => [styles.statusReviewButton, pressed && styles.buttonPressed]}
+                        >
+                            <Text style={styles.statusReviewText}>Review game</Text>
+                        </Pressable>
+                    )}
+                    <Pressable
+                        accessibilityRole="button"
+                        onPress={onReturn}
+                        style={({pressed}) => [styles.returnButton, pressed && styles.buttonPressed]}
+                    >
+                        <Text style={styles.returnButtonText}>{isSpectating && !isFinished ? 'Leave' : 'Return to lobby'}</Text>
+                    </Pressable>
+                </View>
             ) : (
                 <View style={styles.moveBadge}>
                     <Text style={styles.moveBadgeLabel}>MOVE</Text>
@@ -733,7 +660,7 @@ function StatusCard({
 
 export default function GameScreen({navigation}) {
     const {height, width} = useWindowDimensions();
-    const [reviewedResultId, setReviewedResultId] = useState(null);
+    const reviewOpeningRef = useRef(false);
     const [showResignConfirmation, setShowResignConfirmation] = useState(false);
     const gameState = useGameStore((state) => state.gameState);
     const lastMove = useGameStore((state) => state.lastMove);
@@ -777,7 +704,14 @@ export default function GameScreen({navigation}) {
     const requestBotHint = useGameStore((state) => state.requestBotHint);
     const undoBotMove = useGameStore((state) => state.undoBotMove);
     const restartBotGame = useGameStore((state) => state.restartBotGame);
+    const botGamePGN = useGameStore((state) => state.botGamePGN);
     const tournamentCall = useTournamentCall();
+
+    useEffect(() => {
+        return navigation.addListener('focus', () => {
+            reviewOpeningRef.current = false;
+        });
+    }, [navigation]);
 
     if (!gameState) {
         return (
@@ -841,14 +775,29 @@ export default function GameScreen({navigation}) {
         canAnswerOffers && gameState.drawOfferedBy && gameState.drawOfferedBy !== playerColor;
     const hasOpponentTimeOffer =
         canAnswerOffers && gameState.timeOfferedBy && gameState.timeOfferedBy !== playerColor;
-    const showOutcome =
-        !isSpectating &&
-        gameState.status === 'Finished' &&
-        reviewedResultId !== gameState.gameId;
+    // A game nobody moved in has nothing to review, and a bot game can only
+    // be reviewed from the move list this browser kept.
+    const canReview = bot ? botHistoryLength > 0 : gameState.moveNumber > 0;
 
     const returnToModes = () => {
         clearGame();
         navigation.navigate('Lobby');
+    };
+
+    // The game is deliberately left in the store: an online game's chat room
+    // stays open while the players go over the board, and `clearGame` is what
+    // closes it. A bot game never reached the server, so its record is written
+    // here from the moves the browser kept.
+    const openReview = () => {
+        if (reviewOpeningRef.current) return;
+        const pgn = bot ? botGamePGN() : null;
+        if (bot && !pgn) return;
+        reviewOpeningRef.current = true;
+        navigation.navigate('Review', {
+            gameId: bot ? null : gameState.gameId,
+            pgn,
+            playerColor: isSpectating ? null : playerColor,
+        });
     };
 
     const confirmResign = () => {
@@ -1002,6 +951,22 @@ export default function GameScreen({navigation}) {
             wide={isWide}
         />
     );
+    const rematch = bot ? restartBotGame : null;
+    const statusCard = (wide = false) => (
+        <StatusCard
+            botThinking={Boolean(botSession?.thinking)}
+            canReview={canReview}
+            gameState={gameState}
+            isMyTurn={isMyTurn}
+            isSpectating={isSpectating}
+            onRematch={rematch}
+            onReturn={returnToModes}
+            onReviewGame={openReview}
+            playerColor={playerColor}
+            selectedTile={selectedTile}
+            wide={wide}
+        />
+    );
 
     return (
         <SafeAreaView style={styles.safeArea} edges={['top', 'right', 'bottom', 'left']}>
@@ -1040,16 +1005,7 @@ export default function GameScreen({navigation}) {
                             showsVerticalScrollIndicator={false}
                             style={[styles.sidePanel, {height: boardSize + 120}]}
                         >
-                            <StatusCard
-                                botThinking={Boolean(botSession?.thinking)}
-                                gameState={gameState}
-                                isMyTurn={isMyTurn}
-                                isSpectating={isSpectating}
-                                onReturn={returnToModes}
-                                playerColor={playerColor}
-                                selectedTile={selectedTile}
-                                wide
-                            />
+                            {statusCard(true)}
 
                             {matchNotices}
                             {gameActions}
@@ -1090,20 +1046,13 @@ export default function GameScreen({navigation}) {
                         keyboardShouldPersistTaps="handled"
                         showsVerticalScrollIndicator={false}
                     >
+                        {gameState.status === 'Finished' && !isSpectating ? statusCard() : null}
                         {playerBars}
                         {hasTerritory && <TerritoryMeter grid={gameState.grid}/>}
                         {matchNotices}
                         {gameActions}
                         {gameChat}
-                        <StatusCard
-                            botThinking={Boolean(botSession?.thinking)}
-                            gameState={gameState}
-                            isMyTurn={isMyTurn}
-                            isSpectating={isSpectating}
-                            onReturn={returnToModes}
-                            playerColor={playerColor}
-                            selectedTile={selectedTile}
-                        />
+                        {gameState.status !== 'Finished' || isSpectating ? statusCard() : null}
                     </ScrollView>
                 )}
 
@@ -1120,33 +1069,16 @@ export default function GameScreen({navigation}) {
                 )}
 
                 {!isSpectating && (
-                    <>
-                        <ConfirmResignModal
-                            detail={
-                                bot
-                                    ? `${bot.name} wins this practice game. Nothing is recorded.`
-                                    : undefined
-                            }
-                            onCancel={() => setShowResignConfirmation(false)}
-                            onConfirm={confirmResign}
-                            visible={showResignConfirmation}
-                        />
-                        <OutcomeModal
-                            gameState={gameState}
-                            onRematch={
-                                bot
-                                    ? () => {
-                                        setReviewedResultId(null);
-                                        restartBotGame();
-                                    }
-                                    : null
-                            }
-                            onReview={() => setReviewedResultId(gameState.gameId)}
-                            onReturn={returnToModes}
-                            playerColor={playerColor}
-                            visible={showOutcome}
-                        />
-                    </>
+                    <ConfirmResignModal
+                        detail={
+                            bot
+                                ? `${bot.name} wins this practice game. Nothing is recorded.`
+                                : undefined
+                        }
+                        onCancel={() => setShowResignConfirmation(false)}
+                        onConfirm={confirmResign}
+                        visible={showResignConfirmation}
+                    />
                 )}
             </View>
         </SafeAreaView>
@@ -1178,6 +1110,15 @@ const styles = StyleSheet.create({
     },
     emptyButtonText: {color: colors.textStrong, fontWeight: '900'},
     buttonPressed: {opacity: 0.72},
+    statusActions: {flexDirection: 'row', alignItems: 'center', gap: 6},
+    statusReviewButton: {
+        minHeight: 34,
+        justifyContent: 'center',
+        paddingHorizontal: 12,
+        borderRadius: radius.medium,
+        backgroundColor: colors.accent,
+    },
+    statusReviewText: {color: colors.textStrong, fontSize: 10, fontWeight: '900'},
     topBar: {
         minHeight: 47,
         flexDirection: 'row',
@@ -1229,88 +1170,6 @@ const styles = StyleSheet.create({
     playColumn: {alignItems: 'center', gap: 7},
     sidePanel: {width: 310},
     sidePanelContent: {gap: 10, paddingBottom: 2},
-    playerBar: {
-        width: '100%',
-        minHeight: 50,
-        flexDirection: 'row',
-        alignItems: 'center',
-        paddingHorizontal: 5,
-        borderRadius: radius.small,
-        borderWidth: 1,
-        borderColor: 'transparent',
-    },
-    playerBarActive: {
-        borderColor: colors.accentBorder,
-        backgroundColor: colors.accentSurface,
-    },
-    avatar: {
-        width: 35,
-        height: 35,
-        alignItems: 'center',
-        justifyContent: 'center',
-        borderRadius: radius.medium,
-        borderWidth: 1,
-    },
-    redAvatar: {
-        backgroundColor: players.Red.surface,
-        borderColor: players.Red.border,
-    },
-    blueAvatar: {
-        backgroundColor: players.Blue.surface,
-        borderColor: players.Blue.border,
-    },
-    avatarText: {color: colors.textStrong, fontSize: 14, fontWeight: '900'},
-    playerCopy: {flex: 1, minWidth: 0, paddingHorizontal: 9},
-    playerNameRow: {flexDirection: 'row', alignItems: 'center', gap: 6},
-    playerName: {maxWidth: '75%', color: colors.text, fontSize: 13, fontWeight: '800'},
-    youLabel: {
-        color: colors.accentBright,
-        fontSize: 7,
-        fontWeight: '900',
-        letterSpacing: 1,
-    },
-    botLabel: {
-        color: colors.goldBright,
-        fontSize: 7,
-        fontWeight: '900',
-        letterSpacing: 1,
-        paddingHorizontal: 4,
-        paddingVertical: 2,
-        borderRadius: radius.small,
-        backgroundColor: colors.goldSurface,
-    },
-    playerMeta: {color: colors.textFaint, fontSize: 9, fontWeight: '700', marginTop: 2},
-    playerMetaActive: {color: colors.accentSoft},
-    clock: {
-        minWidth: 100,
-        minHeight: 40,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'flex-end',
-        gap: 7,
-        paddingHorizontal: 11,
-        borderRadius: radius.small,
-        backgroundColor: clockColors.idleSurface,
-    },
-    clockActive: {backgroundColor: clockColors.activeSurface},
-    clockLow: {backgroundColor: clockColors.lowSurface},
-    clockPulse: {
-        width: 6,
-        height: 6,
-        borderRadius: 3,
-        backgroundColor: clockColors.idlePulse,
-    },
-    clockPulseActive: {backgroundColor: clockColors.activePulse},
-    clockPulseLow: {backgroundColor: clockColors.lowPulse},
-    clockText: {
-        color: clockColors.idleText,
-        fontSize: 22,
-        fontWeight: '800',
-        fontVariant: ['tabular-nums'],
-        letterSpacing: -0.6,
-    },
-    clockTextActive: {color: clockColors.activeText},
-    clockTextLow: {color: clockColors.lowText},
     selfReconnectNotice: {
         width: '100%',
         alignItems: 'center',
@@ -1575,40 +1434,54 @@ const styles = StyleSheet.create({
         backgroundColor: colors.danger,
     },
     confirmResignText: {color: colors.textStrong, fontSize: 11, fontWeight: '900'},
-    outcomeCard: {
+    finishedCard: {
         width: '100%',
-        maxWidth: 390,
-        alignItems: 'center',
-        paddingHorizontal: 24,
-        paddingTop: 24,
-        paddingBottom: 20,
-        borderRadius: radius.xlarge,
+        padding: 14,
+        borderRadius: radius.large,
         borderWidth: 1,
-        borderColor: colors.borderStrong,
+        borderColor: colors.accentBorder,
         backgroundColor: colors.surface,
-        boxShadow: shadows.modal,
-        elevation: 20,
+    },
+    finishedCardWide: {padding: 16},
+    finishedSummary: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 12,
+    },
+    finishedResult: {flex: 1, minWidth: 0},
+    finishedScoreBlock: {alignItems: 'flex-end'},
+    finishedScoreLabel: {
+        color: colors.textFaint,
+        fontSize: 7,
+        fontWeight: '900',
+        letterSpacing: 1.1,
     },
     outcomeEyebrow: {
-        color: colors.textFaint,
+        color: colors.accentBright,
         fontSize: 8,
         fontWeight: '900',
-        letterSpacing: 1.7,
+        letterSpacing: 1.4,
     },
-    outcomeTitle: {color: colors.textStrong, fontSize: 32, fontWeight: '900', marginTop: 9},
+    outcomeTitle: {color: colors.textStrong, fontSize: 25, fontWeight: '900', marginTop: 4},
     outcomeTitleWin: {color: colors.accentBright},
     outcomeTitleLoss: {color: colors.dangerSoft},
     outcomeScore: {
         color: colors.textSoft,
-        fontSize: 22,
+        fontSize: 17,
         fontWeight: '900',
         fontVariant: ['tabular-nums'],
-        marginTop: 8,
+        marginTop: 3,
+    },
+    outcomeReason: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 9,
+        marginTop: 10,
     },
     outcomeMethodBadge: {
-        marginTop: 14,
-        paddingHorizontal: 11,
-        paddingVertical: 6,
+        paddingHorizontal: 8,
+        paddingVertical: 5,
         borderRadius: radius.small,
         backgroundColor: colors.surfaceMuted,
     },
@@ -1619,41 +1492,58 @@ const styles = StyleSheet.create({
         letterSpacing: 1.15,
     },
     outcomeDetail: {
+        flex: 1,
         color: colors.textMuted,
-        fontSize: 12,
-        lineHeight: 18,
-        marginTop: 13,
-        textAlign: 'center',
+        fontSize: 10,
+        lineHeight: 14,
     },
     outcomeUnrated: {
         color: colors.goldMuted,
         fontSize: 9,
         fontWeight: '800',
-        marginTop: 9,
-        textAlign: 'center',
+        marginTop: 8,
     },
-    outcomeButtons: {width: '100%', gap: 8, marginTop: 22},
-    rematchButton: {
+    reviewGameButton: {
+        flexDirection: 'row',
         alignItems: 'center',
-        paddingVertical: 11,
+        width: '100%',
+        marginTop: 12,
+        paddingHorizontal: 12,
+        paddingVertical: 10,
+        borderRadius: radius.medium,
+        backgroundColor: colors.accent,
+    },
+    reviewGameCopy: {flex: 1, minWidth: 0},
+    reviewGameButtonText: {color: colors.textStrong, fontSize: 12, fontWeight: '900'},
+    reviewGameButtonDetail: {
+        color: colors.accentSurface,
+        fontSize: 8,
+        fontWeight: '700',
+        marginTop: 2,
+    },
+    reviewGameButtonArrow: {color: colors.textStrong, fontSize: 18, fontWeight: '900'},
+    noReviewDetail: {color: colors.textFaint, fontSize: 9, lineHeight: 13, marginTop: 11},
+    finishedActions: {width: '100%', flexDirection: 'row', gap: 8, marginTop: 8},
+    rematchButton: {
+        flex: 1,
+        alignItems: 'center',
+        justifyContent: 'center',
+        minHeight: 36,
+        paddingHorizontal: 10,
         borderRadius: radius.medium,
         borderWidth: 1,
         borderColor: colors.accentBorder,
         backgroundColor: colors.accentSurface,
     },
     rematchButtonText: {color: colors.accentSoft, fontSize: 11, fontWeight: '900'},
-    reviewButton: {
+    finishedModesButton: {
+        flex: 1,
         alignItems: 'center',
-        paddingVertical: 11,
+        justifyContent: 'center',
+        minHeight: 36,
+        paddingHorizontal: 10,
         borderRadius: radius.medium,
         backgroundColor: colors.surfaceMuted,
     },
-    reviewButtonText: {color: colors.textSoft, fontSize: 11, fontWeight: '900'},
-    outcomeReturnButton: {
-        alignItems: 'center',
-        paddingVertical: 12,
-        borderRadius: radius.medium,
-        backgroundColor: colors.accent,
-    },
-    outcomeReturnText: {color: colors.textStrong, fontSize: 11, fontWeight: '900'},
+    finishedModesButtonText: {color: colors.textSoft, fontSize: 11, fontWeight: '900'},
 });

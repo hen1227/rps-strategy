@@ -23,7 +23,7 @@ const sections = [
     eyebrow: 'KEPT INDEFINITELY',
     title: 'What I store',
     paragraphs: [
-      'Your account: a random account ID your browser generates, your display name, your Discord handle, and a SHA-256 hash of your local account key — never the key itself.',
+      'Your account: a random account ID your browser generates, your username, your Discord handle, a SHA-256 hash of your local account key, and, once you register, a salted PBKDF2 hash of your password. Never the key or the password themselves.',
       'Every finished online game, kept indefinitely and linked to both players: who played, the game mode, who won, how it ended, whether it was ranked, both ratings before and after, the number of moves, the time control, and when it started and finished.',
       'Your totals: wins, losses, draws, games played, and a separate Elo rating per game mode.',
       'Tournaments: your entry name, Discord handle, your matches, and their results.',
@@ -33,7 +33,7 @@ const sections = [
     eyebrow: 'PUBLIC BY DEFAULT',
     title: 'What other players see',
     paragraphs: [
-      'Your display name, Discord handle, rating, and record are shown to your opponent and in the lobby live-game list. Any player can spectate a live game, including yours.',
+      'Your username, Discord handle, rating, and record are shown to your opponent and in the lobby live-game list. Any player can spectate a live game, including yours.',
       'In-game chat is not filtered or moderated. Your opponent and every spectator can read it. Chat lives in server memory for the length of the game and is never written to the database — but assume anyone in the room can screenshot it.',
     ],
   },
@@ -49,14 +49,14 @@ const sections = [
     title: 'Deleting your data',
     paragraphs: [
       `Message me on Discord (${CONTACT_DISCORD}) and I will delete your account and profile. Finished games involve another player, so I may keep the bare result with your name removed — otherwise your opponents' histories and ratings would break.`,
-      "Clearing this site's browser data also throws away your local account key, which means a new account and no way back to the old one.",
+      "Clearing this site's browser data also throws away your local account key. If you have registered, your username and password get you back in; if you have not, that key was the only way back.",
     ],
   },
   {
     eyebrow: 'ONLINE PLAY AGREEMENT',
     title: 'By playing online, you agree to',
     bullets: [
-      'Be nice. No harassment, slurs, threats, or bigotry — in chat, display names, or Discord handles.',
+      'Be nice. No harassment, slurs, threats, or bigotry — in chat, usernames, or Discord handles.',
       'Play your own games. No engines, bots, or outside help during a live game. The analysis board is for before and after, not during.',
       'Do not rig results. No throwing games to farm ratings, no sandbagging, no alt accounts to dodge opponents or inflate your Elo.',
       'Do not stall. No sitting on the clock to burn your opponent out, and no disappearing mid-game to avoid a loss.',
@@ -81,7 +81,7 @@ export default function PolicyScreen({ navigation }) {
         <View style={styles.screen}>
           <View style={styles.topBar}>
             <Pressable
-              accessibilityLabel="Back to game modes"
+              accessibilityLabel="Return to lobby"
               accessibilityRole="button"
               onPress={() => navigation.goBack()}
               style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}

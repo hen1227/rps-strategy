@@ -16,7 +16,10 @@ import { BOT_PROFILES, DEFAULT_BOT_PROFILE_ID } from '../engine/botProfiles';
 import BotIcon from '../components/BotIcon';
 import HowToPlayModal from '../components/HowToPlayModal';
 import ModePreview from '../components/ModePreview';
+import PGNImportModal from '../components/PGNImportModal';
+import PositionSetupModal from '../components/PositionSetupModal';
 import TournamentSpotlight from '../components/TournamentSpotlight';
+import { reviewSourceFromPGN } from '../engine/gameReview';
 import {
   Badge,
   EmptyState,
@@ -26,6 +29,8 @@ import {
   SectionHeading,
 } from '../components/ui';
 import { useGameStore } from '../store/gameStore';
+import BotSeriesPanel from '../components/BotSeriesPanel';
+import EngineBotRow from '../components/EngineBotRow';
 import { colors, radius, WIDE_LAYOUT_WIDTH } from '../theme';
 
 const formatSearchTime = (milliseconds) => `${Math.floor(milliseconds / 1000)}s`;
@@ -35,6 +40,43 @@ const playerName = (profile, fallback) => {
   return username && username.toLowerCase() !== 'guest' ? username : fallback;
 };
 
+function BotLevelPicker({ label, onSelect, selectedProfileId }) {
+  return (
+    <View>
+      {label ? <Text style={styles.botPickerLabel}>{label}</Text> : null}
+      <View style={styles.botLevels}>
+        {BOT_PROFILES.map((profile) => {
+          const selected = profile.id === selectedProfileId;
+          return (
+            <Pressable
+              accessibilityLabel={`${label ? `${label}, ` : ''}${profile.name}, level ${profile.rating}`}
+              accessibilityRole="radio"
+              accessibilityState={{ checked: selected }}
+              key={profile.id}
+              onPress={() => onSelect(profile.id)}
+              style={({ pressed }) => [
+                styles.botLevel,
+                selected && styles.botLevelSelected,
+                pressed && styles.pressed,
+              ]}
+            >
+              <View style={styles.botLevelArt}>
+                <BotIcon profileId={profile.id} />
+              </View>
+              <Text style={[styles.botLevelName, selected && styles.botLevelNameSelected]}>
+                {profile.name}
+              </Text>
+              <Text style={[styles.botLevelRating, selected && styles.botLevelRatingSelected]}>
+                {profile.rating}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
+
 export default function LobbyScreen({ navigation }) {
   const { width } = useWindowDimensions();
   const connectionStatus = useGameStore((state) => state.connectionStatus);
@@ -43,6 +85,9 @@ export default function LobbyScreen({ navigation }) {
   const botPlayerCount = useGameStore((state) => state.botPlayerCount);
   const startBotGame = useGameStore((state) => state.startBotGame);
   const account = useGameStore((state) => state.account);
+  // Known before the socket connects, so the button does not change label a
+  // moment after the lobby paints.
+  const sessionToken = useGameStore((state) => state.sessionToken);
   const liveGames = useGameStore((state) => state.liveGames);
   const queue = useGameStore((state) => state.queue);
   const incomingChallenges = useGameStore((state) => state.incomingChallenges);
@@ -57,16 +102,22 @@ export default function LobbyScreen({ navigation }) {
   const cancelChallenge = useGameStore((state) => state.cancelChallenge);
   const spectateGame = useGameStore((state) => state.spectateGame);
   const spectatedGameId = useGameStore((state) => state.spectatedGameId);
+  const engineBots = useGameStore((state) => state.engineBots);
+  const challengeBot = useGameStore((state) => state.challengeBot);
   const gameState = useGameStore((state) => state.gameState);
   const error = useGameStore((state) => state.error);
   const clearError = useGameStore((state) => state.clearError);
 
   const [howToPlayMode, setHowToPlayMode] = useState(null);
   const [botProfileId, setBotProfileId] = useState(DEFAULT_BOT_PROFILE_ID);
-  const [botModeId, setBotModeId] = useState(null);
+  const [battleRedProfileId, setBattleRedProfileId] = useState(DEFAULT_BOT_PROFILE_ID);
+  const [battleBlueProfileId, setBattleBlueProfileId] = useState('boulder');
   const [challengeOpen, setChallengeOpen] = useState(false);
   const [challengeUsername, setChallengeUsername] = useState('');
-  const [challengeModeId, setChallengeModeId] = useState(null);
+  const [challengePosition, setChallengePosition] = useState(null);
+  const [challengePositionOpen, setChallengePositionOpen] = useState(false);
+  const [pgnModalOpen, setPgnModalOpen] = useState(false);
+  const [engineBotModeId, setEngineBotModeId] = useState(null);
 
   const isWide = width >= WIDE_LAYOUT_WIDTH;
   const isConnected = connectionStatus === 'connected';
@@ -81,7 +132,6 @@ export default function LobbyScreen({ navigation }) {
     [modes],
   );
 
-  const selectedChallengeModeId = challengeModeId ?? playableModes[0]?.id ?? null;
   const challengeActionsDisabled =
     !isConnected || queue.isSearching || Boolean(gameState) || Boolean(outgoingChallenge);
   const spectateDisabled =
@@ -90,10 +140,11 @@ export default function LobbyScreen({ navigation }) {
     Boolean(spectatedGameId) ||
     Boolean(outgoingChallenge);
 
-  const submitChallenge = () => {
+  const submitChallenge = (mode) => {
     if (challengeActionsDisabled || !challengeUsername.trim()) return;
-    if (challengePlayer(challengeUsername, selectedChallengeModeId)) {
+    if (challengePlayer(challengeUsername, mode.id, challengePosition)) {
       setChallengeUsername('');
+      setChallengePosition(null);
     }
   };
 
@@ -117,15 +168,21 @@ export default function LobbyScreen({ navigation }) {
           <Text style={styles.statusChipText}>{isConnected ? 'ONLINE' : 'CONNECTING'}</Text>
         </View>
         <GhostButton
+          accessibilityLabel="Browse the opening book"
+          compact
+          label="OPENINGS"
+          onPress={() => navigation.navigate('Openings')}
+        />
+        <GhostButton
           accessibilityLabel="Open tournaments"
           compact
           label="TOURNAMENTS"
           onPress={() => navigation.navigate('Tournaments')}
         />
         <GhostButton
-          accessibilityLabel="Edit account settings"
+          accessibilityLabel={sessionToken ? 'Edit account settings' : 'Create an account or sign in'}
           compact
-          label="ACCOUNT"
+          label={sessionToken ? 'ACCOUNT' : 'SIGN IN'}
           onPress={() => navigation.navigate('Account')}
         />
       </View>
@@ -144,7 +201,10 @@ export default function LobbyScreen({ navigation }) {
               <View key={challenge.id} style={styles.inboxRow}>
                 <View style={styles.inboxCopy}>
                   <Text style={styles.inboxTitle}>{challengerName} challenged you</Text>
-                  <Text style={styles.inboxMeta}>{challenge.modeName} · unranked</Text>
+                  <Text style={styles.inboxMeta}>
+                    {challenge.modeName} · unranked
+                    {challenge.startingPosition ? ' · custom position' : ''}
+                  </Text>
                 </View>
                 <View style={styles.inboxActions}>
                   <GhostButton
@@ -173,7 +233,9 @@ export default function LobbyScreen({ navigation }) {
                   Waiting for {outgoingChallenge.targetUsername}
                 </Text>
                 <Text style={styles.inboxMeta}>
-                  {outgoingChallenge.modeName} · they see this when they connect
+                  {outgoingChallenge.modeName}
+                  {outgoingChallenge.startingPosition ? ' · custom position' : ''}
+                  {' · they see this when they connect'}
                 </Text>
               </View>
               <GhostButton
@@ -197,7 +259,14 @@ export default function LobbyScreen({ navigation }) {
         trailing={
           queue.isSearching ? (
             <Badge label={`SEARCHING ${formatSearchTime(queue.queuedForMs)}`} tone="warm" />
-          ) : null
+          ) : (
+            <GhostButton
+              accessibilityLabel="Load a game analysis from PGN"
+              compact
+              label="LOAD PGN"
+              onPress={() => setPgnModalOpen(true)}
+            />
+          )
         }
       />
       <View style={styles.modeGrid}>
@@ -284,14 +353,12 @@ export default function LobbyScreen({ navigation }) {
     </View>
   );
 
-  const selectedBotModeId = botModeId ?? playableModes[0]?.id ?? null;
-  const selectedBotMode = playableModes.find((mode) => mode.id === selectedBotModeId) ?? null;
   const selectedBotProfile =
     BOT_PROFILES.find((profile) => profile.id === botProfileId) ?? BOT_PROFILES[0];
   // RPSFish runs in a browser Worker, so bots are a website feature for now —
   // the same limit the analysis board already has.
   const botsSupported = Platform.OS === 'web';
-  const botLaunchBlocked = !botsSupported || !selectedBotMode || Boolean(gameState);
+  const botLaunchBlocked = !botsSupported || Boolean(gameState);
 
   // Bots run on this device, so this panel works with the server unreachable
   // and never touches a rating.
@@ -312,72 +379,67 @@ export default function LobbyScreen({ navigation }) {
           ? 'RPSFish plays the other side in your browser. No clock, no rating, and the hint and undo buttons stay switched on.'
           : 'Bots run on the RPSFish web engine, so this practice board is available on the website.'}
       </Text>
-      <View style={styles.botLevels}>
-        {BOT_PROFILES.map((profile) => {
-          const selected = profile.id === selectedBotProfile.id;
-          return (
-            <Pressable
-              accessibilityLabel={`Play ${profile.name}, level ${profile.rating}`}
-              accessibilityRole="radio"
-              accessibilityState={{ checked: selected }}
-              key={profile.id}
-              onPress={() => setBotProfileId(profile.id)}
-              style={({ pressed }) => [
-                styles.botLevel,
-                selected && styles.botLevelSelected,
-                pressed && styles.pressed,
-              ]}
-            >
-              <View style={styles.botLevelArt}>
-                <BotIcon profileId={profile.id} />
-              </View>
-              <Text style={[styles.botLevelName, selected && styles.botLevelNameSelected]}>
-                {profile.name}
-              </Text>
-              <Text style={[styles.botLevelRating, selected && styles.botLevelRatingSelected]}>
-                {profile.rating}
-              </Text>
-            </Pressable>
-          );
-        })}
-      </View>
+      <BotLevelPicker onSelect={setBotProfileId} selectedProfileId={selectedBotProfile.id} />
       <Text style={styles.botBlurb}>{selectedBotProfile.blurb}</Text>
-      <View style={styles.modeChips}>
+      <View style={styles.modeActionButtons}>
         {playableModes.map((mode) => {
-          const selected = selectedBotModeId === mode.id;
           return (
-            <Pressable
-              accessibilityLabel={`Play a bot in ${mode.name}`}
-              accessibilityRole="radio"
-              accessibilityState={{ checked: selected }}
-              key={mode.id}
-              onPress={() => setBotModeId(mode.id)}
-              style={({ pressed }) => [
-                styles.modeChip,
-                selected && styles.modeChipSelected,
-                pressed && styles.pressed,
-              ]}
-            >
-              <Text style={[styles.modeChipText, selected && styles.modeChipTextSelected]}>
-                {mode.name}
-              </Text>
-            </Pressable>
+            <View key={mode.id} style={styles.modeActionButton}>
+              <PrimaryButton
+                accessibilityLabel={`Play ${mode.name} against ${selectedBotProfile.name}`}
+                disabled={botLaunchBlocked}
+                label={`PLAY ${mode.name.toUpperCase()} ▶`}
+                onPress={() => startBotGame({ mode, profileId: selectedBotProfile.id })}
+              />
+            </View>
           );
         })}
       </View>
-      <View style={styles.botLaunch}>
-        <PrimaryButton
-          accessibilityLabel={`Start a ${selectedBotMode?.name ?? 'bot'} game against ${selectedBotProfile.name}`}
-          disabled={botLaunchBlocked}
-          label={
-            Boolean(gameState) && botsSupported
-              ? 'FINISH YOUR GAME FIRST'
-              : `PLAY ${selectedBotProfile.name.toUpperCase()} ▶`
-          }
-          onPress={() =>
-            startBotGame({ mode: selectedBotMode, profileId: selectedBotProfile.id })
-          }
-        />
+    </Panel>
+  );
+
+  const battleRedProfile =
+    BOT_PROFILES.find((profile) => profile.id === battleRedProfileId) ?? BOT_PROFILES[0];
+  const battleBlueProfile =
+    BOT_PROFILES.find((profile) => profile.id === battleBlueProfileId) ?? BOT_PROFILES[0];
+  const battleLaunchBlocked = !botsSupported || Boolean(gameState);
+
+  const botBattleSection = (
+    <Panel tone="accent">
+      <SectionHeading eyebrow="BOT ARENA" title="Watch bot vs bot" />
+      <Text style={styles.helpText}>
+        Pick both fighters, then start either mode. They run at full device speed while
+        RPSFish fills the evaluation, chart, and move-by-move review live.
+      </Text>
+      <BotLevelPicker
+        label="RED BOT"
+        onSelect={setBattleRedProfileId}
+        selectedProfileId={battleRedProfile.id}
+      />
+      <BotLevelPicker
+        label="BLUE BOT"
+        onSelect={setBattleBlueProfileId}
+        selectedProfileId={battleBlueProfile.id}
+      />
+      <View style={styles.modeActionButtons}>
+        {playableModes.map((mode) => {
+          return (
+            <View key={mode.id} style={styles.modeActionButton}>
+              <PrimaryButton
+                accessibilityLabel={`Watch ${battleRedProfile.name} fight ${battleBlueProfile.name} in ${mode.name}`}
+                disabled={battleLaunchBlocked}
+                label={`WATCH ${mode.name.toUpperCase()} ▶`}
+                onPress={() =>
+                  navigation.navigate('BotBattle', {
+                    blueProfileId: battleBlueProfile.id,
+                    mode,
+                    redProfileId: battleRedProfile.id,
+                  })
+                }
+              />
+            </View>
+          );
+        })}
       </View>
     </Panel>
   );
@@ -401,33 +463,9 @@ export default function LobbyScreen({ navigation }) {
       {challengeOpen && (
         <View style={styles.challengeForm}>
           <Text style={styles.helpText}>
-            Pick a mode and invite them. The challenge waits until they connect.
+            Enter a username, optionally set a starting position, then pick the mode to send.
+            One position covers both modes. The challenge waits until they connect.
           </Text>
-          <View style={styles.modeChips}>
-            {playableModes.map((mode) => {
-              const selected = selectedChallengeModeId === mode.id;
-              return (
-                <Pressable
-                  accessibilityLabel={`Challenge in ${mode.name}`}
-                  accessibilityRole="radio"
-                  accessibilityState={{ checked: selected }}
-                  disabled={Boolean(outgoingChallenge)}
-                  key={mode.id}
-                  onPress={() => setChallengeModeId(mode.id)}
-                  style={({ pressed }) => [
-                    styles.modeChip,
-                    selected && styles.modeChipSelected,
-                    Boolean(outgoingChallenge) && styles.disabled,
-                    pressed && styles.pressed,
-                  ]}
-                >
-                  <Text style={[styles.modeChipText, selected && styles.modeChipTextSelected]}>
-                    {mode.name}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </View>
           <View style={styles.challengeInputRow}>
             <TextInput
               accessibilityLabel="Username to challenge"
@@ -436,20 +474,52 @@ export default function LobbyScreen({ navigation }) {
               editable={!outgoingChallenge}
               maxLength={40}
               onChangeText={setChallengeUsername}
-              onSubmitEditing={submitChallenge}
               placeholder="Enter a username"
               placeholderTextColor={colors.textFaint}
-              returnKeyType="send"
+              returnKeyType="done"
               selectionColor={colors.accent}
               style={[styles.challengeInput, Boolean(outgoingChallenge) && styles.disabled]}
               value={challengeUsername}
             />
-            <PrimaryButton
-              accessibilityLabel="Send player challenge"
-              disabled={challengeActionsDisabled || !challengeUsername.trim()}
-              label="CHALLENGE"
-              onPress={submitChallenge}
-            />
+          </View>
+          <View style={styles.challengePositionList}>
+            <View style={styles.positionSetupRow}>
+              <View style={styles.positionSetupCopy}>
+                <Text style={styles.positionSetupTitle}>Starting position</Text>
+                <Text style={styles.positionSetupDetail}>
+                  {challengePosition ? 'Custom position' : 'Standard position'} · Used by whichever
+                  mode you send · Red moves first.
+                </Text>
+              </View>
+              {challengePosition && (
+                <GhostButton
+                  accessibilityLabel="Reset the challenge starting position"
+                  compact
+                  disabled={Boolean(outgoingChallenge)}
+                  label="RESET"
+                  onPress={() => setChallengePosition(null)}
+                />
+              )}
+              <GhostButton
+                accessibilityLabel="Configure the challenge starting position"
+                compact
+                disabled={Boolean(outgoingChallenge)}
+                label={challengePosition ? 'EDIT' : 'SET POSITION'}
+                onPress={() => setChallengePositionOpen(true)}
+              />
+            </View>
+          </View>
+          <View style={styles.modeActionButtons}>
+            {playableModes.map((mode) => (
+              <View key={mode.id} style={styles.modeActionButton}>
+                <PrimaryButton
+                  accessibilityLabel={`Challenge ${challengeUsername.trim() || 'player'} to ${mode.name}`}
+                  disabled={challengeActionsDisabled || !challengeUsername.trim()}
+                  label={`CHALLENGE ${mode.name.toUpperCase()} ▶`}
+                  onPress={() => submitChallenge(mode)}
+                />
+              </View>
+            ))}
           </View>
         </View>
       )}
@@ -507,6 +577,68 @@ export default function LobbyScreen({ navigation }) {
     </Panel>
   );
 
+  // Engines somebody is running on their own machine. Deliberately *not*
+  // gated on `botsSupported` like the panel above: that gate exists because
+  // the browser bots need RPSFish in a Worker, and an engine bot runs on
+  // somebody else's computer, so iOS can challenge one perfectly well.
+  const engineBotMode =
+    playableModes.find((mode) => mode.id === engineBotModeId) ?? playableModes[0] ?? null;
+  const onlineBotSection = (
+    <Panel>
+      <SectionHeading
+        eyebrow="PLAYERS' ENGINES"
+        title="Bots online"
+        trailing={
+          <View style={styles.engineBotHeading}>
+            <Badge
+              label={`${engineBots.length} ONLINE`}
+              tone={engineBots.length > 0 ? 'accent' : 'neutral'}
+            />
+            <GhostButton
+              compact
+              label="CONNECT ONE"
+              onPress={() => navigation.navigate('BotGuide')}
+            />
+          </View>
+        }
+      />
+      {engineBots.length === 0 ? (
+        <EmptyState
+          detail="Anyone can connect one — write a program that reads and writes lines."
+          title="No engines are connected"
+        />
+      ) : (
+        <>
+          {playableModes.length > 1 ? (
+            <View style={styles.engineBotModes}>
+              {playableModes.map((mode) => (
+                <GhostButton
+                  key={mode.id}
+                  compact
+                  label={mode.id === engineBotMode?.id ? `▸ ${mode.name}` : mode.name}
+                  onPress={() => setEngineBotModeId(mode.id)}
+                />
+              ))}
+            </View>
+          ) : null}
+          <View style={styles.liveList}>
+            {engineBots.map((bot) => (
+              <EngineBotRow
+                bot={bot}
+                disabled={challengeActionsDisabled || !engineBotMode}
+                key={bot.botId}
+                modeId={engineBotMode?.id}
+                onChallenge={() => challengeBot(bot.botId, engineBotMode?.id)}
+              />
+            ))}
+          </View>
+        </>
+      )}
+    </Panel>
+  );
+
+  const botSeriesSection = <BotSeriesPanel bots={engineBots} modes={playableModes} />;
+
   const tournamentSection = (
     <TournamentSpotlight onOpenBoard={() => navigation.navigate('Tournaments')} />
   );
@@ -556,8 +688,11 @@ export default function LobbyScreen({ navigation }) {
                 {challengeInbox}
                 {playSection}
                 {botSection}
+                {botBattleSection}
               </View>
               <View style={styles.sideColumn}>
+                {onlineBotSection}
+                {botSeriesSection}
                 {liveSection}
                 {friendSection}
               </View>
@@ -568,6 +703,9 @@ export default function LobbyScreen({ navigation }) {
               {challengeInbox}
               {playSection}
               {botSection}
+              {botBattleSection}
+              {onlineBotSection}
+              {botSeriesSection}
               {liveSection}
               {friendSection}
             </View>
@@ -579,6 +717,26 @@ export default function LobbyScreen({ navigation }) {
         mode={howToPlayMode}
         onClose={() => setHowToPlayMode(null)}
         visible={Boolean(howToPlayMode)}
+      />
+      <PositionSetupModal
+        initialPosition={challengePosition}
+        modes={playableModes}
+        onApply={(position) => {
+          setChallengePosition(position);
+          setChallengePositionOpen(false);
+        }}
+        onClose={() => setChallengePositionOpen(false)}
+        title="Challenge setup"
+        visible={challengePositionOpen}
+      />
+      <PGNImportModal
+        onClose={() => setPgnModalOpen(false)}
+        onLoad={(pgn) => {
+          reviewSourceFromPGN(pgn, modes);
+          setPgnModalOpen(false);
+          navigation.navigate('Review', { pgn });
+        }}
+        visible={pgnModalOpen}
       />
     </SafeAreaView>
   );
@@ -711,7 +869,26 @@ const styles = StyleSheet.create({
   searchTime: { color: colors.textMuted, fontSize: 10, marginTop: 1 },
 
   challengeForm: { marginTop: 12 },
+  positionSetupRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    padding: 10,
+    borderRadius: radius.medium,
+    backgroundColor: colors.surfaceSunken,
+  },
+  positionSetupCopy: { flex: 1 },
+  positionSetupTitle: { color: colors.textSoft, fontSize: 10, fontWeight: '900' },
+  positionSetupDetail: { color: colors.textFaint, fontSize: 8, marginTop: 2 },
+  challengePositionList: { gap: 8, marginTop: 12 },
   helpText: { color: colors.textMuted, fontSize: 11, lineHeight: 17 },
+  botPickerLabel: {
+    color: colors.textFaint,
+    fontSize: 8,
+    fontWeight: '900',
+    letterSpacing: 1.2,
+    marginTop: 14,
+  },
   // Six difficulty tiles wrap into as many rows as the column allows, so the
   // whole ladder is visible at a glance on a phone and in one row on desktop.
   botLevels: { flexDirection: 'row', flexWrap: 'wrap', gap: 7, marginTop: 13 },
@@ -740,18 +917,8 @@ const styles = StyleSheet.create({
   botLevelRating: { color: colors.textFaint, fontSize: 9, fontWeight: '800', marginTop: 2 },
   botLevelRatingSelected: { color: colors.accentSoft },
   botBlurb: { color: colors.textDim, fontSize: 11, lineHeight: 17, marginTop: 11 },
-  botLaunch: { marginTop: 13 },
-  modeChips: { flexDirection: 'row', flexWrap: 'wrap', gap: 7, marginTop: 12 },
-  modeChip: {
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    borderRadius: radius.small,
-    borderWidth: 1,
-    borderColor: colors.borderStrong,
-  },
-  modeChipSelected: { backgroundColor: colors.accentSurfaceStrong, borderColor: colors.accent },
-  modeChipText: { color: colors.textMuted, fontSize: 10, fontWeight: '800' },
-  modeChipTextSelected: { color: colors.accentSoft },
+  modeActionButtons: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 13 },
+  modeActionButton: { flexBasis: 180, flexGrow: 1 },
   challengeInputRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 12 },
   challengeInput: {
     flex: 1,
@@ -765,6 +932,8 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
 
+  engineBotHeading: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  engineBotModes: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 },
   liveList: { gap: 1, marginTop: 8 },
   liveRow: {
     minHeight: 54,

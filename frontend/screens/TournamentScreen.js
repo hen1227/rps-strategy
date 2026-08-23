@@ -26,8 +26,9 @@ import {
   createTournament,
   setMatchResult,
   startTournament,
-  verifyAdminToken,
 } from '../store/tournamentApi';
+import { useAdminToken } from '../store/useAdminToken';
+import { enrollBotsInTournament } from '../store/engineBotApi';
 import {
   matchesOf,
   playedMatchCount,
@@ -36,32 +37,6 @@ import {
   statusOf,
 } from '../store/tournamentSelectors';
 import { colors, radius } from '../theme';
-
-const ADMIN_TOKEN_STORAGE_KEY = 'rpsAdminToken';
-
-const readSavedAdminToken = () => {
-  try {
-    return globalThis.localStorage?.getItem(ADMIN_TOKEN_STORAGE_KEY)?.trim() ?? '';
-  } catch {
-    return '';
-  }
-};
-
-const saveAdminToken = (token) => {
-  try {
-    globalThis.localStorage?.setItem(ADMIN_TOKEN_STORAGE_KEY, token);
-  } catch {
-    // Storage can be unavailable in restricted browser contexts.
-  }
-};
-
-const clearSavedAdminToken = () => {
-  try {
-    globalThis.localStorage?.removeItem(ADMIN_TOKEN_STORAGE_KEY);
-  } catch {
-    // There is nothing else to clear when storage is unavailable.
-  }
-};
 
 export default function TournamentScreen({ navigation }) {
   const accountId = useGameStore((state) => state.accountId);
@@ -86,8 +61,8 @@ export default function TournamentScreen({ navigation }) {
   const [notice, setNotice] = useState(null);
 
   const [adminPanelOpen, setAdminPanelOpen] = useState(false);
+  const admin = useAdminToken();
   const [adminTokenDraft, setAdminTokenDraft] = useState('');
-  const [adminToken, setAdminToken] = useState(null);
   const [tournamentName, setTournamentName] = useState('');
   const [tournamentModeId, setTournamentModeId] = useState(null);
 
@@ -110,32 +85,14 @@ export default function TournamentScreen({ navigation }) {
     queue.isSearching ||
     Boolean(spectatedGameId) ||
     Boolean(outgoingChallenge);
-  const adminUnlocked = Boolean(adminToken);
+  const adminUnlocked = admin.unlocked;
+  const adminToken = admin.token;
   const isBusy = busyAction !== null;
   const signup = selected ? signupFor(selected, accountId) : null;
 
   useEffect(() => {
     loadTournaments();
   }, [loadTournaments]);
-
-  useEffect(() => {
-    if (!adminPanelOpen || adminToken) return;
-
-    const savedToken = readSavedAdminToken();
-    if (!savedToken) return;
-
-    setBusyAction('unlock');
-    verifyAdminToken(savedToken)
-      .then(() => {
-        setAdminToken(savedToken);
-      })
-      .catch(() => {
-        clearSavedAdminToken();
-      })
-      .finally(() => {
-        setBusyAction(null);
-      });
-  }, [adminPanelOpen, adminToken]);
 
   const refresh = async () => {
     setRefreshing(true);
@@ -164,25 +121,17 @@ export default function TournamentScreen({ navigation }) {
   };
 
   const unlockAdmin = async () => {
-    const candidate = adminTokenDraft.trim();
-    if (!candidate) {
+    if (!adminTokenDraft.trim()) {
       setError('Paste the admin token first.');
       return;
     }
-    setBusyAction('unlock');
     setError(null);
-    saveAdminToken(candidate);
-    try {
-      await verifyAdminToken(candidate);
-      setAdminToken(candidate);
-      setAdminTokenDraft('');
+    if (await admin.unlock(adminTokenDraft)) {
       setNotice('Admin commands unlocked.');
-    } catch {
-      clearSavedAdminToken();
-      setAdminTokenDraft('');
-    } finally {
-      setBusyAction(null);
+    } else {
+      setError(admin.error);
     }
+    setAdminTokenDraft('');
   };
 
   const createNewTournament = async () => {
@@ -199,6 +148,20 @@ export default function TournamentScreen({ navigation }) {
       'start',
       () => startTournament(adminToken, selected.tournamentId),
       'Registration closed. Players can start their matches from the home screen.',
+    );
+
+  // Bots do not sign themselves up: their client is a pipe with no tournament
+  // awareness. The host enrols the ones that are online and opted in, and the
+  // server starts their matches when they come due.
+  const enrollBots = () =>
+    runAction(
+      'enroll-bots',
+      async () => {
+        const result = await enrollBotsInTournament(adminToken, selected.tournamentId);
+        await loadTournaments();
+        return result;
+      },
+      'Online bots enrolled.',
     );
 
   const updateResult = (match, result) =>
@@ -257,8 +220,7 @@ export default function TournamentScreen({ navigation }) {
                       compact
                       label="LOCK"
                       onPress={() => {
-                        clearSavedAdminToken();
-                        setAdminToken(null);
+                        admin.lock();
                         setNotice('Admin commands locked.');
                       }}
                     />
@@ -428,6 +390,23 @@ export default function TournamentScreen({ navigation }) {
                         Seed #{signup.signupOrder} · Discord: {signup.discord}
                       </Text>
                     </View>
+                  </View>
+                )}
+
+                {adminUnlocked && selected.status === 'registration' && (
+                  <View style={styles.hostAction}>
+                    <View style={styles.hostActionCopy}>
+                      <Text style={styles.cardTitle}>Add the engines</Text>
+                      <Text style={styles.helpText}>
+                        Enrols every bot that is online and set to enter tournaments.
+                      </Text>
+                    </View>
+                    <PrimaryButton
+                      compact
+                      disabled={isBusy}
+                      label="ENROL BOTS"
+                      onPress={enrollBots}
+                    />
                   </View>
                 )}
 

@@ -79,6 +79,7 @@ export const playBotGame = async ({
   blueBot,
   maxMoves = BOT_TUNING.maxMovesPerArenaGame,
   mode,
+  onAnalysis,
   onMove,
   redBot,
   signal,
@@ -95,6 +96,13 @@ export const playBotGame = async ({
     const bot = mover === 'Red' ? redBot : blueBot;
     const decision = await bot.chooseMove(game, { history, signal });
     if (!decision) break;
+
+    onAnalysis?.({
+      analysis: decision.analysis,
+      decision,
+      game,
+      moveNumber: moves.length,
+    });
 
     if (adjudicateResignations && decision.resigns) {
       game = {
@@ -114,6 +122,8 @@ export const playBotGame = async ({
     history.push(game);
     game = result.game;
     moves.push({
+      analysis: decision.analysis,
+      elapsedMs: decision.elapsedMs,
       from: decision.from,
       mover,
       rank: decision.rank,

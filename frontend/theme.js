@@ -82,6 +82,10 @@ const palette = {
     blue700: '#2f3f52',
     blue050: '#d8ecff',
 
+    // Review annotations need to stand apart from both player fields.
+    purple400: '#9b6fe8',
+    coral400: '#f0643e',
+
     // Signals: a live match, a tournament medal, a board annotation.
     live: '#e07a5f',
     liveSoft: '#f0b8a5',
@@ -174,6 +178,7 @@ export const players = {
         territory: palette.red500,
         tint: withAlpha(palette.red400, 0.42),
         tintBorder: withAlpha(palette.red200, 0.68),
+        territoryMark: withAlpha(palette.red050, 0.62),
     },
     Blue: {
         strong: palette.blue400,
@@ -184,6 +189,7 @@ export const players = {
         territory: palette.blue500,
         tint: withAlpha(palette.blue400, 0.42),
         tintBorder: withAlpha(palette.blue200, 0.68),
+        territoryMark: withAlpha(palette.blue050, 0.62),
     },
 };
 
@@ -197,14 +203,15 @@ export const board = {
     labelOnDark: withAlpha(palette.sand, 0.9),
 
     goalOutline: withAlpha(palette.white, 0.28),
-    selectionBorder: palette.gold500,
     selectionTint: withAlpha(palette.gold500, 0.50),
+    selectionMark: withAlpha(palette.gold200, 0.9),
     lastMoveFrom: withAlpha(palette.green400, 0.5),
     lastMoveTo: withAlpha(palette.green400, 0.7),
-    lastMoveOutline: withAlpha(palette.green300, 0.72),
+    lastMoveMark: withAlpha(palette.green100, 0.72),
     moveHint: withAlpha(palette.ink950, 0.42),
     annotation: palette.orange,
     annotationTint: withAlpha(palette.orange, 0.78),
+    annotationMark: withAlpha(palette.white, 0.76),
 
     // Ranked engine suggestions: best line first.
     analysisArrows: [palette.green400, palette.blue300, palette.gold500],
@@ -214,11 +221,26 @@ export const board = {
 // always with `colors.textInverse` on top.
 export const moveQuality = {
     best: palette.green400,
+    great: palette.purple400,
     excellent: palette.blue300,
     good: palette.green300,
     inaccuracy: palette.gold500,
     mistake: palette.orange,
-    blunder: palette.red400,
+    blunder: palette.coral400,
+};
+
+// The game review timeline uses brighter layered fills than the surrounding
+// cards so small changes in expected score remain visible at a glance.
+export const evaluationChart = {
+    background: palette.ink950,
+    blueArea: palette.blue700,
+    blueHighlight: palette.blue400,
+    redArea: palette.red700,
+    redHighlight: palette.red400,
+    line: palette.ink100,
+    lineGlow: withAlpha(palette.ink950, 0.55),
+    selection: palette.green400,
+    selectionWash: withAlpha(palette.green400, 0.16),
 };
 
 // The analysis eval bar: two player-coloured halves with a floating score.
@@ -248,7 +270,7 @@ export const clock = {
 // Shared shadow recipes so raised surfaces match across screens.
 export const shadows = {
     board: [{offsetX: 0, offsetY: 10, blurRadius: 16, color: withAlpha(palette.ink950, 0.38)}],
-    piece: [{offsetX: 0, offsetY: 7, blurRadius: 7, color: withAlpha(palette.ink950, 0.45)}],
+    piece: [{offsetX: 0, offsetY: 6, blurRadius: 4, color: withAlpha(palette.ink950, 0.58)}],
     banner: [{offsetX: 0, offsetY: 5, blurRadius: 8, color: withAlpha(palette.ink950, 0.36)}],
     modal: [{offsetX: 0, offsetY: 12, blurRadius: 22, color: withAlpha(palette.ink950, 0.55)}],
 };

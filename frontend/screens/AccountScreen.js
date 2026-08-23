@@ -11,14 +11,25 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import {
   Banner,
+  GhostButton,
   LabeledInput,
   Panel,
   PrimaryButton,
   SectionHeading,
 } from '../components/ui';
+import AccountAuthPanel from '../components/AccountAuthPanel';
+import BotManagerPanel from '../components/BotManagerPanel';
 import { getAccount, updateAccount } from '../store/accountApi';
 import { useGameStore } from '../store/gameStore';
+import { isReservedIn, useIdentityPolicy } from '../store/identityPolicy';
 import { colors, radius } from '../theme';
+
+// The account screen, which is now first and foremost where you get an
+// account. Everyone plays under a name the server gave them until they claim
+// one, so the sign-up panel stands where the name field used to.
+
+const MINIMUM_DISCORD_LENGTH = 2;
+const MAXIMUM_DISCORD_LENGTH = 64;
 
 const visibleName = (account) =>
   account?.username && account.username.toLowerCase() !== 'guest' ? account.username : '';
@@ -45,43 +56,39 @@ const modeRatingRows = (account, modes) => {
     });
 };
 
-const isReserved = (value) => {
-  const normalized = value.trim().replace(/^@/, '').toLowerCase();
-  return normalized === 'henhen1227' || normalized === 'webgoatguy';
-};
-
 export default function AccountScreen({ navigation }) {
+  const policy = useIdentityPolicy();
   const accountId = useGameStore((state) => state.accountId);
-  const profileKey = useGameStore((state) => state.profileKey);
+  const sessionToken = useGameStore((state) => state.sessionToken);
   const storedAccount = useGameStore((state) => state.account);
   const modes = useGameStore((state) => state.modes);
   const applyAccountUpdate = useGameStore((state) => state.applyAccountUpdate);
+  const signOut = useGameStore((state) => state.signOut);
+
   const [account, setAccount] = useState(storedAccount);
-  const [displayName, setDisplayName] = useState(() => visibleName(storedAccount));
-  const [discord, setDiscord] = useState(storedAccount?.discord ?? '');
+  // Null until something is typed, so the fields follow the account until the
+  // player takes them over.
+  const [edits, setEdits] = useState(null);
+  const [reservationToken, setReservationToken] = useState('');
   const [loading, setLoading] = useState(!storedAccount);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
   const [saved, setSaved] = useState(false);
-  const [reservationToken, setReservationToken] = useState('');
 
   useEffect(() => {
     if (!storedAccount) return;
     setAccount(storedAccount);
-    setDisplayName(visibleName(storedAccount));
-    setDiscord(storedAccount.discord ?? '');
     setLoading(false);
   }, [storedAccount?.updatedAtUnixMs]);
 
+  // Only a fallback: the lobby socket normally delivers the account before
+  // this screen opens. It matters when the socket has not come up yet.
   useEffect(() => {
     if (storedAccount) return;
     let cancelled = false;
     getAccount(accountId)
       .then((nextAccount) => {
-        if (cancelled) return;
-        setAccount(nextAccount);
-        setDisplayName(visibleName(nextAccount));
-        setDiscord(nextAccount.discord ?? '');
+        if (!cancelled) setAccount(nextAccount);
       })
       .catch((requestError) => {
         if (!cancelled) setError(requestError.message);
@@ -94,23 +101,48 @@ export default function AccountScreen({ navigation }) {
     };
   }, [accountId, storedAccount]);
 
+  const signedIn = Boolean(sessionToken && account?.registered);
+  const username = edits?.username ?? account?.username ?? '';
+  const discord = edits?.discord ?? account?.discord ?? '';
+  const setField = (field, value) => {
+    setEdits({ username, discord, [field]: value });
+    setSaved(false);
+  };
+
+  const trimmedUsername = username.trim();
+  const trimmedDiscord = discord.trim();
+  const needsReservationToken =
+    isReservedIn(policy, trimmedUsername) || isReservedIn(policy, trimmedDiscord);
+  const changed =
+    trimmedUsername !== (account?.username ?? '') || trimmedDiscord !== (account?.discord ?? '');
+  const canSave =
+    !saving &&
+    changed &&
+    trimmedUsername.length >= policy.minLength &&
+    trimmedUsername.length <= policy.maxLength &&
+    (trimmedDiscord === '' ||
+      (trimmedDiscord.length >= MINIMUM_DISCORD_LENGTH &&
+        trimmedDiscord.length <= MAXIMUM_DISCORD_LENGTH &&
+        !/\s/.test(trimmedDiscord))) &&
+    (!needsReservationToken || Boolean(reservationToken.trim()));
+
   const save = async () => {
     setSaving(true);
     setError(null);
     setSaved(false);
     try {
       const updated = await updateAccount(
-        accountId,
-        profileKey,
-        displayName.trim(),
-        discord.trim(),
+        account.userId,
+        sessionToken,
+        trimmedUsername,
+        trimmedDiscord,
         reservationToken.trim(),
       );
       setAccount(updated);
-      setDisplayName(updated.username);
-      setDiscord(updated.discord);
-      setSaved(true);
+      setEdits(null);
       setReservationToken('');
+      setSaved(true);
+      // Reconnects the lobby socket, so opponents see the new name at once.
       applyAccountUpdate(updated);
     } catch (requestError) {
       setError(requestError.message);
@@ -119,14 +151,6 @@ export default function AccountScreen({ navigation }) {
     }
   };
 
-  const canSave =
-    !saving &&
-    displayName.trim().length >= 1 &&
-    displayName.trim().length <= 40 &&
-    discord.trim().length >= 2 &&
-    discord.trim().length <= 64 &&
-    !/\s/.test(discord.trim());
-  const needsReservationToken = isReserved(displayName) || isReserved(discord);
   const ratingRows = modeRatingRows(account, modes);
   // The badge follows the mode the player actually plays rather than averaging
   // ratings that are deliberately independent.
@@ -134,7 +158,6 @@ export default function AccountScreen({ navigation }) {
     (best, rating) => (best && best.gamesPlayed >= rating.gamesPlayed ? best : rating),
     null,
   );
-  const saveDisabled = !canSave || (needsReservationToken && !reservationToken.trim());
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'right', 'bottom', 'left']}>
@@ -142,7 +165,7 @@ export default function AccountScreen({ navigation }) {
         <View style={styles.screen}>
           <View style={styles.topBar}>
             <Pressable
-              accessibilityLabel="Back to game modes"
+              accessibilityLabel="Return to lobby"
               accessibilityRole="button"
               onPress={() => navigation.goBack()}
               style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}
@@ -155,7 +178,9 @@ export default function AccountScreen({ navigation }) {
             <Text style={styles.eyebrow}>PLAYER PROFILE</Text>
             <Text style={styles.title}>Your account</Text>
             <Text style={styles.subtitle}>
-              These details appear to your opponent in every online game.
+              {account?.registered
+                ? 'These details appear to your opponent in every online game.'
+                : 'Claim a username and everything you have played so far comes with it.'}
             </Text>
           </View>
 
@@ -169,13 +194,17 @@ export default function AccountScreen({ navigation }) {
               <Panel style={styles.profilePanel} tone="accent">
                 <View style={styles.avatar}>
                   <Text style={styles.avatarText}>
-                    {(displayName.trim() || 'P').slice(0, 1).toUpperCase()}
+                    {(visibleName(account) || 'G').slice(0, 1).toUpperCase()}
                   </Text>
                 </View>
                 <View style={styles.profileIdentity}>
-                  <Text style={styles.profileName}>{displayName.trim() || 'New player'}</Text>
+                  <Text style={styles.profileName}>{visibleName(account) || 'Guest player'}</Text>
                   <Text style={styles.profileDiscord}>
-                    {discord.trim() ? `Discord: ${discord.trim()}` : 'Add your Discord username'}
+                    {signedIn
+                      ? trimmedDiscord
+                        ? `Discord: ${trimmedDiscord}`
+                        : 'No Discord handle yet'
+                      : 'Not signed in'}
                   </Text>
                 </View>
                 <View style={styles.eloBadge}>
@@ -188,68 +217,80 @@ export default function AccountScreen({ navigation }) {
                 </View>
               </Panel>
 
-              <Panel>
-                <SectionHeading eyebrow="PUBLIC DETAILS" title="Online identity" />
-                <Text style={styles.helper}>
-                  Use the name people know you by. Discord must not contain spaces.
-                </Text>
+              {signedIn ? (
+                <Panel>
+                  <SectionHeading
+                    eyebrow="PUBLIC DETAILS"
+                    title="Online identity"
+                    trailing={<GhostButton compact label="SIGN OUT" onPress={signOut} />}
+                  />
+                  <Text style={styles.helper}>
+                    Your username is what opponents see, what challenges are addressed to,
+                    and what you sign in with. Discord is optional, and how the host reaches
+                    you about tournaments.
+                  </Text>
 
-                <LabeledInput
-                  autoCapitalize="words"
-                  label="DISPLAY NAME"
-                  maxLength={40}
-                  onChangeText={(value) => {
-                    setDisplayName(value);
-                    setSaved(false);
-                  }}
-                  placeholder="Your display name"
-                  value={displayName}
-                />
-                <Text style={styles.characterCount}>{displayName.length}/40</Text>
-
-                <LabeledInput
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  label="DISCORD HANDLE"
-                  maxLength={64}
-                  onChangeText={(value) => {
-                    setDiscord(value);
-                    setSaved(false);
-                  }}
-                  placeholder="username or username#1234"
-                  value={discord}
-                />
-                <Text style={styles.characterCount}>{discord.length}/64</Text>
-
-                {needsReservationToken && (
                   <LabeledInput
                     autoCapitalize="none"
                     autoCorrect={false}
-                    label="SPECIAL TOKEN"
-                    onChangeText={setReservationToken}
-                    placeholder="Paste special token"
-                    secureTextEntry
-                    value={reservationToken}
+                    hint={`${policy.minLength}-${policy.maxLength} characters: letters, digits, and _ . -`}
+                    label="USERNAME"
+                    maxLength={policy.maxLength}
+                    onChangeText={(value) => setField('username', value)}
+                    placeholder="Your username"
+                    value={username}
                   />
-                )}
+                  <Text style={styles.characterCount}>
+                    {username.length}/{policy.maxLength}
+                  </Text>
 
-                {Boolean(error || saved) && (
-                  <View style={styles.banners}>
-                    <Banner message={error} onDismiss={() => setError(null)} tone="error" />
-                    {saved && <Banner message="Profile saved. Online play is reconnecting." />}
+                  <LabeledInput
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    label="DISCORD HANDLE"
+                    maxLength={MAXIMUM_DISCORD_LENGTH}
+                    onChangeText={(value) => setField('discord', value)}
+                    placeholder="username (optional)"
+                    value={discord}
+                  />
+                  <Text style={styles.characterCount}>
+                    {discord.length}/{MAXIMUM_DISCORD_LENGTH}
+                  </Text>
+
+                  {needsReservationToken && (
+                    <LabeledInput
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                      label="SPECIAL TOKEN"
+                      onChangeText={setReservationToken}
+                      placeholder="Paste special token"
+                      secureTextEntry
+                      value={reservationToken}
+                    />
+                  )}
+
+                  {Boolean(error || saved) && (
+                    <View style={styles.banners}>
+                      <Banner message={error} onDismiss={() => setError(null)} tone="error" />
+                      {saved && <Banner message="Profile saved. Online play is reconnecting." />}
+                    </View>
+                  )}
+
+                  <View style={styles.saveAction}>
+                    <PrimaryButton
+                      accessibilityLabel="Save profile"
+                      disabled={!canSave}
+                      label="SAVE PROFILE"
+                      loading={saving}
+                      onPress={save}
+                    />
                   </View>
-                )}
+                </Panel>
+              ) : (
+                <AccountAuthPanel />
+              )}
 
-                <View style={styles.saveAction}>
-                  <PrimaryButton
-                    accessibilityLabel="Save profile"
-                    disabled={saveDisabled}
-                    label="SAVE PROFILE"
-                    loading={saving}
-                    onPress={save}
-                  />
-                </View>
-              </Panel>
+              <BotManagerPanel onOpenGuide={() => navigation.navigate('BotGuide')} />
 
               <Panel>
                 <SectionHeading eyebrow="RANKED" title="Mode ratings" />
@@ -306,10 +347,18 @@ export default function AccountScreen({ navigation }) {
                   <Text style={styles.keyIconText}>◆</Text>
                 </View>
                 <View style={styles.keyCopy}>
-                  <Text style={styles.keyTitle}>Protected by a local account key</Text>
+                  <Text style={styles.keyTitle}>
+                    {account?.registered
+                      ? 'Yours on any device'
+                      : 'Held by this browser alone'}
+                  </Text>
                   <Text style={styles.keyBody}>
-                    This browser keeps a random private key and the server stores only its hash.
-                    Clearing this site’s browser data will create a new account.
+                    {account?.registered
+                      ? 'Your username and password work anywhere, and signing in on another '
+                        + 'device brings this account with them, ratings and history included.'
+                      : 'This browser keeps a random private key and the server stores only '
+                        + 'its hash. Clearing this site’s browser data would start a new '
+                        + 'account — claiming a username keeps this history for good.'}
                   </Text>
                   <Text style={styles.accountId} selectable>
                     Account ID: {accountId}
@@ -326,6 +375,20 @@ export default function AccountScreen({ navigation }) {
                 <Text style={styles.policyLinkText}>
                   What gets stored about you, and the rules of online play ›
                 </Text>
+              </Pressable>
+
+              {/*
+                Always shown rather than gated on knowing the token: the screen
+                itself asks for it, and hiding the door only means a host has to
+                remember a URL.
+              */}
+              <Pressable
+                accessibilityLabel="Open host account tools"
+                accessibilityRole="button"
+                onPress={() => navigation.navigate('Admin')}
+                style={({ pressed }) => [styles.policyLink, pressed && styles.pressed]}
+              >
+                <Text style={styles.policyLinkText}>Host tools: manage accounts ›</Text>
               </Pressable>
             </View>
           )}

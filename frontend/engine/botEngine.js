@@ -117,6 +117,7 @@ export const createBot = (profileOrId, options = {}) => {
       : profileOrId;
   const {
     analyze = analyzeExclusive,
+    analyzeRandomMoves = false,
     now = () => Date.now(),
     random = Math.random,
     sleep = wait,
@@ -157,16 +158,15 @@ export const createBot = (profileOrId, options = {}) => {
     const choice = choiceScoresFor(profile.choice, modeId);
     const manners = mannersScoresFor(profile.manners, modeId);
 
-    // The random roll happens first and skips the search entirely, which is
-    // both the cheapest way to be weak and the most human-looking one.
+    // The random roll normally skips the search entirely, which is both the
+    // cheapest way to be weak and the most human-looking one. A watched arena
+    // can opt into analysis for those moves without changing the choice.
     const rolledRandom = random() < choice.randomMoveChance;
     let analysis = null;
     let chosen = null;
     let reason = 'random';
 
-    if (rolledRandom) {
-      chosen = randomLegalMove(game, random);
-    } else {
+    if (!rolledRandom || analyzeRandomMoves) {
       try {
         analysis = await search(game, history, profile.search, signal);
       } catch (error) {
@@ -175,6 +175,14 @@ export const createBot = (profileOrId, options = {}) => {
         // legal move and the game continues.
         analysis = null;
       }
+    }
+
+    if (rolledRandom) {
+      // A watched bot battle still asks RPSFish to evaluate the position so
+      // its chart and move grade remain complete, but the weak bot keeps the
+      // random choice its profile called for.
+      chosen = randomLegalMove(game, random);
+    } else {
       const candidates = rankedCandidates(analysis, choice);
       if (candidates.length === 0) {
         chosen = randomLegalMove(game, random);

@@ -1,5 +1,10 @@
 const BOARD_SIZE = 9;
-const FILES = 'ABCDEFGHI';
+// The archive's squares, not a second convention: files a to i run left to
+// right and ranks 1 to 9 run from Blue's home boundary to Red's, exactly as
+// `backend/internal/notation` writes them. A review shows a stored game, so
+// the board it draws and the record it came from have to name a square the
+// same way.
+const FILES = 'abcdefghi';
 
 const otherColor = (color) => (color === 'Red' ? 'Blue' : 'Red');
 const inBounds = ({ x, y }) => x >= 0 && x < BOARD_SIZE && y >= 0 && y < BOARD_SIZE;
@@ -41,19 +46,50 @@ const repetitionKey = (game) =>
     ),
   ]);
 
-export const createAnalysisGame = (mode) => {
+const newGame = (mode, grid, currentTurn) => {
   const game = {
     endReason: null,
-    grid: createGrid(mode.startingPosition?.rows),
+    grid,
     id: `analysis-${mode.id}`,
     mode,
     moveNumber: 0,
-    currentTurn: 'Red',
+    currentTurn,
     status: 'InProgress',
     winner: 'Neutral',
   };
   return { ...game, repetitionHistory: [repetitionKey(game)] };
 };
+
+export const createAnalysisGame = (mode, startingPosition = mode.startingPosition) =>
+  newGame(mode, createGrid(startingPosition?.rows), 'Red');
+
+const SYMBOL_BY_PIECE = {
+  Blue: { Rock: 'R', Paper: 'P', Scissors: 'S' },
+  Red: { Rock: 'r', Paper: 'p', Scissors: 's' },
+};
+
+export const startingPositionFromGrid = (grid) => ({
+  rows: Array.from({ length: BOARD_SIZE }, (_, y) =>
+    Array.from({ length: BOARD_SIZE }, (_, x) => {
+      const tile = grid?.[y]?.[x];
+      return SYMBOL_BY_PIECE[tile?.occupantOwner]?.[tile?.occupant] ?? '.';
+    }).join(''),
+  ),
+});
+
+/**
+ * A board that starts from a given position rather than the mode's opening.
+ *
+ * Replaying an archived game needs this: the record stores the board it was
+ * actually played from, so a mode whose opening position was redesigned later
+ * still replays into the game that happened.
+ */
+export const createAnalysisGameFrom = (mode, grid, currentTurn = 'Red') =>
+  newGame(
+    mode,
+    grid.map((row) => row.map((tile) => ({ ...tile }))),
+    currentTurn === 'Blue' ? 'Blue' : 'Red',
+  );
 
 export const validMovesFor = (game, from) => {
   if (!game || game.status !== 'InProgress' || !inBounds(from)) return [];
@@ -129,23 +165,37 @@ export const applyAnalysisMove = (game, from, to) => {
     moveNumber: game.moveNumber + 1,
   };
 
-  if ((game.mode.id === 'V1' || game.mode.id === 'V5') && countPieces(grid, otherColor(mover)) === 0) {
+  // A mode that ends the game on a move never passes the turn — the server's
+  // modes return before `passTurn`, so the final position of a decided game
+  // still has the winner to move. Stalemate and repetition are adjudicated
+  // after the turn has already changed hands, so they keep it changed. The
+  // difference is visible in every archived record's `FinalFEN`, and the
+  // review replays those records.
+  const decide = (winner, endReason) => {
     next.status = 'Finished';
-    next.winner = mover;
-    next.endReason = 'annihilation';
+    next.winner = winner;
+    next.endReason = endReason;
+    next.currentTurn = mover;
+  };
+
+  if ((game.mode.id === 'V1' || game.mode.id === 'V5') && countPieces(grid, otherColor(mover)) === 0) {
+    decide(mover, 'annihilation');
   } else if (
     game.mode.id === 'V3' &&
     ((mover === 'Red' && to.y === 0) || (mover === 'Blue' && to.y === BOARD_SIZE - 1))
   ) {
-    next.status = 'Finished';
-    next.winner = mover;
-    next.endReason = 'infiltration';
+    decide(mover, 'infiltration');
   } else if (game.mode.id === 'V5') {
     const territory = territoryCounts(grid);
     if (territory.neutral === 0) {
-      next.status = 'Finished';
-      next.winner = territory.red === territory.blue ? 'Neutral' : territory.red > territory.blue ? 'Red' : 'Blue';
-      next.endReason = 'territory';
+      decide(
+        territory.red === territory.blue
+          ? 'Neutral'
+          : territory.red > territory.blue
+            ? 'Red'
+            : 'Blue',
+        'territory',
+      );
     }
   }
 
@@ -197,15 +247,6 @@ export const allValidMoves = (game) => {
   return moves;
 };
 
-export const moveLabel = ({ from, to }) =>
-  `${FILES[from.x]}${BOARD_SIZE - from.y}–${FILES[to.x]}${BOARD_SIZE - to.y}`;
+export const squareLabel = ({ x, y }) => `${FILES[x]}${y + 1}`;
 
-export const classifyMove = (bestScore, playedScore) => {
-  const loss = Math.max(0, (bestScore ?? playedScore) - playedScore);
-  if (loss <= 15) return { key: 'best', label: 'Best', loss };
-  if (loss <= 50) return { key: 'excellent', label: 'Excellent', loss };
-  if (loss <= 120) return { key: 'good', label: 'Good', loss };
-  if (loss <= 260) return { key: 'inaccuracy', label: 'Inaccuracy', loss };
-  if (loss <= 600) return { key: 'mistake', label: 'Mistake', loss };
-  return { key: 'blunder', label: 'Blunder', loss };
-};
+export const moveLabel = ({ from, to }) => `${squareLabel(from)}–${squareLabel(to)}`;
