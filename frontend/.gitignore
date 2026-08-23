@@ -46,3 +46,6 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# built by npm run build:worker
+public/rpsfish/rpsfish-worker.js

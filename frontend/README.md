@@ -3,8 +3,53 @@
 The production web build connects to `wss://api-rps.henhen1227.com/ws` and is
 published to the repository's `dist` branch.
 
+## Layout
+
+TypeScript throughout, with `strict` on, and no `.js` in `src/`.
+
+Routing is [Expo Router](https://docs.expo.dev/router/introduction/): a file in
+`src/app/` is a page, and `web.output` is `static`, so `expo export` writes one
+HTML file per page. Every page therefore has a real address that can be
+bookmarked, shared, and reloaded. Two consequences worth knowing before adding
+a page:
+
+- **No dynamic segments.** A `[gameId].tsx` route would have to be pre-generated
+  for every value it could take, and game ids are not knowable at build time, so
+  parameters travel in the query string instead — `/review?gameId=…`. Read them
+  with `useSettledSearchParams`, not `useLocalSearchParams`; a static file cannot
+  know its own query string, so the first render in the browser has to match the
+  pre-rendered HTML, which had none.
+- **The build runs in Node.** Anything with no server implementation — audio,
+  `window`, a worker — must not run during the first render. `GameSoundEffects`
+  shows the pattern.
+
+```
+src/
+  app/         one file per page; thin, they render a feature screen
+  features/    board, analysis, game, bots, tournaments, account, lobby, …
+  engine/      the rules, PGN, RPSFish, the bots — no React anywhere in here
+  store/       Zustand slices and the REST clients under store/api/
+  hooks/       the shared React behaviour: board layout, selection, replay,
+               the analysis walk and the interactive search
+  ui/          primitives and the Markdown renderer
+  navigation/  link builders; the only place a page's address is written
+  types/       the wire protocol, mirroring backend/internal/{game,server}
+```
+
+The four hooks in `src/hooks/` exist because four screens had four copies of
+each: `useBoardLayout` (one rule for how big the board is), `useBoardSelection`
+(tap a piece, tap where it goes), `useReplayCursor` (stepping along a line of
+positions), and `usePositionAnalysis` (the interactive search — as distinct from
+`useGameAnalysis`, which is the review walk that grades moves).
+
+The RPSFish worker is written in TypeScript too, in
+`src/engine/rpsfish/worker/`, and bundled to `public/rpsfish/rpsfish-worker.js`
+by `npm run build:worker`. It shares its message types with the client that
+drives it, so the two cannot drift. The built file is not checked in; `start`,
+`web`, `pretest` and `prebuild:web` all produce it first.
+
 Each game-mode card carries a **How to play** link that opens a per-mode rules
-card (`components/HowToPlayModal.js`): the mode's opening position, the piece
+card (`features/game/HowToPlayModal.tsx`): the mode's opening position, the piece
 matchups drawn with the real artwork, a movement diagram, and the mode's own win
 condition. Only the win condition is keyed by mode id, so an unrecognised mode
 falls back to its catalog objective.
@@ -36,7 +81,7 @@ player.
 
 Online games are reviewed from the record the server stored; bot games are
 reviewed from a record the browser writes itself, in the same dialect
-(`engine/pgn.js`), because the server never saw them. Reviewing an online game
+(`engine/pgn.ts`), because the server never saw them. Reviewing an online game
 does not leave the session, so its chat room stays open under the board while
 both players go over it, and the reviewing player's own accuracy is stored with
 the game.
@@ -48,9 +93,9 @@ the best move and the played move, so the two scores being subtracted were
 produced under identical conditions. Depth is chosen with the **Quick /
 Standard / Deep** switch.
 
-The walk itself is shared. `engine/gameAnalysis.js` holds one analysis session —
+The walk itself is shared. `engine/gameAnalysis.ts` holds one analysis session —
 hand it a line of play as it currently stands and it keeps the engine grading
-whatever part of it is not graded yet — and `hooks/useGameAnalysis.js` binds it
+whatever part of it is not graded yet — and `hooks/useGameAnalysis.ts` binds it
 to a screen. The review, the bot battle, and the analysis board all run through
 it, so a move cannot be Good on one screen and a Mistake on another, and a
 request can pick up where the last one stopped instead of regrading a game from
@@ -62,7 +107,7 @@ whoever is looking at a position right now — the analysis board, the hint
 button, a bot choosing its move — and a second lane grades whole games. That is
 what lets a game and the analysis of that game run at the same time.
 
-`scripts/reviewCalibration.mjs` fits the evaluation-to-expected-score curve the
+`scripts/reviewCalibration.mts` fits the evaluation-to-expected-score curve the
 grades and accuracies are built on; re-run it after an evaluation change and
 put the result in `WIN_PROBABILITY_SCALE`. See
 [`../docs/review.md`](../docs/review.md) for the whole design.
@@ -82,7 +127,7 @@ on — **Hint**, which draws RPSFish's own best move on the board, and **Undo**,
 which takes back the player's last move together with the bot's reply. There is
 no chat, because nobody is listening.
 
-Difficulty lives in `engine/botProfiles.js`, which is the only file to edit when
+Difficulty lives in `engine/bots/profiles.ts`, which is the only file to edit when
 tuning a bot. Each profile carries four groups of knobs:
 
 | Group | What it controls |
@@ -95,7 +140,7 @@ tuning a bot. Each profile carries four groups of knobs:
 A bot never resigns against a person. It will answer a draw offer, because the
 player made that offer, but a lost position gets played out so the win belongs
 to whoever earned it. The `resignBelow*` knobs therefore affect only
-`botArena.js --adjudicate`, an opt-in shortcut for exploratory measurement runs
+`bots/arena.ts --adjudicate`, an opt-in shortcut for exploratory measurement runs
 that is off by default — a recorded number should come from the bot that
 actually ships.
 
@@ -121,7 +166,7 @@ rather than a random one. Lower `maxTimeMs` first if the top bot feels slow.
 There is no per-profile node cap. One shared `BOT_TUNING.maxNodes` valve guards
 every search instead, sized well above what the deepest profile spends, because
 a per-profile node ceiling silently caps depth instead of letting the depth knob
-do it. `botProfiles.js` carries a measured depth-cost table for both modes;
+do it. `bots/profiles.ts` carries a measured depth-cost table for both modes;
 re-measure it after an engine change, since a faster engine makes every rung
 cheaper without making it stronger.
 
@@ -134,7 +179,7 @@ npm run arena -- --spread                 # root-score gaps, per mode
 npm run arena -- --selftest               # the harness checks itself
 ```
 
-`scripts/botArena.mjs` loads the shipped worker and WASM from `public/rpsfish/`
+`scripts/botArena.mts` loads the shipped worker and WASM from `public/rpsfish/`
 into a vm context and drives the real `createBot`, so what it measures is the
 path the app runs rather than a model of it. It plays paired colour-swapped
 games from seeded random openings and reports Elo with a 95% interval, the same
@@ -155,10 +200,10 @@ why the engine's MultiPV cap was raised from three lines to eight: it roughly
 triples the score range a profile has to be weak within. `BOT_TUNING` in the same file holds the settings that are
 not per-difficulty, including the always-strong search behind the hint button.
 
-`engine/botEngine.js` wraps a profile in a `createBot()` object whose only job
+`engine/bots/engine.ts` wraps a profile in a `createBot()` object whose only job
 is `chooseMove(game, { history })`. It holds no React state and touches no
 store, and its engine, random source, and clock are injectable, so the same bot
-can be driven by a stub for testing. `engine/botArena.js` uses exactly that
+can be driven by a stub for testing. `engine/bots/arena.ts` uses exactly that
 contract to play bots against each other — `playBotGame` for one game,
 `playBotPair` for one opening played twice with the colours swapped, and
 `playBotMatch` for a full match with statistics. A bot game in the app is
@@ -205,8 +250,8 @@ clocks, chat, spectating, and reconnection behave exactly as they do elsewhere.
 A floating call to action follows the player across every screen while one of
 their matches is waiting, including while they are spectating someone else's
 board, and disappears once they are sitting at their own game. Its rule lives in
-`store/useTournamentCall.js`, and the derivations behind it in
-`store/tournamentSelectors.js`, so the home screen, the tournament board, and
+`hooks/useTournamentCall.ts`, and the derivations behind it in
+`store/tournamentSelectors.ts`, so the home screen, the tournament board, and
 the floating bar always agree.
 
 The **Tournaments** button opens the full board: schedule, standings, and roster.
@@ -218,8 +263,8 @@ if verification fails or the host taps **Lock**. Tournament HTTP calls use
 `EXPO_PUBLIC_WS_URL` by changing `ws(s)` to `http(s)` and removing the trailing
 `/ws`.
 
-Shared visual tokens live in `theme.js` and shared controls in
-`components/ui.js`. A mode whose catalog entry has `playable: false` is listed
+Shared visual tokens live in `theme.ts` and shared controls in
+`ui/primitives.tsx`. A mode whose catalog entry has `playable: false` is listed
 under **Retired modes** with analysis only; the server refuses matchmaking,
 challenges, and new tournaments for it.
 
@@ -229,7 +274,7 @@ rating, record, and games the browser has already accumulated. A signed-in
 player can rename themselves and add a Discord handle from the same screen;
 nobody can set either without an account.
 
-`store/accountSession.js` owns the session token, holds it in `localStorage`,
+`store/accountSession.ts` owns the session token, holds it in `localStorage`,
 and reconnects the socket whenever it changes. The browser also generates a
 256-bit local profile key alongside its account UUID and keeps the raw key in
 `localStorage`; the socket authenticates with the session token when there is
