@@ -131,6 +131,15 @@ export type ChatSenderRole = 'player' | 'spectator';
 
 export interface ChatMessage {
   id: string;
+  /**
+   * The conversation this belongs to, which is what a client matches against.
+   * `gameId` below is only the board it was typed at: every game of a bot
+   * series shares one room, so the two are not the same thing there.
+   *
+   * Optional only for a server older than this field, which cannot have a
+   * room that is not a game anyway; the store falls back to `gameId` there.
+   */
+  roomId?: string;
   gameId: string;
   senderUserId: string;
   senderName: string;
@@ -192,6 +201,8 @@ export interface BotPresence {
   modes?: ModeID[];
   elo: number;
   modeRatings?: Partial<Record<ModeID, number>>;
+  /** The digest of this bot's icon, or absent when it has none. Feed it to `botIconUrl`. */
+  iconSha256?: string;
   busy: boolean;
   allowPublicPlay: boolean;
   clientVersion?: string;
@@ -262,6 +273,8 @@ export interface LeaderboardEntry {
   gamesPlayed: number;
   /** Set when the row's numbers describe one mode rather than the account. */
   modeId?: ModeID;
+  /** A bot's icon digest. Never set on the human board. See `botIconUrl`. */
+  iconSha256?: string;
 }
 
 /* ------------------------------------------------------------ tournaments -- */
@@ -456,15 +469,27 @@ export type ServerMessage =
   | { type: 'challenge_cancelled'; challenge?: Challenge; message?: string }
   | { type: 'challenge_unavailable'; challenge?: Challenge; message?: string }
   | { type: 'challenge_rejected'; message?: string }
-  | { type: 'match_found'; color?: PlayerColor; gameState?: GameState }
+  | {
+      type: 'match_found';
+      color?: PlayerColor;
+      gameState?: GameState;
+      chatMessages?: ChatMessage[];
+      chatRoomId?: string;
+    }
   | {
       type: 'game_rejoined';
       color?: PlayerColor;
       gameState?: GameState;
       reconnectDeadlineUnixMs?: number;
       chatMessages?: ChatMessage[];
+      chatRoomId?: string;
     }
-  | { type: 'spectator_joined'; gameState?: GameState; chatMessages?: ChatMessage[] }
+  | {
+      type: 'spectator_joined';
+      gameState?: GameState;
+      chatMessages?: ChatMessage[];
+      chatRoomId?: string;
+    }
   | { type: 'spectator_left' }
   | { type: 'spectate_unavailable'; message?: string }
   | { type: 'game_state'; gameState?: GameState; ratingUpdate?: RatingUpdate }

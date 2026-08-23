@@ -38,7 +38,7 @@ import type { BotPresence } from '@/types/protocol';
 // whether strangers may play it, and a series is strangers playing it.
 //
 // So the form is open to anybody, and what used to be an admin gate is now three
-// server-side limits: at most three pairs, at most three minutes each, and one
+// server-side limits: at most three pairs, at most ten minutes each, and one
 // running series per person. The HOST CONTROLS button below lifts all three for
 // somebody who holds the host token, which is what a fifty-pair run at a real
 // time control needs.
@@ -50,9 +50,16 @@ import type { BotPresence } from '@/types/protocol';
 
 /** What the public form may ask for. The server enforces the same numbers. */
 const PUBLIC_MAX_PAIRS = 3;
-const PUBLIC_MAX_MINUTES = 3;
-/** What the host may ask for, matching botSeriesMaxPairs on the server. */
+const PUBLIC_MAX_MINUTES = 10;
+/**
+ * An opening is a handful of moves off the book, not a position somebody else
+ * played into. The server allows up to botSeriesMaxOpeningPlies, which is what
+ * the host form still offers.
+ */
+const PUBLIC_MAX_PLIES = 6;
+/** What the host may ask for, matching the server's own ceilings. */
 const HOST_MAX_PAIRS = 100;
+const HOST_MAX_PLIES = 20;
 
 /** How many finished runs to list. The rest are on the ladder's own page. */
 const VISIBLE_RUNS = 5;
@@ -82,7 +89,7 @@ export default function BotSeriesPanel({ bots, modes }: BotSeriesPanelProps) {
   const [secondBotId, setSecondBotId] = useState<string | null>(null);
   const [modeId, setModeId] = useState<ModeID>(modes[0]?.id ?? 'V5');
   const [pairs, setPairs] = useState('2');
-  const [plies, setPlies] = useState('6');
+  const [plies, setPlies] = useState('3');
   const [seed, setSeed] = useState('');
   const [minutes, setMinutes] = useState('1');
 
@@ -92,6 +99,7 @@ export default function BotSeriesPanel({ bots, modes }: BotSeriesPanelProps) {
 
   const asHost = admin.unlocked;
   const maxPairs = asHost ? HOST_MAX_PAIRS : PUBLIC_MAX_PAIRS;
+  const maxPlies = asHost ? HOST_MAX_PLIES : PUBLIC_MAX_PLIES;
   const maxMinutes = asHost ? 60 : PUBLIC_MAX_MINUTES;
 
   const refresh = useCallback(async () => {
@@ -121,7 +129,7 @@ export default function BotSeriesPanel({ bots, modes }: BotSeriesPanelProps) {
         secondBotId,
         modeId,
         pairs: clamp(numeric(pairs, 2), 1, maxPairs),
-        openingPlies: clamp(numeric(plies, 6), 0, 20),
+        openingPlies: clamp(numeric(plies, 3), 0, maxPlies),
         // Passed through as text rather than parsed: the value a person pastes
         // here is one they copied off a finished run, and `Number.parseInt`
         // would round it before it ever left the browser.
@@ -191,7 +199,7 @@ export default function BotSeriesPanel({ bots, modes }: BotSeriesPanelProps) {
 
       <Text style={styles.help}>
         {asHost
-          ? 'Host limits: up to 100 pairs at any clock. The public form is capped at 3 pairs and 3 minutes each.'
+          ? 'Host limits: up to 100 pairs at any clock. The public form is capped at 3 pairs and 10 minutes each.'
           : `Up to ${PUBLIC_MAX_PAIRS} pairs at ${PUBLIC_MAX_MINUTES} minutes each, and one run at a time per person. Both engines have to be open to public play — or be yours.`}
       </Text>
 
@@ -245,7 +253,7 @@ export default function BotSeriesPanel({ bots, modes }: BotSeriesPanelProps) {
                 value={pairs}
               />
               <LabeledInput
-                hint="Random moves both bots start from"
+                hint={`Random moves both bots start from · max ${maxPlies}`}
                 keyboardType="number-pad"
                 label="OPENING PLIES"
                 onChangeText={setPlies}

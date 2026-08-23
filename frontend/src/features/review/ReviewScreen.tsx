@@ -38,6 +38,7 @@ import useReplayKeyboard from '@/hooks/useReplayKeyboard';
 import { useReplayCursor } from '@/hooks/useReplayCursor';
 import { links } from '@/navigation/links';
 import { getGamePGN, putGameAccuracy } from '@/store/api/review';
+import { roomSpansSeries } from '@/store/chatSelectors';
 import { useGameStore } from '@/store/gameStore';
 import { useReviewHandoff } from '@/store/reviewHandoff';
 import { colors, radius } from '@/theme';
@@ -199,6 +200,7 @@ export default function ReviewScreen() {
   // while they look at the board together.
   const liveGameId = useGameStore((state) => state.gameState?.gameId ?? null);
   const chatMessages = useGameStore((state) => state.chatMessages);
+  const chatRoomId = useGameStore((state) => state.chatRoomId);
   const chatVisible = useGameStore((state) => state.chatVisible);
   const showSpectatorMessages = useGameStore((state) => state.showSpectatorMessages);
   const isSpectating = useGameStore((state) => state.isSpectating);
@@ -504,6 +506,7 @@ export default function ReviewScreen() {
       onSend={sendChat}
       onToggleChat={toggleChat}
       onToggleSpectatorMessages={toggleSpectatorMessages}
+      series={roomSpansSeries(chatRoomId, liveGameId)}
       showSpectatorMessages={showSpectatorMessages}
       spectatorCount={0}
       wide={false}

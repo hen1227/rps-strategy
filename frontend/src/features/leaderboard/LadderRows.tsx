@@ -1,6 +1,7 @@
 import { StyleSheet, Text, View } from 'react-native';
 
 import BotIcon from '@/features/bots/BotIcon';
+import { botIconUrl } from '@/store/api/bots';
 import { useGameStore } from '@/store/gameStore';
 import { colors, radius, space, type } from '@/theme';
 import ListRow from '@/ui/ListRow';
@@ -61,7 +62,13 @@ export default function LadderRows({
           leading={
             <View style={styles.leading}>
               <Text style={[styles.rank, rankTone(entry.rank)]}>{entry.rank}</Text>
-              {showPortraits ? <BotIcon name={entry.username} size={28} /> : null}
+              {showPortraits ? (
+                <BotIcon
+                  name={entry.username}
+                  size={28}
+                  uri={botIconUrl(entry.userId, entry.iconSha256)}
+                />
+              ) : null}
             </View>
           }
           meta={record(entry)}

@@ -6,6 +6,7 @@ import { liveSnapshot, waitingCount, type LiveSnapshot } from './liveSelectors';
 import BotIcon from '@/features/bots/BotIcon';
 import SetupPreview from '@/features/game/SetupPreview';
 import { links } from '@/navigation/links';
+import { botIconUrl } from '@/store/api/bots';
 import { useGameStore } from '@/store/gameStore';
 import { playerName, seriesProgressLabel, seriesScoreLabel, seriesScoreOf } from '@/store/spectateSelectors';
 import { colors, radius, space, type } from '@/theme';
@@ -252,9 +253,13 @@ export default function LiveRail({ embedded }: LiveRailProps) {
 
         {snapshot.connectedBots.length > 0 ? (
           <Block count={snapshot.connectedBots.length} title="Engines online">
-            {snapshot.connectedBots.slice(0, 4).map((bot) => (
+            {snapshot.connectedBots.map((bot) => (
               <View key={bot.botId} style={styles.row}>
-                <BotIcon name={bot.name} size={26} />
+                <BotIcon
+                  name={bot.name}
+                  size={26}
+                  uri={botIconUrl(bot.botId, bot.iconSha256)}
+                />
                 <View style={styles.rowCopy}>
                   <Text numberOfLines={1} style={styles.rowTitle}>
                     {bot.name} <Text style={styles.dim}>({bot.elo})</Text>

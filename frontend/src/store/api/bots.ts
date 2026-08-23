@@ -84,6 +84,8 @@ export interface Bot {
   engineName?: string;
   engineAuthor?: string;
   engineModes?: ModeID[];
+  /** The digest of the icon its client sent, or absent when it sent none. */
+  iconSha256?: string;
   claimed: boolean;
   disabled: boolean;
   retired: boolean;
@@ -307,6 +309,21 @@ export const botGuide = () => request<BotGuide>('/api/bot/guide', { what: 'Loadi
 /** Where the client script and the example engine are served from. */
 export const botClientScriptUrl = `${API_URL}/api/bot/rpsbot.py`;
 export const exampleEngineUrl = `${API_URL}/api/bot/example_engine.py`;
+
+/**
+ * The URL of a bot's icon, or undefined when it has none.
+ *
+ * `id` is either of the two ids a bot has — the registry id an owner's page
+ * knows it by, or the account id it plays under, which is what a ladder row or
+ * a game record carries. The endpoint answers to both, so no list has to fetch
+ * an id it would otherwise never need.
+ *
+ * The digest goes in the query string rather than being ignored: it is what
+ * makes the answer cacheable for ever, since an icon that changes changes this
+ * URL. Without one the server still answers, but only briefly cacheable.
+ */
+export const botIconUrl = (id: string | undefined, digest: string | undefined) =>
+  id && digest ? `${API_URL}/api/bots/${id}/icon.png?v=${digest}` : undefined;
 
 /* --------------------------------------------------- account administration -- */
 // These take the host token, which `adminOnly` also accepts from a signed-in

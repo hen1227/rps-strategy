@@ -381,6 +381,7 @@ export const createBotSlice: StateCreator<GameStore, [], [], BotSlice> = (set, g
         validMoves: [],
         opponentReconnectDeadline: null,
         chatMessages: [],
+        chatRoomId: null,
         error: null,
       });
       publish();

@@ -12,8 +12,10 @@ import {
   PrimaryButton,
   SectionHeading,
 } from '@/ui/primitives';
+import BotIcon from './BotIcon';
 import {
   botClientScriptUrl,
+  botIconUrl,
   createBot,
   exampleEngineUrl,
   listMyBots,
@@ -168,6 +170,13 @@ export default function BotManagerPanel() {
         <View style={styles.list}>
           {bots.map((bot) => (
             <View key={bot.botId} style={styles.row}>
+              {/* The icon its client sent, which is the only place an owner can
+                  check that the PNG they pointed at actually arrived. */}
+              <BotIcon
+                name={bot.name}
+                size={34}
+                uri={botIconUrl(bot.botId, bot.iconSha256)}
+              />
               <View style={styles.rowCopy}>
                 <Text style={styles.rowName}>
                   {bot.name || 'Unclaimed slot'}{' '}
@@ -213,6 +222,8 @@ export default function BotManagerPanel() {
       <Text style={styles.help}>
         These switches take effect immediately, but rpsbot.conf on your machine re-applies
         its own values the next time the bot restarts. Edit the file for a lasting change.
+        The picture comes from the same file: point its icon line at a square PNG of at
+        most 128×128 and restart the bot.
       </Text>
     </Panel>
   );

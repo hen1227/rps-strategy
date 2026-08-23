@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Image, StyleSheet, Text, View } from 'react-native';
 
 import { colors, radius } from '@/theme';
@@ -33,19 +34,42 @@ const monogramOf = (name: string) => {
 /**
  * A bot's portrait.
  *
- * The six built-in browser bots have drawn ones. An engine somebody connected
- * from their own machine has no artwork and never will, so it gets a monogram
- * rather than the blank square this component used to return.
+ * Three kinds, in order of preference. The six built-in browser bots have drawn
+ * ones. An engine somebody connected from their own machine has whatever PNG its
+ * owner shipped with `rpsbot.py`, fetched from the server — see `botIconUrl`.
+ * Anything else falls back to a monogram, which is also where a picture that
+ * fails to load lands, rather than the blank square this component used to
+ * return.
  */
 export interface BotIconProps {
   /** One of the six built-in bots, which have drawn portraits. */
   profileId?: string;
   /** A connected engine's name, used for the monogram fallback. */
   name?: string;
+  /** An owner-supplied icon, from `botIconUrl`. */
+  uri?: string;
   size?: number;
 }
 
-export default function BotIcon({ profileId, name, size = 52 }: BotIconProps) {
+export default function BotIcon({ profileId, name, uri, size = 52 }: BotIconProps) {
+  // The URL that failed, rather than a flag: an owner who has just replaced a
+  // broken PNG gets a new URL, and that has to be tried rather than written off
+  // because the previous one was bad.
+  const [failedUri, setFailedUri] = useState<string | null>(null);
+
+  if (uri && uri !== failedUri) {
+    return (
+      <Image
+        accessible={false}
+        accessibilityIgnoresInvertColors
+        onError={() => setFailedUri(uri)}
+        resizeMode="contain"
+        source={{ uri }}
+        style={{ width: size, height: size, borderRadius: radius.small }}
+      />
+    );
+  }
+
   const source = profileId ? SOURCES[profileId] : undefined;
   if (source) {
     return (

@@ -1,6 +1,7 @@
 import { StyleSheet, Text, View } from 'react-native';
 
 import BotIcon from './BotIcon';
+import { botIconUrl } from '@/store/api/bots';
 import { colors } from '@/theme';
 import type { ModeID } from '@/types/game';
 import type { BotPresence } from '@/types/protocol';
@@ -42,7 +43,7 @@ export default function EngineBotRow({
 
   return (
     <View style={styles.row}>
-      <BotIcon name={bot.name} size={34} />
+      <BotIcon name={bot.name} size={34} uri={botIconUrl(bot.botId, bot.iconSha256)} />
       <View style={styles.copy}>
         <Text numberOfLines={1} style={styles.name}>
           {bot.name} <Text style={styles.rating}>({rating})</Text>

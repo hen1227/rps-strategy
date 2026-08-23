@@ -10,6 +10,7 @@ import {
 } from './localIdentity';
 import { createBotSlice, initialBotState } from './botSession';
 import { createSessionSlice } from './accountSession';
+import { chatRoomIdOf, withChatMessage } from './chatSelectors';
 import { WS_URL } from './serverConfig';
 import { isStandardSetup, standardSetup } from './setupSelectors';
 import { send } from './socketSend';
@@ -293,6 +294,12 @@ export interface LobbyState {
   validMoves: Position[];
   opponentReconnectDeadline: number | null;
   chatMessages: ChatMessage[];
+  /**
+   * The conversation `chatMessages` belongs to. Not always the game on screen:
+   * every game of a bot series shares one room, so following a run to its next
+   * board stays in the same chat as the board left behind.
+   */
+  chatRoomId: string | null;
   chatVisible: boolean;
   showSpectatorMessages: boolean;
 }
@@ -393,6 +400,7 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
   validMoves: [],
   opponentReconnectDeadline: null,
   chatMessages: [],
+  chatRoomId: null,
   chatVisible: true,
   showSpectatorMessages: true,
 
@@ -777,7 +785,8 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
           selectedTile: null,
           validMoves: [],
           opponentReconnectDeadline: null,
-          chatMessages: [],
+          chatMessages: message.chatMessages ?? [],
+          chatRoomId: chatRoomIdOf(message.chatRoomId, message.gameState?.gameId),
           error: null,
         });
         break;
@@ -797,6 +806,7 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
           validMoves: [],
           opponentReconnectDeadline: message.reconnectDeadlineUnixMs || null,
           chatMessages: message.chatMessages ?? [],
+          chatRoomId: chatRoomIdOf(message.chatRoomId, message.gameState?.gameId),
           error: null,
         });
         break;
@@ -816,6 +826,7 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
           validMoves: [],
           opponentReconnectDeadline: null,
           chatMessages: message.chatMessages ?? [],
+          chatRoomId: chatRoomIdOf(message.chatRoomId, message.gameState?.gameId),
           error: null,
         });
         break;
@@ -832,6 +843,7 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
           validMoves: [],
           opponentReconnectDeadline: null,
           chatMessages: [],
+          chatRoomId: null,
           error: null,
         });
         break;
@@ -846,6 +858,7 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
           validMoves: [],
           opponentReconnectDeadline: null,
           chatMessages: [],
+          chatRoomId: null,
           connectionStatus: 'connected',
           error: message.message ?? 'That game is no longer available to spectate.',
         });
@@ -874,9 +887,12 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
       case 'chat_message':
         set((state) => {
           const chatMessage = message.chatMessage;
-          if (!chatMessage || chatMessage.gameId !== state.gameState?.gameId) return {};
-          if (state.chatMessages.some((candidate) => candidate.id === chatMessage.id)) return {};
-          return { chatMessages: [...state.chatMessages, chatMessage].slice(-100) };
+          if (!chatMessage) return {};
+          // Matched on the room rather than the board on screen, so a message
+          // from the next game of a series lands in this conversation.
+          const room = chatRoomIdOf(state.chatRoomId, state.gameState?.gameId);
+          const chatMessages = withChatMessage(state.chatMessages, room, chatMessage);
+          return chatMessages === state.chatMessages ? {} : { chatMessages };
         });
         break;
       case 'spectator_left':
@@ -890,6 +906,7 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
             selectedTile: null,
             validMoves: [],
             chatMessages: [],
+            chatRoomId: null,
           });
         }
         break;
@@ -1259,6 +1276,7 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
       validMoves: [],
       opponentReconnectDeadline: null,
       chatMessages: [],
+      chatRoomId: null,
       error: null,
     });
   },

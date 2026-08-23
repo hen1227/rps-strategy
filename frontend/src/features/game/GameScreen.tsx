@@ -1,6 +1,15 @@
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Modal,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+  type LayoutChangeEvent,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import TerritoryMeter from '@/features/analysis/TerritoryMeter';
@@ -15,6 +24,7 @@ import { useSettled } from '@/hooks/useSettled';
 import { useSpectateContext } from '@/hooks/useSpectateContext';
 import { useTournamentCall } from '@/hooks/useTournamentCall';
 import { links } from '@/navigation/links';
+import { roomSpansSeries } from '@/store/chatSelectors';
 import { useGameStore } from '@/store/gameStore';
 import { useReviewHandoff } from '@/store/reviewHandoff';
 import { ruleSummary } from '@/store/setupSelectors';
@@ -39,6 +49,15 @@ interface WaitingMode {
     shortCode: string;
     waiting: number;
 }
+
+/**
+ * The top bar's height, before anything has been measured.
+ *
+ * Only a starting guess: the header is measured below, because what sits in it
+ * is not fixed. Starting from the plain case means a game with nothing extra up
+ * there never resizes its board after the first paint.
+ */
+const HEADER_HEIGHT = 54;
 
 const formatTimeControl = (timeControl: TimeControl | null | undefined) => {
     if (!timeControl) return 'Live';
@@ -810,6 +829,7 @@ export default function GameScreen() {
     const resignGame = useGameStore((state) => state.resignGame);
     const accountId = useGameStore((state) => state.accountId);
     const chatMessages = useGameStore((state) => state.chatMessages);
+    const chatRoomId = useGameStore((state) => state.chatRoomId);
     const liveGames = useGameStore((state) => state.liveGames);
     const spectatedGameId = useGameStore((state) => state.spectatedGameId);
     const spectateGame = useGameStore((state) => state.spectateGame);
@@ -851,14 +871,25 @@ export default function GameScreen() {
     // crash React reports as rendering more hooks than during the previous
     // render.
     const hasTerritory = gameState?.mode.features?.includes('territory');
+    // Everything above the board is measured rather than assumed, because it is
+    // not always the same height: a spectated game carries the rail that steers
+    // between boards, and a custom game an extra line of terms. Sizing the board
+    // as though the header were only ever the top bar is what pushed the bottom
+    // player bar — the clock — off the screen while watching two bots play.
+    const [headerHeight, setHeaderHeight] = useState(HEADER_HEIGHT);
+    const measureHeader = (event: LayoutChangeEvent) => {
+        const measured = Math.round(event.nativeEvent.layout.height);
+        setHeaderHeight((current) => (current === measured ? current : measured));
+    };
     // The live board is the tightest fit in the app: it has a player bar above
     // and below, and on a narrow screen the controls and the territory meter
-    // under those.
+    // under those. What the constants cover is everything the header does not —
+    // the two player bars, the gaps around the board, and the page's padding.
     const {boardSize, height, isWide} = useBoardLayout({
         minimum: 190,
         sidePanel: 390,
-        chrome: 190,
-        narrowChrome: hasTerritory ? 390 : 360,
+        chrome: headerHeight + 136,
+        narrowChrome: headerHeight + (hasTerritory ? 336 : 306),
     });
     // A refresh arrives here with nothing in the store: the socket has to come
     // back up and the game has to be asked for again before there is a board to
@@ -1128,6 +1159,7 @@ export default function GameScreen() {
             onSend={sendChat}
             onToggleChat={toggleChat}
             onToggleSpectatorMessages={toggleSpectatorMessages}
+            series={roomSpansSeries(chatRoomId, gameState.gameId)}
             showSpectatorMessages={showSpectatorMessages}
             spectatorCount={spectatorCount}
             wide={isWide}
@@ -1153,49 +1185,51 @@ export default function GameScreen() {
     return (
         <SafeAreaView style={styles.safeArea} edges={['top', 'right', 'bottom', 'left']}>
             <View style={styles.screen}>
-                <View style={styles.topBar}>
-                    <View style={styles.matchIdentity}>
-                        <Text style={styles.matchKicker}>
-                            {gameState.mode.shortCode} ·{' '}
-                            {gameState.status === 'Finished'
-                                ? 'FINAL'
-                                : bot
-                                    ? 'BOT GAME · UNRATED'
-                                    : isSpectating
-                                        ? 'SPECTATING LIVE'
-                                        : 'LIVE MATCH'}
-                        </Text>
-                        <Text style={styles.modeName}>{gameState.mode.name}</Text>
-                        {/*
-                          The terms this game was set up with, when they are not
-                          the usual ones. Players who accepted a custom game
-                          should not have to remember what they agreed to.
-                        */}
-                        {customTerms ? (
-                            <Text numberOfLines={2} style={styles.customTerms}>
-                                {customTerms}
+                <View onLayout={measureHeader}>
+                    <View style={styles.topBar}>
+                        <View style={styles.matchIdentity}>
+                            <Text style={styles.matchKicker}>
+                                {gameState.mode.shortCode} ·{' '}
+                                {gameState.status === 'Finished'
+                                    ? 'FINAL'
+                                    : bot
+                                        ? 'BOT GAME · UNRATED'
+                                        : isSpectating
+                                            ? 'SPECTATING LIVE'
+                                            : 'LIVE MATCH'}
                             </Text>
-                        ) : null}
+                            <Text style={styles.modeName}>{gameState.mode.name}</Text>
+                            {/*
+                              The terms this game was set up with, when they are not
+                              the usual ones. Players who accepted a custom game
+                              should not have to remember what they agreed to.
+                            */}
+                            {customTerms ? (
+                                <Text numberOfLines={2} style={styles.customTerms}>
+                                    {customTerms}
+                                </Text>
+                            ) : null}
+                        </View>
+                        <View style={styles.timeControlBadge}>
+                            <Text style={styles.timeControlLabel}>{bot ? 'OPPONENT' : 'TIME CONTROL'}</Text>
+                            <Text style={styles.timeControlValue} numberOfLines={1}>
+                                {bot ? bot.name : timeControlLabel}
+                            </Text>
+                        </View>
                     </View>
-                    <View style={styles.timeControlBadge}>
-                        <Text style={styles.timeControlLabel}>{bot ? 'OPPONENT' : 'TIME CONTROL'}</Text>
-                        <Text style={styles.timeControlValue} numberOfLines={1}>
-                            {bot ? bot.name : timeControlLabel}
-                        </Text>
-                    </View>
-                </View>
 
-                {isSpectating && (
-                    <SpectateRail
-                        blueName={playerName(gameState.bluePlayer, 'Blue player')}
-                        context={spectateContext}
-                        currentGameId={gameState.gameId}
-                        disabled={!isConnected}
-                        onWatch={spectateGame}
-                        pendingGameId={spectatedGameId}
-                        redName={playerName(gameState.redPlayer, 'Red player')}
-                    />
-                )}
+                    {isSpectating && (
+                        <SpectateRail
+                            blueName={playerName(gameState.bluePlayer, 'Blue player')}
+                            context={spectateContext}
+                            currentGameId={gameState.gameId}
+                            disabled={!isConnected}
+                            onWatch={spectateGame}
+                            pendingGameId={spectatedGameId}
+                            redName={playerName(gameState.redPlayer, 'Red player')}
+                        />
+                    )}
+                </View>
 
                 <GameTransition
                     gameKey={gameState.gameId}
