@@ -1,4 +1,4 @@
-import LobbyScreen from '@/features/lobby/LobbyScreen';
+import PlayOnlineScreen from '@/features/play/PlayOnlineScreen';
 import PageTitle from '@/navigation/PageTitle';
 
 export default function Page() {
@@ -6,7 +6,7 @@ export default function Page() {
     <>
       {/* The front page is the site, so it carries the bare name. */}
       <PageTitle />
-      <LobbyScreen />
+      <PlayOnlineScreen />
     </>
   );
 }

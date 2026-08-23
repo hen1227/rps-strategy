@@ -41,7 +41,7 @@ declare const self: {
   postMessage: (message: WorkerResponse) => void;
 };
 
-const MODE_CODES: Record<string, number> = { V1: 0, V5: 1, V3: 2 };
+const MODE_CODES: Record<string, number> = { V5: 1, V3: 2 };
 const COLOR_CODES: Record<string, number> = { Red: 0, Blue: 1 };
 const PIECE_OFFSETS: Record<string, number> = {
   'Red:Rock': 0,

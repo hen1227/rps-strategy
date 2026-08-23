@@ -29,6 +29,7 @@ import TerritoryMeter from '@/features/analysis/TerritoryMeter';
 import Board from '@/features/board/Board';
 import { capturedPieces } from '@/features/board/CapturedPieces';
 import PlayerBar from '@/features/game/PlayerBar';
+import { colourResultLabel } from '@/features/game/resultLabels';
 import { useBoardLayout } from '@/hooks/useBoardLayout';
 import type { GameAnalysisResult } from '@/hooks/useGameAnalysis';
 import useGameAnalysis from '@/hooks/useGameAnalysis';
@@ -117,19 +118,6 @@ const botBattlePGN = ({
     winner,
     result,
   });
-};
-
-const resultLabel = (winner: PlayerColor, endReason: string | null) => {
-  const result = winner === 'Neutral' ? 'Draw' : `${winner} wins`;
-  const reason: string | undefined = {
-    annihilation: 'annihilation',
-    infiltration: 'infiltration',
-    move_limit: 'move limit',
-    repetition: 'threefold repetition',
-    stalemate: 'stalemate',
-    territory: 'territory',
-  }[endReason ?? ''];
-  return reason ? `${result} by ${reason}` : result;
 };
 
 const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ? '' : 's'}`;
@@ -227,7 +215,7 @@ interface BattleOutcome {
 export default function BotBattleScreen() {
   const router = useRouter();
   const modes = useGameStore((state) => state.modes);
-  // The battle is described entirely by the URL, so `/bots/battle?mode=V5&red=
+  // The battle is described entirely by the URL, so `/battle?mode=V5&red=
   // crane&blue=snips` is a page somebody can link to or reload into.
   const { params, settled } = useSettledSearchParams<{
     mode: string;
@@ -519,7 +507,7 @@ function BotBattle({ blueProfile, mode, redProfile }: BotBattleProps) {
               {running
                 ? `${latestGame.currentTurn} is calculating`
                 : result
-                  ? resultLabel(result.winner, result.endReason)
+                  ? colourResultLabel(result.winner, result.endReason)
                   : 'Battle stopped'}
             </Text>
           </View>

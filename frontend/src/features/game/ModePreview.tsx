@@ -3,7 +3,13 @@ import { StyleSheet, Text, View } from 'react-native';
 import PieceIcon from '@/features/board/PieceIcon';
 import TileMark from '@/features/board/TileMark';
 import { board, colors, players, radius } from '@/theme';
-import type { ModeDefinition, ModeID, PlayablePiece, SideColor } from '@/types/game';
+import type {
+  ModeDefinition,
+  ModeID,
+  PlayablePiece,
+  SideColor,
+  StartingPosition,
+} from '@/types/game';
 
 const BOARD_SIZE = 9;
 const MODE_INFILTRATION = 'V3';
@@ -29,8 +35,14 @@ const PIECES_BY_SYMBOL: Record<string, { owner: SideColor; piece: PlayablePiece 
   s: { owner: 'Red', piece: 'Scissors' },
 };
 
-// The preview board is a fixed 116pt wide with 8pt of padding around it.
+// The default preview board, and the piece size that reads well inside it.
+// A smaller board scales the pieces with it rather than keeping them large,
+// which would turn nine ranks into one dark smudge.
+const PREVIEW_SIZE = 116;
 const PREVIEW_PIECE_SIZE = 11;
+
+const pieceSizeFor = (size: number) =>
+  Math.max(5, Math.round((size * PREVIEW_PIECE_SIZE) / PREVIEW_SIZE));
 
 // Mirrors `tintForTile` in the board: in Infiltration the far ranks are the
 // goal each side is running at, so the thumbnail marks them the same way.
@@ -50,16 +62,26 @@ const validRows = (rows: unknown): rows is string[] =>
 
 export interface ModePreviewProps {
   mode: ModeDefinition | null | undefined;
+  /**
+   * The board to draw, when it is not the mode's own. This is what makes the
+   * thumbnail work for a custom game: the mode still decides the tinting and
+   * the goal ranks, and the pieces are wherever the setup put them.
+   */
+  position?: StartingPosition | null;
+  /** Frame width in points. The board is square inside it. */
+  size?: number;
 }
 
-export default function ModePreview({ mode }: ModePreviewProps) {
-  const rows = validRows(mode?.startingPosition?.rows)
+export default function ModePreview({ mode, position, size = PREVIEW_SIZE }: ModePreviewProps) {
+  const custom = validRows(position?.rows) ? position.rows : null;
+  const rows = custom ?? (validRows(mode?.startingPosition?.rows)
     ? mode.startingPosition.rows
-    : DEFAULT_ROWS;
+    : DEFAULT_ROWS);
   const showsTerritory = mode?.features?.includes('territory');
+  const pieceSize = pieceSizeFor(size);
 
   return (
-    <View style={styles.frame} accessibilityElementsHidden>
+    <View style={[styles.frame, { width: size }]} accessibilityElementsHidden>
       <View style={styles.previewHeader}>
         <View style={styles.previewDot} />
         <View style={styles.previewLine} />
@@ -97,11 +119,7 @@ export default function ModePreview({ mode }: ModePreviewProps) {
                     <TileMark compact owner={piece.owner} variant="territory" />
                   )}
                   {piece && (
-                    <PieceIcon
-                      piece={piece.piece}
-                      color={piece.owner}
-                      size={PREVIEW_PIECE_SIZE}
-                    />
+                    <PieceIcon piece={piece.piece} color={piece.owner} size={pieceSize} />
                   )}
                 </View>
               );
@@ -115,7 +133,6 @@ export default function ModePreview({ mode }: ModePreviewProps) {
 
 const styles = StyleSheet.create({
   frame: {
-    width: 116,
     padding: 8,
     borderRadius: radius.large,
     backgroundColor: colors.surfaceWell,

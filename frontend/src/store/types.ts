@@ -9,7 +9,14 @@
 import type { BotSlice } from './botSession';
 import type { SessionSlice } from './accountSession';
 import type { LobbySlice } from './gameStore';
-import type { ClockState, GameState, SideColor, TimeControl } from '@/types/game';
+import type {
+  ClockState,
+  GameSetup,
+  GameState,
+  PlayerProfile,
+  SideColor,
+  TimeControl,
+} from '@/types/game';
 
 export type GameStore = LobbySlice & BotSlice & SessionSlice;
 
@@ -41,6 +48,49 @@ export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 're
 export interface QueueState {
   isSearching: boolean;
   modeId: string | null;
+  /**
+   * The game being searched for. A plain search carries the mode's standard
+   * setup; a search with a clock or a rule changed carries that instead, which
+   * is why this is the whole setup rather than just a mode.
+   */
+  setup: GameSetup | null;
   searchRange: number;
-  queuedForMs: number;
+  /**
+   * The local-clock instant this wait began, so the label ticks by itself
+   * rather than only advancing when the server pushes.
+   *
+   * Anchored on receipt from the server's `queuedForMs`, which is a duration
+   * and therefore immune to the two clocks disagreeing. Storing the instant
+   * instead of the duration is also what makes "your wait is preserved" true
+   * after a no-show: nothing touches the anchor.
+   */
+  queuedSinceUnixMs: number | null;
+}
+
+/**
+ * A game that has been arranged but has not started, because somebody has to
+ * answer for it first.
+ *
+ * The two roles are genuinely different screens. `summoned` means the seat is
+ * yours to take and the clock is running on you; `present` means you are
+ * already in and the countdown belongs to the other person.
+ */
+export interface QueueClaim {
+  pendingId: string;
+  role: 'summoned' | 'present';
+  /** Absolute local-clock instant, anchored on receipt. */
+  deadlineUnixMs: number;
+  opponent: PlayerProfile;
+  opponentElo: number | null;
+  modeId: string;
+  modeName: string;
+  setup: GameSetup;
+  /** True from tapping the claim button until the game arrives. */
+  claiming: boolean;
+}
+
+/** Why the last hold came to nothing, shown briefly and then forgotten. */
+export interface QueueMiss {
+  message: string;
+  atUnixMs: number;
 }

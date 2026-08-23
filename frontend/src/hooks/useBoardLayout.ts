@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
 import { useWindowDimensions } from 'react-native';
 
+import { useSettled } from '@/hooks/useSettled';
 import { WIDE_LAYOUT_WIDTH } from '@/theme';
 
 // How big the board is, in one place.
@@ -15,18 +15,12 @@ import { WIDE_LAYOUT_WIDTH } from '@/theme';
 /**
  * The viewport, or nothing until the browser has one.
  *
- * Every page of this site is pre-rendered in Node at build time, where there is
- * no window at all. If the first render in the browser used the real dimensions
- * while the pre-rendered HTML used none, the two would disagree and React would
- * throw the whole pre-rendered page away as a hydration mismatch — so the first
- * client render deliberately matches the server, and the real size arrives one
- * render later.
+ * A build has no window, so the first client render reports no size either and
+ * the real one arrives a render later. See `useSettled` for why.
  */
 const useSettledDimensions = () => {
   const dimensions = useWindowDimensions();
-  const [settled, setSettled] = useState(false);
-  useEffect(() => setSettled(true), []);
-  return settled ? dimensions : { height: 0, width: 0 };
+  return useSettled() ? dimensions : { height: 0, width: 0 };
 };
 
 /**

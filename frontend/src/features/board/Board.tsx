@@ -46,7 +46,6 @@ const BOARD_SIZE = 9;
 // Files and ranks as the archive writes them, so a square named on the
 // board is the square named in the game's PGN.
 const FILES = 'abcdefghi';
-const MODE_ANNIHILATION = 'V1';
 const MODE_INFILTRATION = 'V3';
 const MODE_TOTAL_WAR = 'V5';
 const TILE_PERCENTAGE = 100 / BOARD_SIZE;
@@ -108,8 +107,6 @@ interface TileTint {
 }
 
 const tintForTile = (modeId: ModeID | undefined, tile: Tile): TileTint | null => {
-  if (modeId === MODE_ANNIHILATION) return null;
-
   if (modeId === MODE_INFILTRATION) {
     if (tile.y === 0) return { color: 'Red', kind: 'goal' };
     if (tile.y === BOARD_SIZE - 1) return { color: 'Blue', kind: 'goal' };

@@ -26,7 +26,8 @@ a page:
 ```
 src/
   app/         one file per page; thin, they render a feature screen
-  features/    board, analysis, game, bots, tournaments, account, lobby, …
+  app/(shell)/ the pages that sit inside the app shell — see below
+  features/    board, analysis, game, bots, tournaments, account, shell, live, …
   engine/      the rules, PGN, RPSFish, the bots — no React anywhere in here
   store/       Zustand slices and the REST clients under store/api/
   hooks/       the shared React behaviour: board layout, selection, replay,
@@ -35,6 +36,62 @@ src/
   navigation/  link builders; the only place a page's address is written
   types/       the wire protocol, mirroring backend/internal/{game,server}
 ```
+
+## The app shell
+
+Seven sections live inside one frame: **Play Online**, **Bots**, **Tournaments**,
+**Account**, **Leaderboard**, **Openings**, and — only for an account with the
+admin flag — **Admin**. On a wide screen that frame is a left sidebar, the
+section, and a floating right-hand rail of what is happening right now. On a
+phone it is a one-line header, the section, the rail collapsed to a single
+tappable line, and a bottom bar of four tabs plus **More**.
+
+They live in the route group `src/app/(shell)/`. A parenthesised directory
+contributes nothing to the URL, so every one of these pages keeps the address it
+already had — `/`, `/bots`, `/tournaments`, `/openings`, `/account`, `/admin` —
+and still exports as its own HTML file. A section may have pages *under* it:
+`/account/bots` is the engine registry and `/account/bots/connect` and
+`/account/bots/protocol` are the two documents behind it. Those are ordinary
+nested routes, so they export as their own files too and keep **Account** lit in
+the sidebar, and `PageHeading` gives them the one line of trail the sidebar
+cannot — nothing in a list of sections leads back from a reference page to the
+registry that sent you there. `(shell)/_layout.tsx` renders
+`features/shell/ShellLayout.tsx`, which uses `<Slot />` rather than a `Tabs`
+navigator: each section is a fresh mount with fresh data, which for a lobby is
+the behaviour you want, since the whole point of the page is what is true now.
+The live board, the analysis board, the review screen and the bot battle stay
+outside the shell, full-bleed, because a board wants the whole window.
+
+`features/shell/sections.ts` is the only list of sections. All three navigation
+surfaces read it, so adding one is one entry rather than three edits that have to
+agree, and the Admin entry's visibility is a predicate on the account rather than
+a condition repeated per surface.
+
+Two things to know before changing the responsive split. First, `useWideScreen`
+is false on the very first client render, always — the pages are pre-rendered in
+Node where there is no viewport, and the first render in the browser has to match
+— so the phone layout is what paints first and the desktop layout arrives one
+render later. Second, a child of `<Link asChild>` must be given **one resolved
+style object**: `StyleSheet.flatten([...])`, not an array and not the usual
+`({ pressed }) => [...]` function. Anything else is silently dropped, which the
+first version of the sidebar discovered by rendering every nav row with none of
+its own styles.
+
+## The live rail
+
+`features/live/liveSelectors.ts` turns store state into one `LiveSnapshot`: who
+is online, which live games are between people and which are one game of a bot
+series, who is waiting for an opponent, and whether a tournament needs
+attention. Pure functions, in the same spirit as `store/tournamentSelectors.ts`,
+because the desktop rail, the phone's collapsed bar and — later — the game
+screen all ask the same questions, and three copies of "is this row a bot fight"
+is how one of them ends up counting a tournament board twice.
+
+A bot fight is a live game carrying the server's own `series` marker, so the
+split needs no guess about who the players are. Your own open challenge stays on
+the board marked as yours, with a Cancel button rather than an Accept one: hiding
+it would lose the only feedback that a posted game is up, and offering it back
+would offer a game the server refuses.
 
 The four hooks in `src/hooks/` exist because four screens had four copies of
 each: `useBoardLayout` (one rule for how big the board is), `useBoardSelection`
@@ -114,7 +171,16 @@ put the result in `WIN_PROBABILITY_SCALE`. See
 
 ## Bots
 
-The home screen's **Play a bot** panel opens a practice board where RPSFish
+The **Bots** section is one screen: play a bot, watch two of them fight, and
+challenge an engine somebody connected. It used to be four sub-tabs, which is
+what a page becomes when unrelated things are filed on it — two of those tabs
+were not about playing at all. The bot ladder was the Leaderboard's own BOTS
+board rendered a second time, and the registry with both handouts under it
+belongs to whoever owns an engine, so it is now `/account/bots`. What is left
+fits without paging: one difficulty ladder picks your opponent *and* the red
+side of a battle, and the chips under it pick the blue side.
+
+The **Play a bot** panel opens a practice board where RPSFish
 plays the other side. It runs entirely in the browser — the same WebAssembly
 worker the analysis board uses — so the server never sees a bot move and a bot
 game keeps working while the connection is down.
@@ -212,7 +278,8 @@ move can be replayed rather than described.
 
 ### Bot battles
 
-The lobby can also put two bots on the board and let you watch. The battle
+The **Bots** section can also put two bots on the board and let you watch, at
+`/battle`. The battle
 screen is a live game and a game review at once: the board plays itself while
 RPSFish grades it, with an evaluation bar and chart, a grade on every move,
 ranked lines for whatever position is on screen, and an accuracy for each bot.
@@ -232,43 +299,70 @@ The finished game can be copied as a PGN and reopened in the review screen,
 since a battle is recorded in the same dialect as everything else.
 
 While a player is on the bot board the lobby still counts them: the server is
-told `bot_session_start`, publishes the total as `botPlayerCount`, and the home
-screen shows **"N playing bots"**. The bot board watches the other direction
+told `bot_session_start`, publishes the total as `botPlayerCount`, and the Bots
+section shows **"N playing bots"** while the live rail says how many people are
+practising. The bot board watches the other direction
 too. Because the server broadcasts matchmaking waits separately as
 `modeQueueCounts`, a bot game shows a live notice whenever a real player is
 looking for an opponent in any mode, with a button that joins that queue —
 keeping the bot game playable until the match is actually found, at which point
 the real game takes the board.
 
-The home screen leads with any tournament that needs attention: signup while
+**Play Online** leads with any tournament that needs attention: signup while
 registration is open, then your own scheduled matches and the event's live games
-once it starts. On wide screens it splits into a play column and a side column
-for live games, friend challenges, and retired modes. Tournament play reuses the
-ordinary game screen — readying up on a match starts a normal game session, so
+once it starts. Below that are the ranked mode cards, then one panel for custom
+games — pick a starting position and either name somebody or leave it open for
+whoever takes it first — then the board of open challenges other people have
+left, then the retired modes with analysis only. Tournament play reuses the
+ordinary game screen: readying up on a match starts a normal game session, so
 clocks, chat, spectating, and reconnection behave exactly as they do elsewhere.
 
 A floating call to action follows the player across every screen while one of
 their matches is waiting, including while they are spectating someone else's
 board, and disappears once they are sitting at their own game. Its rule lives in
 `hooks/useTournamentCall.ts`, and the derivations behind it in
-`store/tournamentSelectors.ts`, so the home screen, the tournament board, and
+`store/tournamentSelectors.ts`, so Play Online, the tournament board, and
 the floating bar always agree.
 
-The **Tournaments** button opens the full board: schedule, standings, and roster.
-**Host controls** accepts the backend's `RPS_ADMIN_TOKEN` and exposes tournament
-creation, start, and result-override commands. The browser remembers a verified
-token in local storage, retries it when host controls are opened, and forgets it
-if verification fails or the host taps **Lock**. Tournament HTTP calls use
+The **Tournaments** section is the full board: schedule, standings, roster, and
+an archive of every event that has finished, each opening into its own standings
+and champion. `store/tournamentSelectors.ts` owns the split — `currentTournaments`
+for what needs attention and `pastTournaments` for what happened — because mixing
+them made a finished event look like something to sign up for.
+
+Administration has two doors, and `hooks/useAdminToken.ts` is both. A signed-in
+account with the admin flag is one already: the server accepts their session
+token on every admin route, `connection_ready.account.isAdmin` says so before any
+request is made, and they never see a token form or a **Lock** button. The shared
+`RPS_ADMIN_TOKEN` is the other door, for a host running the server without an
+account; the browser remembers a verified token in local storage, retries it when
+host controls are opened, and forgets it if verification fails or the host taps
+**Lock**. Tournament HTTP calls use
 `EXPO_PUBLIC_API_URL` when set; otherwise the API origin is derived from
 `EXPO_PUBLIC_WS_URL` by changing `ws(s)` to `http(s)` and removing the trailing
 `/ws`.
 
-Shared visual tokens live in `theme.ts` and shared controls in
-`ui/primitives.tsx`. A mode whose catalog entry has `playable: false` is listed
-under **Retired modes** with analysis only; the server refuses matchmaking,
-challenges, and new tournaments for it.
+Shared visual tokens live in `theme.ts` — colour, `radius`, and now `space`,
+`type` and `contentWidth`, which exist because font sizes, weights,
+letter-spacings, gaps and page widths were inline numbers in every file, and
+"what size is a section heading" had eleven answers. Shared controls are in
+`ui/primitives.tsx`, alongside three that earned their place by removing real
+duplication: `ModalCard` (the backdrop, card and close button that three dialogs
+each wrote out), `ScreenShell` (page padding and width, replacing eleven
+hand-rolled headers), and `ListRow` (the table row the live games, the engine
+roster, the leaderboard and the open board all share).
 
-The lobby's **Account** button leads with registration: a player is "Guest"
+A mode whose catalog entry has `playable: false` is listed under **Retired
+modes** with analysis only; the server refuses matchmaking, challenges, and new
+tournaments for it.
+
+The **Leaderboard** is two boards over one route, and the combined one ranks each
+account by its strongest mode rather than by `accounts.elo` — that column is only
+the seed a new mode inherits, so a board ordered by it would sit everybody on
+1200 for ever. Each row names the mode its rating came from, because a number
+with no scope attached invites the reader to think this game has one rating.
+
+The **Account** section leads with registration: a player is "Guest"
 until they claim a username and password there, and claiming one keeps the
 rating, record, and games the browser has already accumulated. A signed-in
 player can rename themselves and add a Discord handle from the same screen;
@@ -329,3 +423,21 @@ sudo systemctl reload nginx
 If Certbot or another existing site file already owns this hostname, retain its
 TLS directives and merge the `root` and `location` blocks instead of replacing
 the file.
+
+**`/sw.js` and `/manifest.webmanifest` must not be cached for long.** The export
+puts both at the site root, and the service worker is what delivers a match
+notification to somebody who has closed the tab — so a worker pinned in a
+browser cache for a year is a worker that cannot be fixed. Serve them with
+`Cache-Control: no-cache`; the fingerprinted bundles under `_expo/` can be
+cached for as long as you like, as they always could.
+
+```nginx
+location = /sw.js              { add_header Cache-Control "no-cache"; }
+location = /manifest.webmanifest { add_header Cache-Control "no-cache"; }
+```
+
+The worker deliberately caches nothing itself — it has no `fetch` handler at
+all. Expo fingerprints its bundles per deploy, so a cache-first worker would go
+on serving an HTML file pointing at chunks that no longer exist. To retire it
+entirely, deploy an `sw.js` whose whole body is
+`self.registration.unregister()`.

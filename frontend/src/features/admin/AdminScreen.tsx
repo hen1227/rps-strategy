@@ -1,7 +1,7 @@
-import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
-import { Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 
+import ScreenShell from '@/ui/ScreenShell';
 import {
   Badge,
   Banner,
@@ -20,7 +20,7 @@ import {
   updateAccountFlags,
   type AccountSummary,
 } from '@/store/api/bots';
-import { colors, radius } from '@/theme';
+import { colors, contentWidth, radius, space, type } from '@/theme';
 
 // Account administration.
 //
@@ -29,7 +29,6 @@ import { colors, radius } from '@/theme';
 // take a deliberate navigation to reach.
 
 export default function AdminScreen() {
-  const router = useRouter();
   const admin = useAdminToken();
   const [draft, setDraft] = useState('');
   const [query, setQuery] = useState('');
@@ -74,45 +73,50 @@ export default function AdminScreen() {
   };
 
   const header = (
-    <View style={styles.topBar}>
-      <Pressable onPress={() => router.back()}>
-        <Text style={styles.back}>‹ BACK</Text>
-      </Pressable>
-      <Text style={styles.title}>Accounts</Text>
-      {admin.unlocked ? <GhostButton compact label="LOCK" onPress={admin.lock} /> : <View />}
-    </View>
+    <SectionHeading
+      eyebrow="ADMINISTRATION"
+      title="Accounts"
+      // Nothing to lock when the credential is who you are rather than
+      // something you pasted.
+      trailing={
+        admin.unlocked && !admin.bySession ? (
+          <GhostButton compact label="LOCK" onPress={admin.lock} />
+        ) : null
+      }
+    />
   );
 
   if (!admin.unlocked) {
     return (
-      <SafeAreaView style={styles.safeArea}>
-        <ScrollView contentContainerStyle={styles.content}>
-          {header}
-          <Panel>
-            <SectionHeading eyebrow="PRIVATE" title="Host controls" />
-            {admin.error ? <Banner message={admin.error} tone="error" /> : null}
-            <LabeledInput
-              label="ADMIN TOKEN"
-              onChangeText={setDraft}
-              secureTextEntry
-              value={draft}
-            />
-            <PrimaryButton
-              disabled={admin.verifying}
-              label="UNLOCK COMMANDS"
-              onPress={() => admin.unlock(draft).then((ok) => ok && setDraft(''))}
-            />
-          </Panel>
-        </ScrollView>
-      </SafeAreaView>
+      <ScreenShell width={contentWidth.reading}>
+        <Panel>
+          <SectionHeading eyebrow="PRIVATE" title="Host controls" />
+          <Text style={styles.help}>
+            Sign in with an administrator account and these tools open by themselves. This
+            form is the other door, for a host running the server without one.
+          </Text>
+          {admin.error ? <Banner message={admin.error} tone="error" /> : null}
+          <LabeledInput
+            label="ADMIN TOKEN"
+            onChangeText={setDraft}
+            secureTextEntry
+            value={draft}
+          />
+          <PrimaryButton
+            disabled={admin.verifying}
+            label="UNLOCK COMMANDS"
+            onPress={() => admin.unlock(draft).then((ok) => ok && setDraft(''))}
+          />
+        </Panel>
+      </ScreenShell>
     );
   }
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <ScrollView contentContainerStyle={styles.content}>
-        {header}
+    <ScreenShell width={contentWidth.wide}>
+      <>
         <Panel style={styles.adminPanel}>
+          {header}
           {error ? <Banner message={error} onDismiss={() => setError(null)} tone="error" /> : null}
           {notice ? <Banner message={notice} onDismiss={() => setNotice(null)} /> : null}
           <View style={styles.searchRow}>
@@ -209,17 +213,12 @@ export default function AdminScreen() {
             players. Its name is also rewritten inside every stored record.
           </Text>
         </Panel>
-      </ScrollView>
-    </SafeAreaView>
+      </>
+    </ScreenShell>
   );
 }
 
 const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: colors.background },
-  content: { padding: 16, gap: 12, maxWidth: 1100, width: '100%', alignSelf: 'center' },
-  topBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  back: { color: colors.textFaint, fontSize: 11, fontWeight: '800', letterSpacing: 1 },
-  title: { color: colors.textStrong, fontSize: 18, fontWeight: '800' },
   adminPanel: {
     borderColor: colors.goldBorder,
     backgroundColor: colors.goldSurfaceDeep,
@@ -242,5 +241,5 @@ const styles = StyleSheet.create({
   rowName: { color: colors.text, fontSize: 12, fontWeight: '800' },
   rowElo: { color: colors.textFaint, fontSize: 10, fontWeight: '600' },
   rowMeta: { color: colors.textFaint, fontSize: 10, marginTop: 2 },
-  help: { color: colors.textFaint, fontSize: 11, lineHeight: 16, marginTop: 12 },
+  help: { ...type.body, color: colors.textFaint, marginTop: space.medium },
 });

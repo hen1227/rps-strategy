@@ -52,15 +52,14 @@ export const WIN_PROBABILITY_SCALE: Partial<Record<ModeID, number>> = Object.fre
   // (`--games 150 --depth 8 --plies 400 --seed 20260821`). The comment is the
   // score at which the side to move expects three points in four, which is
   // the legible form of the same number.
-  V1: 0.006_187, // Annihilation, 75% at 178 centipawns
   // Total War was 0.003_848 (75% at 286cp) until the mode's territory
   // evaluation was re-priced (RPSFish EVAL_RESULTS.md H9). Re-fitted on the
   // same protocol on two fresh seeds: 0.003_380 (seed 6180339) and 0.003_091
   // (1414213), ~30,600 positions each. This is their mean.
   //
-  // Read the two control modes before trusting any single run of this script:
-  // re-measured on seed 6180339 with *unchanged* weights, V1 came back 5.5%
-  // low and V3 28% high, so one fit is not evidence of a shift. Two seeds
+  // Read the control modes before trusting any single run of this script:
+  // re-measured on seed 6180339 with *unchanged* weights, the since-retired V1
+  // came back 5.5% low and V3 28% high, so one fit is not evidence of a shift. Two seeds
   // agreeing in direction, on the mode with five times V3's sample, is. The
   // direction is what the re-pricing implies: Total War has two win
   // conditions and the evaluation now states the territory one far more
@@ -70,7 +69,7 @@ export const WIN_PROBABILITY_SCALE: Partial<Record<ModeID, number>> = Object.fre
   V3: 0.004_949, // Infiltration, 75% at 222 centipawns
 });
 
-// A mode nobody has calibrated yet gets the middle of the three rather than a
+// A mode nobody has calibrated yet borrows a measured scale rather than a
 // guess of its own.
 const DEFAULT_SCALE = 0.004_949;
 const MATE_THRESHOLD = 29_000;

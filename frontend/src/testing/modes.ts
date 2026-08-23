@@ -15,7 +15,6 @@ export const STANDARD_OPENING_ROWS = [
 ];
 
 const MODE_NAMES: Record<string, string> = {
-  V1: 'Annihilation',
   V5: 'Total War',
   V3: 'Infiltration',
 };
@@ -41,7 +40,5 @@ export const testMode = (
   ...overrides,
 });
 
-/** All three shipped modes, for a script that sweeps every one of them. */
-export const ALL_TEST_MODES: readonly ModeDefinition[] = ['V1', 'V5', 'V3'].map((id) =>
-  testMode(id),
-);
+/** Every shipped mode, for a script that sweeps all of them. */
+export const ALL_TEST_MODES: readonly ModeDefinition[] = ['V5', 'V3'].map((id) => testMode(id));

@@ -24,7 +24,7 @@ import type { Move, Position } from '@/types/game';
 //
 // A profile states its choice and manners knobs as multiples of a per-mode
 // unit, never as raw scores, because the two are not interchangeable: the same
-// number of centipawns is a wide net in Annihilation and a hair's breadth in
+// number of centipawns is a wide net in Total War and a hair's breadth in
 // Infiltration. `choiceScoresFor` and `mannersScoresFor` resolve them against
 // the mode actually being played, so the resolution happens once per decision
 // rather than being baked into the profile.

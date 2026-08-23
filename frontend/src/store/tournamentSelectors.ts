@@ -231,6 +231,35 @@ export const homeTournaments = (
     .sort((first, second) => homeRank(first, accountId) - homeRank(second, accountId))
     .slice(0, limit);
 
+/**
+ * Events that are over, most recent first.
+ *
+ * The counterpart to `homeTournaments`, which deliberately drops `completed`
+ * because the home screen is about what needs attention. A finished event needs
+ * none, but it is the only record of who won, so it belongs on the tournament
+ * board rather than nowhere.
+ */
+export const pastTournaments = (
+  tournaments: Tournament[] | null | undefined,
+): Tournament[] =>
+  (tournaments ?? [])
+    .filter((tournament) => tournament.status === 'completed')
+    .sort(
+      (first, second) =>
+        (second.completedAtUnixMs ?? second.createdAtUnixMs) -
+        (first.completedAtUnixMs ?? first.createdAtUnixMs),
+    );
+
+/** Events still worth acting on: signups open, or a round in progress. */
+export const currentTournaments = (
+  tournaments: Tournament[] | null | undefined,
+): Tournament[] =>
+  (tournaments ?? []).filter((tournament) => tournament.status !== 'completed');
+
+/** Who won, when an event has finished and anybody played in it. */
+export const championOf = (tournament: Tournament): string | null =>
+  tournament.status === 'completed' ? tournament.standings?.[0]?.ign ?? null : null;
+
 /** How many home-screen tournaments were left off by the cap. */
 export const hiddenHomeTournamentCount = (
   tournaments: Tournament[] | null | undefined,

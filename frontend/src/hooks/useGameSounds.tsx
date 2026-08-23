@@ -152,8 +152,43 @@ const useGameSounds = () => {
   ]);
 };
 
+/**
+ * Whether a summons is new enough to be worth a chime.
+ *
+ * Only the summoned side. Somebody who is already present and watching the
+ * other player be fetched gets the card arriving, which is enough — a chime for
+ * a countdown you are not on the wrong end of is noise.
+ */
+export const shouldSoundQueueSummon = (
+  previousPendingId: string | null,
+  claim: { pendingId: string; role: 'summoned' | 'present' } | null,
+): boolean =>
+  Boolean(claim && claim.role === 'summoned' && claim.pendingId !== previousPendingId);
+
+/**
+ * The chime when a seat is being held for you.
+ *
+ * It lives with the game sounds rather than in the call-out, because
+ * `GameSoundEffects` is already the one component that owns audio and already
+ * loads this exact file. Autoplay is not a concern: joining the queue was a
+ * click, which unlocks the tab's audio for its lifetime. The sound is a bonus
+ * on top of the card and the notification, never the mechanism.
+ */
+const useQueueSummonSound = () => {
+  const claim = useGameStore((state) => state.claim);
+  const notifyPlayer = useAudioPlayer(SOUND_SOURCES.notify);
+  const lastSounded = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!shouldSoundQueueSummon(lastSounded.current, claim)) return;
+    lastSounded.current = claim?.pendingId ?? null;
+    replay(notifyPlayer);
+  }, [claim, notifyPlayer]);
+};
+
 const GameSoundPlayers = () => {
   useGameSounds();
+  useQueueSummonSound();
   return null;
 };
 

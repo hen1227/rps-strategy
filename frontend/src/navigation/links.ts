@@ -34,9 +34,15 @@ export const links = {
   review: (gameId?: string): Href =>
     gameId ? { pathname: '/review', params: { gameId } } : '/review',
 
-  /** Two bots playing each other, watched. */
+  /**
+   * Two bots playing each other, watched.
+   *
+   * A full-bleed page rather than a lobby section, and addressed at the top
+   * level rather than under `/bots`, so that `/bots` belongs unambiguously to
+   * the Bots section of the shell.
+   */
   botBattle: (options: { mode?: ModeID; red?: string; blue?: string } = {}): Href => ({
-    pathname: '/bots/battle',
+    pathname: '/battle',
     params: {
       ...(options.mode ? { mode: options.mode } : {}),
       ...(options.red ? { red: options.red } : {}),
@@ -44,12 +50,37 @@ export const links = {
     },
   }),
 
-  /** The handout for bot authors. */
+  /** Playing bots: the practice ladder, the engines online, and their series. */
   bots: (): Href => '/bots',
 
   tournaments: (): Href => '/tournaments',
   openings: (): Href => '/openings',
+  leaderboard: (): Href => '/leaderboard',
   account: (): Href => '/account',
+
+  /**
+   * The engines you own, and the handout for writing one.
+   *
+   * Under `/account` rather than under `/bots` because a bot belongs to an
+   * account: the registry needs one to hang a token off, and the two documents
+   * are the deep end of that flow rather than of the page where people play a
+   * bot. Reading either therefore keeps Account lit in the sidebar, which is
+   * where you came from.
+   */
+  myBots: (): Href => '/account/bots',
+  botGuide: (): Href => '/account/bots/connect',
+  botProtocol: (): Href => '/account/bots/protocol',
   admin: (): Href => '/admin',
   policy: (): Href => '/policy',
+
+  /** The sections that do not fit a phone's tab bar. */
+  more: (): Href => '/more',
 } as const;
+
+/**
+ * The game this is all based on.
+ *
+ * Not a `links` entry because it is not a page of this site, and `Href` is a
+ * promise that Expo Router can resolve it.
+ */
+export const YOUTUBE_URL = 'https://www.youtube.com/watch?v=qC3SO1s5L6Q';

@@ -1,4 +1,6 @@
 import type { GradeKey } from '@/engine/gameReview';
+import type { TextStyle } from 'react-native';
+
 import type { SideColor } from '@/types/game';
 
 // One palette for the whole app. Screens and components import these tokens
@@ -302,6 +304,60 @@ export const shadows: Record<'board' | 'piece' | 'banner' | 'modal', ShadowLayer
 export const overlay = withAlpha(palette.ink950, 0.78);
 
 export const radius = { small: 6, medium: 9, large: 13, xlarge: 18 };
+
+// --------------------------------------------------------------------------
+// Spacing and type.
+//
+// These were the last magic numbers left. Every screen wrote its own font
+// sizes, weights, letter-spacings and gaps inline, which is how the same badge
+// ended up at 8px in one file and 9px in the next, and why "what size is a
+// section heading" had eleven answers. Naming them does not make the old files
+// wrong, but nothing new should invent a twelfth.
+// --------------------------------------------------------------------------
+
+/** The spacing steps this app actually uses, smallest first. */
+export const space = {
+  hair: 2,
+  tight: 4,
+  snug: 6,
+  small: 8,
+  medium: 12,
+  large: 16,
+  xlarge: 24,
+  xxlarge: 32,
+} as const;
+
+/**
+ * Named text roles rather than a size ramp, because a size on its own has never
+ * been the decision: an eyebrow is small *and* heavy *and* letter-spaced, and
+ * splitting that into three tokens would just move the guessing.
+ */
+export const type = {
+  /** The tiny all-caps kicker above a heading. */
+  eyebrow: { fontSize: 8, fontWeight: '900', letterSpacing: 1.4 },
+  /** Button and badge lettering. */
+  label: { fontSize: 9, fontWeight: '900', letterSpacing: 0.8 },
+  /** The dim second line of a row. */
+  meta: { fontSize: 10, lineHeight: 15 },
+  body: { fontSize: 11, lineHeight: 17 },
+  bodyStrong: { fontSize: 12, lineHeight: 18 },
+  /** The first line of a list row. */
+  rowTitle: { fontSize: 12, fontWeight: '800' },
+  cardTitle: { fontSize: 15, fontWeight: '900' },
+  sectionTitle: { fontSize: 18, fontWeight: '900' },
+  screenTitle: { fontSize: 22, fontWeight: '900' },
+  hero: { fontSize: 26, fontWeight: '800' },
+} as const satisfies Record<string, TextStyle>;
+
+/**
+ * How wide a page's content may get.
+ *
+ * Screens used to pick this by hand and picked eleven different numbers —
+ * 640, 760, 900, 1100, 1180, 1200, 1240 — none of which were decisions.
+ * `reading` is prose and forms, `standard` is a page of panels, `wide` is a
+ * page with a board or a table on it.
+ */
+export const contentWidth = { reading: 640, standard: 900, page: 1180, wide: 1240 } as const;
 
 // Layout breakpoint where a screen splits into two columns. Read it through
 // `useWideLayout` rather than comparing against it by hand.

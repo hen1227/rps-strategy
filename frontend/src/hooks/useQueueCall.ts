@@ -1,0 +1,99 @@
+import { useEffect, useMemo, useState } from 'react';
+
+import { useGameStore } from '@/store/gameStore';
+import { canOfferAlerts, usePushStore } from '@/store/push';
+import { lobbyGate, queueCallState, type LobbyGate, type QueueCall } from '@/store/queueSelectors';
+
+/**
+ * What this player is waiting on, recomputed often enough to look alive.
+ *
+ * The tick lives here rather than in `queueSelectors` so that module stays pure
+ * and testable. Its rate follows what is on screen: a thirty-second countdown
+ * needs to move smoothly, a ten-minute search needs a number that changes once
+ * a second, and an idle lobby needs no timer at all.
+ */
+const CLAIM_TICK_MS = 250;
+const SEARCH_TICK_MS = 1000;
+
+/** Whether the player is sitting at a real board. A bot game does not count. */
+const useAtOwnBoard = () => {
+  const gameState = useGameStore((state) => state.gameState);
+  const isSpectating = useGameStore((state) => state.isSpectating);
+  return Boolean(gameState) && !gameState?.bot && !isSpectating;
+};
+
+export const useQueueCall = (): QueueCall | null => {
+  const queue = useGameStore((state) => state.queue);
+  const claim = useGameStore((state) => state.claim);
+  const miss = useGameStore((state) => state.queueMiss);
+  const outgoingChallenge = useGameStore((state) => state.outgoingChallenge);
+  const connectionStatus = useGameStore((state) => state.connectionStatus);
+  const modes = useGameStore((state) => state.modes);
+  const pushEnabled = useGameStore((state) => state.pushEnabled);
+  const pushStatus = usePushStore((state) => state.status);
+  const snoozedUntil = usePushStore((state) => state.snoozedUntil);
+  const atOwnBoard = useAtOwnBoard();
+
+  const active = Boolean(queue.isSearching || claim || outgoingChallenge);
+  const [nowMs, setNowMs] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!active || atOwnBoard) return;
+    // Read the clock immediately as well as on the interval. Without this the
+    // first frame of a countdown is drawn against whatever `nowMs` the previous,
+    // slower tick left behind, so a thirty-second hold can appear as thirty-three.
+    setNowMs(Date.now());
+    const interval = setInterval(() => setNowMs(Date.now()), claim ? CLAIM_TICK_MS : SEARCH_TICK_MS);
+    return () => clearInterval(interval);
+  }, [active, atOwnBoard, claim]);
+
+  return useMemo(
+    () =>
+      queueCallState({
+        queue,
+        claim,
+        miss,
+        outgoingChallenge,
+        connectionStatus,
+        modes,
+        atOwnBoard,
+        pushLive: pushStatus === 'granted',
+        canOfferAlerts: canOfferAlerts(pushStatus, snoozedUntil, pushEnabled, nowMs),
+        nowMs,
+      }),
+    [
+      atOwnBoard,
+      claim,
+      connectionStatus,
+      miss,
+      modes,
+      nowMs,
+      outgoingChallenge,
+      pushEnabled,
+      pushStatus,
+      queue,
+      snoozedUntil,
+    ],
+  );
+};
+
+/**
+ * What the player cannot start right now, and why.
+ *
+ * Every screen that used to disable half its buttons while `queue.isSearching`
+ * reads this instead. Five copies of that expression existed, and all five were
+ * fine while a queue lasted twenty seconds and took over the page — and all
+ * five would make the app read-only now that it does not.
+ */
+export const useLobbyGate = (): LobbyGate => {
+  const connectionStatus = useGameStore((state) => state.connectionStatus);
+  const outgoingChallenge = useGameStore((state) => state.outgoingChallenge);
+  const claim = useGameStore((state) => state.claim);
+  const queue = useGameStore((state) => state.queue);
+  const atOwnBoard = useAtOwnBoard();
+
+  return useMemo(
+    () => lobbyGate({ connectionStatus, atOwnBoard, outgoingChallenge, claim, queue }),
+    [atOwnBoard, claim, connectionStatus, outgoingChallenge, queue],
+  );
+};

@@ -31,17 +31,12 @@ import { colors, radius } from '@/theme';
 
 // The engine bots hanging off a signed-in account.
 //
-// This lives in its own component because the account screen has enough to do
-// already. The session it works from is the one the store holds, which is the
-// same one the lobby socket connects with; the one prop is navigation, which
-// components here take as a callback rather than reaching for a hook.
+// Its own component because it is a registry with its own failure states, and
+// because it has now lived on two different screens. The session it works from
+// is the one the store holds, which is the same one the lobby socket connects
+// with, so it takes no props at all.
 
-export interface BotManagerPanelProps {
-  /** Opens the bot guide, when the surrounding screen can navigate there. */
-  onOpenGuide?: () => void;
-}
-
-export default function BotManagerPanel({ onOpenGuide }: BotManagerPanelProps) {
+export default function BotManagerPanel() {
   const token = useGameStore((state) => state.sessionToken);
   const clearSession = useGameStore((state) => state.clearSession);
   const [busy, setBusy] = useState(false);
@@ -132,15 +127,8 @@ export default function BotManagerPanel({ onOpenGuide }: BotManagerPanelProps) {
 
   return (
     <Panel>
-      <SectionHeading
-        eyebrow="BOTS"
-        title="Your bots"
-        trailing={
-          onOpenGuide ? (
-            <GhostButton compact label="BOT GUIDE" onPress={onOpenGuide} />
-          ) : null
-        }
-      />
+      {/* No link to the guide: the guide is on this page, under this panel. */}
+      <SectionHeading eyebrow="BOTS" title="Your bots" />
       {error ? <Banner message={error} onDismiss={() => setError(null)} tone="error" /> : null}
       {notice ? <Banner message={notice} onDismiss={() => setNotice(null)} /> : null}
 

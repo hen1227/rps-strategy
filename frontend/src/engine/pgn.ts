@@ -537,6 +537,7 @@ const ADJUDICATED_BY_A_MOVE = new Set<string>([
   'infiltration',
   'repetition',
   'stalemate',
+  'move_limit',
 ]);
 
 /** A move as `encodePGN` needs it: notation, whose it was, and its clock cost. */

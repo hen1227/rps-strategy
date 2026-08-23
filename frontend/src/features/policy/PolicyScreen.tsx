@@ -1,9 +1,7 @@
-import { useRouter } from 'expo-router';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { StyleSheet, Text, View } from 'react-native';
 
-import { links } from '@/navigation/links';
-import { colors, radius } from '@/theme';
+import { colors, contentWidth, radius } from '@/theme';
+import ScreenShell from '@/ui/ScreenShell';
 import { Panel, SectionHeading } from '@/ui/primitives';
 import type { PanelTone } from '@/ui/tones';
 
@@ -88,22 +86,11 @@ const sections: PolicySection[] = [
 ];
 
 export default function PolicyScreen() {
-  const router = useRouter();
+  // No back button: this page sits inside the app shell, whose sidebar or tab
+  // bar is already the way out.
   return (
-    <SafeAreaView style={styles.safeArea} edges={['top', 'right', 'bottom', 'left']}>
-      <ScrollView contentContainerStyle={styles.scrollContent}>
-        <View style={styles.screen}>
-          <View style={styles.topBar}>
-            <Pressable
-              accessibilityLabel="Return to lobby"
-              accessibilityRole="button"
-              onPress={() => router.back()}
-              style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}
-            >
-              <Text style={styles.backText}>‹ LOBBY</Text>
-            </Pressable>
-          </View>
-
+    <ScreenShell width={contentWidth.reading}>
+      <>
           <View style={styles.hero}>
             <Text style={styles.eyebrow}>THE HOUSE RULES</Text>
             <Text style={styles.title}>Privacy & play</Text>
@@ -132,26 +119,12 @@ export default function PolicyScreen() {
               </Panel>
             ))}
           </View>
-        </View>
-      </ScrollView>
-    </SafeAreaView>
+      </>
+    </ScreenShell>
   );
 }
 
 const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: colors.background },
-  scrollContent: { flexGrow: 1 },
-  screen: {
-    width: '100%',
-    maxWidth: 640,
-    alignSelf: 'center',
-    paddingHorizontal: 18,
-    paddingTop: 14,
-    paddingBottom: 96,
-  },
-  topBar: { flexDirection: 'row', alignItems: 'center' },
-  backButton: { paddingVertical: 8, paddingRight: 12 },
-  backText: { color: colors.textMuted, fontSize: 11, fontWeight: '900', letterSpacing: 0.9 },
 
   hero: { paddingTop: 24, paddingBottom: 22 },
   eyebrow: { color: colors.accent, fontSize: 10, fontWeight: '900', letterSpacing: 2.1 },

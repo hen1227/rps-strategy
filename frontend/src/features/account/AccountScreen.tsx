@@ -1,16 +1,10 @@
 import { useRouter } from 'expo-router';
 import { failureMessage } from '@/errors';
 import { useEffect, useState } from 'react';
-import {
-  ActivityIndicator,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 
+import LinkRow from '@/ui/LinkRow';
+import ScreenShell from '@/ui/ScreenShell';
 import {
   Banner,
   GhostButton,
@@ -20,14 +14,14 @@ import {
   SectionHeading,
 } from '@/ui/primitives';
 import AccountAuthPanel from '@/features/account/AccountAuthPanel';
-import BotManagerPanel from '@/features/bots/BotManagerPanel';
+import MatchAlertsPanel from '@/features/queue/MatchAlertsPanel';
 import { getAccount, updateAccount } from '@/store/api/accounts';
 import { useGameStore } from '@/store/gameStore';
 import { isReservedIn, useIdentityPolicy } from '@/hooks/useIdentityPolicy';
 import { links } from '@/navigation/links';
 import type { ModeDefinition, ModeID } from '@/types/game';
 import type { Account } from '@/types/protocol';
-import { colors, radius } from '@/theme';
+import { colors, contentWidth, radius } from '@/theme';
 
 // The account screen, which is now first and foremost where you get an
 // account. Everyone plays under a name the server gave them until they claim
@@ -182,20 +176,10 @@ export default function AccountScreen() {
   );
 
   return (
-    <SafeAreaView style={styles.safeArea} edges={['top', 'right', 'bottom', 'left']}>
-      <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
-        <View style={styles.screen}>
-          <View style={styles.topBar}>
-            <Pressable
-              accessibilityLabel="Return to lobby"
-              accessibilityRole="button"
-              onPress={() => router.back()}
-              style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}
-            >
-              <Text style={styles.backText}>‹ LOBBY</Text>
-            </Pressable>
-          </View>
-
+    // No back button: inside the app shell the sidebar or the tab bar is the
+    // way out, and a third answer to "how do I leave" is not an improvement.
+    <ScreenShell width={contentWidth.reading}>
+      <>
           <View style={styles.hero}>
             <Text style={styles.eyebrow}>PLAYER PROFILE</Text>
             <Text style={styles.title}>Your account</Text>
@@ -312,7 +296,27 @@ export default function AccountScreen() {
                 <AccountAuthPanel />
               )}
 
-              <BotManagerPanel onOpenGuide={() => router.push(links.bots())} />
+              {/*
+                Only rendered once alerts are actually on. Somewhere to turn
+                them off is necessary; a settings row reading "notifications:
+                off" for everybody who never wanted them is the clutter this
+                feature promised not to add.
+              */}
+              <MatchAlertsPanel variant="settings" />
+
+              {/*
+                A bot belongs to an account, so this is where its registry
+                hangs off. It used to be the fourth tab of the Bots page, which
+                put a token minter behind a page about playing.
+              */}
+              <Panel>
+                <LinkRow
+                  detail="Register an engine, take its token, and run it from your own machine."
+                  divided={false}
+                  href={links.myBots()}
+                  title="Your bots"
+                />
+              </Panel>
 
               <Panel>
                 <SectionHeading eyebrow="RANKED" title="Mode ratings" />
@@ -369,19 +373,6 @@ export default function AccountScreen() {
                   <Text style={styles.keyIconText}>◆</Text>
                 </View>
                 <View style={styles.keyCopy}>
-                  <Text style={styles.keyTitle}>
-                    {account?.registered
-                      ? 'Yours on any device'
-                      : 'Held by this browser alone'}
-                  </Text>
-                  <Text style={styles.keyBody}>
-                    {account?.registered
-                      ? 'Your username and password work anywhere, and signing in on another '
-                        + 'device brings this account with them, ratings and history included.'
-                      : 'This browser keeps a random private key and the server stores only '
-                        + 'its hash. Clearing this site’s browser data would start a new '
-                        + 'account — claiming a username keeps this history for good.'}
-                  </Text>
                   <Text style={styles.accountId} selectable>
                     Account ID: {accountId}
                   </Text>
@@ -399,41 +390,14 @@ export default function AccountScreen() {
                 </Text>
               </Pressable>
 
-              {/*
-                Always shown rather than gated on knowing the token: the screen
-                itself asks for it, and hiding the door only means a host has to
-                remember a URL.
-              */}
-              <Pressable
-                accessibilityLabel="Open host account tools"
-                accessibilityRole="button"
-                onPress={() => router.push(links.admin())}
-                style={({ pressed }) => [styles.policyLink, pressed && styles.pressed]}
-              >
-                <Text style={styles.policyLinkText}>Host tools: manage accounts ›</Text>
-              </Pressable>
             </View>
           )}
-        </View>
-      </ScrollView>
-    </SafeAreaView>
+      </>
+    </ScreenShell>
   );
 }
 
 const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: colors.background },
-  scrollContent: { flexGrow: 1 },
-  screen: {
-    width: '100%',
-    maxWidth: 640,
-    alignSelf: 'center',
-    paddingHorizontal: 18,
-    paddingTop: 14,
-    paddingBottom: 96,
-  },
-  topBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  backButton: { paddingVertical: 8, paddingRight: 12 },
-  backText: { color: colors.textMuted, fontSize: 11, fontWeight: '900', letterSpacing: 0.9 },
 
   hero: { paddingTop: 24, paddingBottom: 22 },
   eyebrow: { color: colors.accent, fontSize: 10, fontWeight: '900', letterSpacing: 2.1 },

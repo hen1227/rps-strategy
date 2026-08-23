@@ -34,9 +34,7 @@ export default function TournamentSpotlight({ onOpenBoard }: TournamentSpotlight
   const accountId = useGameStore((state) => state.accountId);
   const tournaments = useGameStore((state) => state.tournaments);
   const connectionStatus = useGameStore((state) => state.connectionStatus);
-  const queue = useGameStore((state) => state.queue);
   const spectatedGameId = useGameStore((state) => state.spectatedGameId);
-  const outgoingChallenge = useGameStore((state) => state.outgoingChallenge);
   const spectateGame = useGameStore((state) => state.spectateGame);
   const readyForTournamentMatch = useGameStore((state) => state.readyForTournamentMatch);
   const withdrawFromTournamentMatch = useGameStore(
@@ -50,11 +48,10 @@ export default function TournamentSpotlight({ onOpenBoard }: TournamentSpotlight
   const hiddenCount = hiddenHomeTournamentCount(tournaments, accountId);
 
   const isConnected = connectionStatus === 'connected';
-  const spectateDisabled =
-    !isConnected ||
-    queue.isSearching ||
-    Boolean(spectatedGameId) ||
-    Boolean(outgoingChallenge);
+  // Watching somebody else's board while you wait for your own game is exactly
+  // what a queue you can walk away from is for, so being queued no longer stops
+  // it. The server takes you out of the queue when your game starts.
+  const spectateDisabled = !isConnected || Boolean(spectatedGameId);
 
   if (featured.length === 0) return null;
 

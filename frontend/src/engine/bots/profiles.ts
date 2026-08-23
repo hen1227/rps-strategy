@@ -39,20 +39,20 @@
 // This matters more than it sounds. Measured over 600 seeded random openings
 // per mode at depths 2, 4, 6 and 11 (`npm run arena -- --spread`,
 // cross-checked against a native Rust run), the gap between the best root move
-// and the third best has a 90th percentile of about 7 in Annihilation, 20 in
-// Total War, and 50 in Infiltration — a 7x spread, and the *reverse* of what
-// the material weights suggest, because Infiltration grades every advancing
-// move while a quiet Annihilation position is nearly flat.
+// and the third best has a 90th percentile of about 20 in Total War and 50 in
+// Infiltration — and the *reverse* of what the material weights suggest,
+// because Infiltration grades every advancing move while a quiet Total War
+// position is far flatter.
 //
 // The knobs used to be raw centipawn numbers: temperatures from 60 to 1050 and
-// guardrails from 115 to 800, against gaps whose 90th percentile is 7 in
-// Annihilation, 20 in Total War and 50 in Infiltration. The softmax was
+// guardrails from 115 to 800, against gaps whose 90th percentile is 20 in
+// Total War and 50 in Infiltration. The softmax was
 // therefore saturated at every rung — even Crane, the tightest sampling rung,
 // gave its second choice about 90% of the weight of its first — so Pebble
 // through Crane all picked close to uniformly among their candidates. The
 // `maxLoss` guardrail never fired in any mode, and resignation thresholds of
-// -1200 to -2400 were unreachable in all three: the largest root score seen in
-// a Total War sample was 211. Depth and `randomMoveChance` were the only live
+// -1200 to -2400 were unreachable in every mode: the largest root score seen
+// in a Total War sample was 211. Depth and `randomMoveChance` were the only live
 // dials. Everything expressed per mode here exists so a number cannot silently
 // mean nothing.
 
@@ -84,7 +84,6 @@ export interface ModeScoreScale {
 //              piece count that means "nearly lost" in one mode and "still
 //              fine" in another.
 export const MODE_SCORE_SCALE: Partial<Record<ModeID, ModeScoreScale>> = Object.freeze({
-  V1: Object.freeze({ army: 3, choice: 7, material: 220 }),
   // Total War's `choice` was 20 until the mode's territory evaluation was
   // re-priced (RPSFish EVAL_RESULTS.md H9): a territory lead used to be worth
   // up to 1120cp on its own and is now bounded at 70, so every root score in
@@ -97,9 +96,9 @@ export const MODE_SCORE_SCALE: Partial<Record<ModeID, ModeScoreScale>> = Object.
   V3: Object.freeze({ army: 9, choice: 50, material: 35 }),
 });
 
-// Annihilation's scale is the fallback: it is the narrowest, so an unknown
-// mode gets the most conservative reading of every knob.
-const FALLBACK_SCALE: ModeScoreScale = { army: 3, choice: 7, material: 220 };
+// Total War's scale is the fallback: it is the narrower of the two shipped
+// modes, so an unknown mode gets the more conservative reading of every knob.
+const FALLBACK_SCALE: ModeScoreScale = { army: 9, choice: 15, material: 70 };
 
 export const modeScoreScale = (modeId: ModeID | undefined): ModeScoreScale =>
   (modeId === undefined ? undefined : MODE_SCORE_SCALE[modeId]) ?? FALLBACK_SCALE;
@@ -217,7 +216,7 @@ export const mannersScoresFor = (
 // played out rather than adjudicated. Elo of the stronger rung over the
 // weaker, with a 95% interval:
 //
-//   matchup             Annihilation      Total War         Infiltration
+//   matchup             V1 (retired)      Total War         Infiltration
 //   Napkin  > Pebble    +403 [235,616]    +338 [178,574]    +159 [ 30,312]
 //   Snips   > Napkin    +368 [204,600]    +446 [244,800]    +226 [ 87,404]
 //   Boulder > Snips     +232 [ 89,407]    not measured      not measured
@@ -228,16 +227,16 @@ export const mannersScoresFor = (
 // do not:
 //
 //   The ladder is not evenly spaced, and it is differently uneven per mode.
-//   Annihilation's rungs converge as they climb while Infiltration's start
-//   much closer together. One rating per rung is a deliberate product
+//   The retired mode's rungs converged as they climbed while Infiltration's
+//   start much closer together. One rating per rung is a deliberate product
 //   simplification, not a measurement.
 //
 //   The gaps are wide enough that they were never in doubt; what the intervals
 //   rule out is a rung being accidentally equal to its neighbour.
 //
 // The blank cells are blank on purpose. They were previously filled from a run
-// with `--adjudicate` on, which ended 23 of 24 Boulder-Snips Annihilation
-// games by resignation and 9 of 10 for Crane-Boulder — so those numbers
+// with `--adjudicate` on, which ended 23 of 24 Boulder-Snips games in the
+// retired mode by resignation and 9 of 10 for Crane-Boulder — so those numbers
 // described the adjudication threshold, not the bots, and playing them out
 // moved Boulder-Snips from +172 to +232. Since no bot resigns against a
 // person, only played-out games belong here. Fill them in with:
@@ -422,7 +421,7 @@ export const BOT_PROFILES: readonly BotProfile[] = Object.freeze([
     // The old cap of 16 finished Infiltration in about a second and then
     // returned, spending a quarter of the budget it had already asked for.
     // Total War is time-limited at depth 13 either way, so this changes only
-    // Infiltration; Annihilation is retired from play.
+    // Infiltration.
     search: Object.freeze({ maxDepth: 19, maxTimeMs: 4_000 }),
     choice: Object.freeze({
       candidateLines: 1,

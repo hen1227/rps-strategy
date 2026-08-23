@@ -36,7 +36,7 @@ export const opposingColor = (color: SideColor): SideColor =>
  * set is closed. The three literals are the ones that exist today and are
  * spelled out only so that fixtures and mode-keyed tables can be checked.
  */
-export type ModeID = 'V1' | 'V5' | 'V3' | (string & {});
+export type ModeID = 'V5' | 'V3' | (string & {});
 
 export type ModeFeature = 'territory';
 
@@ -52,11 +52,46 @@ export type GameEndReason =
   | 'draw_agreement'
   | 'repetition'
   | 'stalemate'
-  | 'abandonment';
+  | 'abandonment'
+  | 'move_limit';
 
 /** Nine rows of nine characters: upper case Blue, lower case Red, `.` empty. */
 export interface StartingPosition {
   rows: string[];
+}
+
+/**
+ * The engine rules a custom game switched off, plus the one it added.
+ *
+ * Every field is a *deviation*, so an all-false value is the normal game. That
+ * is what lets the lobby render one icon per non-standard field and nothing at
+ * all for an ordinary match.
+ */
+export interface RuleFlags {
+  noRepetitionDraw?: boolean;
+  noDrawOffers?: boolean;
+  noTimeExtensions?: boolean;
+  /** A draw once this many moves have been played by both sides together. */
+  moveLimit?: number;
+}
+
+/**
+ * The complete description of a game somebody wants to play.
+ *
+ * The same value covers a matchmaking search and a posted challenge, because
+ * they are the same act: a search carries the mode's standard setup, and a
+ * challenge carries an edited one. Anything left out is filled in from the mode
+ * by the server, so an empty setup asks for a normal rated match.
+ */
+export interface GameSetup {
+  modeId: ModeID;
+  timeControl: TimeControl;
+  startingPosition: StartingPosition;
+  rules: RuleFlags;
+  /** Casual games leave ratings alone. Stored as the deviation from rated. */
+  casual?: boolean;
+  /** The seat its author wants. Absent means either. */
+  preferredColor?: SideColor;
 }
 
 export interface ModeDefinition {
@@ -142,6 +177,8 @@ export interface GameState {
   grid: Grid;
   mode: ModeDefinition;
   timeControl: TimeControl;
+  /** The optional rules this game switched off. All-false is a normal game. */
+  rules?: RuleFlags;
   clock: ClockState;
   currentTurn: PlayerColor;
   status: GameStatus;

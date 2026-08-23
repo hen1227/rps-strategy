@@ -1,6 +1,13 @@
 const USER_ID_KEY = 'rps.userAccountId.v1';
 const PROFILE_KEY_KEY = 'rps.localProfileKey.v1';
 const GAME_SESSION_ID_KEY = 'rps.activeGameSessionId.v1';
+// What the server was last told this browser's push endpoint is, so a rotated
+// one can be spotted and re-sent rather than quietly going stale.
+const PUSH_ENDPOINT_KEY = 'rps.pushEndpoint.v1';
+// When the alerts offer may be shown again. The anti-nag mechanism: dismissing
+// it once buys a week of silence, and the fact underneath — that the tab has to
+// stay open — is still stated, because that is information rather than a pitch.
+const ALERTS_SNOOZED_UNTIL_KEY = 'rps.alertsSnoozedUntil.v1';
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -120,5 +127,46 @@ export const clearGameSessionId = () => {
     localStorage()?.removeItem(GAME_SESSION_ID_KEY);
   } catch {
     // Nothing else is required when storage is unavailable.
+  }
+};
+
+export const readPushEndpoint = (): string | null => {
+  try {
+    return localStorage()?.getItem(PUSH_ENDPOINT_KEY) || null;
+  } catch {
+    return null;
+  }
+};
+
+export const savePushEndpoint = (endpoint: string) => {
+  try {
+    localStorage()?.setItem(PUSH_ENDPOINT_KEY, endpoint);
+  } catch {
+    // Alerts still work; we just cannot notice a rotated endpoint next time.
+  }
+};
+
+export const clearPushEndpoint = () => {
+  try {
+    localStorage()?.removeItem(PUSH_ENDPOINT_KEY);
+  } catch {
+    // Nothing else is required when storage is unavailable.
+  }
+};
+
+export const readAlertsSnoozedUntil = (): number => {
+  try {
+    return Number(localStorage()?.getItem(ALERTS_SNOOZED_UNTIL_KEY)) || 0;
+  } catch {
+    return 0;
+  }
+};
+
+export const saveAlertsSnoozedUntil = (untilUnixMs: number) => {
+  try {
+    localStorage()?.setItem(ALERTS_SNOOZED_UNTIL_KEY, String(untilUnixMs));
+  } catch {
+    // Without storage the offer reappears next session, which is the safe way
+    // to be wrong: annoying rather than permanently hidden.
   }
 };

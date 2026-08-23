@@ -27,7 +27,7 @@ import { startEngineWorker, type NodeEngineWorker } from '../../scripts/engineWo
 import { testMode } from '@/testing/modes';
 import type { Move, SideColor } from '@/types/game';
 
-const MODE = testMode('V1');
+const MODE = testMode('V5');
 
 const PRESETS: Record<string, SearchLimits> = {
   test: { maxDepth: 6, maxNodes: 200_000, maxTimeMs: 1_000, throttleMs: 0, variations: 3 },

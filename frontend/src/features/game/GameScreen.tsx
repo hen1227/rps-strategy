@@ -1,20 +1,26 @@
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import TerritoryMeter from '@/features/analysis/TerritoryMeter';
 import Board from '@/features/board/Board';
 import { capturedPieces } from '@/features/board/CapturedPieces';
 import GameChat from './GameChat';
+import GameTransition from './GameTransition';
 import PlayerBar from './PlayerBar';
+import SpectateRail from './SpectateRail';
 import { useBoardLayout } from '@/hooks/useBoardLayout';
+import { useSettled } from '@/hooks/useSettled';
+import { useSpectateContext } from '@/hooks/useSpectateContext';
 import { useTournamentCall } from '@/hooks/useTournamentCall';
 import { links } from '@/navigation/links';
 import { useGameStore } from '@/store/gameStore';
 import { useReviewHandoff } from '@/store/reviewHandoff';
+import { ruleSummary } from '@/store/setupSelectors';
+import { playerName } from '@/store/spectateSelectors';
 import type { ActiveGame } from '@/store/types';
-import { colors, overlay, radius, shadows } from '@/theme';
+import { colors, overlay, radius, shadows, type } from '@/theme';
 import {
   opposingColor,
   type GameEndReason,
@@ -81,6 +87,10 @@ const outcomeFor = (gameState: ActiveGame, playerColor: PlayerColor | null): Gam
         stalemate: {
             method: 'STALEMATE',
             detail: 'A player had no legal move, which is a draw.',
+        },
+        move_limit: {
+            method: 'MOVE LIMIT',
+            detail: 'This game was set up with a move cap, and it ran out.',
         },
         infiltration: {
             method: 'INFILTRATION',
@@ -234,39 +244,46 @@ function GameActions({
         playerColor,
         connected,
     );
+    // A custom game can drop either offer. Hidden rather than disabled: a
+    // greyed-out button reads as "not yet", and these are never.
+    const rules = gameState.rules ?? {};
 
     return (
         <View style={styles.gameActions}>
-            <Pressable
-                accessibilityRole="button"
-                accessibilityState={{disabled: draw.disabled}}
-                disabled={draw.disabled}
-                onPress={onDraw}
-                style={({pressed}) => [
-                    styles.actionButton,
-                    draw.disabled && styles.actionButtonDisabled,
-                    pressed && styles.buttonPressed,
-                ]}
-            >
-                <Text style={[styles.actionButtonText, draw.disabled && styles.actionButtonTextDisabled]}>
-                    {draw.pending ? 'Draw offered' : 'Offer draw'}
-                </Text>
-            </Pressable>
-            <Pressable
-                accessibilityRole="button"
-                accessibilityState={{disabled: time.disabled}}
-                disabled={time.disabled}
-                onPress={onTimeExtension}
-                style={({pressed}) => [
-                    styles.actionButton,
-                    time.disabled && styles.actionButtonDisabled,
-                    pressed && styles.buttonPressed,
-                ]}
-            >
-                <Text style={[styles.actionButtonText, time.disabled && styles.actionButtonTextDisabled]}>
-                    {time.pending ? '+3 min asked' : 'Ask +3 min'}
-                </Text>
-            </Pressable>
+            {rules.noDrawOffers ? null : (
+                <Pressable
+                    accessibilityRole="button"
+                    accessibilityState={{disabled: draw.disabled}}
+                    disabled={draw.disabled}
+                    onPress={onDraw}
+                    style={({pressed}) => [
+                        styles.actionButton,
+                        draw.disabled && styles.actionButtonDisabled,
+                        pressed && styles.buttonPressed,
+                    ]}
+                >
+                    <Text style={[styles.actionButtonText, draw.disabled && styles.actionButtonTextDisabled]}>
+                        {draw.pending ? 'Draw offered' : 'Offer draw'}
+                    </Text>
+                </Pressable>
+            )}
+            {rules.noTimeExtensions ? null : (
+                <Pressable
+                    accessibilityRole="button"
+                    accessibilityState={{disabled: time.disabled}}
+                    disabled={time.disabled}
+                    onPress={onTimeExtension}
+                    style={({pressed}) => [
+                        styles.actionButton,
+                        time.disabled && styles.actionButtonDisabled,
+                        pressed && styles.buttonPressed,
+                    ]}
+                >
+                    <Text style={[styles.actionButtonText, time.disabled && styles.actionButtonTextDisabled]}>
+                        {time.pending ? '+3 min asked' : 'Ask +3 min'}
+                    </Text>
+                </Pressable>
+            )}
             <Pressable
                 accessibilityRole="button"
                 accessibilityState={{disabled: !connected}}
@@ -399,43 +416,18 @@ function BotGameActions({
 // with someone waiting in matchmaking is offered here, and taking one up hands
 // the board over to that match as soon as it is found.
 interface OpponentSearchNoticeProps {
-    isSearching: boolean;
-    onCancel: () => void;
     onJoin: (modeId: ModeID) => void;
-    queuedForMs: number;
-    /** Modes with somebody waiting in matchmaking right now. */
+    /** Modes with somebody waiting *and at the keyboard* right now. */
     waitingModes: WaitingMode[];
 }
 
-function OpponentSearchNotice({
-                                  isSearching,
-                                  onCancel,
-                                  onJoin,
-                                  queuedForMs,
-                                  waitingModes,
-                              }: OpponentSearchNoticeProps) {
-    if (isSearching) {
-        return (
-            <View style={styles.searchNotice}>
-                <View style={styles.searchNoticeCopy}>
-                    <Text style={styles.searchNoticeTitle}>Looking for a real opponent</Text>
-                    <Text style={styles.searchNoticeDetail}>
-                        Searching {Math.floor(queuedForMs / 1000)}s · keep playing the bot until
-                        someone is found.
-                    </Text>
-                </View>
-                <Pressable
-                    accessibilityLabel="Cancel the matchmaking search"
-                    accessibilityRole="button"
-                    onPress={onCancel}
-                    style={({pressed}) => [styles.searchNoticeButton, pressed && styles.buttonPressed]}
-                >
-                    <Text style={styles.searchNoticeButtonText}>CANCEL</Text>
-                </Pressable>
-            </View>
-        );
-    }
-
+// Somebody practising against a bot, told that a real opponent is available.
+//
+// This used to carry the search state too, which is now the floating bar's job
+// on every screen rather than this one's. What is left is the half that is a
+// nudge on a page you are already looking at, rather than a notification — so
+// the rule that this server sends exactly one kind of notification is untouched.
+function OpponentSearchNotice({onJoin, waitingModes}: OpponentSearchNoticeProps) {
     if (waitingModes.length === 0) return null;
     const waiting = waitingModes.reduce((total, mode) => total + mode.waiting, 0);
 
@@ -795,6 +787,9 @@ export default function GameScreen() {
     const reviewOpeningRef = useRef(false);
     const [showResignConfirmation, setShowResignConfirmation] = useState(false);
     const gameState = useGameStore((state) => state.gameState);
+    // The game this browser was in, remembered across a refresh. It is what
+    // tells an empty screen whether a board is on its way back.
+    const gameSessionId = useGameStore((state) => state.gameSessionId);
     const lastMove = useGameStore((state) => state.lastMove);
     const playerColor = useGameStore((state) => state.playerColor);
     const isSpectating = useGameStore((state) => state.isSpectating);
@@ -816,6 +811,8 @@ export default function GameScreen() {
     const accountId = useGameStore((state) => state.accountId);
     const chatMessages = useGameStore((state) => state.chatMessages);
     const liveGames = useGameStore((state) => state.liveGames);
+    const spectatedGameId = useGameStore((state) => state.spectatedGameId);
+    const spectateGame = useGameStore((state) => state.spectateGame);
     const chatVisible = useGameStore((state) => state.chatVisible);
     const showSpectatorMessages = useGameStore((state) => state.showSpectatorMessages);
     const sendChat = useGameStore((state) => state.sendChat);
@@ -827,7 +824,7 @@ export default function GameScreen() {
     const error = useGameStore((state) => state.error);
     const clearError = useGameStore((state) => state.clearError);
     const modes = useGameStore((state) => state.modes);
-    const modeQueueCounts = useGameStore((state) => state.modeQueueCounts);
+    const modeReadyCounts = useGameStore((state) => state.modeReadyCounts);
     const queue = useGameStore((state) => state.queue);
     const joinQueue = useGameStore((state) => state.joinQueue);
     const leaveQueue = useGameStore((state) => state.leaveQueue);
@@ -838,6 +835,7 @@ export default function GameScreen() {
     const restartBotGame = useGameStore((state) => state.restartBotGame);
     const botGamePGN = useGameStore((state) => state.botGamePGN);
     const tournamentCall = useTournamentCall();
+    const spectateContext = useSpectateContext();
 
     // Opening the review is guarded so a double press cannot hand the same
     // record over twice; coming back to this page arms it again.
@@ -847,24 +845,12 @@ export default function GameScreen() {
         }, []),
     );
 
-    if (!gameState) {
-        return (
-            <SafeAreaView style={styles.safeArea}>
-                <View style={styles.centered}>
-                    <Text style={styles.emptyTitle}>No active match</Text>
-                    <Text style={styles.emptyBody}>Return to the mode screen to find an opponent.</Text>
-                    <Pressable
-                        onPress={() => router.back()}
-                        style={({pressed}) => [styles.emptyButton, pressed && styles.buttonPressed]}
-                    >
-                        <Text style={styles.emptyButtonText}>Choose a mode</Text>
-                    </Pressable>
-                </View>
-            </SafeAreaView>
-        );
-    }
-
-    const hasTerritory = gameState.mode.features?.includes('territory');
+    // Measured before the empty state below rather than after it. A refresh
+    // renders this page twice — once with no game, then again with the game
+    // the server hands back — and a hook only the second render reaches is the
+    // crash React reports as rendering more hooks than during the previous
+    // render.
+    const hasTerritory = gameState?.mode.features?.includes('territory');
     // The live board is the tightest fit in the app: it has a player bar above
     // and below, and on a narrow screen the controls and the territory meter
     // under those.
@@ -874,6 +860,52 @@ export default function GameScreen() {
         chrome: 190,
         narrowChrome: hasTerritory ? 390 : 360,
     });
+    // A refresh arrives here with nothing in the store: the socket has to come
+    // back up and the game has to be asked for again before there is a board to
+    // draw. So an empty screen is two different things, and saying the wrong
+    // one is what the player notices.
+    //
+    // A remembered session id means a board is on its way — the server clears
+    // it with `game_unavailable` if the game is really gone. The very first
+    // render cannot read it, because a pre-rendered page has no local storage
+    // and disagreeing with the pre-rendered HTML would cost the whole page, so
+    // that render says it is still looking rather than claiming there is
+    // nothing.
+    const settled = useSettled();
+    const lookingForGame = !settled || Boolean(gameSessionId);
+
+    if (!gameState) {
+        return (
+            <SafeAreaView style={styles.safeArea}>
+                <View style={styles.centered}>
+                    {lookingForGame ? (
+                        <ActivityIndicator
+                            color={colors.accent}
+                            size="small"
+                            style={styles.emptySpinner}
+                        />
+                    ) : null}
+                    <Text style={styles.emptyTitle}>
+                        {lookingForGame ? 'Looking for your game…' : 'No active match'}
+                    </Text>
+                    <Text style={styles.emptyBody}>
+                        {lookingForGame
+                            ? 'A refresh has to ask the server for the board again.'
+                            : 'Return to the mode screen to find an opponent.'}
+                    </Text>
+                    {/* An escape hatch either way: a rejoin that never answers
+                        should not be a screen with nothing on it. */}
+                    <Pressable
+                        accessibilityRole="button"
+                        onPress={() => router.push(links.lobby())}
+                        style={({pressed}) => [styles.emptyButton, pressed && styles.buttonPressed]}
+                    >
+                        <Text style={styles.emptyButtonText}>Choose a mode</Text>
+                    </Pressable>
+                </View>
+            </SafeAreaView>
+        );
+    }
     // A bot game is local: it needs no socket, shows no clock, and nothing it
     // does can change a rating.
     const bot = gameState.bot ?? null;
@@ -893,18 +925,30 @@ export default function GameScreen() {
         gameState.status === 'InProgress' &&
         gameState.currentTurn === playerColor;
     const timeControlLabel = formatTimeControl(gameState.timeControl);
+    // Read from the same describeSetup the lobby row was rendered from, so a
+    // game reads the same after you accept it as it did before.
+    const customTerms = ruleSummary(gameState.rules);
     const spectatorCount =
         liveGames.find((liveGame) => liveGame.gameId === gameState.gameId)?.spectatorCount ?? 0;
+    // A board has been asked for and has not arrived yet. `spectatedGameId` is
+    // set the moment the request goes out, while `gameState` still holds the
+    // board being left, so the two disagreeing is exactly the hand-off.
+    const switchingBoards = isSpectating && Boolean(spectatedGameId) && spectatedGameId !== gameState.gameId;
     // Modes with a real player waiting in matchmaking right now. Someone busy
     // with a bot should still get the chance to take that game.
+    // Counted from the people who are *at the keyboard*, not from everybody
+    // queued. Now that a search survives a closed tab, the wider figure includes
+    // players who are asleep — and telling somebody mid-bot-game that a human is
+    // waiting, when that human cannot be seated for another thirty seconds, is
+    // how a useful nudge becomes a wasted click.
     const waitingModes = bot
         ? modes
-            .filter((mode) => (modeQueueCounts[mode.id] ?? 0) > 0)
+            .filter((mode) => (modeReadyCounts[mode.id] ?? 0) > 0)
             .map((mode) => ({
                 id: mode.id,
                 name: mode.name,
                 shortCode: mode.shortCode,
-                waiting: modeQueueCounts[mode.id] ?? 0,
+                waiting: modeReadyCounts[mode.id] ?? 0,
             }))
         : [];
     const canAnswerOffers = !isSpectating && gameState.status === 'InProgress';
@@ -952,13 +996,7 @@ export default function GameScreen() {
     const matchNotices = (
         <>
             {Boolean(bot) && (
-                <OpponentSearchNotice
-                    isSearching={queue.isSearching}
-                    onCancel={leaveQueue}
-                    onJoin={joinQueue}
-                    queuedForMs={queue.queuedForMs}
-                    waitingModes={waitingModes}
-                />
+                <OpponentSearchNotice onJoin={joinQueue} waitingModes={waitingModes} />
             )}
             {botSession?.drawNotice ? (
                 <View style={styles.selfReconnectNotice}>
@@ -1128,6 +1166,16 @@ export default function GameScreen() {
                                         : 'LIVE MATCH'}
                         </Text>
                         <Text style={styles.modeName}>{gameState.mode.name}</Text>
+                        {/*
+                          The terms this game was set up with, when they are not
+                          the usual ones. Players who accepted a custom game
+                          should not have to remember what they agreed to.
+                        */}
+                        {customTerms ? (
+                            <Text numberOfLines={2} style={styles.customTerms}>
+                                {customTerms}
+                            </Text>
+                        ) : null}
                     </View>
                     <View style={styles.timeControlBadge}>
                         <Text style={styles.timeControlLabel}>{bot ? 'OPPONENT' : 'TIME CONTROL'}</Text>
@@ -1137,68 +1185,86 @@ export default function GameScreen() {
                     </View>
                 </View>
 
-                {isWide ? (
-                    <View style={styles.wideLayout}>
-                        <View style={styles.playColumn}>{playerBars}</View>
+                {isSpectating && (
+                    <SpectateRail
+                        blueName={playerName(gameState.bluePlayer, 'Blue player')}
+                        context={spectateContext}
+                        currentGameId={gameState.gameId}
+                        disabled={!isConnected}
+                        onWatch={spectateGame}
+                        pendingGameId={spectatedGameId}
+                        redName={playerName(gameState.redPlayer, 'Red player')}
+                    />
+                )}
+
+                <GameTransition
+                    gameKey={gameState.gameId}
+                    leaving={switchingBoards}
+                    style={styles.transition}
+                >
+                    {isWide ? (
+                        <View style={styles.wideLayout}>
+                            <View style={styles.playColumn}>{playerBars}</View>
+                            <ScrollView
+                                contentContainerStyle={[
+                                    styles.sidePanelContent,
+                                    Boolean(tournamentCall) && styles.calloutClearance,
+                                ]}
+                                keyboardShouldPersistTaps="handled"
+                                showsVerticalScrollIndicator={false}
+                                style={[styles.sidePanel, {height: boardSize + 120}]}
+                            >
+                                {statusCard(true)}
+
+                                {matchNotices}
+                                {gameActions}
+
+                                {hasTerritory && <TerritoryMeter grid={gameState.grid}/>}
+
+                                {gameChat}
+
+                                {!chatVisible && (
+                                    <>
+                                        <View style={styles.detailCard}>
+                                            <Text style={styles.detailEyebrow}>OBJECTIVE</Text>
+                                            <Text style={styles.detailTitle}>{gameState.mode.description}</Text>
+                                            <Text style={styles.detailBody}>{gameState.mode.objective}</Text>
+                                        </View>
+
+                                        <View style={styles.matchFacts}>
+                                            <View>
+                                                <Text style={styles.factLabel}>MOVE</Text>
+                                                <Text style={styles.factValue}>{gameState.moveNumber + 1}</Text>
+                                            </View>
+                                            <View style={styles.factDivider}/>
+                                            <View>
+                                                <Text style={styles.factLabel}>CLOCK</Text>
+                                                <Text style={styles.factValue}>{timeControlLabel}</Text>
+                                            </View>
+                                        </View>
+                                    </>
+                                )}
+                            </ScrollView>
+                        </View>
+                    ) : (
                         <ScrollView
                             contentContainerStyle={[
-                                styles.sidePanelContent,
+                                styles.mobileLayout,
                                 Boolean(tournamentCall) && styles.calloutClearance,
                             ]}
                             keyboardShouldPersistTaps="handled"
                             showsVerticalScrollIndicator={false}
-                            style={[styles.sidePanel, {height: boardSize + 120}]}
                         >
-                            {statusCard(true)}
-
+                            {gameState.status === 'Finished' && !isSpectating ? statusCard() : null}
+                            {playerBars}
+                            {hasTerritory && <TerritoryMeter grid={gameState.grid}/>}
                             {matchNotices}
                             {gameActions}
-
-                            {hasTerritory && <TerritoryMeter grid={gameState.grid}/>}
-
                             {gameChat}
-
-                            {!chatVisible && (
-                                <>
-                                    <View style={styles.detailCard}>
-                                        <Text style={styles.detailEyebrow}>OBJECTIVE</Text>
-                                        <Text style={styles.detailTitle}>{gameState.mode.description}</Text>
-                                        <Text style={styles.detailBody}>{gameState.mode.objective}</Text>
-                                    </View>
-
-                                    <View style={styles.matchFacts}>
-                                        <View>
-                                            <Text style={styles.factLabel}>MOVE</Text>
-                                            <Text style={styles.factValue}>{gameState.moveNumber + 1}</Text>
-                                        </View>
-                                        <View style={styles.factDivider}/>
-                                        <View>
-                                            <Text style={styles.factLabel}>CLOCK</Text>
-                                            <Text style={styles.factValue}>{timeControlLabel}</Text>
-                                        </View>
-                                    </View>
-                                </>
-                            )}
+                            {gameState.status !== 'Finished' || isSpectating ? statusCard() : null}
                         </ScrollView>
-                    </View>
-                ) : (
-                    <ScrollView
-                        contentContainerStyle={[
-                            styles.mobileLayout,
-                            Boolean(tournamentCall) && styles.calloutClearance,
-                        ]}
-                        keyboardShouldPersistTaps="handled"
-                        showsVerticalScrollIndicator={false}
-                    >
-                        {gameState.status === 'Finished' && !isSpectating ? statusCard() : null}
-                        {playerBars}
-                        {hasTerritory && <TerritoryMeter grid={gameState.grid}/>}
-                        {matchNotices}
-                        {gameActions}
-                        {gameChat}
-                        {gameState.status !== 'Finished' || isSpectating ? statusCard() : null}
-                    </ScrollView>
-                )}
+                    )}
+                </GameTransition>
 
                 {error && (
                     <Pressable
@@ -1243,6 +1309,7 @@ const styles = StyleSheet.create({
     centered: {flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24},
     // Room for the floating tournament call to action.
     calloutClearance: {paddingBottom: 88},
+    emptySpinner: {marginBottom: 14},
     emptyTitle: {color: colors.textStrong, fontSize: 25, fontWeight: '900'},
     emptyBody: {color: colors.textMuted, marginTop: 8, textAlign: 'center'},
     emptyButton: {
@@ -1281,6 +1348,7 @@ const styles = StyleSheet.create({
         letterSpacing: 1.4,
     },
     modeName: {color: colors.textStrong, fontSize: 20, fontWeight: '900', marginTop: 2},
+    customTerms: {...type.meta, color: colors.accentSoft, marginTop: 2},
     timeControlBadge: {
         minWidth: 88,
         alignItems: 'flex-end',
@@ -1303,6 +1371,9 @@ const styles = StyleSheet.create({
         fontWeight: '900',
         marginTop: 1,
     },
+    // The hand-off wrapper sits between the screen and the layout, so it has to
+    // pass the height it was given straight through.
+    transition: {flex: 1},
     mobileLayout: {flexGrow: 1, alignItems: 'center', gap: 7, paddingBottom: 4},
     wideLayout: {
         flex: 1,

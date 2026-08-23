@@ -1,37 +1,69 @@
-import { failureMessage } from '@/errors';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
+import { failureMessage } from '@/errors';
+import { useAdminToken } from '@/hooks/useAdminToken';
+import { useRequestIdentity } from '@/hooks/useRequestIdentity';
+import { links } from '@/navigation/links';
+import {
+  abortAdminBotSeries,
+  abortBotSeries,
+  listBotSeries,
+  startAdminBotSeries,
+  startBotSeries,
+  type BotSeries,
+} from '@/store/api/bots';
+import { colors, space, type } from '@/theme';
+import LinkRow from '@/ui/LinkRow';
+import ListRow from '@/ui/ListRow';
 import {
   Badge,
   Banner,
   GhostButton,
   LabeledInput,
+  OptionChips,
   Panel,
   PrimaryButton,
   SectionHeading,
 } from '@/ui/primitives';
-import { useAdminToken } from '@/hooks/useAdminToken';
-import {
-  abortBotSeries,
-  listBotSeries,
-  startBotSeries,
-  type BotSeries,
-} from '@/store/api/bots';
-import { colors } from '@/theme';
-import type { ModeDefinition } from '@/types/game';
+import type { ModeDefinition, ModeID } from '@/types/game';
 import type { BotPresence } from '@/types/protocol';
 
-// Host controls for engine bots: pit two of them against each other.
+// Pit two engine bots against each other.
 //
-// It sits next to the bot roster rather than on its own screen because that is
-// where you are when you decide to do it. The games it starts are ordinary
-// games, so watching them is the existing live-games table doing its job.
+// This was a host control, and the reasoning for that only ever covered the
+// cost: a run holds two engines for as long as it lasts, so it should not be
+// free to start a hundred of them. It never covered the permission, because the
+// bots already carry one — every engine has a public-play switch that decides
+// whether strangers may play it, and a series is strangers playing it.
+//
+// So the form is open to anybody, and what used to be an admin gate is now three
+// server-side limits: at most three pairs, at most three minutes each, and one
+// running series per person. The HOST CONTROLS button below lifts all three for
+// somebody who holds the host token, which is what a fifty-pair run at a real
+// time control needs.
+//
+// The four numbers that shape a run sit behind a toggle. Every one of them has a
+// sensible default, none of them is the decision anybody came here to make, and
+// four labelled fields at the top of a panel read as a form to be filled in
+// rather than a button to be pressed.
+
+/** What the public form may ask for. The server enforces the same numbers. */
+const PUBLIC_MAX_PAIRS = 3;
+const PUBLIC_MAX_MINUTES = 3;
+/** What the host may ask for, matching botSeriesMaxPairs on the server. */
+const HOST_MAX_PAIRS = 100;
+
+/** How many finished runs to list. The rest are on the ladder's own page. */
+const VISIBLE_RUNS = 5;
 
 const numeric = (value: string, fallback: number) => {
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) ? parsed : fallback;
 };
+
+const clamp = (value: number, low: number, high: number) =>
+  Math.min(Math.max(value, low), high);
 
 export interface BotSeriesPanelProps {
   /** The connected engines to pick two opponents from. */
@@ -40,13 +72,15 @@ export interface BotSeriesPanelProps {
 }
 
 export default function BotSeriesPanel({ bots, modes }: BotSeriesPanelProps) {
-  const [open, setOpen] = useState(false);
+  const identity = useRequestIdentity();
   const admin = useAdminToken();
+  const [hostFormOpen, setHostFormOpen] = useState(false);
+  const [optionsOpen, setOptionsOpen] = useState(false);
   const [draft, setDraft] = useState('');
 
-  const [redBotId, setRedBotId] = useState<string | null>(null);
-  const [blueBotId, setBlueBotId] = useState<string | null>(null);
-  const [modeId, setModeId] = useState(modes[0]?.id ?? 'V5');
+  const [firstBotId, setFirstBotId] = useState<string | null>(null);
+  const [secondBotId, setSecondBotId] = useState<string | null>(null);
+  const [modeId, setModeId] = useState<ModeID>(modes[0]?.id ?? 'V5');
   const [pairs, setPairs] = useState('2');
   const [plies, setPlies] = useState('6');
   const [seed, setSeed] = useState('');
@@ -56,40 +90,49 @@ export default function BotSeriesPanel({ bots, modes }: BotSeriesPanelProps) {
   const [error, setError] = useState<string | null>(null);
   const [series, setSeries] = useState<BotSeries[]>([]);
 
-  const refresh = async () => {
+  const asHost = admin.unlocked;
+  const maxPairs = asHost ? HOST_MAX_PAIRS : PUBLIC_MAX_PAIRS;
+  const maxMinutes = asHost ? 60 : PUBLIC_MAX_MINUTES;
+
+  const refresh = useCallback(async () => {
     try {
-      setSeries((await listBotSeries()) ?? []);
+      setSeries((await listBotSeries(12)) ?? []);
     } catch {
-      // The scoreboard is a nicety; a failure here should not block starting one.
+      // The scoreboard is a nicety; a failure here should not stop somebody
+      // starting a run, and the error that matters is the one from the start.
     }
-  };
+  }, []);
 
   useEffect(() => {
-    if (!open) return undefined;
     refresh();
     // Series games are ordinary games, so the lobby already updates live. This
     // only refreshes the tally, which changes once per game.
     const timer = setInterval(refresh, 5000);
     return () => clearInterval(timer);
-  }, [open]);
+  }, [refresh]);
 
   const start = async () => {
+    if (!firstBotId || !secondBotId) return;
     setBusy(true);
     setError(null);
     try {
-      if (!redBotId || !blueBotId) return;
-      await startBotSeries(admin.token, {
-        firstBotId: redBotId,
-        secondBotId: blueBotId,
+      const options = {
+        firstBotId,
+        secondBotId,
         modeId,
-        pairs: numeric(pairs, 2),
-        openingPlies: numeric(plies, 6),
-        seed: numeric(seed, 0),
+        pairs: clamp(numeric(pairs, 2), 1, maxPairs),
+        openingPlies: clamp(numeric(plies, 6), 0, 20),
+        // Passed through as text rather than parsed: the value a person pastes
+        // here is one they copied off a finished run, and `Number.parseInt`
+        // would round it before it ever left the browser.
+        seed: seed.trim().replace(/\D/g, ''),
         timeControl: {
-          initialTimeMs: Math.max(numeric(minutes, 1), 1) * 60_000,
+          initialTimeMs: clamp(numeric(minutes, 1), 1, maxMinutes) * 60_000,
           incrementMs: 1000,
         },
-      });
+      };
+      if (asHost) await startAdminBotSeries(admin.token, options);
+      else await startBotSeries(identity, options);
       await refresh();
     } catch (caught) {
       setError(failureMessage(caught, 'The series could not be started.'));
@@ -98,45 +141,61 @@ export default function BotSeriesPanel({ bots, modes }: BotSeriesPanelProps) {
     }
   };
 
-  // A bot that is mid-game cannot be entered into a new series.
-  const idle = bots.filter((bot) => !bot.busy);
-  const canStart =
-    !busy && redBotId && blueBotId && redBotId !== blueBotId && admin.unlocked;
+  const stop = async (run: BotSeries) => {
+    setError(null);
+    try {
+      if (asHost) await abortAdminBotSeries(admin.token, run.seriesId);
+      else await abortBotSeries(identity, run.seriesId);
+      await refresh();
+    } catch (caught) {
+      setError(failureMessage(caught, 'The series could not be stopped.'));
+    }
+  };
 
-  const picker = (
-    label: string,
-    selected: string | null,
-    onSelect: (botId: string) => void,
-  ) => (
-    <View style={styles.picker}>
-      <Text style={styles.pickerLabel}>{label}</Text>
-      <View style={styles.pickerRow}>
-        {idle.map((bot) => (
-          <GhostButton
-            compact
-            key={bot.botId}
-            label={bot.botId === selected ? `▸ ${bot.name}` : bot.name}
-            onPress={() => onSelect(bot.botId)}
-          />
-        ))}
-      </View>
-    </View>
+  // A bot that is mid-game cannot be entered into a new run. A bot whose owner
+  // has not opened it to public play is still listed, marked, because its owner
+  // is allowed to enter it and the server is the one that knows who that is.
+  const idle = useMemo(() => bots.filter((bot) => !bot.busy), [bots]);
+  const botOptions = useMemo(
+    () =>
+      idle.map((bot) => ({
+        label: bot.allowPublicPlay ? bot.name : `${bot.name} · PRIVATE`,
+        value: bot.botId as string | null,
+      })),
+    [idle],
   );
+  const enoughBots = idle.length >= 2;
+  const canStart =
+    !busy && Boolean(firstBotId) && Boolean(secondBotId) && firstBotId !== secondBotId;
+  const mine = (run: BotSeries) =>
+    Boolean(run.requestedByUserId) && run.requestedByUserId === identity.userId;
 
   return (
-    <Panel style={admin.unlocked ? styles.adminPanel : undefined}>
+    <Panel style={asHost ? styles.adminPanel : undefined}>
       <SectionHeading
-        eyebrow="PRIVATE"
-        title="Pit two bots"
+        eyebrow={asHost ? 'HOST' : 'ANYBODY'}
+        title="Pit two bots against each other"
         trailing={
-          <GhostButton
-            compact
-            label={open ? 'CLOSE' : 'HOST CONTROLS'}
-            onPress={() => setOpen(!open)}
-          />
+          admin.bySession ? undefined : (
+            <GhostButton
+              compact
+              label={hostFormOpen || asHost ? 'CLOSE' : 'HOST CONTROLS'}
+              onPress={() => {
+                if (asHost) admin.lock();
+                setHostFormOpen(!hostFormOpen && !asHost);
+              }}
+            />
+          )
         }
       />
-      {!open ? null : !admin.unlocked ? (
+
+      <Text style={styles.help}>
+        {asHost
+          ? 'Host limits: up to 100 pairs at any clock. The public form is capped at 3 pairs and 3 minutes each.'
+          : `Up to ${PUBLIC_MAX_PAIRS} pairs at ${PUBLIC_MAX_MINUTES} minutes each, and one run at a time per person. Both engines have to be open to public play — or be yours.`}
+      </Text>
+
+      {hostFormOpen && !asHost ? (
         <>
           {admin.error ? <Banner message={admin.error} tone="error" /> : null}
           <LabeledInput
@@ -147,124 +206,143 @@ export default function BotSeriesPanel({ bots, modes }: BotSeriesPanelProps) {
           />
           <PrimaryButton
             disabled={admin.verifying}
-            label="UNLOCK COMMANDS"
+            label="UNLOCK HOST LIMITS"
             onPress={() => admin.unlock(draft).then((ok) => ok && setDraft(''))}
           />
         </>
-      ) : (
-        <>
-          {error ? <Banner message={error} onDismiss={() => setError(null)} tone="error" /> : null}
-          {idle.length < 2 ? (
-            <Text style={styles.help}>
-              Two idle bots are needed. {idle.length} available right now.
-            </Text>
-          ) : null}
-          {picker('FIRST BOT', redBotId, setRedBotId)}
-          {picker('SECOND BOT', blueBotId, setBlueBotId)}
-          <View style={styles.pickerRow}>
-            {modes.map((mode) => (
-              <GhostButton
-                compact
-                key={mode.id}
-                label={mode.id === modeId ? `▸ ${mode.name}` : mode.name}
-                onPress={() => setModeId(mode.id)}
+      ) : null}
+
+      {error ? <Banner message={error} onDismiss={() => setError(null)} tone="error" /> : null}
+
+      {enoughBots && (
+        <View style={styles.form}>
+          <OptionChips<string | null>
+            label="FIRST BOT"
+            onChange={setFirstBotId}
+            options={botOptions}
+            value={firstBotId}
+          />
+          <OptionChips<string | null>
+            label="SECOND BOT"
+            onChange={setSecondBotId}
+            options={botOptions}
+            value={secondBotId}
+          />
+          <OptionChips<ModeID>
+            label="MODE"
+            onChange={setModeId}
+            options={modes.map((mode) => ({ label: mode.name, value: mode.id }))}
+            value={modeId}
+          />
+
+          {optionsOpen ? (
+            <View style={styles.fields}>
+              <LabeledInput
+                hint={`Played twice each, colours swapped · max ${maxPairs}`}
+                keyboardType="number-pad"
+                label="PAIRS"
+                onChangeText={setPairs}
+                value={pairs}
               />
-            ))}
-          </View>
-          <View style={styles.fields}>
-            <LabeledInput
-              hint="Each pair is played twice, colours swapped"
-              keyboardType="number-pad"
-              label="PAIRS"
-              onChangeText={setPairs}
-              value={pairs}
-            />
-            <LabeledInput
-              hint="Random moves both bots start from"
-              keyboardType="number-pad"
-              label="OPENING PLIES"
-              onChangeText={setPlies}
-              value={plies}
-            />
-            <LabeledInput
-              hint="Blank picks one"
-              keyboardType="number-pad"
-              label="SEED"
-              onChangeText={setSeed}
-              value={seed}
-            />
-            <LabeledInput
-              keyboardType="number-pad"
-              label="MINUTES EACH"
-              onChangeText={setMinutes}
-              value={minutes}
-            />
-          </View>
+              <LabeledInput
+                hint="Random moves both bots start from"
+                keyboardType="number-pad"
+                label="OPENING PLIES"
+                onChangeText={setPlies}
+                value={plies}
+              />
+              <LabeledInput
+                hint="Blank picks one"
+                keyboardType="number-pad"
+                label="SEED"
+                onChangeText={setSeed}
+                value={seed}
+              />
+              <LabeledInput
+                hint={`Max ${maxMinutes}`}
+                keyboardType="number-pad"
+                label="MINUTES EACH"
+                onChangeText={setMinutes}
+                value={minutes}
+              />
+            </View>
+          ) : null}
+
           <View style={styles.actions}>
             <PrimaryButton disabled={!canStart} label="START SERIES ▶" onPress={start} />
-            <GhostButton label="LOCK" onPress={admin.lock} />
+            <GhostButton
+              compact
+              label={
+                optionsOpen
+                  ? 'HIDE OPTIONS'
+                  : `${pairs} PAIRS · ${plies} PLIES · ${minutes} MIN`
+              }
+              onPress={() => setOptionsOpen(!optionsOpen)}
+            />
           </View>
+        </View>
+      )}
 
-          {series.length === 0 ? null : (
-            <View style={styles.list}>
-              {series.slice(0, 6).map((run) => (
-                <View key={run.seriesId} style={styles.row}>
-                  <View style={styles.rowCopy}>
-                    <Text style={styles.rowName}>
-                      {run.firstBotName} {run.firstWins}–{run.secondWins} {run.secondBotName}
-                      {run.draws ? ` (${run.draws} drawn)` : ''}
-                    </Text>
-                    <Text style={styles.rowMeta}>
-                      {run.modeId} · {run.pairs} pairs · seed {run.seed}
-                    </Text>
-                  </View>
+      {series.length === 0 ? null : (
+        <View style={styles.list}>
+          {series.slice(0, VISIBLE_RUNS).map((run, index) => (
+            <ListRow
+              detail={
+                run.requestedByName ? (
+                  <Text style={styles.rowMeta}>
+                    started by {run.requestedByName}
+                    {mine(run) ? ' · you' : ''}
+                  </Text>
+                ) : undefined
+              }
+              divided={index > 0}
+              key={run.seriesId}
+              meta={`${run.modeId} · ${run.pairs} pairs · seed ${run.seed}`}
+              title={`${run.firstBotName} ${run.firstWins}–${run.secondWins} ${run.secondBotName}${
+                run.draws ? ` (${run.draws} drawn)` : ''
+              }`}
+              trailing={
+                <View style={styles.rowActions}>
                   <Badge
                     label={run.status.toUpperCase()}
                     tone={run.status === 'running' ? 'live' : 'neutral'}
                   />
-                  {run.status === 'running' ? (
-                    <GhostButton
-                      compact
-                      label="ABORT"
-                      onPress={() =>
-                        abortBotSeries(admin.token, run.seriesId).then(refresh).catch(() => {})
-                      }
-                    />
+                  {run.status === 'running' && (asHost || mine(run)) ? (
+                    <GhostButton compact label="STOP" onPress={() => stop(run)} />
                   ) : null}
                 </View>
-              ))}
-            </View>
-          )}
-        </>
+              }
+            />
+          ))}
+        </View>
       )}
+
+      {/*
+        Where these runs end up. The standings and the game-by-game history used
+        to be copied onto this page as well, which made a page about starting a
+        run twice as long as the run's own scoreboard.
+      */}
+      <LinkRow
+        detail="Ranked engine standings, and every game behind them."
+        href={links.leaderboard()}
+        title="The bot ladder"
+      />
     </Panel>
   );
 }
 
 const styles = StyleSheet.create({
   adminPanel: { borderColor: colors.goldBorder, backgroundColor: colors.goldSurfaceDeep },
-  help: { color: colors.textFaint, fontSize: 11, marginTop: 8 },
-  picker: { marginTop: 10 },
-  pickerLabel: {
-    color: colors.textFaint,
-    fontSize: 10,
-    fontWeight: '800',
-    letterSpacing: 1,
-    marginBottom: 4,
-  },
-  pickerRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6 },
-  fields: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
-  actions: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginTop: 10 },
-  list: { gap: 1, marginTop: 12 },
-  row: {
-    minHeight: 48,
+  help: { ...type.body, color: colors.textMuted, marginTop: space.small },
+  form: { gap: space.medium, marginTop: space.medium },
+  fields: { flexDirection: 'row', flexWrap: 'wrap', gap: space.medium },
+  actions: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'center',
-    gap: 10,
-    borderTopWidth: 1,
-    borderTopColor: colors.borderSoft,
+    gap: space.small,
   },
-  rowCopy: { flex: 1 },
-  rowName: { color: colors.text, fontSize: 12, fontWeight: '800' },
-  rowMeta: { color: colors.textFaint, fontSize: 10, marginTop: 2 },
+  list: { marginTop: space.medium },
+  rowMeta: { ...type.meta, color: colors.textFaint, marginTop: space.hair },
+  rowActions: { flexDirection: 'row', alignItems: 'center', gap: space.snug },
 });

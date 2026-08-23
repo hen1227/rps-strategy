@@ -260,7 +260,7 @@ export const applyAnalysisMove = (
   };
 
   if (
-    (game.mode.id === 'V1' || game.mode.id === 'V5') &&
+    game.mode.id === 'V5' &&
     countPieces(grid, opposingColor(mover)) === 0
   ) {
     decide(mover, 'annihilation');

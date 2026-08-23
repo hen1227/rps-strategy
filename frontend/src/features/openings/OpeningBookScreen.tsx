@@ -1,15 +1,12 @@
-import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 
 import {
   exactOpeningName,
@@ -36,8 +33,9 @@ import {
   suggestOpeningName,
 } from '@/store/api/openings';
 import { useGameStore } from '@/store/gameStore';
-import { colors, players, radius, WIDE_LAYOUT_WIDTH } from '@/theme';
+import { colors, contentWidth, players, radius } from '@/theme';
 import type { ModeID } from '@/types/game';
+import ScreenShell from '@/ui/ScreenShell';
 import { Badge, Banner, GhostButton, Panel, PrimaryButton } from '@/ui/primitives';
 
 /** Enough of a mode to label a tab, for before the server catalog arrives. */
@@ -49,7 +47,6 @@ interface ModeTab {
 
 const FALLBACK_MODES: ModeTab[] = [
   { id: 'V3', name: 'Infiltration', shortCode: 'V3' },
-  { id: 'V1', name: 'Annihilation', shortCode: 'V1' },
   { id: 'V5', name: 'Total War', shortCode: 'V5' },
 ];
 
@@ -355,7 +352,6 @@ function AdminStudio({
 }
 
 export default function OpeningBookScreen() {
-  const router = useRouter();
   const storeModes = useGameStore((state) => state.modes);
   const modes = storeModes.length > 0 ? storeModes : FALLBACK_MODES;
   const [modeId, setModeId] = useState<ModeID>('V3');
@@ -423,15 +419,10 @@ export default function OpeningBookScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.safeArea} edges={['top', 'right', 'bottom', 'left']}>
-      <ScrollView
-        contentContainerStyle={styles.scrollContent}
-        keyboardShouldPersistTaps="handled"
-        showsVerticalScrollIndicator={false}
-      >
-        <View style={styles.screen}>
+    <ScreenShell width={contentWidth.standard}>
+      <>
+          {/* No back button: the shell's navigation is already the way out. */}
           <View style={styles.header}>
-            <GhostButton compact label="← LOBBY" onPress={() => router.push(links.lobby())} />
             <View style={styles.headerCopy}>
               <Text style={styles.brand}>RPS OPENINGS</Text>
               <Text style={styles.headerSubtitle}>A living book, analyzed by RPSFish and named by players.</Text>
@@ -616,24 +607,12 @@ export default function OpeningBookScreen() {
             onNamePublished={publishLocally}
             onNotice={setNotice}
           />
-        </View>
-      </ScrollView>
-    </SafeAreaView>
+      </>
+    </ScreenShell>
   );
 }
 
 const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: colors.background },
-  scrollContent: { flexGrow: 1 },
-  screen: {
-    width: '100%',
-    maxWidth: WIDE_LAYOUT_WIDTH,
-    alignSelf: 'center',
-    paddingHorizontal: 18,
-    paddingTop: 16,
-    paddingBottom: 70,
-    gap: 14,
-  },
   pressed: { opacity: 0.7 },
   header: { flexDirection: 'row', alignItems: 'center', gap: 14 },
   headerCopy: { flex: 1 },

@@ -6,9 +6,16 @@
 // says which it wants.
 
 import { apiClient } from './http';
+import { identityCredential, identityScope, type RequestIdentity } from './identity';
 import { API_URL } from '../serverConfig';
 import type { ModeID, TimeControl } from '@/types/game';
-import type { Account, AccountKind, BotPresence, Tournament } from '@/types/protocol';
+import type {
+  Account,
+  AccountKind,
+  BotPresence,
+  GameRecord,
+  Tournament,
+} from '@/types/protocol';
 
 const request = apiClient('bot registry');
 
@@ -157,10 +164,17 @@ export interface BotSeries {
   secondBotId: string;
   firstBotName?: string;
   secondBotName?: string;
+  /** Who asked for the run. Absent on one started with the host token. */
+  requestedByUserId?: string;
+  requestedByName?: string;
   status: BotSeriesStatus | string;
   pairs: number;
   openingPlies: number;
-  seed: number;
+  /**
+   * A string, because it is a full 64-bit value: as a JSON number it would
+   * arrive rounded, and a seed you cannot paste back is not a seed.
+   */
+  seed: string;
   initialTimeMs: number;
   incrementMs: number;
   firstWins: number;
@@ -177,15 +191,46 @@ export interface StartBotSeriesOptions {
   secondBotId: string;
   pairs?: number;
   openingPlies?: number;
-  seed?: number;
+  /** Digits, or omitted to let the server pick one. See `BotSeries.seed`. */
+  seed?: string;
   /** Omitted means the server's default. */
   timeControl?: TimeControl;
 }
 
-export const listBotSeries = () =>
-  request<BotSeries[]>('/api/bot-series', { what: 'Loading bot series' });
+export const listBotSeries = (limit?: number) =>
+  request<BotSeries[]>(`/api/bot-series${limit ? `?limit=${limit}` : ''}`, {
+    what: 'Loading bot series',
+  });
 
-export const startBotSeries = (adminToken: string, options: StartBotSeriesOptions) =>
+/**
+ * Pit two bots against each other.
+ *
+ * Anybody may do this, which is why it takes an identity rather than the host
+ * token: the server holds a public request to a short run at a fast clock, needs
+ * both bots to be open to public play, and lets one account hold one run at a
+ * time. The row it creates says who asked, so the scoreboard can say so too.
+ */
+export const startBotSeries = (identity: RequestIdentity, options: StartBotSeriesOptions) =>
+  request<BotSeries>(`/api/bot-series${identityScope(identity)}`, {
+    method: 'POST',
+    token: identityCredential(identity),
+    body: options,
+    what: 'Starting the series',
+  });
+
+/** Stop a run you started. The server refuses anybody else's. */
+export const abortBotSeries = (identity: RequestIdentity, seriesId: string) =>
+  request<{ aborted: boolean }>(
+    `/api/bot-series/${seriesId}/abort${identityScope(identity)}`,
+    {
+      method: 'POST',
+      token: identityCredential(identity),
+      what: 'Stopping the series',
+    },
+  );
+
+/** The host's version: any length, any clock, and it can stop anybody's run. */
+export const startAdminBotSeries = (adminToken: string, options: StartBotSeriesOptions) =>
   request<BotSeries>('/api/admin/bot-series', {
     method: 'POST',
     token: adminToken,
@@ -193,12 +238,46 @@ export const startBotSeries = (adminToken: string, options: StartBotSeriesOption
     what: 'Starting the series',
   });
 
-export const abortBotSeries = (adminToken: string, seriesId: string) =>
-  request<BotSeries>(`/api/admin/bot-series/${seriesId}/abort`, {
+export const abortAdminBotSeries = (adminToken: string, seriesId: string) =>
+  request<{ aborted: boolean }>(`/api/admin/bot-series/${seriesId}/abort`, {
     method: 'POST',
     token: adminToken,
-    what: 'Aborting the series',
+    what: 'Stopping the series',
   });
+
+/* ---------------------------------------------------------------- matches -- */
+
+/**
+ * One finished game between two bots.
+ *
+ * An ordinary game record — a bot plays through the same machinery a person
+ * does — plus the run it belonged to, when it belonged to one. Games a bot
+ * played against a person are deliberately not here: they are unranked, so they
+ * cannot answer which engine is stronger, which is the only question this list
+ * is asked.
+ */
+export interface BotMatch extends GameRecord {
+  seriesId?: string;
+}
+
+export interface BotMatchQuery {
+  /** Bot *account* ids. Repeated, so a board of top bots can ask for its own. */
+  botUserIds?: string[];
+  /** One mode's games, to match a per-mode ladder. Omitted means every mode. */
+  modeId?: ModeID | null;
+  limit?: number;
+  offset?: number;
+}
+
+export const botMatches = ({ botUserIds, modeId, limit, offset }: BotMatchQuery = {}) => {
+  const query = new URLSearchParams();
+  for (const userId of botUserIds ?? []) query.append('botId', userId);
+  if (modeId) query.set('mode', modeId);
+  if (limit !== undefined) query.set('limit', String(limit));
+  if (offset !== undefined) query.set('offset', String(offset));
+  const suffix = query.size > 0 ? `?${query}` : '';
+  return request<BotMatch[]>(`/api/bot-matches${suffix}`, { what: 'Loading bot games' });
+};
 
 export const enrollBotsInTournament = (adminToken: string, tournamentId: string) =>
   request<Tournament>(`/api/admin/tournaments/${tournamentId}/enroll-bots`, {

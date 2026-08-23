@@ -1,18 +1,10 @@
 import * as Clipboard from 'expo-clipboard';
 import { failureMessage } from '@/errors';
 import { useEffect, useState } from 'react';
-import {
-  KeyboardAvoidingView,
-  Modal,
-  Platform,
-  Pressable,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from 'react-native';
+import { Pressable, StyleSheet, Text, TextInput } from 'react-native';
 
-import { colors, overlay, radius, shadows } from '@/theme';
+import { colors, radius } from '@/theme';
+import ModalCard from '@/ui/ModalCard';
 
 export interface PGNImportModalProps {
   onClose: () => void;
@@ -58,35 +50,32 @@ export default function PGNImportModal({ onClose, onLoad, visible }: PGNImportMo
   };
 
   return (
-    <Modal animationType="fade" onRequestClose={onClose} transparent visible={visible}>
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        style={styles.root}
-      >
-        <Pressable
-          accessibilityLabel="Close PGN import"
-          accessibilityRole="button"
-          onPress={onClose}
-          style={styles.backdrop}
-        />
-        <View accessibilityViewIsModal style={styles.card}>
-          <View style={styles.header}>
-            <View style={styles.headerCopy}>
-              <Text style={styles.eyebrow}>LOAD GAME ANALYSIS</Text>
-              <Text style={styles.title}>Paste a PGN</Text>
-              <Text style={styles.subtitle}>
-                The game will be replayed and checked before RPSFish reviews every move.
-              </Text>
-            </View>
-            <Pressable
-              accessibilityLabel="Close PGN import"
-              accessibilityRole="button"
-              onPress={onClose}
-              style={({ pressed }) => [styles.closeButton, pressed && styles.pressed]}
-            >
-              <Text style={styles.closeMark}>×</Text>
-            </Pressable>
-          </View>
+    <ModalCard
+      closeLabel="Close PGN import"
+      eyebrow="LOAD GAME ANALYSIS"
+      footer={
+        <>
+          <Pressable
+            accessibilityRole="button"
+            onPress={pasteFromClipboard}
+            style={({ pressed }) => [styles.pasteButton, pressed && styles.pressed]}
+          >
+            <Text style={styles.pasteText}>PASTE FROM CLIPBOARD</Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            onPress={load}
+            style={({ pressed }) => [styles.loadButton, pressed && styles.pressed]}
+          >
+            <Text style={styles.loadText}>ANALYZE GAME</Text>
+          </Pressable>
+        </>
+      }
+      onClose={onClose}
+      subtitle="The game will be replayed and checked before RPSFish reviews every move."
+      title="Paste a PGN"
+      visible={visible}
+    >
 
           <TextInput
             accessibilityLabel="PGN text"
@@ -97,7 +86,7 @@ export default function PGNImportModal({ onClose, onLoad, visible }: PGNImportMo
               setText(value);
               setError(null);
             }}
-            placeholder={'[Event "RPS Strategy"]\n[ModeId "V1"]\n…'}
+            placeholder={'[Event "RPS Strategy"]\n[ModeId "V5"]\n…'}
             placeholderTextColor={colors.textFaint}
             style={styles.input}
             textAlignVertical="top"
@@ -110,57 +99,11 @@ export default function PGNImportModal({ onClose, onLoad, visible }: PGNImportMo
             </Text>
           ) : null}
 
-          <View style={styles.footer}>
-            <Pressable
-              accessibilityRole="button"
-              onPress={pasteFromClipboard}
-              style={({ pressed }) => [styles.pasteButton, pressed && styles.pressed]}
-            >
-              <Text style={styles.pasteText}>PASTE FROM CLIPBOARD</Text>
-            </Pressable>
-            <Pressable
-              accessibilityRole="button"
-              onPress={load}
-              style={({ pressed }) => [styles.loadButton, pressed && styles.pressed]}
-            >
-              <Text style={styles.loadText}>ANALYZE GAME</Text>
-            </Pressable>
-          </View>
-        </View>
-      </KeyboardAvoidingView>
-    </Modal>
+    </ModalCard>
   );
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 14 },
-  backdrop: { ...StyleSheet.absoluteFill, backgroundColor: overlay },
-  card: {
-    width: '100%',
-    maxWidth: 620,
-    maxHeight: '94%',
-    padding: 17,
-    borderRadius: radius.large,
-    borderWidth: 1,
-    borderColor: colors.borderStrong,
-    backgroundColor: colors.surface,
-    boxShadow: shadows.modal,
-    elevation: 18,
-  },
-  header: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
-  headerCopy: { flex: 1 },
-  eyebrow: { color: colors.accentBright, fontSize: 8, fontWeight: '900', letterSpacing: 1.4 },
-  title: { color: colors.textStrong, fontSize: 20, fontWeight: '900', marginTop: 4 },
-  subtitle: { color: colors.textMuted, fontSize: 10, lineHeight: 15, marginTop: 4 },
-  closeButton: {
-    width: 34,
-    height: 34,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: radius.medium,
-    backgroundColor: colors.surfaceRaised,
-  },
-  closeMark: { color: colors.textMuted, fontSize: 23, lineHeight: 25 },
   input: {
     minHeight: 230,
     maxHeight: 420,
@@ -176,7 +119,6 @@ const styles = StyleSheet.create({
     lineHeight: 16,
   },
   error: { color: colors.dangerText, fontSize: 10, lineHeight: 14, marginTop: 8 },
-  footer: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8, marginTop: 14 },
   pasteButton: {
     minHeight: 40,
     justifyContent: 'center',

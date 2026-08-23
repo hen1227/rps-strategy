@@ -46,15 +46,6 @@ const flag = (name: string) => process.argv.includes(`--${name}`);
 // the id and the starting rows matter to the rules module, so these come from
 // the shared fixtures rather than being restated.
 const MODES: Record<string, ModeDefinition> = {
-  V1: testMode('V1', {
-    startingPosition: {
-      rows: [
-        '.........', '.........', '.........',
-        '.R.....s.', '.P.....p.', '.S.....r.',
-        '.........', '.........', '.........',
-      ],
-    },
-  }),
   V5: testMode('V5'),
   V3: testMode('V3'),
 };
@@ -74,7 +65,7 @@ const main = async () => {
   const seed = Number(argument('seed', '1'));
   const openingPlies = Number(argument('opening', '6'));
   const modeArgument = argument('mode', 'all');
-  const modeIds = modeArgument === 'all' ? ['V1', 'V5', 'V3'] : modeArgument.split(',');
+  const modeIds = modeArgument === 'all' ? ['V5', 'V3'] : modeArgument.split(',');
 
   if (flag('spread')) {
     await reportSpread({ analyze, modeIds, seed });

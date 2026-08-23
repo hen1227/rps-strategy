@@ -30,15 +30,6 @@ const argument = (name: string, fallback = '') => {
 };
 
 const MODES: Record<string, ModeDefinition> = {
-  V1: testMode('V1', {
-    startingPosition: {
-      rows: [
-        '.........', '.........', '.........',
-        '.R.....s.', '.P.....p.', '.S.....r.',
-        '.........', '.........', '.........',
-      ],
-    },
-  }),
   V5: testMode('V5'),
   V3: testMode('V3'),
 };
@@ -178,7 +169,7 @@ const main = async () => {
   const plies = Number(argument('plies', '400'));
   const seed = Number(argument('seed', '20260821'));
   const modeIds =
-    argument('mode', 'all') === 'all' ? ['V1', 'V5', 'V3'] : argument('mode').split(',');
+    argument('mode', 'all') === 'all' ? ['V5', 'V3'] : argument('mode').split(',');
 
   console.log(`${games} games per mode, depth ${depth}, up to ${plies} plies, seed ${seed}\n`);
   for (const modeId of modeIds) {

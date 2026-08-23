@@ -1,18 +1,16 @@
-import { useRouter } from 'expo-router';
 import { failureMessage } from '@/errors';
 import { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 
 import TournamentMatchRow from './TournamentMatchRow';
 import TournamentSignupForm from './TournamentSignupForm';
+import ScreenShell from '@/ui/ScreenShell';
 import {
   Badge,
   Banner,
@@ -32,30 +30,29 @@ import {
 import { useAdminToken } from '@/hooks/useAdminToken';
 import { enrollBotsInTournament } from '@/store/api/bots';
 import {
+  championOf,
+  currentTournaments,
   matchesOf,
+  pastTournaments,
   playedMatchCount,
   roundsOf,
   signupFor,
   statusOf,
 } from '@/store/tournamentSelectors';
-import { links } from '@/navigation/links';
 import type { ModeID } from '@/types/game';
 import type {
   Tournament,
   TournamentMatch,
   TournamentMatchResult,
 } from '@/types/protocol';
-import { colors, radius } from '@/theme';
+import { colors, contentWidth, radius } from '@/theme';
 
 export default function TournamentScreen() {
-  const router = useRouter();
   const accountId = useGameStore((state) => state.accountId);
   const modes = useGameStore((state) => state.modes);
   const tournaments = useGameStore((state) => state.tournaments);
   const connectionStatus = useGameStore((state) => state.connectionStatus);
-  const queue = useGameStore((state) => state.queue);
   const spectatedGameId = useGameStore((state) => state.spectatedGameId);
-  const outgoingChallenge = useGameStore((state) => state.outgoingChallenge);
   const loadTournaments = useGameStore((state) => state.loadTournaments);
   const applyTournamentUpdate = useGameStore((state) => state.applyTournamentUpdate);
   const spectateGame = useGameStore((state) => state.spectateGame);
@@ -81,6 +78,12 @@ export default function TournamentScreen() {
     [modes],
   );
   const selectedModeId = tournamentModeId ?? playableModes[0]?.id ?? null;
+  // Two lists, because they answer different questions: what is happening, and
+  // what happened. Mixing them made a finished event look like something to
+  // sign up for.
+  const current = useMemo(() => currentTournaments(tournaments), [tournaments]);
+  const past = useMemo(() => pastTournaments(tournaments), [tournaments]);
+
   const selected = useMemo(
     () =>
       tournaments.find((tournament) => tournament.tournamentId === selectedId) ??
@@ -90,11 +93,7 @@ export default function TournamentScreen() {
   );
 
   const isConnected = connectionStatus === 'connected';
-  const spectateDisabled =
-    !isConnected ||
-    queue.isSearching ||
-    Boolean(spectatedGameId) ||
-    Boolean(outgoingChallenge);
+  const spectateDisabled = !isConnected || Boolean(spectatedGameId);
   const adminUnlocked = admin.unlocked;
   const adminToken = admin.token;
   const isBusy = busyAction !== null;
@@ -186,18 +185,10 @@ export default function TournamentScreen() {
     );
 
   return (
-    <SafeAreaView style={styles.safeArea} edges={['top', 'right', 'bottom', 'left']}>
-      <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
-        <View style={styles.screen}>
+    <ScreenShell width={contentWidth.standard}>
+      <>
+          {/* No back button: the shell's navigation is already the way out. */}
           <View style={styles.topBar}>
-            <Pressable
-              accessibilityLabel="Back to the lobby"
-              accessibilityRole="button"
-              onPress={() => router.push(links.lobby())}
-              style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}
-            >
-              <Text style={styles.backText}>‹ LOBBY</Text>
-            </Pressable>
             <View style={styles.topBarActions}>
               <GhostButton
                 accessibilityLabel="Refresh the tournament board"
@@ -334,9 +325,9 @@ export default function TournamentScreen() {
           ) : (
             // With a single event the detail panel below says everything the
             // picker would.
-            tournaments.length > 1 && (
+            current.length > 1 && (
             <View style={styles.tournamentList}>
-              {tournaments.map((tournament) => {
+              {current.map((tournament) => {
                 const status = statusOf(tournament);
                 const isSelected = tournament.tournamentId === selected?.tournamentId;
                 return (
@@ -571,9 +562,65 @@ export default function TournamentScreen() {
               </Panel>
             </View>
           )}
-        </View>
-      </ScrollView>
-    </SafeAreaView>
+
+          {past.length > 0 && (
+            <Panel>
+              <SectionHeading
+                eyebrow="THE ARCHIVE"
+                title="Past events"
+                trailing={<Badge label={`${past.length}`} />}
+              />
+              <Text style={styles.historyHelp}>
+                Every event that has finished. Open one for its full standings, roster, and
+                round-by-round results.
+              </Text>
+              <View style={styles.historyList}>
+                {past.map((tournament) => {
+                  const champion = championOf(tournament);
+                  const finished = tournament.completedAtUnixMs ?? tournament.createdAtUnixMs;
+                  const isSelected = tournament.tournamentId === selected?.tournamentId;
+                  return (
+                    <Pressable
+                      accessibilityLabel={`Open ${tournament.name}`}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected: isSelected }}
+                      key={tournament.tournamentId}
+                      onPress={() => setSelectedId(tournament.tournamentId)}
+                      style={({ pressed }) => [
+                        styles.historyRow,
+                        isSelected && styles.historyRowSelected,
+                        pressed && styles.pressed,
+                      ]}
+                    >
+                      <View style={styles.historyCopy}>
+                        <Text numberOfLines={1} style={styles.historyName}>
+                          {tournament.name}
+                        </Text>
+                        <Text style={styles.historyMeta}>
+                          {tournament.modeName} ·{' '}
+                          {new Date(finished).toLocaleDateString()} ·{' '}
+                          {tournament.players.length} player
+                          {tournament.players.length === 1 ? '' : 's'}
+                        </Text>
+                      </View>
+                      {champion ? (
+                        <View style={styles.historyChampion}>
+                          <Text style={styles.historyCrown}>♛</Text>
+                          <Text numberOfLines={1} style={styles.historyChampionName}>
+                            {champion}
+                          </Text>
+                        </View>
+                      ) : (
+                        <Badge label="NO RESULT" />
+                      )}
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </Panel>
+          )}
+      </>
+    </ScreenShell>
   );
 }
 
@@ -607,20 +654,8 @@ function ResultButton({ label, selected, disabled, onPress }: ResultButtonProps)
 }
 
 const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: colors.background },
-  scrollContent: { flexGrow: 1 },
-  screen: {
-    width: '100%',
-    maxWidth: 760,
-    alignSelf: 'center',
-    paddingHorizontal: 18,
-    paddingTop: 14,
-    paddingBottom: 96,
-  },
-  topBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  topBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end' },
   topBarActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  backButton: { paddingVertical: 8, paddingRight: 12 },
-  backText: { color: colors.textMuted, fontSize: 11, fontWeight: '900', letterSpacing: 0.9 },
 
   hero: { paddingTop: 24, paddingBottom: 22 },
   eyebrow: { color: colors.accent, fontSize: 10, fontWeight: '900', letterSpacing: 2.1 },
@@ -680,6 +715,25 @@ const styles = StyleSheet.create({
   tournamentMeta: { color: colors.textDim, fontSize: 10, marginTop: 4 },
 
   detailStack: { gap: 12 },
+
+  historyHelp: { color: colors.textMuted, fontSize: 11, lineHeight: 17, marginTop: 8 },
+  historyList: { marginTop: 8 },
+  historyRow: {
+    minHeight: 54,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 6,
+    borderTopWidth: 1,
+    borderTopColor: colors.borderSoft,
+  },
+  historyRowSelected: { backgroundColor: colors.accentSurfaceQuiet, borderRadius: radius.small },
+  historyCopy: { flex: 1 },
+  historyName: { color: colors.text, fontSize: 12, fontWeight: '800' },
+  historyMeta: { color: colors.textFaint, fontSize: 10, marginTop: 2 },
+  historyChampion: { flexDirection: 'row', alignItems: 'center', gap: 5, maxWidth: 150 },
+  historyCrown: { color: colors.gold, fontSize: 13 },
+  historyChampionName: { color: colors.goldSoft, fontSize: 11, fontWeight: '800' },
   championCard: {
     flexDirection: 'row',
     alignItems: 'center',

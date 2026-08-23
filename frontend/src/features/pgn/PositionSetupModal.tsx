@@ -1,16 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
-import {
-  Modal,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  useWindowDimensions,
-  View,
-} from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 
 import PieceIcon from '@/features/board/PieceIcon';
-import { board, colors, overlay, players, radius, shadows } from '@/theme';
+import { board, colors, players, radius } from '@/theme';
+import ModalCard from '@/ui/ModalCard';
 import type {
   ModeDefinition,
   Piece,
@@ -126,30 +119,33 @@ export default function PositionSetupModal({
   if (presetModes.length === 0) return null;
 
   return (
-    <Modal animationType="fade" onRequestClose={onClose} transparent visible={visible}>
-      <View style={styles.root}>
-        <Pressable
-          accessibilityLabel="Close position setup"
-          accessibilityRole="button"
-          onPress={onClose}
-          style={styles.backdrop}
-        />
-        <View accessibilityViewIsModal style={styles.card}>
-          <View style={styles.header}>
-            <View style={styles.headerCopy}>
-              <Text style={styles.eyebrow}>CUSTOM POSITION</Text>
-              <Text style={styles.title}>{title ?? `${presetModes[0].name} setup`}</Text>
-              <Text style={styles.subtitle}>Choose a piece, then tap squares to place it.</Text>
-            </View>
-            <Pressable
-              accessibilityLabel="Close position setup"
-              accessibilityRole="button"
-              onPress={onClose}
-              style={({ pressed }) => [styles.closeButton, pressed && styles.pressed]}
-            >
-              <Text style={styles.closeMark}>×</Text>
-            </Pressable>
-          </View>
+    <ModalCard
+      closeLabel="Close position setup"
+      eyebrow="CUSTOM POSITION"
+      footer={
+        <>
+          <Pressable
+            accessibilityRole="button"
+            onPress={onClose}
+            style={({ pressed }) => [styles.cancelButton, pressed && styles.pressed]}
+          >
+            <Text style={styles.cancelText}>CANCEL</Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => onApply({ rows })}
+            style={({ pressed }) => [styles.applyButton, pressed && styles.pressed]}
+          >
+            <Text style={styles.applyText}>USE POSITION</Text>
+          </Pressable>
+        </>
+      }
+      maxWidth={520}
+      onClose={onClose}
+      subtitle="Choose a piece, then tap squares to place it."
+      title={title ?? `${presetModes[0].name} setup`}
+      visible={visible}
+    >
 
           <ScrollView
             contentContainerStyle={styles.scrollContent}
@@ -249,57 +245,11 @@ export default function PositionSetupModal({
             </View>
           </ScrollView>
 
-          <View style={styles.footer}>
-            <Pressable
-              accessibilityRole="button"
-              onPress={onClose}
-              style={({ pressed }) => [styles.cancelButton, pressed && styles.pressed]}
-            >
-              <Text style={styles.cancelText}>CANCEL</Text>
-            </Pressable>
-            <Pressable
-              accessibilityRole="button"
-              onPress={() => onApply({ rows })}
-              style={({ pressed }) => [styles.applyButton, pressed && styles.pressed]}
-            >
-              <Text style={styles.applyText}>USE POSITION</Text>
-            </Pressable>
-          </View>
-        </View>
-      </View>
-    </Modal>
+    </ModalCard>
   );
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 14 },
-  backdrop: { ...StyleSheet.absoluteFill, backgroundColor: overlay },
-  card: {
-    width: '100%',
-    maxWidth: 520,
-    maxHeight: '94%',
-    padding: 17,
-    borderRadius: radius.large,
-    borderWidth: 1,
-    borderColor: colors.borderStrong,
-    backgroundColor: colors.surface,
-    boxShadow: shadows.modal,
-    elevation: 18,
-  },
-  header: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
-  headerCopy: { flex: 1 },
-  eyebrow: { color: colors.accentBright, fontSize: 8, fontWeight: '900', letterSpacing: 1.4 },
-  title: { color: colors.textStrong, fontSize: 20, fontWeight: '900', marginTop: 4 },
-  subtitle: { color: colors.textMuted, fontSize: 10, marginTop: 4 },
-  closeButton: {
-    width: 34,
-    height: 34,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: radius.medium,
-    backgroundColor: colors.surfaceRaised,
-  },
-  closeMark: { color: colors.textMuted, fontSize: 23, lineHeight: 25 },
   scrollContent: { alignItems: 'center', paddingTop: 14, paddingBottom: 4 },
   palette: { flexDirection: 'row', justifyContent: 'center', flexWrap: 'wrap', gap: 6 },
   tool: {
@@ -352,7 +302,6 @@ const styles = StyleSheet.create({
     borderColor: colors.borderStrong,
   },
   secondaryText: { color: colors.textMuted, fontSize: 8, fontWeight: '900' },
-  footer: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8, marginTop: 14 },
   cancelButton: { minHeight: 40, justifyContent: 'center', paddingHorizontal: 14 },
   cancelText: { color: colors.textMuted, fontSize: 9, fontWeight: '900' },
   applyButton: {

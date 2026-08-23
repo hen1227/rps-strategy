@@ -1,11 +1,12 @@
 import type { ReactNode } from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { ModeDefinition, PlayablePiece, SideColor } from '@/types/game';
 
 import ModePreview from './ModePreview';
 import PieceIcon from '@/features/board/PieceIcon';
 import TileMark from '@/features/board/TileMark';
-import { board, colors, overlay, players, radius, shadows } from '@/theme';
+import { board, colors, players, radius } from '@/theme';
+import ModalCard from '@/ui/ModalCard';
 
 // Small rules card for a single mode. Everything the two playable modes share
 // lives in the constants below; only the win condition is looked up per mode,
@@ -145,31 +146,24 @@ export default function HowToPlayModal({ mode, onClose, visible }: HowToPlayModa
   const win = WIN_CONDITIONS[mode.id] ?? fallbackWinCondition(mode);
 
   return (
-    <Modal animationType="fade" onRequestClose={onClose} transparent visible={visible}>
-      {/* The dimmed backdrop is a sibling of the card, not its parent, so the
-          card's own buttons are never nested inside a pressable. */}
-      <View style={styles.root}>
+    <ModalCard
+      closeLabel="Close how to play"
+      eyebrow="HOW TO PLAY"
+      footer={
         <Pressable
           accessibilityLabel="Close how to play"
           accessibilityRole="button"
           onPress={onClose}
-          style={styles.backdrop}
-        />
-        <View accessibilityViewIsModal style={styles.card}>
-          <View style={styles.header}>
-            <View style={styles.headerCopy}>
-              <Text style={styles.eyebrow}>HOW TO PLAY</Text>
-              <Text style={styles.title}>{mode.name}</Text>
-            </View>
-            <Pressable
-              accessibilityLabel="Close how to play"
-              accessibilityRole="button"
-              onPress={onClose}
-              style={({ pressed }) => [styles.closeButton, pressed && styles.pressed]}
-            >
-              <Text style={styles.closeMark}>×</Text>
-            </Pressable>
-          </View>
+          style={({ pressed }) => [styles.doneButton, pressed && styles.pressed]}
+        >
+          <Text style={styles.doneText}>GOT IT</Text>
+        </Pressable>
+      }
+      maxWidth={420}
+      onClose={onClose}
+      title={mode.name}
+      visible={visible}
+    >
 
           <ScrollView
             contentContainerStyle={styles.scrollContent}
@@ -227,65 +221,13 @@ export default function HowToPlayModal({ mode, onClose, visible }: HowToPlayModa
               No legal move, or the same position three times over, is a draw. You can also
               offer a draw or resign from the game screen.
             </Text>
-          </ScrollView>
-
-          <Pressable
-            accessibilityLabel="Close how to play"
-            accessibilityRole="button"
-            onPress={onClose}
-            style={({ pressed }) => [styles.doneButton, pressed && styles.pressed]}
-          >
-            <Text style={styles.doneText}>GOT IT</Text>
-          </Pressable>
-        </View>
-      </View>
-    </Modal>
+      </ScrollView>
+    </ModalCard>
   );
 }
 
 const styles = StyleSheet.create({
-  root: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 20,
-  },
-  backdrop: {
-    ...StyleSheet.absoluteFill,
-    backgroundColor: overlay,
-  },
-  card: {
-    width: '100%',
-    maxWidth: 420,
-    maxHeight: '90%',
-    padding: 18,
-    borderRadius: radius.large,
-    borderWidth: 1,
-    borderColor: colors.borderStrong,
-    backgroundColor: colors.surface,
-    boxShadow: shadows.modal,
-    elevation: 18,
-  },
 
-  header: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
-  headerCopy: { flex: 1 },
-  eyebrow: {
-    color: colors.accentBright,
-    fontSize: 8,
-    fontWeight: '900',
-    letterSpacing: 1.4,
-    marginBottom: 3,
-  },
-  title: { color: colors.textStrong, fontSize: 20, fontWeight: '900' },
-  closeButton: {
-    width: 30,
-    height: 30,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: radius.small,
-    backgroundColor: colors.surfaceMuted,
-  },
-  closeMark: { color: colors.textSoft, fontSize: 19, lineHeight: 21, fontWeight: '700' },
 
   scroll: { marginTop: 4 },
   scrollContent: { paddingTop: 12, paddingBottom: 4 },
@@ -375,6 +317,7 @@ const styles = StyleSheet.create({
   },
 
   doneButton: {
+    flex: 1,
     minHeight: 42,
     alignItems: 'center',
     justifyContent: 'center',

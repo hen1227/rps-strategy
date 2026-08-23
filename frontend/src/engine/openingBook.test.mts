@@ -73,7 +73,7 @@ test('curator imports must match the selected mode and format', () => {
     root: { moves: [] },
   };
   assert.equal(validateOpeningBookDocument(book, 'V3'), book);
-  assert.throws(() => validateOpeningBookDocument(book, 'V1'), /not V1/);
+  assert.throws(() => validateOpeningBookDocument(book, 'V5'), /not V5/);
   assert.throws(
     () => validateOpeningBookDocument({ ...book, format: 'something-else' }, 'V3'),
     /Expected rps-opening-book\/v1/,

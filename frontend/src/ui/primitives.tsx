@@ -12,7 +12,7 @@ import {
 } from 'react-native';
 
 import type { BadgeTone, BannerTone, ButtonTone, PanelTone } from './tones';
-import { colors, players, radius } from '@/theme';
+import { colors, players, radius, space, type } from '@/theme';
 
 // Shared building blocks for every surface in the app. Keeping them here means
 // a new panel matches the rest without copying styles.
@@ -205,6 +205,68 @@ export function Checkbox({ checked, label, onToggle }: CheckboxProps) {
   );
 }
 
+export interface OptionChipsProps<Value> {
+  /** The tiny all-caps label above the row. */
+  label?: string;
+  options: readonly { value: Value; label: string }[];
+  value: Value;
+  onChange: (value: Value) => void;
+  disabled?: boolean;
+  /** Marks the row as configuring something away from its usual setting. */
+  changed?: boolean;
+}
+
+/**
+ * One choice from a handful, as a row of chips.
+ *
+ * A radio group would be the same information in four times the height, and
+ * every knob on the game setup screen is a choice between three or four named
+ * things — a clock, a seat, a move cap. Values are compared with `===`, so pass
+ * primitives and keep the mapping to objects outside.
+ */
+export function OptionChips<Value extends string | number | boolean | null>({
+  label,
+  options,
+  value,
+  onChange,
+  disabled,
+  changed,
+}: OptionChipsProps<Value>) {
+  return (
+    <View style={styles.chipGroup}>
+      {label ? (
+        <Text style={[styles.chipGroupLabel, changed && styles.chipGroupLabelChanged]}>
+          {label}
+        </Text>
+      ) : null}
+      <View style={styles.chipRow}>
+        {options.map((option) => {
+          const selected = option.value === value;
+          return (
+            <Pressable
+              accessibilityRole="radio"
+              accessibilityState={{ selected, disabled: Boolean(disabled) }}
+              disabled={disabled}
+              key={String(option.value)}
+              onPress={() => onChange(option.value)}
+              style={({ pressed }) => [
+                styles.chip,
+                selected && styles.chipSelected,
+                disabled && styles.disabled,
+                pressed && styles.pressed,
+              ]}
+            >
+              <Text style={[styles.chipLabel, selected && styles.chipLabelSelected]}>
+                {option.label}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
+
 export interface BannerProps {
   message?: string | null;
   onDismiss?: () => void;
@@ -360,6 +422,23 @@ const styles = StyleSheet.create({
   checkboxChecked: { borderColor: colors.accent, backgroundColor: colors.accent },
   checkboxMark: { color: colors.textStrong, fontSize: 13, fontWeight: '900' },
   checkboxLabel: { flex: 1, color: colors.textSubtle, fontSize: 11, lineHeight: 17 },
+
+  chipGroup: { gap: space.tight },
+  chipGroupLabel: { ...type.eyebrow, color: colors.textFaint },
+  chipGroupLabelChanged: { color: colors.accentSoft },
+  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: space.tight },
+  chip: {
+    minHeight: 26,
+    paddingHorizontal: space.small,
+    justifyContent: 'center',
+    borderRadius: radius.small,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceSunken,
+  },
+  chipSelected: { borderColor: colors.accent, backgroundColor: colors.accentSurface },
+  chipLabel: { ...type.label, color: colors.textMuted },
+  chipLabelSelected: { color: colors.accentTextStrong },
 
   banner: {
     flexDirection: 'row',
