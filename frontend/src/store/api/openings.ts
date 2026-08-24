@@ -1,10 +1,12 @@
 import { apiClient } from './http';
 import type {
-  OpeningBookDocument,
+  OpeningBookBootstrap,
+  OpeningBookUpload,
   OpeningLine,
   OpeningName,
   OpeningNameSuggestion,
-  PublishedOpeningBook,
+  OpeningBookMeta,
+  OpeningNodeResponse,
 } from '@/engine/openingBook';
 import type { ModeID } from '@/types/game';
 
@@ -12,17 +14,28 @@ const request = apiClient('opening-book server');
 
 const modePath = (modeId: ModeID) => encodeURIComponent(modeId);
 
+/**
+ * The book's front page: metadata, names, the opening position, and the
+ * positions along the featured lines. Not the book -- the server keeps that.
+ */
 export const getOpeningBook = (modeId: ModeID) =>
-  request<PublishedOpeningBook>(`/api/openings/${modePath(modeId)}`, {
+  request<OpeningBookBootstrap>(`/api/openings/${modePath(modeId)}`, {
     what: 'Loading the opening book',
   });
+
+/** One position, named by the line that reaches it. */
+export const getOpeningNode = (modeId: ModeID, line: OpeningLine) =>
+  request<OpeningNodeResponse>(
+    `/api/openings/${modePath(modeId)}/node?line=${encodeURIComponent(line.join(','))}`,
+    { what: 'Loading the position' },
+  );
 
 export const importOpeningBook = (
   adminToken: string,
   modeId: ModeID,
-  document: OpeningBookDocument | string,
+  document: OpeningBookUpload | string,
 ) =>
-  request<PublishedOpeningBook>(`/api/admin/openings/${modePath(modeId)}`, {
+  request<OpeningBookMeta>(`/api/admin/openings/${modePath(modeId)}`, {
     method: 'PUT',
     body: document,
     token: adminToken,

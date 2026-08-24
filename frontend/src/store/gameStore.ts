@@ -11,6 +11,7 @@ import {
 import { createBotSlice, initialBotState } from './botSession';
 import { createSessionSlice } from './accountSession';
 import { chatRoomIdOf, withChatMessage } from './chatSelectors';
+import { grantedTimeExtension, type TimeExtension } from './clockSelectors';
 import { WS_URL } from './serverConfig';
 import { isStandardSetup, standardSetup } from './setupSelectors';
 import { send } from './socketSend';
@@ -278,6 +279,15 @@ export interface LobbyState {
   spectatedGameId: string | null;
   gameState: ActiveGame | null;
   lastMove: Move | null;
+  /**
+   * The bonus both clocks just gained, for the player bars to celebrate.
+   *
+   * Deliberately never cleared — not on a timer, and not when a game ends.
+   * The bars play on this *changing* to a later instant, so one left standing
+   * is inert: it cannot fire again, and the next extension is a new instant
+   * whether or not the last one was ever on screen.
+   */
+  timeExtension: TimeExtension | null;
   selectedTile: Position | null;
   validMoves: Position[];
   opponentReconnectDeadline: number | null;
@@ -385,6 +395,7 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
   spectatedGameId: null,
   gameState: null,
   lastMove: null,
+  timeExtension: null,
   selectedTile: null,
   validMoves: [],
   opponentReconnectDeadline: null,
@@ -865,8 +876,13 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
         const awaitingFirstMove =
           message.gameState?.status === 'InProgress' &&
           message.gameState.clock.activeColor === 'Neutral';
+        // Nothing in a snapshot says a bonus just landed, so it is read out of
+        // the pair. Both players and every spectator get the same pair, so the
+        // flourish plays on all of their boards at once.
+        const bonusMs = grantedTimeExtension(current.gameState, message.gameState);
         set((state) => ({
           gameState: message.gameState,
+          timeExtension: bonusMs === null ? state.timeExtension : { at: Date.now(), bonusMs },
           firstMoveDeadline: awaitingFirstMove ? state.firstMoveDeadline : null,
           // The result does not end the session: the chat room stays open
           // until we leave it, and rejoining is how a reconnect gets back in.

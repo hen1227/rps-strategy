@@ -1,5 +1,7 @@
-import { failureMessage } from '@/errors';
+import { useLocalSearchParams } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
+
+import { failureMessage } from '@/errors';
 import {
   ActivityIndicator,
   Pressable,
@@ -61,7 +63,14 @@ export default function TournamentScreen() {
     (state) => state.withdrawFromTournamentMatch,
   );
 
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  // `?tournament=` opens the page on one event, which is how a card in the bot
+  // history links to the event behind it. Seeded rather than forced, so picking
+  // a different one from the list still works and the URL is not fought over.
+  const { tournament: linkedId } = useLocalSearchParams<{ tournament?: string }>();
+  const [selectedId, setSelectedId] = useState<string | null>(linkedId ?? null);
+  useEffect(() => {
+    if (linkedId) setSelectedId(linkedId);
+  }, [linkedId]);
   const [refreshing, setRefreshing] = useState(false);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);

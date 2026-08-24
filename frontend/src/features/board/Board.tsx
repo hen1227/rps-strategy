@@ -22,6 +22,7 @@ import Svg, { Defs, Line, Marker, Polygon } from 'react-native-svg';
 
 import PieceIcon from './PieceIcon';
 import TileMark from './TileMark';
+import { tintForTile } from './tint';
 import MoveQualityBadge from '@/features/analysis/MoveQualityBadge';
 import {
   buildReplayPieceTracks,
@@ -46,8 +47,6 @@ const BOARD_SIZE = 9;
 // Files and ranks as the archive writes them, so a square named on the
 // board is the square named in the game's PGN.
 const FILES = 'abcdefghi';
-const MODE_INFILTRATION = 'V3';
-const MODE_TOTAL_WAR = 'V5';
 const TILE_PERCENTAGE = 100 / BOARD_SIZE;
 const ANNOTATION_COLOR = board.annotation;
 const RIGHT_BUTTON = 2;
@@ -99,29 +98,6 @@ const moveBadgeSizeForBoard = (boardSize: number) =>
       Math.min(22, ((boardSize - BOARD_BORDER_WIDTH * 2) / BOARD_SIZE) * 0.36),
     ),
   );
-
-/** What a tile is dressed as: a mode's goal rank, or territory somebody owns. */
-interface TileTint {
-  color: PlayerColor;
-  kind: 'goal' | 'territory';
-}
-
-const tintForTile = (modeId: ModeID | undefined, tile: Tile): TileTint | null => {
-  if (modeId === MODE_INFILTRATION) {
-    if (tile.y === 0) return { color: 'Red', kind: 'goal' };
-    if (tile.y === BOARD_SIZE - 1) return { color: 'Blue', kind: 'goal' };
-    return null;
-  }
-
-  if (
-    modeId === MODE_TOTAL_WAR &&
-    (tile.ownerColor === 'Red' || tile.ownerColor === 'Blue')
-  ) {
-    return { color: tile.ownerColor, kind: 'territory' };
-  }
-
-  return null;
-};
 
 const positionFromDrag = (
   from: Position,

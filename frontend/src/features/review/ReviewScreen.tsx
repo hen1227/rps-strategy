@@ -28,7 +28,9 @@ import MoveQualityBadge from '@/features/analysis/MoveQualityBadge';
 import ReplayControls from '@/features/analysis/ReplayControls';
 import TerritoryMeter from '@/features/analysis/TerritoryMeter';
 import Board from '@/features/board/Board';
+import SeriesScoreTable from '@/features/bots/SeriesScoreTable';
 import GameChat from '@/features/game/GameChat';
+import GameTransition from '@/features/game/GameTransition';
 import { failureMessage } from '@/errors';
 import { useBoardLayout } from '@/hooks/useBoardLayout';
 import { useBoardSelection } from '@/hooks/useBoardSelection';
@@ -37,11 +39,12 @@ import { usePositionAnalysis } from '@/hooks/usePositionAnalysis';
 import useReplayKeyboard from '@/hooks/useReplayKeyboard';
 import { useReplayCursor } from '@/hooks/useReplayCursor';
 import { links } from '@/navigation/links';
+import { botSeriesForGame, type BotSeries } from '@/store/api/bots';
 import { getGamePGN, putGameAccuracy } from '@/store/api/review';
 import { roomSpansSeries } from '@/store/chatSelectors';
 import { useGameStore } from '@/store/gameStore';
 import { useReviewHandoff } from '@/store/reviewHandoff';
-import { colors, radius } from '@/theme';
+import { colors, radius, space } from '@/theme';
 import {
   SIDE_COLORS,
   sameMove,
@@ -52,6 +55,11 @@ import {
 
 // A stable empty line, so the analysis hook is not handed a new array on every
 // render while the record is still loading.
+// The evaluation bar's width plus the gap beside it, so the series strip spans
+// the board *and* the bar rather than stopping short of it. Kept next to the
+// style that lays those two out (`boardWithEval`), which is its other half.
+const EVAL_BAR_GUTTER = 38;
+
 const EMPTY_POSITIONS: AnalysisGame[] = [];
 const EMPTY_MOVES: RecordedMove[] = [];
 
@@ -211,6 +219,14 @@ export default function ReviewScreen() {
 
   const [pgnText, setPgnText] = useState<string | null>(providedPGN);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // The run this game is one game of, when it is one. Fetched by game id rather
+  // than carried on the link, so a pasted URL gets the strip too.
+  const [series, setSeries] = useState<BotSeries | null>(null);
+  // The game asked for while the one on screen is still up, which is what drives
+  // the board's hand-off. Cleared when the new record lands. See GameTransition:
+  // this is the same animation the spectate screen plays when a series moves on
+  // to its next board, because it is the same act.
+  const [switchingTo, setSwitchingTo] = useState<string | null>(null);
   const [preset, setPreset] = useState<AnalysisPreset>(DEFAULT_ANALYSIS_PRESET);
   const [branch, setBranch] = useState<ReviewBranch | null>(null);
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'error'>('idle');
@@ -218,20 +234,69 @@ export default function ReviewScreen() {
   // The key of the accuracy already reported, so it is reported once.
   const savedRef = useRef<string | null>(null);
 
+  // The record on screen, and the id it came from. Held together so that a
+  // change of game id is known to be a change rather than inferred: this screen
+  // used to keep the first PGN it was given for as long as it was mounted, which
+  // was invisible while every game arrived on its own page and became a bug the
+  // moment one screen could show a second game.
+  const loadedRef = useRef<string | null>(gameId ?? null);
   useEffect(() => {
-    if (pgnText || !gameId) return undefined;
+    if (!gameId) return undefined;
+    if (pgnText && loadedRef.current === gameId) return undefined;
     let cancelled = false;
     getGamePGN(gameId)
       .then((text) => {
-        if (!cancelled) setPgnText(text);
+        if (cancelled) return;
+        loadedRef.current = gameId;
+        setLoadError(null);
+        setPgnText(text);
+        setSwitchingTo(null);
       })
       .catch((error: unknown) => {
-        if (!cancelled) setLoadError(failureMessage(error, 'The record could not be loaded.'));
+        if (cancelled) return;
+        setSwitchingTo(null);
+        setLoadError(failureMessage(error, 'The record could not be loaded.'));
       });
     return () => {
       cancelled = true;
     };
   }, [gameId, pgnText]);
+
+  // The run behind this game. A game that is not part of one answers null, and
+  // the strip simply does not appear; a failure does the same, because a missing
+  // strip is a smaller problem than an error banner over a board somebody is
+  // trying to read.
+  useEffect(() => {
+    if (!gameId) {
+      setSeries(null);
+      return undefined;
+    }
+    let cancelled = false;
+    botSeriesForGame(gameId)
+      .then((found) => {
+        if (!cancelled) setSeries(found);
+      })
+      .catch(() => {
+        if (!cancelled) setSeries(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [gameId]);
+
+  // Stepping to another game of the same run. `replace` rather than `push`, so
+  // that walking a six-game series does not leave six entries to back out of,
+  // and the PGN is dropped here so the effect above fetches the new one.
+  const watchSeriesGame = useCallback(
+    (nextGameId: string) => {
+      if (!nextGameId || nextGameId === gameId) return;
+      setSwitchingTo(nextGameId);
+      setPgnText(null);
+      setBranch(null);
+      router.replace(links.review(nextGameId));
+    },
+    [gameId, router],
+  );
 
   // A record that cannot be read is shown as a message rather than thrown:
   // the reviewer pasted it, and telling them what is wrong with it is the
@@ -514,6 +579,18 @@ export default function ReviewScreen() {
   ) : null;
 
   const boardBlock = (
+    <View style={styles.boardStack}>
+      {series ? (
+        <View style={[styles.seriesStrip, { maxWidth: boardSize + EVAL_BAR_GUTTER }]}>
+          <SeriesScoreTable
+            compact
+            currentGameId={gameId ?? null}
+            onSelect={watchSeriesGame}
+            series={series}
+          />
+        </View>
+      ) : null}
+      <GameTransition gameKey={gameId ?? null} leaving={Boolean(switchingTo)}>
     <View style={styles.boardWithEval}>
       <EvalBar height={boardSize} redScore={analysis?.redScore} />
       <Board
@@ -533,6 +610,8 @@ export default function ReviewScreen() {
         selectedTile={selectedTile}
         validMoves={validMoves}
       />
+    </View>
+      </GameTransition>
     </View>
   );
 
@@ -743,6 +822,17 @@ const styles = StyleSheet.create({
   wideLayout: { flex: 1, flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'center', gap: 18 },
   boardColumn: { alignItems: 'center', gap: 10 },
   boardWithEval: { flexDirection: 'row', alignItems: 'stretch', gap: 7 },
+  // The strip sits over the board and no wider than it, so a six-game run reads
+  // as belonging to the board underneath rather than to the page.
+  boardStack: { gap: space.small },
+  seriesStrip: {
+    gap: space.snug,
+    padding: space.small,
+    borderWidth: 1,
+    borderColor: colors.borderSoft,
+    borderRadius: radius.small,
+    backgroundColor: colors.surfaceWell,
+  },
   widePanel: { width: 360 },
   widePanelContent: { paddingBottom: 18 },
   mobileContent: { alignItems: 'center', paddingBottom: 24, gap: 12 },

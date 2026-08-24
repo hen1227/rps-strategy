@@ -895,6 +895,9 @@ export default function GameScreen() {
     const declineDraw = useGameStore((state) => state.declineDraw);
     const offerTimeExtension = useGameStore((state) => state.offerTimeExtension);
     const acceptTimeExtension = useGameStore((state) => state.acceptTimeExtension);
+    // Both bars celebrate the same grant, so it is read once here rather than
+    // subscribed to twice.
+    const timeExtension = useGameStore((state) => state.timeExtension);
     const declineTimeExtension = useGameStore((state) => state.declineTimeExtension);
     const resignGame = useGameStore((state) => state.resignGame);
     const abortGame = useGameStore((state) => state.abortGame);
@@ -1201,6 +1204,7 @@ export default function GameScreen() {
                 captured={captured[topColor]}
                 clock={gameState.clock}
                 color={topColor}
+                extension={timeExtension}
                 fallbackLabel={isSpectating ? `${topColor} player` : 'Opponent'}
                 gameStatus={gameState.status}
                 isYou={false}
@@ -1232,6 +1236,7 @@ export default function GameScreen() {
                 captured={captured[bottomColor]}
                 clock={gameState.clock}
                 color={bottomColor}
+                extension={timeExtension}
                 fallbackLabel={isSpectating ? `${bottomColor} player` : 'You'}
                 gameStatus={gameState.status}
                 isYou={!isSpectating}

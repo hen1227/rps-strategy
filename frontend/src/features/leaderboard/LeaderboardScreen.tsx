@@ -3,7 +3,7 @@ import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 
 import LadderRows from './LadderRows';
 import { failureMessage } from '@/errors';
-import BotMatchHistory from '@/features/bots/BotMatchHistory';
+import BotHistoryFeed from '@/features/bots/BotHistoryFeed';
 import { useWideScreen } from '@/hooks/useBoardLayout';
 import { leaderboard, type LeaderboardKind } from '@/store/api/leaderboard';
 import { useGameStore } from '@/store/gameStore';
@@ -16,9 +16,14 @@ import type { LeaderboardEntry } from '@/types/protocol';
 // The ladder: four boards on one page, and neither axis of them is a tab.
 //
 // Bots and people are separate boards because the ratings are not measuring the
-// same competition: a bot's Elo moves in ranked bot-versus-bot series, and
-// bot-versus-human is unranked in both directions. Ranking them together would
-// read as a claim nobody made. Behind a tab, though, that separation read as a
+// same competition: a bot's rating moves in ranked bot-versus-bot series, and
+// bot-versus-human is unranked in both directions. They are not even the same
+// arithmetic — a person's Elo is a per-game transfer, a bot's rating is a fit
+// over every pair of bots' head-to-head record, because an engine's author picks
+// its opponents and a transfer system pays out for beating a fresh account. A bot
+// with too few opponents, or one that only plays engines its own author entered,
+// is not on the board at all.
+// Ranking them together would read as a claim nobody made. Behind a tab, though, that separation read as a
 // question — pick a population — when it is really two answers. So they stack,
 // bots first: the engines play each other constantly, and the games behind
 // their ranking are listed underneath.
@@ -37,7 +42,7 @@ const SECTIONS: { kind: LeaderboardKind; title: string; help: string }[] = [
   {
     kind: 'bot',
     title: 'Best bots',
-    help: 'Bot ratings come from ranked bot-versus-bot games, and anybody can start a series of those from the Bots page. Games against people are unranked, so they do not move these numbers.',
+    help: 'Bot ratings come from the head-to-head record between every pair of bots, solved all at once, not from points won and lost per game. Playing one opponent over and over stops counting, a bot needs at least two opponents to be ranked at all, and beating engines the board has already placed is what moves a rating. Anybody can start a series from the Bots page. Games against people are unranked.',
   },
   {
     kind: 'human',
@@ -98,9 +103,9 @@ export default function LeaderboardScreen() {
     load();
   }, [load]);
 
-  // Every bot this page just ranked, in either mode. The history below is not
-  // filtered by mode any more, because both modes are on the page now and it
-  // names the mode on each row anyway.
+  // Every bot this page just ranked, in either mode. The feed below is not
+  // filtered by mode any more, because both modes are on the page now and every
+  // card names the mode it was played in.
   const rankedBots = ladderModes.flatMap((mode) => boards[boardKey('bot', mode.id)] ?? []);
 
   return (
@@ -154,11 +159,10 @@ export default function LeaderboardScreen() {
         );
       })}
 
-      <BotMatchHistory
+      <BotHistoryFeed
         botUserIds={rankedBots.map((entry) => entry.userId)}
         emptyDetail="Anybody can pit two engines against each other from the Bots page."
         eyebrow="MATCH HISTORY"
-        limit={15}
         title="Games behind the ladder"
       />
     </ScreenShell>

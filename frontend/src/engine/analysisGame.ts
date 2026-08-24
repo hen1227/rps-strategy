@@ -72,7 +72,13 @@ const PIECES: Record<string, { occupant: PlayablePiece; occupantOwner: SideColor
   s: { occupant: 'Scissors', occupantOwner: 'Red' },
 };
 
-const createGrid = (rows: readonly string[] | undefined): Grid =>
+/**
+ * A board from nine rows of `RPSrps.` symbols.
+ *
+ * Exported because a diagram of a starting position has rows and no game: the
+ * lobby thumbnail draws one before anybody has played a move.
+ */
+export const gridFromRows = (rows: readonly string[] | undefined): Grid =>
   Array.from({ length: BOARD_SIZE }, (_unusedRow, y) =>
     Array.from({ length: BOARD_SIZE }, (_unusedTile, x): Tile => {
       const piece = PIECES[rows?.[y]?.[x] ?? ''];
@@ -111,7 +117,7 @@ const newGame = (mode: ModeDefinition, grid: Grid, currentTurn: SideColor): Anal
 export const createAnalysisGame = (
   mode: ModeDefinition,
   startingPosition: StartingPosition | undefined = mode.startingPosition,
-): AnalysisGame => newGame(mode, createGrid(startingPosition?.rows), 'Red');
+): AnalysisGame => newGame(mode, gridFromRows(startingPosition?.rows), 'Red');
 
 const SYMBOL_BY_PIECE: Record<SideColor, Record<PlayablePiece, string>> = {
   Blue: { Rock: 'R', Paper: 'P', Scissors: 'S' },

@@ -283,6 +283,20 @@ export const clock = {
   lowSurface: palette.clockFaceLow,
   lowText: palette.red600,
   lowPulse: palette.red400,
+
+  // The wash that runs over a clock face when the players agree to more time,
+  // and the chip that rises off it saying how much. Translucent so it reads as
+  // light thrown across the face rather than a fourth clock state.
+  //
+  // Two washes because the two faces read light on dark and dark on light, and
+  // one green cannot brighten both: the accent that lifts the lit panel drops
+  // the idle panel's grey digits to 1.8:1, which is a flourish that costs you
+  // the time it is announcing. The dark green does the same job at 5.3:1.
+  bonusWash: withAlpha(palette.green750, 0.9),
+  bonusWashLit: withAlpha(palette.green400, 0.62),
+  bonusChip: palette.green800,
+  bonusChipBorder: palette.green700,
+  bonusChipText: palette.green100,
 };
 
 /** One shadow layer, in the shape React Native's `boxShadow` takes. */

@@ -53,7 +53,18 @@ export const links = {
   /** Playing bots: the practice ladder, the engines online, and their series. */
   bots: (): Href => '/bots',
 
-  tournaments: (): Href => '/tournaments',
+  /**
+   * The tournaments page, optionally opened on one event.
+   *
+   * A query parameter rather than a path segment, for the reason at the top of
+   * this file: every page of this site exports as one static HTML file, and a
+   * dynamic segment would have to be pre-generated for every tournament id that
+   * will ever exist.
+   */
+  tournaments: (tournamentId?: string): Href =>
+    tournamentId
+      ? { pathname: '/tournaments', params: { tournament: tournamentId } }
+      : '/tournaments',
   openings: (): Href => '/openings',
   leaderboard: (): Href => '/leaderboard',
   account: (): Href => '/account',

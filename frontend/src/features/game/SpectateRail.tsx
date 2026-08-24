@@ -1,3 +1,4 @@
+import { useRouter } from 'expo-router';
 import { useEffect, useRef, type ReactNode } from 'react';
 import {
   Animated as NativeAnimated,
@@ -9,14 +10,17 @@ import {
   View,
 } from 'react-native';
 
+import SeriesScoreTable from '@/features/bots/SeriesScoreTable';
+import { useBotSeries } from '@/hooks/useBotSeries';
 import { useWideScreen } from '@/hooks/useBoardLayout';
+import { links } from '@/navigation/links';
 import type { SpectateContext } from '@/hooks/useSpectateContext';
 import {
   seriesProgressLabel,
   seriesScoreOf,
   type TournamentBoard,
 } from '@/store/spectateSelectors';
-import { colors, radius } from '@/theme';
+import { colors, radius, space } from '@/theme';
 import type { LiveGameSummary } from '@/types/protocol';
 
 // The bar above a spectated board: everything else there is to watch from
@@ -52,6 +56,7 @@ export default function SpectateRail({
       <RailFrame>
         <SeriesRail
           blueName={blueName}
+          currentGameId={currentGameId}
           disabled={disabled}
           isPending={isPending}
           nextGame={nextSeriesGame}
@@ -118,6 +123,8 @@ function RailFrame({ children }: { children: ReactNode }) {
 
 interface SeriesRailProps {
   blueName: string;
+  /** The board on screen, drawn as the current chip. */
+  currentGameId: string;
   disabled: boolean;
   isPending: boolean;
   nextGame: LiveGameSummary | null;
@@ -128,6 +135,7 @@ interface SeriesRailProps {
 
 function SeriesRail({
   blueName,
+  currentGameId,
   disabled,
   isPending,
   nextGame,
@@ -136,6 +144,10 @@ function SeriesRail({
   series,
 }: SeriesRailProps) {
   const isWide = useWideScreen();
+  const router = useRouter();
+  // Refetched when the run moves on to its next game, which is the only thing
+  // that changes what the strip should say.
+  const full = useBotSeries(series.seriesId, series.gameNumber);
   const score = seriesScoreOf(series, redName, blueName);
   const played = series.firstWins + series.secondWins + series.draws;
   const canAdvance = Boolean(nextGame) && !disabled && !isPending;
@@ -161,6 +173,7 @@ function SeriesRail({
   );
 
   return (
+    <View style={styles.seriesFrame}>
     <View style={styles.railRow}>
       <View style={isWide ? styles.railCopy : styles.railCopyStacked}>
         <Text style={styles.eyebrow}>BOT SERIES</Text>
@@ -187,6 +200,27 @@ function SeriesRail({
           {isPending ? 'OPENING…' : isOver ? 'LAST GAME' : 'NEXT GAME ▶'}
         </Text>
       </Pressable>
+    </View>
+
+      {/*
+        Every game of the run, not only the one on screen and the one after it.
+        The bar above says where you are; this says what has happened, which is
+        the question somebody arriving at game five actually has.
+
+        A finished game opens in review rather than on this board, because there
+        is no live board to put you on — the engines have moved on. The game
+        being played is the current chip and is already where you are.
+      */}
+      {full ? (
+        <SeriesScoreTable
+          compact
+          currentGameId={currentGameId}
+          onSelect={(gameId) =>
+            gameId === currentGameId ? undefined : router.push(links.review(gameId))
+          }
+          series={full}
+        />
+      ) : null}
     </View>
   );
 }
@@ -273,6 +307,9 @@ function TournamentRail({
 }
 
 const styles = StyleSheet.create({
+  // The steering bar and the run's own games, stacked: one says where you are,
+  // the other says what has happened.
+  seriesFrame: { gap: space.small },
   rail: {
     marginBottom: 7,
     paddingHorizontal: 11,

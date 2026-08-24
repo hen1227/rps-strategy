@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
+import BotHistoryFeed from './BotHistoryFeed';
 import { failureMessage } from '@/errors';
 import { useAdminToken } from '@/hooks/useAdminToken';
 import { useRequestIdentity } from '@/hooks/useRequestIdentity';
@@ -8,16 +9,13 @@ import { links } from '@/navigation/links';
 import {
   abortAdminBotSeries,
   abortBotSeries,
-  listBotSeries,
   startAdminBotSeries,
   startBotSeries,
   type BotSeries,
 } from '@/store/api/bots';
 import { colors, space, type } from '@/theme';
 import LinkRow from '@/ui/LinkRow';
-import ListRow from '@/ui/ListRow';
 import {
-  Badge,
   Banner,
   GhostButton,
   LabeledInput,
@@ -61,9 +59,6 @@ const PUBLIC_MAX_PLIES = 6;
 const HOST_MAX_PAIRS = 100;
 const HOST_MAX_PLIES = 20;
 
-/** How many finished runs to list. The rest are on the ladder's own page. */
-const VISIBLE_RUNS = 5;
-
 const numeric = (value: string, fallback: number) => {
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) ? parsed : fallback;
@@ -95,29 +90,18 @@ export default function BotSeriesPanel({ bots, modes }: BotSeriesPanelProps) {
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [series, setSeries] = useState<BotSeries[]>([]);
+  // Bumped after starting or stopping a run, which is how the feed below is told
+  // to refetch now rather than on its own timer. The runs themselves are the
+  // feed's to hold: this panel is a form, and it kept a second copy of the list
+  // only because it used to draw one.
+  const [changed, setChanged] = useState(0);
 
   const asHost = admin.unlocked;
   const maxPairs = asHost ? HOST_MAX_PAIRS : PUBLIC_MAX_PAIRS;
   const maxPlies = asHost ? HOST_MAX_PLIES : PUBLIC_MAX_PLIES;
   const maxMinutes = asHost ? 60 : PUBLIC_MAX_MINUTES;
 
-  const refresh = useCallback(async () => {
-    try {
-      setSeries((await listBotSeries(12)) ?? []);
-    } catch {
-      // The scoreboard is a nicety; a failure here should not stop somebody
-      // starting a run, and the error that matters is the one from the start.
-    }
-  }, []);
-
-  useEffect(() => {
-    refresh();
-    // Series games are ordinary games, so the lobby already updates live. This
-    // only refreshes the tally, which changes once per game.
-    const timer = setInterval(refresh, 5000);
-    return () => clearInterval(timer);
-  }, [refresh]);
+  const refresh = useCallback(() => setChanged((count) => count + 1), []);
 
   const start = async () => {
     if (!firstBotId || !secondBotId) return;
@@ -141,7 +125,7 @@ export default function BotSeriesPanel({ bots, modes }: BotSeriesPanelProps) {
       };
       if (asHost) await startAdminBotSeries(admin.token, options);
       else await startBotSeries(identity, options);
-      await refresh();
+      refresh();
     } catch (caught) {
       setError(failureMessage(caught, 'The series could not be started.'));
     } finally {
@@ -154,7 +138,7 @@ export default function BotSeriesPanel({ bots, modes }: BotSeriesPanelProps) {
     try {
       if (asHost) await abortAdminBotSeries(admin.token, run.seriesId);
       else await abortBotSeries(identity, run.seriesId);
-      await refresh();
+      refresh();
     } catch (caught) {
       setError(failureMessage(caught, 'The series could not be stopped.'));
     }
@@ -179,6 +163,7 @@ export default function BotSeriesPanel({ bots, modes }: BotSeriesPanelProps) {
     Boolean(run.requestedByUserId) && run.requestedByUserId === identity.userId;
 
   return (
+    <>
     <Panel style={asHost ? styles.adminPanel : undefined}>
       <SectionHeading
         eyebrow={asHost ? 'HOST' : 'ANYBODY'}
@@ -291,44 +276,10 @@ export default function BotSeriesPanel({ bots, modes }: BotSeriesPanelProps) {
         </View>
       )}
 
-      {series.length === 0 ? null : (
-        <View style={styles.list}>
-          {series.slice(0, VISIBLE_RUNS).map((run, index) => (
-            <ListRow
-              detail={
-                run.requestedByName ? (
-                  <Text style={styles.rowMeta}>
-                    started by {run.requestedByName}
-                    {mine(run) ? ' · you' : ''}
-                  </Text>
-                ) : undefined
-              }
-              divided={index > 0}
-              key={run.seriesId}
-              meta={`${run.modeId} · ${run.pairs} pairs · seed ${run.seed}`}
-              title={`${run.firstBotName} ${run.firstWins}–${run.secondWins} ${run.secondBotName}${
-                run.draws ? ` (${run.draws} drawn)` : ''
-              }`}
-              trailing={
-                <View style={styles.rowActions}>
-                  <Badge
-                    label={run.status.toUpperCase()}
-                    tone={run.status === 'running' ? 'live' : 'neutral'}
-                  />
-                  {run.status === 'running' && (asHost || mine(run)) ? (
-                    <GhostButton compact label="STOP" onPress={() => stop(run)} />
-                  ) : null}
-                </View>
-              }
-            />
-          ))}
-        </View>
-      )}
-
       {/*
-        Where these runs end up. The standings and the game-by-game history used
-        to be copied onto this page as well, which made a page about starting a
-        run twice as long as the run's own scoreboard.
+        Where these runs end up. The standings used to be copied onto this page
+        as well, which made a page about starting a run twice as long as the
+        run's own scoreboard.
       */}
       <LinkRow
         detail="Ranked engine standings, and every game behind them."
@@ -336,6 +287,25 @@ export default function BotSeriesPanel({ bots, modes }: BotSeriesPanelProps) {
         title="The bot ladder"
       />
     </Panel>
+
+    {/*
+      The same feed the Leaderboard carries, because it is the same question.
+      What this page adds is the one thing only it can: a STOP button on a run
+      you started, which needs the identity and the admin token this panel is
+      already holding.
+    */}
+    <BotHistoryFeed
+      emptyDetail="Pick two engines above and press START SERIES."
+      eyebrow="RESULTS"
+      refreshKey={changed}
+      seriesAction={(run) =>
+        String(run.status).toLowerCase() === 'running' && (asHost || mine(run)) ? (
+          <GhostButton compact label="STOP" onPress={() => stop(run)} />
+        ) : null
+      }
+      title="Recent runs"
+    />
+    </>
   );
 }
 
@@ -350,7 +320,4 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: space.small,
   },
-  list: { marginTop: space.medium },
-  rowMeta: { ...type.meta, color: colors.textFaint, marginTop: space.hair },
-  rowActions: { flexDirection: 'row', alignItems: 'center', gap: space.snug },
 });

@@ -150,13 +150,19 @@ export const retireBot = (token: string, botId: string) =>
 
 export type BotSeriesStatus = 'pending' | 'running' | 'completed' | 'aborted';
 
+export type BotSeriesResult = 'pending' | 'first_win' | 'second_win' | 'draw';
+
 export interface BotSeriesGame {
   gameNumber: number;
   pairNumber: number;
+  /** True when the seats were swapped, so the first bot played Blue. */
   swapped: boolean;
   gameId?: string;
   openingLine?: string;
-  result: string;
+  /** Always from the first bot's point of view, whichever colour it held. */
+  result: BotSeriesResult | string;
+  /** How the game ended: `abandonment`, `resignation`, `timeout`, and so on. */
+  endReason?: string;
 }
 
 export interface BotSeries {
@@ -166,6 +172,16 @@ export interface BotSeries {
   secondBotId: string;
   firstBotName?: string;
   secondBotName?: string;
+  /** The engines' pictures. Feed to `botIconUrl` with the matching bot id. */
+  firstBotIconSha256?: string;
+  secondBotIconSha256?: string;
+  /**
+   * The accounts the two engines play under. A bot has two ids — the registry
+   * id this run is keyed on, and the account id every game record and ladder
+   * row carries — so a page showing the ladder's own runs needs both.
+   */
+  firstBotUserId?: string;
+  secondBotUserId?: string;
   /** Who asked for the run. Absent on one started with the host token. */
   requestedByUserId?: string;
   requestedByName?: string;
@@ -203,6 +219,27 @@ export const listBotSeries = (limit?: number) =>
   request<BotSeries[]>(`/api/bot-series${limit ? `?limit=${limit}` : ''}`, {
     what: 'Loading bot series',
   });
+
+/** One run, with its games. */
+export const botSeries = (seriesId: string) =>
+  request<BotSeries>(`/api/bot-series/${encodeURIComponent(seriesId)}`, {
+    what: 'Loading the series',
+  });
+
+/**
+ * The run one game belonged to, or null when it was not part of one.
+ *
+ * Asked by the review and spectate screens, which are handed a game id and have
+ * no other way to know it is the fourth of six. A query rather than something
+ * carried on the link, so a pasted URL gets the strip too.
+ */
+export const botSeriesForGame = async (gameId: string) => {
+  const found = await request<BotSeries[]>(
+    `/api/bot-series?game=${encodeURIComponent(gameId)}`,
+    { what: 'Loading the series' },
+  );
+  return found?.[0] ?? null;
+};
 
 /**
  * Pit two bots against each other.
@@ -259,7 +296,13 @@ export const abortAdminBotSeries = (adminToken: string, seriesId: string) =>
  * is asked.
  */
 export interface BotMatch extends GameRecord {
+  /**
+   * The occasion this game belonged to, when it belonged to one. A run and an
+   * event are both several games that are really one thing that happened, and
+   * the history is read as a list of those rather than of games.
+   */
   seriesId?: string;
+  tournamentId?: string;
 }
 
 export interface BotMatchQuery {
