@@ -26,6 +26,7 @@ import { useTournamentCall } from '@/hooks/useTournamentCall';
 import { links } from '@/navigation/links';
 import { roomSpansSeries } from '@/store/chatSelectors';
 import { useGameStore } from '@/store/gameStore';
+import { firstMoveCall } from '@/store/queueSelectors';
 import { useReviewHandoff } from '@/store/reviewHandoff';
 import { ruleSummary } from '@/store/setupSelectors';
 import { playerName } from '@/store/spectateSelectors';
@@ -167,6 +168,52 @@ function OpponentReconnectNotice({deadline}: {deadline: number | null}) {
     );
 }
 
+/**
+ * The board is open and nothing is ticking yet.
+ *
+ * A game is now seated the moment two seeks fit, whether or not either player
+ * is looking at the screen, so the first thing a board has to be able to say is
+ * "this has not started". Both clocks are whole, nothing is rated, and the
+ * first move is what turns it into a game — or thirty seconds pass and it is
+ * called off as though it never happened.
+ *
+ * It ticks at 250ms like the reconnect notice, for the same reason: a countdown
+ * that stutters is a countdown nobody believes. It says what is happening and
+ * nothing else — the way out is the button the action row is already showing in
+ * the place a player looks for it, and two of them a centimetre apart is one
+ * too many.
+ */
+function FirstMoveNotice({
+                             deadline,
+                             opponentName,
+                             yours,
+                         }: {
+    deadline: number | null;
+    opponentName: string | null;
+    yours: boolean;
+}) {
+    const [now, setNow] = useState(() => Date.now());
+
+    useEffect(() => {
+        if (!deadline) return undefined;
+        setNow(Date.now());
+        const interval = setInterval(() => setNow(Date.now()), 250);
+        return () => clearInterval(interval);
+    }, [deadline]);
+
+    const call = firstMoveCall(deadline, yours, opponentName, now);
+    if (!call) return null;
+    return (
+        <View style={[styles.reconnectNotice, call.critical && styles.firstMoveNoticeUrgent]}>
+            <View style={[styles.reconnectDot, call.critical && styles.firstMoveDotUrgent]}/>
+            <View style={styles.reconnectCopy}>
+                <Text style={styles.reconnectTitle}>{call.title}</Text>
+                <Text style={styles.reconnectDetail}>{call.detail}</Text>
+            </View>
+        </View>
+    );
+}
+
 // Draw offers and time extensions are the same negotiation, so they share one
 // notice: accept it, ignore it, or make a move to decline it.
 interface OfferNoticeProps {
@@ -233,9 +280,12 @@ const offerAvailability = (
 };
 
 interface GameActionsProps {
+    /** Nothing has been played yet, so leaving costs nothing. */
+    awaitingFirstMove: boolean;
     connected: boolean;
     gameState: ActiveGame;
     isMyTurn: boolean;
+    onAbort: () => void;
     onDraw: () => void;
     onResign: () => void;
     onTimeExtension: () => void;
@@ -243,9 +293,11 @@ interface GameActionsProps {
 }
 
 function GameActions({
+                         awaitingFirstMove,
                          connected,
                          gameState,
                          isMyTurn,
+                         onAbort,
                          onDraw,
                          onResign,
                          onTimeExtension,
@@ -303,11 +355,17 @@ function GameActions({
                     </Text>
                 </Pressable>
             )}
+            {/*
+              Resigning a game nobody has played is a rated loss for nothing,
+              and it is exactly the button somebody reaches for when a board
+              they did not expect opens in front of them. Until the first move
+              lands, the same place says what it actually does.
+            */}
             <Pressable
                 accessibilityRole="button"
                 accessibilityState={{disabled: !connected}}
                 disabled={!connected}
-                onPress={onResign}
+                onPress={awaitingFirstMove ? onAbort : onResign}
                 style={({pressed}) => [
                     styles.actionButton,
                     styles.resignButton,
@@ -315,7 +373,9 @@ function GameActions({
                     pressed && styles.buttonPressed,
                 ]}
             >
-                <Text style={styles.resignButtonText}>Resign</Text>
+                <Text style={styles.resignButtonText}>
+                    {awaitingFirstMove ? 'Call it off' : 'Resign'}
+                </Text>
             </Pressable>
         </View>
     );
@@ -687,7 +747,17 @@ function StatusContent({
                 tone: 'neutral',
             };
         }
-        return {title: "Opponent's move", detail: 'Their clock is running.', tone: 'neutral'};
+        // Only true once the game has begun. Before the first move both clocks
+        // are stopped, and the notice below is already counting down the one
+        // thing that *is* running.
+        return {
+            title: "Opponent's move",
+            detail:
+                gameState.clock?.activeColor === 'Neutral'
+                    ? 'Nothing is on the clock until they play it.'
+                    : 'Their clock is running.',
+            tone: 'neutral',
+        };
     }
 
     if (selectedTile) {
@@ -827,6 +897,8 @@ export default function GameScreen() {
     const acceptTimeExtension = useGameStore((state) => state.acceptTimeExtension);
     const declineTimeExtension = useGameStore((state) => state.declineTimeExtension);
     const resignGame = useGameStore((state) => state.resignGame);
+    const abortGame = useGameStore((state) => state.abortGame);
+    const firstMoveDeadline = useGameStore((state) => state.firstMoveDeadline);
     const accountId = useGameStore((state) => state.accountId);
     const chatMessages = useGameStore((state) => state.chatMessages);
     const chatRoomId = useGameStore((state) => state.chatRoomId);
@@ -955,6 +1027,14 @@ export default function GameScreen() {
         (isConnected || Boolean(bot)) &&
         gameState.status === 'InProgress' &&
         gameState.currentTurn === playerColor;
+    // A board that exists but has not been played on. Read off the position
+    // rather than tracked separately: a stopped clock in a game in progress is
+    // the server's own way of saying it, so this cannot go stale.
+    const awaitingFirstMove =
+        !bot &&
+        gameState.status === 'InProgress' &&
+        gameState.clock?.activeColor === 'Neutral';
+    const opponentName = topProfile?.username?.trim() || null;
     const timeControlLabel = formatTimeControl(gameState.timeControl);
     // Read from the same describeSetup the lobby row was rendered from, so a
     // game reads the same after you accept it as it did before.
@@ -1046,7 +1126,19 @@ export default function GameScreen() {
                     </Text>
                 </View>
             )}
-            {!isSpectating && !bot && (
+            {!isSpectating && !bot && awaitingFirstMove && (
+                <FirstMoveNotice
+                    deadline={firstMoveDeadline}
+                    opponentName={opponentName}
+                    yours={isMyTurn}
+                />
+            )}
+            {/*
+              Only one countdown at a time. Before the first move nobody has
+              abandoned anything: the game is simply waiting, and it says so
+              above rather than threatening a win that is not on offer.
+            */}
+            {!isSpectating && !bot && !awaitingFirstMove && (
                 <OpponentReconnectNotice deadline={opponentReconnectDeadline}/>
             )}
             {hasOpponentDrawOffer && (
@@ -1089,9 +1181,11 @@ export default function GameScreen() {
             />
         ) : (
             <GameActions
+                awaitingFirstMove={awaitingFirstMove}
                 connected={isConnected}
                 gameState={gameState}
                 isMyTurn={isMyTurn}
+                onAbort={abortGame}
                 onDraw={offerDraw}
                 onResign={() => setShowResignConfirmation(true)}
                 onTimeExtension={offerTimeExtension}
@@ -1239,46 +1333,86 @@ export default function GameScreen() {
                     {isWide ? (
                         <View style={styles.wideLayout}>
                             <View style={styles.playColumn}>{playerBars}</View>
-                            <ScrollView
-                                contentContainerStyle={[
-                                    styles.sidePanelContent,
+                            {/*
+                              A column of a known height, with the chat pinned to
+                              the foot of it.
+
+                              The chat used to sit *inside* this panel's
+                              ScrollView, where `flex: 1` cannot bound it: the
+                              card grew with the conversation instead, its own
+                              message list never scrolled, and by thirty messages
+                              the composer was a thousand pixels below the panel.
+                              Scrolling down to reach it took the clock, the
+                              status card and the resign button off the screen.
+                              So the chat is a sibling of the scroller now — it
+                              takes the room the cards above it do not want, and
+                              scrolls its messages inside that.
+                            */}
+                            <View
+                                style={[
+                                    styles.sidePanel,
+                                    {height: boardSize + 120},
                                     Boolean(tournamentCall) && styles.calloutClearance,
                                 ]}
-                                keyboardShouldPersistTaps="handled"
-                                showsVerticalScrollIndicator={false}
-                                style={[styles.sidePanel, {height: boardSize + 120}]}
                             >
-                                {statusCard(true)}
+                                <ScrollView
+                                    contentContainerStyle={styles.sidePanelContent}
+                                    keyboardShouldPersistTaps="handled"
+                                    showsVerticalScrollIndicator={false}
+                                    style={styles.sidePanelScroll}
+                                >
+                                    {statusCard(true)}
 
-                                {matchNotices}
-                                {gameActions}
+                                    {matchNotices}
+                                    {gameActions}
 
-                                {hasTerritory && <TerritoryMeter grid={gameState.grid}/>}
+                                    {hasTerritory && <TerritoryMeter grid={gameState.grid}/>}
+
+                                    {/*
+                                      The cards that fill the panel when the chat
+                                      is not taking the room: either it is
+                                      collapsed, or this is a bot game, which has
+                                      no chat to collapse. Gating them on
+                                      `chatVisible` alone left the bot board with
+                                      an empty half-panel, and hid the objective
+                                      behind a toggle for a chat that was never
+                                      there.
+                                    */}
+                                    {(!gameChat || !chatVisible) && (
+                                        <>
+                                            <View style={styles.detailCard}>
+                                                <Text style={styles.detailEyebrow}>OBJECTIVE</Text>
+                                                <Text style={styles.detailTitle}>{gameState.mode.description}</Text>
+                                                <Text style={styles.detailBody}>{gameState.mode.objective}</Text>
+                                            </View>
+
+                                            <View style={styles.matchFacts}>
+                                                <View>
+                                                    <Text style={styles.factLabel}>MOVE</Text>
+                                                    <Text style={styles.factValue}>{gameState.moveNumber + 1}</Text>
+                                                </View>
+                                                <View style={styles.factDivider}/>
+                                                {/*
+                                                  A bot game has no clock at all,
+                                                  and `formatTimeControl` spells
+                                                  that "Live" — true of a real
+                                                  game waiting on a clock, a lie
+                                                  next to a practice board. Its
+                                                  rating is the useful figure.
+                                                */}
+                                                <View>
+                                                    <Text style={styles.factLabel}>{bot ? 'LEVEL' : 'CLOCK'}</Text>
+                                                    <Text style={styles.factValue}>
+                                                        {bot ? bot.rating : timeControlLabel}
+                                                    </Text>
+                                                </View>
+                                            </View>
+                                        </>
+                                    )}
+                                </ScrollView>
 
                                 {gameChat}
-
-                                {!chatVisible && (
-                                    <>
-                                        <View style={styles.detailCard}>
-                                            <Text style={styles.detailEyebrow}>OBJECTIVE</Text>
-                                            <Text style={styles.detailTitle}>{gameState.mode.description}</Text>
-                                            <Text style={styles.detailBody}>{gameState.mode.objective}</Text>
-                                        </View>
-
-                                        <View style={styles.matchFacts}>
-                                            <View>
-                                                <Text style={styles.factLabel}>MOVE</Text>
-                                                <Text style={styles.factValue}>{gameState.moveNumber + 1}</Text>
-                                            </View>
-                                            <View style={styles.factDivider}/>
-                                            <View>
-                                                <Text style={styles.factLabel}>CLOCK</Text>
-                                                <Text style={styles.factValue}>{timeControlLabel}</Text>
-                                            </View>
-                                        </View>
-                                    </>
-                                )}
-                            </ScrollView>
+                            </View>
                         </View>
                     ) : (
                         <ScrollView
@@ -1417,7 +1551,13 @@ const styles = StyleSheet.create({
         gap: 18,
     },
     playColumn: {alignItems: 'center', gap: 7},
-    sidePanel: {width: 310},
+    // `flexGrow` because this was a ScrollView, which grows by default on the
+    // web: taking it away would have narrowed the panel and left the row
+    // floating in the middle of the page.
+    sidePanel: {width: 310, flexGrow: 1, flexShrink: 1, gap: 10},
+    // Only as tall as its cards, and the first thing to give when the panel is
+    // short — which is what leaves the chat below it a bounded box to scroll in.
+    sidePanelScroll: {flexGrow: 0, flexShrink: 1, flexBasis: 'auto'},
     sidePanelContent: {gap: 10, paddingBottom: 2},
     selfReconnectNotice: {
         width: '100%',
@@ -1449,6 +1589,8 @@ const styles = StyleSheet.create({
         backgroundColor: colors.goldDot,
     },
     reconnectCopy: {flex: 1},
+    firstMoveNoticeUrgent: {borderColor: colors.dangerBorder},
+    firstMoveDotUrgent: {backgroundColor: colors.danger},
     reconnectTitle: {color: colors.goldBright, fontSize: 10, fontWeight: '900'},
     reconnectDetail: {color: colors.goldMuted, fontSize: 8, marginTop: 2},
     drawOfferNotice: {

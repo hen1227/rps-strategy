@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import ScreenShell from '@/ui/ScreenShell';
 import {
   Badge,
   Banner,
+  Checkbox,
   EmptyState,
   GhostButton,
   LabeledInput,
@@ -15,11 +16,18 @@ import {
 import { failureMessage } from '@/errors';
 import { useAdminToken } from '@/hooks/useAdminToken';
 import {
+  accountDetail,
   anonymizeAccount,
+  deleteGame,
   listAccounts,
+  listAdminGames,
+  purgeAccount,
+  purgeBot,
   updateAccountFlags,
+  type AccountDetail,
   type AccountSummary,
 } from '@/store/api/bots';
+import type { GameRecord } from '@/types/protocol';
 import { colors, contentWidth, radius, space, type } from '@/theme';
 
 // Account administration.
@@ -27,6 +35,114 @@ import { colors, contentWidth, radius, space, type } from '@/theme';
 // Its own screen rather than another panel, because a table of accounts wants
 // the width, and because everything here is destructive enough that it should
 // take a deliberate navigation to reach.
+//
+// The screen is built around one distinction, and it is worth stating plainly
+// because every button below is on one side of it:
+//
+//   - *Anonymize* removes the person and keeps the games. It is the right
+//     answer for a privacy request, and it is what PRIVACY.md promises.
+//   - *Delete* removes the rows. It is for the account, bot, or game that
+//     should never have existed, where a placeholder name in somebody's
+//     history preserves nothing anyone wanted.
+//
+// Both are offered, the destructive one is red, and every one of them asks
+// twice.
+
+/** How a row's confirmation is keyed, so two armed buttons cannot be confused. */
+type ConfirmKey = string;
+
+/**
+ * A destructive button that arms on the first press and fires on the second.
+ *
+ * The confirmation lives in the parent rather than in here because pressing
+ * anything else on the screen should disarm it: an armed delete that stays
+ * armed while the host goes off to search for something else is a trap.
+ */
+function ConfirmButton({
+  armed,
+  busy,
+  label,
+  onArm,
+  onConfirm,
+  tone = 'danger',
+}: {
+  armed: boolean;
+  busy: boolean;
+  label: string;
+  onArm: () => void;
+  onConfirm: () => void;
+  tone?: 'danger' | 'quiet';
+}) {
+  return (
+    <Pressable
+      accessibilityLabel={armed ? `Confirm: ${label}` : label}
+      accessibilityRole="button"
+      accessibilityState={{ disabled: busy }}
+      disabled={busy}
+      onPress={armed ? onConfirm : onArm}
+      style={({ pressed }) => [
+        styles.actionButton,
+        tone === 'danger' && styles.actionButtonDanger,
+        armed && styles.actionButtonArmed,
+        busy && styles.actionButtonDisabled,
+        pressed && styles.actionButtonPressed,
+      ]}
+    >
+      <Text
+        style={[
+          styles.actionButtonText,
+          tone === 'danger' && styles.actionButtonTextDanger,
+          armed && styles.actionButtonTextArmed,
+        ]}
+      >
+        {armed ? 'CONFIRM?' : label}
+      </Text>
+    </Pressable>
+  );
+}
+
+/** One game, as a line an administrator can identify it from and delete. */
+function GameRow({
+  armed,
+  busy,
+  game,
+  onArm,
+  onDelete,
+}: {
+  armed: boolean;
+  busy: boolean;
+  game: GameRecord;
+  onArm: () => void;
+  onDelete: () => void;
+}) {
+  const played = new Date(game.finishedAtUnixMs);
+  const outcome =
+    game.outcome === 'draw'
+      ? 'draw'
+      : `${game.outcome === 'red_win' ? game.redPlayer.username : game.bluePlayer.username} won`;
+  return (
+    <View style={styles.subRow}>
+      <View style={styles.rowCopy}>
+        <Text numberOfLines={1} style={styles.subRowName}>
+          {game.redPlayer.username} vs {game.bluePlayer.username}
+        </Text>
+        <Text numberOfLines={1} style={styles.rowMeta}>
+          {game.modeName} · {outcome} · {game.endReason} ·{' '}
+          {Number.isFinite(played.valueOf()) ? played.toLocaleDateString() : 'undated'} ·{' '}
+          {game.gameId}
+        </Text>
+      </View>
+      {game.ranked ? <Badge label="RANKED" tone="neutral" /> : null}
+      <ConfirmButton
+        armed={armed}
+        busy={busy}
+        label="DELETE"
+        onArm={onArm}
+        onConfirm={onDelete}
+      />
+    </View>
+  );
+}
 
 export default function AdminScreen() {
   const admin = useAdminToken();
@@ -36,9 +152,22 @@ export default function AdminScreen() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  // Anonymizing cannot be undone, so it asks once. The confirmation is the id
-  // of the account whose delete button has been pressed but not confirmed.
-  const [confirming, setConfirming] = useState<string | null>(null);
+  // Nothing here can be undone, so everything asks once. The value is the key
+  // of the button that has been pressed but not confirmed.
+  const [confirming, setConfirming] = useState<ConfirmKey | null>(null);
+  // The account whose bots and games are open below its row, and what they are.
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [detail, setDetail] = useState<AccountDetail | null>(null);
+  // The game browser is its own search: a game is often the thing being looked
+  // for, and finding it through whichever of its two players happens to be
+  // memorable is a detour.
+  const [gameQuery, setGameQuery] = useState('');
+  const [games, setGames] = useState<GameRecord[]>([]);
+  // Deleting a game hands its rating back by default, because the usual reason
+  // to delete one is that the result should not stand. The exception — a game
+  // removed for being unwatchable, whose result was fair — is a toggle rather
+  // than a second button, since it applies to whichever row is pressed next.
+  const [revertRatings, setRevertRatings] = useState(true);
 
   const refresh = useCallback(
     async (searchText = query) => {
@@ -52,9 +181,40 @@ export default function AdminScreen() {
     [admin.token, query],
   );
 
+  const refreshGames = useCallback(
+    async (searchText = gameQuery) => {
+      if (!admin.token) return;
+      try {
+        setGames((await listAdminGames(admin.token, searchText)) ?? []);
+      } catch (caught) {
+        setError(failureMessage(caught));
+      }
+    },
+    [admin.token, gameQuery],
+  );
+
+  const refreshDetail = useCallback(
+    async (userId: string | null) => {
+      if (!admin.token || !userId) {
+        setDetail(null);
+        return;
+      }
+      try {
+        setDetail(await accountDetail(admin.token, userId));
+      } catch (caught) {
+        // A detail that fails to load must not leave the previous account's
+        // bots on screen under a different name.
+        setDetail(null);
+        setError(failureMessage(caught));
+      }
+    },
+    [admin.token],
+  );
+
   useEffect(() => {
     refresh();
-  }, [refresh]);
+    refreshGames();
+  }, [refresh, refreshGames]);
 
   const run = async <Result,>(action: () => Promise<Result>, successNotice?: string) => {
     setBusy(true);
@@ -63,13 +223,30 @@ export default function AdminScreen() {
     try {
       await action();
       if (successNotice) setNotice(successNotice);
-      await refresh();
+      await Promise.all([refresh(), refreshGames(), refreshDetail(expanded)]);
     } catch (caught) {
       setError(failureMessage(caught));
     } finally {
       setBusy(false);
       setConfirming(null);
     }
+  };
+
+  /** Deleting a game is offered from two lists, and does the same thing in both. */
+  const removeGame = (gameId: string) =>
+    run(
+      () => deleteGame(admin.token, gameId, revertRatings),
+      revertRatings
+        ? 'Game deleted. Both players have their rating back.'
+        : 'Game deleted. The ratings it moved were left alone.',
+    );
+
+  const toggleExpanded = (userId: string) => {
+    const next = expanded === userId ? null : userId;
+    setExpanded(next);
+    setConfirming(null);
+    setDetail(null);
+    refreshDetail(next);
   };
 
   const header = (
@@ -138,71 +315,164 @@ export default function AdminScreen() {
           ) : (
             <View style={styles.list}>
               {accounts.map((account) => (
-                <View key={account.userId} style={styles.row}>
-                  <View style={styles.rowCopy}>
-                    <Text numberOfLines={1} style={styles.rowName}>
-                      {account.username}{' '}
-                      <Text style={styles.rowElo}>({account.elo})</Text>
-                    </Text>
-                    <Text numberOfLines={1} style={styles.rowMeta}>
-                      {account.userId} · {account.gamesPlayed} games
-                      {account.botCount ? ` · ${account.botCount} bots` : ''}
-                    </Text>
-                  </View>
-                  {account.kind === 'bot' ? <Badge label="BOT" tone="neutral" /> : null}
-                  {account.isAdmin ? <Badge label="ADMIN" tone="accent" /> : null}
-                  {account.disabled ? <Badge label="DISABLED" tone="live" /> : null}
-                  {/*
-                    Only for people. A bot has no password either, but calling
-                    it anonymous alongside its BOT badge says the wrong thing:
-                    it has an owner, and that is the opposite of anonymous.
-                  */}
-                  {account.kind === 'bot' || account.registered ? null : (
-                    <Badge label="ANON" tone="neutral" />
-                  )}
-                  <GhostButton
-                    compact
-                    disabled={busy}
-                    label={account.disabled ? 'ENABLE' : 'DISABLE'}
-                    onPress={() =>
-                      run(
-                        () =>
-                          updateAccountFlags(admin.token, account.userId, {
-                            disabled: !account.disabled,
-                          }),
-                        account.disabled ? 'Account enabled.' : 'Account disabled.',
-                      )
-                    }
-                  />
-                  {account.kind === 'bot' || !account.registered ? null : (
+                <View key={account.userId}>
+                  <View style={styles.row}>
+                    <View style={styles.rowCopy}>
+                      <Text numberOfLines={1} style={styles.rowName}>
+                        {account.username}{' '}
+                        <Text style={styles.rowElo}>({account.elo})</Text>
+                      </Text>
+                      <Text numberOfLines={1} style={styles.rowMeta}>
+                        {account.userId} · {account.gamesPlayed} games
+                        {account.botCount ? ` · ${account.botCount} bots` : ''}
+                      </Text>
+                    </View>
+                    {account.kind === 'bot' ? <Badge label="BOT" tone="neutral" /> : null}
+                    {account.isAdmin ? <Badge label="ADMIN" tone="accent" /> : null}
+                    {account.disabled ? <Badge label="DISABLED" tone="live" /> : null}
+                    {/*
+                      Only for people. A bot has no password either, but calling
+                      it anonymous alongside its BOT badge says the wrong thing:
+                      it has an owner, and that is the opposite of anonymous.
+                    */}
+                    {account.kind === 'bot' || account.registered ? null : (
+                      <Badge label="ANON" tone="neutral" />
+                    )}
                     <GhostButton
                       compact
                       disabled={busy}
-                      label={account.isAdmin ? 'DEMOTE' : 'MAKE ADMIN'}
+                      label={expanded === account.userId ? 'CLOSE' : 'MANAGE'}
+                      onPress={() => toggleExpanded(account.userId)}
+                    />
+                    <GhostButton
+                      compact
+                      disabled={busy}
+                      label={account.disabled ? 'ENABLE' : 'DISABLE'}
                       onPress={() =>
                         run(
                           () =>
                             updateAccountFlags(admin.token, account.userId, {
-                              isAdmin: !account.isAdmin,
+                              disabled: !account.disabled,
                             }),
-                          account.isAdmin ? 'Administrator removed.' : 'Administrator added.',
+                          account.disabled ? 'Account enabled.' : 'Account disabled.',
                         )
                       }
                     />
-                  )}
-                  <GhostButton
-                    compact
-                    disabled={busy}
-                    label={confirming === account.userId ? 'CONFIRM?' : 'ANONYMIZE'}
-                    onPress={() =>
-                      confirming === account.userId
-                        ? run(
-                            () => anonymizeAccount(admin.token, account.userId),
-                            'Account anonymized. Its games stay in the archive under a placeholder name.',
+                    {account.kind === 'bot' || !account.registered ? null : (
+                      <GhostButton
+                        compact
+                        disabled={busy}
+                        label={account.isAdmin ? 'DEMOTE' : 'MAKE ADMIN'}
+                        onPress={() =>
+                          run(
+                            () =>
+                              updateAccountFlags(admin.token, account.userId, {
+                                isAdmin: !account.isAdmin,
+                              }),
+                            account.isAdmin ? 'Administrator removed.' : 'Administrator added.',
                           )
-                        : setConfirming(account.userId)
-                    }
-                  />
+                        }
+                      />
+                    )}
+                    <ConfirmButton
+                      armed={confirming === `anonymize:${account.userId}`}
+                      busy={busy}
+                      label="ANONYMIZE"
+                      onArm={() => setConfirming(`anonymize:${account.userId}`)}
+                      onConfirm={() =>
+                        run(
+                          () => anonymizeAccount(admin.token, account.userId),
+                          'Account anonymized. Its games stay in the archive under a placeholder name.',
+                        )
+                      }
+                      tone="quiet"
+                    />
+                    <ConfirmButton
+                      armed={confirming === `purge:${account.userId}`}
+                      busy={busy}
+                      label="DELETE"
+                      onArm={() => setConfirming(`purge:${account.userId}`)}
+                      onConfirm={() =>
+                        run(async () => {
+                          const purge = await purgeAccount(admin.token, account.userId);
+                          if (expanded === account.userId) {
+                            setExpanded(null);
+                            setDetail(null);
+                          }
+                          setNotice(
+                            `Deleted ${purge.username || purge.userId}: ` +
+                              `${purge.gamesDeleted} games, ${purge.botsDeleted} bots, ` +
+                              `${purge.tournamentEntriesDeleted} tournament entries.`,
+                          );
+                        })
+                      }
+                    />
+                  </View>
+
+                  {expanded === account.userId ? (
+                    <View style={styles.detail}>
+                      {detail === null ? (
+                        <Text style={styles.detailNote}>Loading…</Text>
+                      ) : (
+                        <>
+                          <Text style={styles.detailHeading}>BOTS</Text>
+                          {detail.bots.length === 0 ? (
+                            <Text style={styles.detailNote}>This account owns no bots.</Text>
+                          ) : (
+                            detail.bots.map((bot) => (
+                              <View key={bot.botId} style={styles.subRow}>
+                                <View style={styles.rowCopy}>
+                                  <Text numberOfLines={1} style={styles.subRowName}>
+                                    {bot.name || 'Unclaimed slot'}
+                                  </Text>
+                                  <Text numberOfLines={1} style={styles.rowMeta}>
+                                    {bot.botId}
+                                    {bot.engineName ? ` · ${bot.engineName}` : ''}
+                                  </Text>
+                                </View>
+                                {bot.retired ? <Badge label="RETIRED" tone="neutral" /> : null}
+                                {bot.disabled ? <Badge label="DISABLED" tone="live" /> : null}
+                                <ConfirmButton
+                                  armed={confirming === `bot:${bot.botId}`}
+                                  busy={busy}
+                                  label="DELETE BOT"
+                                  onArm={() => setConfirming(`bot:${bot.botId}`)}
+                                  onConfirm={() =>
+                                    run(async () => {
+                                      const removed = await purgeBot(admin.token, bot.botId);
+                                      setNotice(
+                                        `Deleted ${removed.name || removed.botId}: ` +
+                                          `${removed.gamesDeleted} games, ` +
+                                          `${removed.seriesDeleted} series.`,
+                                      );
+                                    })
+                                  }
+                                />
+                              </View>
+                            ))
+                          )}
+
+                          <Text style={styles.detailHeading}>RECENT GAMES</Text>
+                          {detail.games.length === 0 ? (
+                            <Text style={styles.detailNote}>
+                              This account has no recorded games.
+                            </Text>
+                          ) : (
+                            detail.games.map((game) => (
+                              <GameRow
+                                armed={confirming === `game:${game.gameId}`}
+                                busy={busy}
+                                game={game}
+                                key={game.gameId}
+                                onArm={() => setConfirming(`game:${game.gameId}`)}
+                                onDelete={() => removeGame(game.gameId)}
+                              />
+                            ))
+                          )}
+                        </>
+                      )}
+                    </View>
+                  ) : null}
                 </View>
               ))}
             </View>
@@ -210,7 +480,56 @@ export default function AdminScreen() {
           <Text style={styles.help}>
             Anonymizing removes the person, not their games: an account that has played is
             stripped and disabled rather than deleted, because the games belong to both
-            players. Its name is also rewritten inside every stored record.
+            players. Its name is also rewritten inside every stored record. Deleting removes
+            the rows instead — the account, its bots, its games, and its tournament entries —
+            and hands every opponent their rating back.
+          </Text>
+        </Panel>
+
+        <Panel style={styles.adminPanel}>
+          <SectionHeading eyebrow="ADMINISTRATION" title="Games" />
+          <View style={styles.searchRow}>
+            <View style={styles.searchField}>
+              <LabeledInput
+                autoCapitalize="none"
+                label="SEARCH"
+                onChangeText={setGameQuery}
+                onSubmitEditing={() => refreshGames()}
+                placeholder="username, user id, or game id"
+                value={gameQuery}
+              />
+            </View>
+            <GhostButton label="SEARCH" onPress={() => refreshGames()} />
+          </View>
+          <Checkbox
+            checked={revertRatings}
+            label="Give both players their rating back"
+            onToggle={() => setRevertRatings((current) => !current)}
+          />
+
+          {games.length === 0 ? (
+            <EmptyState detail="Nothing matched that search." title="No games" />
+          ) : (
+            <View style={styles.list}>
+              {games.map((game) => (
+                <GameRow
+                  armed={confirming === `game:${game.gameId}`}
+                  busy={busy}
+                  game={game}
+                  key={game.gameId}
+                  onArm={() => setConfirming(`game:${game.gameId}`)}
+                  onDelete={() => removeGame(game.gameId)}
+                />
+              ))}
+            </View>
+          )}
+          <Text style={styles.help}>
+            A deleted game leaves the history, the archive, and any review of it. With the box
+            above ticked — which is the default, since the usual reason to delete a game is
+            that its result should not stand — the Elo and the win counts it moved are
+            reversed for both players. That reversal is exact for the last game somebody
+            played and an approximation for an older one, because the games since were rated
+            against a number that has now changed.
           </Text>
         </Panel>
       </>
@@ -241,5 +560,62 @@ const styles = StyleSheet.create({
   rowName: { color: colors.text, fontSize: 12, fontWeight: '800' },
   rowElo: { color: colors.textFaint, fontSize: 10, fontWeight: '600' },
   rowMeta: { color: colors.textFaint, fontSize: 10, marginTop: 2 },
+  // The expanded block is inset and darker so that a delete button inside it
+  // reads as belonging to the account above rather than to the list.
+  detail: {
+    marginLeft: space.medium,
+    marginBottom: space.small,
+    paddingLeft: space.medium,
+    borderLeftWidth: 2,
+    borderLeftColor: colors.goldBorder,
+  },
+  detailHeading: {
+    color: colors.textFaint,
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 1,
+    marginTop: space.small,
+  },
+  detailNote: { color: colors.textFaint, fontSize: 10, paddingVertical: 6 },
+  subRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 5,
+  },
+  subRowName: { color: colors.text, fontSize: 11, fontWeight: '700' },
+  // Matched to GhostButton, so the quiet destructive action beside it reads as
+  // a button rather than as a disabled one.
+  actionButton: {
+    minHeight: 42,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+    borderRadius: radius.medium,
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
+    backgroundColor: colors.surfaceRaised,
+  },
+  actionButtonDanger: {
+    borderColor: colors.dangerBorder,
+    backgroundColor: colors.dangerSurfaceQuiet,
+  },
+  // An armed button is filled rather than merely relabelled: the difference
+  // between "delete" and "yes, really" should be visible from across the row.
+  actionButtonArmed: {
+    borderColor: colors.dangerStrong,
+    backgroundColor: colors.dangerSurface,
+  },
+  actionButtonDisabled: { opacity: 0.45 },
+  actionButtonPressed: { opacity: 0.7 },
+  actionButtonText: {
+    color: colors.textSubtle,
+    fontSize: 9,
+    fontWeight: '900',
+    letterSpacing: 0.8,
+  },
+  actionButtonTextDanger: { color: colors.dangerSoft },
+  actionButtonTextArmed: { color: colors.dangerText },
   help: { ...type.body, color: colors.textFaint, marginTop: space.medium },
 });

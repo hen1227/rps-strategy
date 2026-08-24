@@ -1,5 +1,5 @@
 // The service worker exists for exactly one thing: to be awake when the tab is
-// not, so a match found while you are away can still reach you.
+// not, so a game that starts while you are away can still reach you.
 //
 // WHAT IT DELIBERATELY DOES NOT DO: cache anything. There is no `fetch`
 // handler, no precache, no offline shell, and adding one would be a serious
@@ -31,8 +31,10 @@ self.addEventListener('push', function (event) {
 
   event.waitUntil(
     self.registration
-      .showNotification(payload.title || 'Your game is ready', {
-        body: payload.body || 'Somebody is waiting at the board. Tap to take your seat.',
+      .showNotification(payload.title || 'Your game has started', {
+        body:
+          payload.body ||
+          'The board is open and no clock is running yet. Play a move within 30s or it is called off.',
         // One tag, so a re-send replaces the banner rather than stacking a
         // second one for the same game.
         tag: payload.tag || 'rps-match',
@@ -41,14 +43,14 @@ self.addEventListener('push', function (event) {
         requireInteraction: true,
         icon: '/icon-192.png',
         badge: '/icon-192.png',
-        data: { pendingMatchId: payload.pendingId || '' },
+        data: { gameId: payload.gameId || '' },
       })
       .then(function () {
         return self.clients.matchAll({ type: 'window', includeUncontrolled: true });
       })
       .then(function (clients) {
         // A tab that is open and visible does not need a system banner over
-        // the top of it — it has the bar and the chime. Telling every client
+        // the top of it — it has the board and the chime. Telling every client
         // lets a visible one dismiss the notification itself, which keeps the
         // userVisibleOnly promise without shouting at somebody who is looking
         // straight at the answer.
@@ -69,8 +71,10 @@ self.addEventListener('notificationclick', function (event) {
         client.postMessage({ type: 'rps-match-summons' });
         return client.focus();
       }
-      // The lobby rather than /play: the board route renders nothing without a
-      // game, and the app navigates there by itself the moment one starts.
+      // The lobby rather than /play: the board route renders nothing until the
+      // socket has come up and been handed the game, and the app navigates
+      // there by itself the moment it has been. Opening /play directly would
+      // show an empty page for the length of a connection.
       return self.clients.openWindow('/');
     }),
   );

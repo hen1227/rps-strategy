@@ -187,28 +187,37 @@ export default function TournamentScreen() {
   return (
     <ScreenShell width={contentWidth.standard}>
       <>
-          {/* No back button: the shell's navigation is already the way out. */}
-          <View style={styles.topBar}>
-            <View style={styles.topBarActions}>
-              <GhostButton
-                accessibilityLabel="Refresh the tournament board"
-                compact
-                disabled={refreshing}
-                label={refreshing ? 'LOADING' : 'REFRESH'}
-                onPress={refresh}
-              />
-              <GhostButton
-                accessibilityLabel="Toggle tournament admin controls"
-                compact
-                label={adminUnlocked ? 'ADMIN ON' : 'HOST CONTROLS'}
-                onPress={() => setAdminPanelOpen((open) => !open)}
-              />
-            </View>
-          </View>
+          {/*
+            No back button: the shell's navigation is already the way out.
 
+            The two controls belong beside the title, not on a line of their
+            own above it — right-aligned over an empty row they read as
+            floating, and the row plus the hero's padding left a band of
+            nothing between the heading and the first card. The row wraps, so a
+            phone still stacks them under the title rather than crushing it.
+          */}
           <View style={styles.hero}>
-            <Text style={styles.eyebrow}>RPS STRATEGY</Text>
-            <Text style={styles.title}>Tournaments</Text>
+            <View style={styles.heroRow}>
+              <View style={styles.heroCopy}>
+                <Text style={styles.eyebrow}>RPS STRATEGY</Text>
+                <Text style={styles.title}>Tournaments</Text>
+              </View>
+              <View style={styles.topBarActions}>
+                <GhostButton
+                  accessibilityLabel="Refresh the tournament board"
+                  compact
+                  disabled={refreshing}
+                  label={refreshing ? 'LOADING' : 'REFRESH'}
+                  onPress={refresh}
+                />
+                <GhostButton
+                  accessibilityLabel="Toggle tournament admin controls"
+                  compact
+                  label={adminUnlocked ? 'ADMIN ON' : 'HOST CONTROLS'}
+                  onPress={() => setAdminPanelOpen((open) => !open)}
+                />
+              </View>
+            </View>
             <Text style={styles.subtitle}>
               Sign up, play your matches in the app, and follow the standings live.
             </Text>
@@ -654,10 +663,17 @@ function ResultButton({ label, selected, disabled, onPress }: ResultButtonProps)
 }
 
 const styles = StyleSheet.create({
-  topBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end' },
   topBarActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
 
-  hero: { paddingTop: 24, paddingBottom: 22 },
+  hero: { paddingBottom: 6 },
+  heroRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'flex-end',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  heroCopy: { flexShrink: 1, minWidth: 0 },
   eyebrow: { color: colors.accent, fontSize: 10, fontWeight: '900', letterSpacing: 2.1 },
   title: {
     color: colors.textStrong,

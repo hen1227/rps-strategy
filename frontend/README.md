@@ -432,8 +432,26 @@ browser cache for a year is a worker that cannot be fixed. Serve them with
 cached for as long as you like, as they always could.
 
 ```nginx
-location = /sw.js              { add_header Cache-Control "no-cache"; }
-location = /manifest.webmanifest { add_header Cache-Control "no-cache"; }
+location = /sw.js { add_header Cache-Control "no-cache"; }
+
+# nginx has no mime type for .webmanifest before 1.21, so it falls through to
+# `application/octet-stream` — and a manifest served as a binary blob is a
+# manifest the browser may decline to read. That matters more than it looks:
+# `display: standalone` in the manifest is what makes an iOS Home Screen
+# install a context where Web Push works at all, so a mistyped manifest is an
+# iPhone that can never be notified.
+location = /manifest.webmanifest {
+    types { } default_type application/manifest+json;
+    add_header Cache-Control "no-cache";
+}
+```
+
+Check both from outside, because a CDN in front can override either one — a
+browser cache TTL set at the edge replaces whatever the origin said:
+
+```sh
+curl -sI https://rps.example.com/sw.js | grep -i 'cache-control\|content-type'
+curl -sI https://rps.example.com/manifest.webmanifest | grep -i 'content-type'
 ```
 
 The worker deliberately caches nothing itself — it has no `fetch` handler at

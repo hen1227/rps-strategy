@@ -8,11 +8,9 @@ import { lobbyGate, queueCallState, type LobbyGate, type QueueCall } from '@/sto
  * What this player is waiting on, recomputed often enough to look alive.
  *
  * The tick lives here rather than in `queueSelectors` so that module stays pure
- * and testable. Its rate follows what is on screen: a thirty-second countdown
- * needs to move smoothly, a ten-minute search needs a number that changes once
- * a second, and an idle lobby needs no timer at all.
+ * and testable. One second is the whole vocabulary now: what is left on this
+ * card is a wait measured in minutes, and an idle lobby needs no timer at all.
  */
-const CLAIM_TICK_MS = 250;
 const SEARCH_TICK_MS = 1000;
 
 /** Whether the player is sitting at a real board. A bot game does not count. */
@@ -24,7 +22,6 @@ const useAtOwnBoard = () => {
 
 export const useQueueCall = (): QueueCall | null => {
   const queue = useGameStore((state) => state.queue);
-  const claim = useGameStore((state) => state.claim);
   const miss = useGameStore((state) => state.queueMiss);
   const outgoingChallenge = useGameStore((state) => state.outgoingChallenge);
   const connectionStatus = useGameStore((state) => state.connectionStatus);
@@ -34,7 +31,7 @@ export const useQueueCall = (): QueueCall | null => {
   const snoozedUntil = usePushStore((state) => state.snoozedUntil);
   const atOwnBoard = useAtOwnBoard();
 
-  const active = Boolean(queue.isSearching || claim || outgoingChallenge);
+  const active = Boolean(queue.isSearching || outgoingChallenge);
   const [nowMs, setNowMs] = useState(() => Date.now());
 
   useEffect(() => {
@@ -43,15 +40,14 @@ export const useQueueCall = (): QueueCall | null => {
     // first frame of a countdown is drawn against whatever `nowMs` the previous,
     // slower tick left behind, so a thirty-second hold can appear as thirty-three.
     setNowMs(Date.now());
-    const interval = setInterval(() => setNowMs(Date.now()), claim ? CLAIM_TICK_MS : SEARCH_TICK_MS);
+    const interval = setInterval(() => setNowMs(Date.now()), SEARCH_TICK_MS);
     return () => clearInterval(interval);
-  }, [active, atOwnBoard, claim]);
+  }, [active, atOwnBoard]);
 
   return useMemo(
     () =>
       queueCallState({
         queue,
-        claim,
         miss,
         outgoingChallenge,
         connectionStatus,
@@ -63,7 +59,6 @@ export const useQueueCall = (): QueueCall | null => {
       }),
     [
       atOwnBoard,
-      claim,
       connectionStatus,
       miss,
       modes,
@@ -88,12 +83,11 @@ export const useQueueCall = (): QueueCall | null => {
 export const useLobbyGate = (): LobbyGate => {
   const connectionStatus = useGameStore((state) => state.connectionStatus);
   const outgoingChallenge = useGameStore((state) => state.outgoingChallenge);
-  const claim = useGameStore((state) => state.claim);
   const queue = useGameStore((state) => state.queue);
   const atOwnBoard = useAtOwnBoard();
 
   return useMemo(
-    () => lobbyGate({ connectionStatus, atOwnBoard, outgoingChallenge, claim, queue }),
-    [atOwnBoard, claim, connectionStatus, outgoingChallenge, queue],
+    () => lobbyGate({ connectionStatus, atOwnBoard, outgoingChallenge, queue }),
+    [atOwnBoard, connectionStatus, outgoingChallenge, queue],
   );
 };

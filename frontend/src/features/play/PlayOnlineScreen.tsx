@@ -352,7 +352,7 @@ export default function PlayOnlineScreen() {
                 of thing — the server takes the same message either way — so it
                 is one optional field rather than a second set of buttons.
               */}
-              <View style={[styles.opponentField, isWide && styles.opponentFieldWide]}>
+              <View style={styles.opponentField}>
                 <Text style={styles.groupLabel}>OPPONENT — OPTIONAL</Text>
                 <TextInput
                   accessibilityLabel="Username to challenge, or leave blank to open the game to anyone"
@@ -570,10 +570,9 @@ const styles = StyleSheet.create({
   // centring the copy against it reads as two unrelated things side by side.
   setupRow: { alignItems: 'flex-start', paddingVertical: space.small },
 
-  opponentField: { flexGrow: 1, flexBasis: 220 },
+  opponentField: { flexGrow: 1, flexBasis: 220, width: '100%' },
   // A username is short. Letting the field run the width of a desktop panel
   // made it look like the main event rather than an optional detail.
-  opponentFieldWide: { flexGrow: 0, flexBasis: 260, maxWidth: 260 },
   input: {
     height: 42,
     paddingHorizontal: space.medium,

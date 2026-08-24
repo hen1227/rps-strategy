@@ -60,29 +60,6 @@ export interface Challenge {
 }
 
 /**
- * A game that has been arranged but has not started, because at least one of
- * its two players has to be fetched first.
- *
- * Both halves of who-is-waiting-on-whom are stated rather than one being
- * inferred, because the two screens are entirely different — "take your seat,
- * twenty-three seconds" and "we have called them, twenty-three seconds" — and
- * a client should not have to work out which one it is showing.
- */
-export interface PendingMatchView {
-  id: string;
-  opponent: PlayerProfile;
-  opponentElo?: number;
-  modeId: ModeID;
-  modeName: string;
-  setup: GameSetup;
-  /** You are the one being waited on. */
-  summoned: boolean;
-  /** They are. */
-  opponentSummoned: boolean;
-  deadlineUnixMs: number;
-}
-
-/**
  * A search as a reconnecting client needs to be told about it.
  *
  * `queuedForMs` is a duration rather than an instant because the two ends do
@@ -390,8 +367,11 @@ export type ClientMessage =
    * treating a closed socket as away.
    */
   | { type: 'queue_presence'; present: boolean }
-  | { type: 'claim_match'; pendingMatchId: string }
-  | { type: 'decline_match'; pendingMatchId: string };
+  /**
+   * Call off a game nobody has moved in yet. Refused once it has begun, when
+   * the only way out is a resignation and the rating that comes with it.
+   */
+  | { type: 'abort_game' };
 
 export type ClientMessageType = ClientMessage['type'];
 
@@ -423,8 +403,14 @@ export interface ConnectionReadyMessage {
    * queued, which is why the handler must clear the queue when it is missing.
    */
   queue?: QueueSnapshot;
-  /** A seat being held for this player right now. */
-  pendingMatch?: PendingMatchView;
+  /**
+   * A live game this account is already seated in.
+   *
+   * The board may have opened while the browser was closed, in which case it
+   * has never heard of the game and cannot ask to rejoin one by id. Being told
+   * the id here is what makes a notification worth opening.
+   */
+  gameId?: string;
   /**
    * Whether this server can call anybody back. False turns off the whole offer
    * to wait with the tab closed, rather than leaving a button that quietly
@@ -459,9 +445,8 @@ export type ServerMessage =
       queuedForMs?: number;
     }
   | { type: 'queue_left'; message?: string }
-  | { type: 'match_pending'; pendingMatch?: PendingMatchView }
-  | { type: 'match_missed'; message?: string }
-  | { type: 'match_unavailable'; message?: string }
+  /** A game that was opened, never played, and is now gone. Nothing was rated. */
+  | { type: 'game_cancelled'; gameId?: string; message?: string }
   | { type: 'challenge_received'; challenge?: Challenge }
   | { type: 'challenge_sent'; challenge?: Challenge }
   | { type: 'challenge_removed'; challenge?: Challenge }
@@ -475,6 +460,13 @@ export type ServerMessage =
       gameState?: GameState;
       chatMessages?: ChatMessage[];
       chatRoomId?: string;
+      /**
+       * When a board nobody has moved on gives up waiting. Zero or absent for a
+       * game that is already being played, which is how a client tells the two
+       * apart: a board with a deadline on it is one where nothing is ticking
+       * and nothing is rated yet.
+       */
+      firstMoveDeadlineUnixMs?: number;
     }
   | {
       type: 'game_rejoined';
@@ -483,6 +475,7 @@ export type ServerMessage =
       reconnectDeadlineUnixMs?: number;
       chatMessages?: ChatMessage[];
       chatRoomId?: string;
+      firstMoveDeadlineUnixMs?: number;
     }
   | {
       type: 'spectator_joined';

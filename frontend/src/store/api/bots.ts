@@ -377,3 +377,90 @@ export const anonymizeAccount = (adminToken: string, userId: string) =>
     token: adminToken,
     what: 'Anonymizing the account',
   });
+
+/** An account with everything an admin might want to remove from it. */
+export interface AccountDetail {
+  account: Account;
+  bots: Bot[];
+  games: GameRecord[];
+}
+
+export const accountDetail = (adminToken: string, userId: string, limit = 25) =>
+  request<AccountDetail>(`/api/admin/accounts/${userId}?limit=${limit}`, {
+    token: adminToken,
+    what: 'Loading the account',
+  });
+
+/** What a purge removed, so the screen can say it rather than guess. */
+export interface AccountPurge {
+  userId: string;
+  username: string;
+  gamesDeleted: number;
+  botsDeleted: number;
+  tournamentEntriesDeleted: number;
+}
+
+/**
+ * Delete an account outright, with its games, bots, and tournament entries.
+ *
+ * The hard neighbour of `anonymizeAccount`, which keeps the games and only
+ * removes the person. Separate paths on the server too, so the destructive one
+ * cannot be reached by a typo in the other's URL.
+ */
+export const purgeAccount = (adminToken: string, userId: string) =>
+  request<AccountPurge>(`/api/admin/accounts/${userId}/purge`, {
+    method: 'DELETE',
+    token: adminToken,
+    what: 'Deleting the account',
+  });
+
+/** What a game deletion removed. The two tables can disagree, so both are reported. */
+export interface GameDeletion {
+  gameId: string;
+  historyDeleted: boolean;
+  archiveDeleted: boolean;
+  reviewsDeleted: number;
+  ratingsReverted: boolean;
+}
+
+export const listAdminGames = (adminToken: string, query = '', limit = 50) =>
+  request<GameRecord[]>(
+    `/api/admin/games?query=${encodeURIComponent(query)}&limit=${limit}`,
+    { token: adminToken, what: 'Loading games' },
+  );
+
+/**
+ * Delete one game from the history and the archive.
+ *
+ * `revertRatings` defaults to true on the server as well: the usual reason to
+ * delete a game is that its result should not stand, so both players get the
+ * Elo and the win count back unless the caller says otherwise.
+ */
+export const deleteGame = (adminToken: string, gameId: string, revertRatings = true) =>
+  request<GameDeletion>(
+    `/api/admin/games/${encodeURIComponent(gameId)}?revertRatings=${revertRatings}`,
+    { method: 'DELETE', token: adminToken, what: 'Deleting the game' },
+  );
+
+/** What deleting a bot removed. */
+export interface BotDeletion {
+  botId: string;
+  name: string;
+  gamesDeleted: number;
+  seriesDeleted: number;
+  accountDeleted: boolean;
+}
+
+/**
+ * Delete a bot entirely: its games, its series, and the account it played under.
+ *
+ * `deleteBot` in the owner section retires instead — the bot leaves play and
+ * its games stay, because they are also its opponents' games. This is the one
+ * for a bot whose record is itself the problem.
+ */
+export const purgeBot = (adminToken: string, botId: string) =>
+  request<BotDeletion>(`/api/admin/bots/${botId}`, {
+    method: 'DELETE',
+    token: adminToken,
+    what: 'Deleting the bot',
+  });

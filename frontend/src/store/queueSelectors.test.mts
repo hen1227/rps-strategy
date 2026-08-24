@@ -2,10 +2,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
-  CLAIM_CRITICAL_MS,
-  CLAIM_WINDOW_MS,
+  FIRST_MOVE_CRITICAL_MS,
+  FIRST_MOVE_WINDOW_MS,
   MISS_NOTICE_MS,
   QUEUE_COPY,
+  firstMoveCall,
   formatCountdown,
   formatWait,
   lobbyGate,
@@ -13,7 +14,7 @@ import {
   waitingPresence,
   type QueueSource,
 } from './queueSelectors.ts';
-import type { QueueClaim, QueueState } from './types.ts';
+import type { QueueState } from './types.ts';
 import type { Challenge } from '../types/protocol.ts';
 import type { ModeDefinition } from '../types/game.ts';
 
@@ -42,7 +43,6 @@ const searching = (waitedMs = 0): QueueState => ({
 
 const emptySource = (): QueueSource => ({
   queue: idleQueue(),
-  claim: null,
   miss: null,
   outgoingChallenge: null,
   connectionStatus: 'connected',
@@ -52,22 +52,6 @@ const emptySource = (): QueueSource => ({
   canOfferAlerts: true,
   nowMs: NOW,
 });
-
-const claim = (
-  role: 'summoned' | 'present',
-  remainingMs = CLAIM_WINDOW_MS,
-): QueueClaim =>
-  ({
-    pendingId: 'hold-1',
-    role,
-    deadlineUnixMs: NOW + remainingMs,
-    opponent: { userId: 'ada', username: 'Ada' },
-    opponentElo: 1300,
-    modeId: 'V5',
-    modeName: 'Total War',
-    setup: {},
-    claiming: false,
-  }) as unknown as QueueClaim;
 
 const openChallenge = (overrides: Partial<Challenge> = {}): Challenge =>
   ({
@@ -119,46 +103,6 @@ test('a snoozed or impossible offer is not made', () => {
   assert.equal(call?.offerAlerts, false);
 });
 
-test('being summoned outranks searching', () => {
-  const call = queueCallState({
-    ...emptySource(),
-    queue: searching(),
-    claim: claim('summoned'),
-  });
-  assert.equal(call?.kind, 'claiming');
-  assert.equal(call?.opponentName, 'Ada');
-});
-
-test('being the one who waits reads differently from being summoned', () => {
-  const call = queueCallState({
-    ...emptySource(),
-    queue: searching(),
-    claim: claim('present'),
-  });
-  assert.equal(call?.kind, 'holding');
-});
-
-// A message that arrived late, or a tab that woke up throttled, must not leave
-// a dead countdown on screen with a button that cannot work.
-test('a claim whose deadline has passed is ignored', () => {
-  const call = queueCallState({
-    ...emptySource(),
-    queue: searching(),
-    claim: claim('summoned', -1),
-  });
-  assert.equal(call?.kind, 'searching_tethered');
-});
-
-test('a claim outranks reconnecting, so the card does not vanish', () => {
-  const call = queueCallState({
-    ...emptySource(),
-    queue: searching(),
-    claim: claim('summoned'),
-    connectionStatus: 'disconnected',
-  });
-  assert.equal(call?.kind, 'claiming');
-});
-
 test('a dropped socket pauses the search rather than ending it', () => {
   for (const status of ['disconnected', 'connecting', 'rejoining'] as const) {
     const call = queueCallState({
@@ -170,7 +114,7 @@ test('a dropped socket pauses the search rather than ending it', () => {
   }
 });
 
-test('a no-show notice shows briefly and then gives way', () => {
+test('a cancelled-game notice shows briefly and then gives way', () => {
   const source = {
     ...emptySource(),
     queue: searching(),
@@ -185,14 +129,14 @@ test('a no-show notice shows briefly and then gives way', () => {
 
 // The regression test for "your wait is preserved": the notice reports the
 // whole search, not the thirty seconds that were just wasted.
-test('the wait shown after a no-show is the whole search', () => {
+test('the wait shown after a cancelled game is the whole search', () => {
   const call = queueCallState({
     ...emptySource(),
     queue: searching(9 * 60_000),
     miss: { message: 'gone', atUnixMs: NOW - 500 },
   });
   assert.equal(call?.kind, 'missed');
-  assert.ok(call!.waitedMs > CLAIM_WINDOW_MS);
+  assert.ok(call!.waitedMs > FIRST_MOVE_WINDOW_MS);
   assert.equal(QUEUE_COPY.missed.detail(call!), 'Back to searching · 9m 00s in, and your place is intact');
 });
 
@@ -239,27 +183,9 @@ test('a countdown rounds up and clamps', () => {
   assert.equal(formatCountdown(-500), '0s');
 });
 
-test('the countdown goes urgent at ten seconds and never negative', () => {
-  const atTen = queueCallState({
-    ...emptySource(),
-    claim: claim('summoned', CLAIM_CRITICAL_MS),
-  });
-  assert.equal(atTen?.critical, true);
-
-  const early = queueCallState({
-    ...emptySource(),
-    claim: claim('summoned', CLAIM_CRITICAL_MS + 1),
-  });
-  assert.equal(early?.critical, false);
-  assert.equal(early?.progress > 0, true);
-});
-
 // Catches a future kind added without copy to go with it.
 test('every call kind has usable copy', () => {
-  const call = queueCallState({
-    ...emptySource(),
-    claim: claim('summoned'),
-  })!;
+  const call = queueCallState({ ...emptySource(), queue: searching() })!;
   for (const [kind, copy] of Object.entries(QUEUE_COPY)) {
     assert.ok(copy.title({ ...call, kind } as typeof call).length > 0, kind);
     assert.ok(copy.detail({ ...call, kind } as typeof call).length > 0, kind);
@@ -273,7 +199,6 @@ const gateSource = (overrides: Partial<Parameters<typeof lobbyGate>[0]> = {}) =>
   connectionStatus: 'connected' as const,
   atOwnBoard: false,
   outgoingChallenge: null,
-  claim: null,
   queue: idleQueue(),
   ...overrides,
 });
@@ -291,9 +216,8 @@ test('a real game and a dead socket both count as being at a board', () => {
   assert.equal(lobbyGate(gateSource({ connectionStatus: 'disconnected' })).atBoard, true);
 });
 
-test('an outgoing challenge or a held seat is already a seek', () => {
+test('an outgoing challenge is already a seek', () => {
   assert.equal(lobbyGate(gateSource({ outgoingChallenge: openChallenge() })).seekTaken, true);
-  assert.equal(lobbyGate(gateSource({ claim: claim('summoned') })).seekTaken, true);
 });
 
 /* ---------------------------------------------------------------- board -- */
@@ -307,40 +231,43 @@ test('the board separates people who are here from people who are away', () => {
   assert.deepEqual(waitingPresence(rows), { total: 3, here: 1, away: 2 });
 });
 
-// The two clocks disagree by up to one server sweep. In that gap the bar must
-// not claim the search is running again, because the server still has the seat
-// held and the seek off the board — so a presence report, or a cancel, would
-// land somewhere the player did not mean it to.
-test('a lapsed hold reads as a no-show, not as a fresh search', () => {
-  const call = queueCallState({
-    ...emptySource(),
-    queue: searching(120_000),
-    claim: claim('present', -100),
-  });
-  assert.equal(call?.kind, 'missed');
-  assert.equal(call?.opponentName, 'Ada');
-  assert.equal(QUEUE_COPY.missed.title(call!), 'Ada never turned up');
+/* ----------------------------------------------------------- first move -- */
+
+test('a board with no deadline says nothing', () => {
+  assert.equal(firstMoveCall(null, true, 'Ada', NOW), null);
+  assert.equal(firstMoveCall(0, true, 'Ada', NOW), null);
 });
 
-// The other side of it: a summons that lapsed is the player's own fault and
-// their seek is gone, so there is nothing to report but the search they are
-// no longer in. The server's queue_left settles it a moment later.
-test('a lapsed summons does not pretend a hold is still live', () => {
-  const call = queueCallState({
-    ...emptySource(),
-    queue: searching(120_000),
-    claim: claim('summoned', -100),
-  });
-  assert.notEqual(call?.kind, 'claiming');
+test('the player to move is told the clock is waiting on them', () => {
+  const call = firstMoveCall(NOW + 22_000, true, 'Ada', NOW)!;
+  assert.equal(call.yours, true);
+  assert.match(call.title, /Your move/);
+  assert.match(call.detail, /^22s to play it/);
+});
+
+test('the other player is told who is being waited for', () => {
+  const call = firstMoveCall(NOW + 22_000, false, 'Ada', NOW)!;
+  assert.equal(call.yours, false);
+  assert.equal(call.title, 'Waiting for Ada to open');
+  assert.match(call.detail, /called off/);
+});
+
+test('an unnamed opponent still reads as a sentence', () => {
+  assert.equal(
+    firstMoveCall(NOW + 5_000, false, '   ', NOW)!.title,
+    'Waiting for your opponent to open',
+  );
+});
+
+test('the first-move countdown goes urgent at ten seconds and never negative', () => {
+  assert.equal(firstMoveCall(NOW + FIRST_MOVE_CRITICAL_MS, true, null, NOW)!.critical, true);
+  assert.equal(firstMoveCall(NOW + FIRST_MOVE_CRITICAL_MS + 1, true, null, NOW)!.critical, false);
+  assert.equal(firstMoveCall(NOW - 5_000, true, null, NOW)!.remainingMs, 0);
 });
 
 // The two clocks can disagree. A bar promising thirty-four seconds of a
-// thirty-second hold runs out early and looks broken doing it.
-test('the countdown never promises more than the window', () => {
-  const call = queueCallState({
-    ...emptySource(),
-    claim: claim('summoned', CLAIM_WINDOW_MS + 5_000),
-  });
-  assert.equal(call?.remainingMs, CLAIM_WINDOW_MS);
-  assert.equal(call?.progress, 1);
+// thirty-second wait runs out early and looks broken doing it.
+test('the first-move countdown never promises more than the window', () => {
+  const call = firstMoveCall(NOW + FIRST_MOVE_WINDOW_MS + 5_000, true, null, NOW)!;
+  assert.equal(call.remainingMs, FIRST_MOVE_WINDOW_MS);
 });

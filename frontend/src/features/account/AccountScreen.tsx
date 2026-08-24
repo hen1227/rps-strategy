@@ -297,10 +297,10 @@ export default function AccountScreen() {
               )}
 
               {/*
-                Only rendered once alerts are actually on. Somewhere to turn
-                them off is necessary; a settings row reading "notifications:
-                off" for everybody who never wanted them is the clutter this
-                feature promised not to add.
+                Always here, whatever state alerts are in — including the states
+                nothing can be done about. This is the page somebody opens when
+                notifications are not working and they want to know why, and it
+                cannot answer that by rendering nothing.
               */}
               <MatchAlertsPanel variant="settings" />
 

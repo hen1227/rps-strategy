@@ -165,6 +165,11 @@ const styles = StyleSheet.create({
   tableHead: { borderTopWidth: 0, backgroundColor: colors.surfaceRaised },
   cell: {
     flex: 1,
+    // `flex: 1` alone is not enough on the web, where a flex item will not
+    // shrink below its longest unbreakable word. A cell holding a command like
+    // `'eval|exec|pickle|os.system'` was widening its row past the table, and
+    // `overflow: hidden` above then cut the next cell's text off entirely.
+    minWidth: 0,
     color: colors.text,
     fontSize: 12,
     lineHeight: 18,

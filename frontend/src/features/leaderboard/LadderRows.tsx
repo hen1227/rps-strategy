@@ -50,7 +50,8 @@ export default function LadderRows({
   // The counters beside it are lifetime totals, which do cover every mode.
   const record = (entry: LeaderboardEntry) => {
     const scope = modeId ? '' : `best in ${modeName(entry.modeId)} · `;
-    return `${scope}${entry.wins}W · ${entry.draws}D · ${entry.losses}L · ${entry.gamesPlayed} games`;
+    const games = entry.gamesPlayed === 1 ? '1 game' : `${entry.gamesPlayed} games`;
+    return `${scope}${entry.wins}W · ${entry.draws}D · ${entry.losses}L · ${games}`;
   };
 
   return (

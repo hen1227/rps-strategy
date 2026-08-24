@@ -167,7 +167,16 @@ const styles = StyleSheet.create({
     fontSize: 11,
     lineHeight: 18,
   },
-  digest: { ...type.meta, color: colors.textFaint, fontFamily: 'monospace', flexShrink: 1 },
+  // `flexShrink` cannot do this on its own: a flex item will not shrink below
+  // its longest unbreakable word, and the digest is one 64-character word, so
+  // it ran off the side of a phone. With a floor of zero it wraps instead.
+  digest: {
+    ...type.meta,
+    color: colors.textFaint,
+    fontFamily: 'monospace',
+    flexShrink: 1,
+    minWidth: 0,
+  },
   answers: { marginTop: space.medium },
   reading: { marginTop: space.medium },
 });

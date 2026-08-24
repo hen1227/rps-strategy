@@ -44,6 +44,22 @@ export const savePushSubscription = (
     what: 'Turning on alerts',
   });
 
+/**
+ * Ask the server to send this browser one notification, now.
+ *
+ * The only way to tell a working subscription from one that stores cleanly and
+ * silently delivers nothing — which are otherwise indistinguishable right up
+ * until somebody misses a game. `delivered` is how many browsers it went to, so
+ * zero is a real answer and not a failure.
+ */
+export const sendTestPush = (identity: PushIdentity) =>
+  request<{ delivered: number }>(`/api/push/test${identityScope(identity)}`, {
+    method: 'POST',
+    body: {},
+    token: identityCredential(identity),
+    what: 'Sending a test notification',
+  });
+
 export const deletePushSubscription = (endpoint: string, identity: PushIdentity) =>
   request<{ subscribed: boolean }>(`/api/push/subscriptions${identityScope(identity)}`, {
     method: 'DELETE',

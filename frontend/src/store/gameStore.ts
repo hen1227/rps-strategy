@@ -14,12 +14,10 @@ import { chatRoomIdOf, withChatMessage } from './chatSelectors';
 import { WS_URL } from './serverConfig';
 import { isStandardSetup, standardSetup } from './setupSelectors';
 import { send } from './socketSend';
-import { CLAIM_WINDOW_MS } from './queueSelectors';
 import type {
   ActiveGame,
   ConnectionStatus,
   GameStore,
-  QueueClaim,
   QueueMiss,
   QueueState,
 } from './types';
@@ -41,7 +39,6 @@ import type {
   ChatMessage,
   LiveGameSummary,
   ModeCounts,
-  PendingMatchView,
   ServerMessage,
   Tournament,
   TournamentMatchResult,
@@ -126,23 +123,6 @@ const anchorWait = (
   if (existing === null) return reported;
   return Math.abs(existing - reported) > QUEUE_ANCHOR_DRIFT_MS ? reported : existing;
 };
-
-/** A hold, as the store keeps it: server durations turned into local instants. */
-const claimFrom = (
-  pending: PendingMatchView,
-  nowMs: number,
-  wasClaiming: boolean,
-): QueueClaim => ({
-  pendingId: pending.id,
-  role: pending.summoned ? 'summoned' : 'present',
-  deadlineUnixMs: pending.deadlineUnixMs || nowMs + CLAIM_WINDOW_MS,
-  opponent: pending.opponent,
-  opponentElo: pending.opponentElo ?? null,
-  modeId: pending.modeId,
-  modeName: pending.modeName,
-  setup: pending.setup,
-  claiming: wasClaiming,
-});
 
 // This browser's own identity, as distinct from the store's `accountId`,
 // which is whoever the server says we are right now. The two differ on a
@@ -278,7 +258,15 @@ export interface LobbyState {
   defaultTimeControl: TimeControl | null;
   queue: QueueState;
   /** A game arranged but not started, because somebody has to answer for it. */
-  claim: QueueClaim | null;
+  /**
+   * When a board nobody has moved on gives up waiting, or null once the game
+   * has begun.
+   *
+   * Held beside the game rather than inside it because it is not part of the
+   * position: it is a promise about the next thirty seconds, and it stops
+   * meaning anything the moment somebody plays.
+   */
+  firstMoveDeadline: number | null;
   /** Why the last hold came to nothing. Shown briefly, then forgotten. */
   queueMiss: QueueMiss | null;
   /** People per mode who are waiting *and* at the keyboard right now. */
@@ -310,10 +298,11 @@ export interface LobbyActions {
   handleServerMessage: (message: ServerMessage) => void;
   joinQueue: (modeId?: ModeID | null) => void;
   leaveQueue: () => void;
-  /** Take a seat that is being held. */
-  claimMatch: () => void;
-  /** Give up a seat now, so the other player is freed at once. */
-  declineMatch: () => void;
+  /**
+   * Call off a game nobody has moved in yet, freeing the opponent at once
+   * rather than making them wait out a countdown that is already decided.
+   */
+  abortGame: () => void;
   /** Tell the server whether a person is actually behind this tab. */
   reportPresence: (present: boolean) => void;
   challengePlayer: (username: string, setup: GameSetup) => boolean;
@@ -389,7 +378,7 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
   challengeNotice: null,
   defaultTimeControl: null,
   queue: initialQueue,
-  claim: null,
+  firstMoveDeadline: null,
   queueMiss: null,
   playerColor: null,
   isSpectating: false,
@@ -477,7 +466,6 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
       socket: null,
       connectionStatus: 'disconnected',
       queue: initialQueue,
-      claim: null,
       queueMiss: null,
       incomingChallenges: [],
       openChallenges: [],
@@ -492,7 +480,11 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
         reconnectAttempts = 0;
         set((state) => {
           const modes = message.modes?.length ? message.modes : state.modes;
-          const gameSessionId = state.gameSessionId ?? readGameSessionId();
+          // The server's answer wins: a board may have opened while this
+          // browser was closed, so the id it names is one localStorage cannot
+          // know. Falling back to the stored one covers an ordinary reload.
+          const gameSessionId =
+            message.gameId ?? state.gameSessionId ?? readGameSessionId();
           const spectatedGameId = gameSessionId ? null : state.spectatedGameId;
           if (gameSessionId) {
             send(state.socket, { type: 'rejoin_game', gameId: gameSessionId });
@@ -524,12 +516,9 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
             : initialQueue;
           // Somebody who came back to find their search gone deserves a reason,
           // not an inexplicably empty lobby.
-          const lostQueue = state.queue.isSearching && !message.queue && !message.pendingMatch;
+          const lostQueue = state.queue.isSearching && !message.queue && !message.gameId;
           return {
             queue,
-            claim: message.pendingMatch
-              ? claimFrom(message.pendingMatch, now, false)
-              : null,
             queueMiss: null,
             pushEnabled: message.pushEnabled ?? false,
             modeReadyCounts: message.modeReadyCounts ?? state.modeReadyCounts,
@@ -658,36 +647,33 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
       case 'queue_left':
         set({
           queue: initialQueue,
-          claim: null,
           queueMiss: null,
           challengeNotice: message.message ?? null,
         });
         break;
-      case 'match_pending': {
-        const pending = message.pendingMatch;
-        if (!pending) break;
-        set((state) => ({
-          // A hold that is already ours keeps its `claiming` flag, so the
-          // button does not flicker back to idle while the claim is in flight.
-          claim: claimFrom(
-            pending,
-            Date.now(),
-            state.claim?.pendingId === pending.id && state.claim.claiming,
-          ),
-          queueMiss: null,
-        }));
-        break;
-      }
-      case 'match_missed':
-        // The seek is back on the board and the server will send a fresh
-        // queue_update for it; all this has to do is explain the gap.
+      case 'game_cancelled':
+        // Nothing was played, so nothing is kept: the board goes, the stored
+        // session id goes, and no result is ever shown. Whether the search
+        // resumes is the server's call — a queue_update follows for whoever it
+        // put back — so this only has to explain the gap.
         set({
-          claim: null,
+          playerColor: null,
+          isSpectating: false,
+          spectatedGameId: null,
+          gameState: null,
+          lastMove: null,
+          gameSessionId: clearPersistedGame(),
+          firstMoveDeadline: null,
+          connectionStatus: 'connected',
+          selectedTile: null,
+          validMoves: [],
+          opponentReconnectDeadline: null,
+          chatMessages: [],
+          chatRoomId: null,
           queueMiss: { message: message.message ?? '', atUnixMs: Date.now() },
+          challengeNotice: message.message ?? null,
+          error: null,
         });
-        break;
-      case 'match_unavailable':
-        set({ claim: null, error: message.message ?? 'That match is no longer waiting.' });
         break;
       case 'challenge_received': {
         const received = message.challenge;
@@ -774,9 +760,9 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
           gameState: message.gameState,
           lastMove: null,
           gameSessionId,
+          firstMoveDeadline: message.firstMoveDeadlineUnixMs || null,
           connectionStatus: 'connected',
           queue: initialQueue,
-          claim: null,
           queueMiss: null,
           incomingChallenges: [],
           outgoingChallenge: null,
@@ -800,6 +786,7 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
           gameState: message.gameState,
           lastMove: null,
           gameSessionId,
+          firstMoveDeadline: message.firstMoveDeadlineUnixMs || null,
           connectionStatus: 'connected',
           queue: initialQueue,
           selectedTile: null,
@@ -814,6 +801,7 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
       case 'spectator_joined':
         clearPersistedGame();
         set({
+          firstMoveDeadline: null,
           playerColor: 'Neutral',
           isSpectating: true,
           spectatedGameId: message.gameState?.gameId ?? null,
@@ -832,6 +820,7 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
         break;
       case 'game_unavailable':
         set({
+          firstMoveDeadline: null,
           playerColor: null,
           isSpectating: false,
           spectatedGameId: null,
@@ -870,8 +859,15 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
         }
         const isFinished = message.gameState?.status === 'Finished';
         const isSpectating = current.isSpectating;
+        // A running clock is the board's own way of saying the game has begun,
+        // so the deadline is read off the position rather than tracked
+        // separately and left to go stale.
+        const awaitingFirstMove =
+          message.gameState?.status === 'InProgress' &&
+          message.gameState.clock.activeColor === 'Neutral';
         set((state) => ({
           gameState: message.gameState,
+          firstMoveDeadline: awaitingFirstMove ? state.firstMoveDeadline : null,
           // The result does not end the session: the chat room stays open
           // until we leave it, and rejoining is how a reconnect gets back in.
           gameSessionId: isSpectating ? null : persistGame(message.gameState),
@@ -971,43 +967,30 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
   },
 
   leaveQueue: () => {
-    const { socket, claim } = get();
-    if (claim) {
-      send(socket, { type: 'decline_match', pendingMatchId: claim.pendingId });
-    }
+    const { socket } = get();
     // Cleared locally whatever the socket did, and remembered if it could not
     // carry the message. Pressing cancel and being told you are out, while the
     // server goes on holding your place, is the one outcome this must not have.
     if (!send(socket, { type: 'leave_queue' })) {
       leaveQueueOnReconnect = true;
     }
-    set({ queue: initialQueue, claim: null, queueMiss: null });
+    set({ queue: initialQueue, queueMiss: null });
   },
 
-  claimMatch: () => {
-    const { socket, claim } = get();
-    if (!claim) return;
-    if (!send(socket, { type: 'claim_match', pendingMatchId: claim.pendingId })) {
-      set({ error: 'Connect to the server before taking your seat.' });
-      return;
+  abortGame: () => {
+    // Nothing is set optimistically. The server decides whether this game is
+    // still abortable — a move may have landed while the press was in flight —
+    // and answers with either game_cancelled or a refusal.
+    if (!send(get().socket, { type: 'abort_game' })) {
+      set({ error: 'Reconnect to the server before calling the game off.' });
     }
-    set({ claim: { ...claim, claiming: true }, error: null });
-  },
-
-  declineMatch: () => {
-    const { socket, claim } = get();
-    if (!claim) return;
-    send(socket, { type: 'decline_match', pendingMatchId: claim.pendingId });
-    // The seat is given up but the search is not: declining one game is not
-    // leaving the queue, and the server puts the seek straight back.
-    set({ claim: null });
   },
 
   reportPresence: (present) => {
-    const { socket, queue, claim } = get();
+    const { socket, queue } = get();
     // Nothing is waiting on us, so nothing needs to know where we are. An idle
     // browsing session should generate no presence traffic at all.
-    if (!queue.isSearching && !claim) return;
+    if (!queue.isSearching) return;
     send(socket, { type: 'queue_presence', present });
   },
 

@@ -15,13 +15,11 @@ import { space } from '@/theme';
 // sometimes invisible when it matters most. So the layer is a place rather than
 // a component, and one rule decides what goes in it.
 //
-// **A summons wins, and nothing else does.** Taking a seat is the only state
-// here with a deadline attached: thirty seconds, after which the player loses
-// both the game and their place in the queue. Everything else can wait a
-// moment. Below that the tournament wins, because a named opponent standing at
-// a scheduled board is a firmer commitment than a search — and because the
-// queue's own cancel button is also on the lobby screen and in the rail, while
-// the tournament's is only here.
+// **The tournament wins.** A named opponent standing at a scheduled board is a
+// firmer commitment than a search, and the queue's own cancel button is also on
+// the lobby screen and in the rail, while the tournament's is only here. There
+// is no longer a third contender: a match no longer produces a card at all,
+// because pairing opens the board and the board takes the whole screen.
 //
 // It also, finally, reads `bottomInset`. The shell has measured the phone's tab
 // bar and summary bar into that store since it was written, and the tournament
@@ -34,8 +32,7 @@ export default function CalloutLayer() {
   const tournamentCall = useTournamentCall();
   const bottomInset = useBottomInset((state) => state.bottomInset);
 
-  const showQueue =
-    queueCall && (queueCall.kind === 'claiming' || queueCall.kind === 'holding' || !tournamentCall);
+  const showQueue = queueCall && !tournamentCall;
 
   if (!showQueue && !tournamentCall) return null;
 
