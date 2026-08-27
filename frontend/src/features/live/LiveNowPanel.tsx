@@ -5,7 +5,6 @@ import LiveBoardCard from './LiveBoardCard';
 import { allLiveBoards, liveGameGrid, liveGameMeta } from './liveSelectors';
 import { useLiveSnapshot } from './useLiveSnapshot';
 import MiniBoard from '@/features/board/MiniBoard';
-import { modeBackground, modeLooks } from '@/features/board/modeArt';
 import { useGameStore } from '@/store/gameStore';
 import { titledName } from '@/store/spectateSelectors';
 import { colors, space, type } from '@/theme';
@@ -50,10 +49,8 @@ function WatchRow({ busy, divided, game, mode, onWatch }: WatchRowProps) {
       divided={divided}
       leading={
         <MiniBoard
-          boardBackground={modeBackground(mode)}
           grid={grid}
           modeId={game.modeId}
-          pieceLooks={modeLooks(mode)}
           size={68}
         />
       }

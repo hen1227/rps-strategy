@@ -35,7 +35,6 @@
     "web": "npm run build:worker && expo start --web",
     "typecheck": "tsc --noEmit",
     "build:worker": "esbuild src/engine/rpsfish/worker/index.ts --bundle --format=iife --target=es2022 --outfile=public/rpsfish/rpsfish-worker.js --tsconfig=tsconfig.json",
-    "build:conformance": "node --import ./scripts/register.mjs scripts/buildConformance.mts",
     "build:rpsfish": "../RPSFish/scripts/build_web.sh",
     "build:rpsfish:ios": "../RPSFish/scripts/build_ios.sh",
     "arena": "node --import ./scripts/register.mjs scripts/botArena.mts",

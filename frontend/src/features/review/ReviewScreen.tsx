@@ -28,7 +28,6 @@ import MoveQualityBadge from '@/features/analysis/MoveQualityBadge';
 import ReplayControls from '@/features/analysis/ReplayControls';
 import TerritoryMeter from '@/features/analysis/TerritoryMeter';
 import Board from '@/features/board/Board';
-import { modeBackground, modeLooks } from '@/features/board/modeArt';
 import { usePieceDrag } from '@/features/board/pieceDrag';
 import SeriesLink from '@/features/bots/SeriesLink';
 import { seriesContains } from '@/features/bots/seriesSummary';
@@ -670,8 +669,6 @@ export default function ReviewScreen() {
         lastMove={lastMoveShown ? { from: lastMoveShown.from, to: lastMoveShown.to } : null}
         lastMoveGrade={onMainLine && !currentMove?.pending ? currentMove?.grade : null}
         modeId={record.mode.id}
-        pieceLooks={modeLooks(record.mode)}
-        boardBackground={modeBackground(record.mode)}
         movableColor={game.currentTurn}
         onPieceDrop={playMove}
         onTilePress={selection.selectTile}

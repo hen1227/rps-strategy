@@ -2,9 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 
 import { alphabetOf } from '@/engine/analysisGame';
-import type { PieceLook } from '@/engine/spec/interpret';
+import type { PieceLook } from '@/features/board/pieceLook';
 import PieceIcon from '@/features/board/PieceIcon';
-import { modeLooks } from '@/features/board/modeArt';
 import { board, colors, players, radius } from '@/theme';
 import ModalCard from '@/ui/ModalCard';
 import {
@@ -69,10 +68,8 @@ interface Palette {
  *
  * So both halves come from the doors every other board reaches them through:
  * `alphabetOf` for the letters a layout is written with, which is the one place
- * a spec-defined mode and a built-in meet, and `modeLooks` for the artwork.
- * Neither needs a second path for the modes that have no spec — the standard six
- * letters and no looks at all is exactly the built-in answer — so there is no
- * fork in here about which kind of mode is being edited for.
+ * a spec-defined mode and a built-in meet. The standard six letters and no looks
+ * at all is the built-in answer, and now the only one.
  *
  * Red's forms first and then Blue's, kinds in the order the mode declares them,
  * matching the Lab's palette: Red moves first, and a layout is written from
@@ -80,9 +77,6 @@ interface Palette {
  */
 const paletteFor = (mode: ModeDefinition | null | undefined): Palette => {
   const alphabet = alphabetOf(mode);
-  const looks = modeLooks(mode);
-  const kinds = mode?.spec?.pieces;
-  const names = new Map((kinds ?? []).map((kind) => [kind.id, kind.name || kind.id]));
 
   const bySymbol: Record<string, SetupTool> = Object.fromEntries(
     Object.entries(alphabet).map(([symbol, { occupant, occupantOwner }]) => [
@@ -91,19 +85,12 @@ const paletteFor = (mode: ModeDefinition | null | undefined): Palette => {
         symbol,
         color: occupantOwner,
         piece: occupant,
-        look: looks?.[occupant],
-        name: names.get(occupant) ?? occupant,
+        name: occupant,
       },
     ]),
   );
 
-  const ordered = kinds
-    ? (['Red', 'Blue'] as const).flatMap((color) =>
-        kinds.map((kind) =>
-          color === 'Blue' ? kind.symbol.toUpperCase() : kind.symbol.toLowerCase(),
-        ),
-      )
-    : Array.from(BUILTIN_SYMBOLS);
+  const ordered = Array.from(BUILTIN_SYMBOLS);
 
   // Deduplicated because two kinds sharing a letter would otherwise be two
   // brushes painting the same symbol, only one of which the board can read back.

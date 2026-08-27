@@ -10,8 +10,7 @@ import {
   type ViewStyle,
 } from 'react-native';
 
-import type { PieceLook } from '@/engine/spec/interpret';
-import { artUrl } from './modeArt';
+import type { PieceLook } from './pieceLook';
 import { players, shadows } from '@/theme';
 import type { Piece, PlayerColor, SideColor } from '@/types/game';
 
@@ -63,8 +62,6 @@ interface Artwork {
 }
 
 const artworkFor = (color: SideColor, piece: string, art: string | undefined): Artwork | null => {
-  const uploaded = artUrl(art);
-  if (uploaded) return { source: { uri: uploaded }, overRing: true };
   const bundled = SOURCES[color][art ?? ''] ?? SOURCES[color][piece.toLowerCase()];
   return bundled ? { source: bundled, overRing: false } : null;
 };

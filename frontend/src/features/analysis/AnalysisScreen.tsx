@@ -18,7 +18,6 @@ import { reviewSourceFromPGN, type GradedMove, type ReviewMove } from '@/engine/
 import { ANALYSIS_PRESETS, type AnalysisPresetName } from '@/engine/rpsfish/client';
 import type { Analysis } from '@/engine/rpsfish/protocol';
 import Board from '@/features/board/Board';
-import { modeBackground, modeLooks } from '@/features/board/modeArt';
 import { usePieceDrag } from '@/features/board/pieceDrag';
 import PGNImportModal from '@/features/pgn/PGNImportModal';
 import PositionSetupModal from '@/features/pgn/PositionSetupModal';
@@ -493,8 +492,6 @@ function AnalysisBoard({ mode }: { mode: ModeDefinition }) {
         lastMove={history[history.length - 1]?.move ?? null}
         lastMoveGrade={lastGradedMove?.grade ?? null}
         modeId={game.mode.id}
-        pieceLooks={modeLooks(game.mode)}
-        boardBackground={modeBackground(game.mode)}
         movableColor={game.currentTurn}
         onPieceDrop={performMove}
         onTilePress={(square) => {

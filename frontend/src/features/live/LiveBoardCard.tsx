@@ -3,7 +3,6 @@ import { StyleSheet, Text, View, type LayoutChangeEvent } from 'react-native';
 
 import { liveGameGrid, liveMoveLabel } from './liveSelectors';
 import MiniBoard from '@/features/board/MiniBoard';
-import { modeBackground, modeLooks } from '@/features/board/modeArt';
 import { titledName } from '@/store/spectateSelectors';
 import { colors, players, radius, space, type } from '@/theme';
 import type { ModeDefinition, SideColor } from '@/types/game';
@@ -146,10 +145,8 @@ export default function LiveBoardCard({
   const board = (
     <View style={styles.board}>
       <MiniBoard
-        boardBackground={modeBackground(mode)}
         grid={grid}
         modeId={game.modeId}
-        pieceLooks={modeLooks(mode)}
         size={boardSize}
       />
     </View>

@@ -1,7 +1,6 @@
 import { ScrollViewStyleReset } from 'expo-router/html';
 import type { PropsWithChildren } from 'react';
 
-import { WEBMCP_ORIGIN_TRIAL } from '@/featureFlags';
 import { colors } from '@/theme';
 
 // The HTML shell every exported page is built into.
@@ -62,18 +61,6 @@ export default function Root({ children }: PropsWithChildren) {
           React Native Web renders a scroll view per screen rather than
           scrolling the document, so the body must not scroll as well.
         */}
-        {/*
-          WebMCP — the API that lets an agent call this page's own functions —
-          is behind a Chrome origin trial, and a trial token is issued per
-          origin. Without one `document.modelContext` is simply absent, and the
-          Lab installs its own object of the same shape instead, so the page
-          works either way. Set `EXPO_PUBLIC_WEBMCP_ORIGIN_TRIAL` and export
-          with `--clear`: the value is inlined by Babel and Metro caches the
-          result without it in the cache key.
-        */}
-        {WEBMCP_ORIGIN_TRIAL ? (
-          <meta httpEquiv="origin-trial" content={WEBMCP_ORIGIN_TRIAL} />
-        ) : null}
         <ScrollViewStyleReset />
       </head>
       <body>{children}</body>

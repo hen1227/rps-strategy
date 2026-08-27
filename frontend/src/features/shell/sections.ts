@@ -1,4 +1,3 @@
-import { LAB_ENABLED } from '@/featureFlags';
 import { links } from '@/navigation/links';
 import type { Account } from '@/types/protocol';
 import type { Href } from 'expo-router';
@@ -13,7 +12,7 @@ import type { Href } from 'expo-router';
 export type SectionId =
   | 'play'
   | 'bots'
-  | 'library'
+ 
   | 'openings'
   | 'tournaments'
   | 'leaderboard'
@@ -68,16 +67,6 @@ export const SECTIONS: readonly Section[] = [
     href: links.account(),
     path: '/account',
     primary: true,
-  },
-  {
-    id: 'library',
-    label: 'Mode Library',
-    shortLabel: 'Modes',
-    href: links.library(),
-    path: '/library',
-    // Hidden in a build the Lab is off in: a library nobody can add to is a
-    // shelf of somebody else's games.
-    visible: () => LAB_ENABLED,
   },
   {
     id: 'leaderboard',

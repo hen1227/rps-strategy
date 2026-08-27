@@ -1,4 +1,3 @@
-import type { RuleSpec } from '@/engine/spec/types';
 
 // The game as the server describes it.
 //
@@ -171,25 +170,6 @@ export interface ModeDefinition {
   playable: boolean;
   features: ModeFeature[];
   startingPosition: StartingPosition;
-  /**
-   * The rules, for a mode nobody wrote code for.
-   *
-   * Present on a spec-defined mode and absent on the two built-in ones, whose
-   * rules are hand-written on both sides. It travels with the definition — and
-   * therefore inside every `GameState` — because that is what lets a client that
-   * has never heard of a mode play it anyway: the rules arrive with the game.
-   *
-   * See `docs/rulespec.md`, and `engine/spec/interpret.ts` for the reader.
-   */
-  spec?: RuleSpec;
-  /**
-   * Where the mode came from. Absent means built-in.
-   *
-   * The lobby catalogue is the built-in modes only — an unbounded community set
-   * must not be broadcast to every socket — so this is what the catalogue
-   * filters on.
-   */
-  origin?: 'builtin' | 'community';
 }
 
 export const modeHasFeature = (mode: ModeDefinition | null | undefined, feature: ModeFeature) =>

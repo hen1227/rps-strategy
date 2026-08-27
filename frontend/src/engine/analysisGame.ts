@@ -7,7 +7,6 @@
 // server exactly is the whole point.
 
 import { positionKey } from './positionKey';
-import { alphabetFor, specApplyMove, specMovesFor } from './spec/interpret';
 import {
   BOARD_SIZE,
   boardHeight,
@@ -170,12 +169,12 @@ export const createAnalysisGame = (
 /**
  * The letters this mode's layouts are written with.
  *
- * A spec-defined mode declares its own pieces, so its alphabet comes from the
- * spec; a built-in mode uses the standard six. This is the one place the two
- * meet, so nothing else has to know which kind of mode it is holding.
+ * Every mode uses the standard six. Kept as a function rather than inlined
+ * because it is the one door every screen reaches the alphabet through, and a
+ * format that declares its own pieces would change only this.
  */
-export const alphabetOf = (mode: ModeDefinition | null | undefined): PieceAlphabet =>
-  mode?.spec ? alphabetFor(mode.spec) : STANDARD_ALPHABET;
+export const alphabetOf = (_mode?: ModeDefinition | null): PieceAlphabet =>
+  STANDARD_ALPHABET;
 
 /** `gridFromRows` backwards: the letter a tile is written with. */
 const pieceSymbol = (tile: Tile | undefined, alphabet: PieceAlphabet): string => {
@@ -257,10 +256,6 @@ export const validMovesFor = (
   from: Position,
 ): Position[] => {
   if (!game || game.status !== 'InProgress' || !isOnBoard(game.grid, from)) return [];
-  // A mode that brought its own rules is played by them. Every screen goes
-  // through this function, so this one line is what makes a mode somebody
-  // invented playable on the analysis board, against a bot, and in a replay.
-  if (game.mode.spec) return specMovesFor(game.mode.spec, game, from);
   const source = game.grid[from.y]?.[from.x];
   if (!source || source.occupantOwner !== game.currentTurn) return [];
   if (source.occupant === 'Empty' || source.occupantOwner === 'Neutral') return [];
@@ -308,7 +303,6 @@ export const applyAnalysisMove = (
   from: Position,
   to: Position,
 ): AppliedMove | null => {
-  if (game.mode.spec) return specApplyMove(game.mode.spec, game, from, to);
   if (!validMovesFor(game, from).some((candidate) => samePosition(candidate, to))) {
     return null;
   }

@@ -3,7 +3,6 @@ import { StyleSheet, Text, View } from 'react-native';
 
 import { gridFromRows } from '@/engine/analysisGame';
 import MiniBoard from '@/features/board/MiniBoard';
-import { modeBackground, modeLooks } from '@/features/board/modeArt';
 import { colors, radius } from '@/theme';
 import { isBoardRows, type ModeDefinition, type StartingPosition } from '@/types/game';
 
@@ -58,8 +57,6 @@ export default function ModePreview({ mode, position, size = PREVIEW_SIZE }: Mod
       <MiniBoard
         grid={grid}
         modeId={mode?.id}
-        pieceLooks={modeLooks(mode)}
-        boardBackground={modeBackground(mode)}
         pieceSize={pieceSizeFor(size)}
         size={size - FRAME_PADDING * 2}
       />

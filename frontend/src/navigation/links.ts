@@ -98,20 +98,6 @@ export const links = {
           },
         }
       : '/openings',
-  /**
-   * The workbench: design a game mode with the agent, and publish it.
-   *
-   * `fork` opens somebody else's published mode to edit, which is how a mode
-   * becomes a family rather than a one-off. A query parameter rather than a path
-   * segment, for the reason at the top of this file.
-   */
-  lab: (options: { fork?: string } = {}): Href =>
-    options.fork ? { pathname: '/lab', params: { fork: options.fork } } : '/lab',
-
-  /** Every mode people have published, and the way into playing one. */
-  library: (modeId?: string): Href =>
-    modeId ? { pathname: '/library', params: { mode: modeId } } : '/library',
-
   leaderboard: (): Href => '/leaderboard',
   account: (): Href => '/account',
 

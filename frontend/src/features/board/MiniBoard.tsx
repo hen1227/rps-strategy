@@ -5,7 +5,7 @@ import Svg, { Defs, Line, Marker, Polygon } from 'react-native-svg';
 import PieceIcon from './PieceIcon';
 import TileMark from './TileMark';
 import { overlayCellAt, type BoardOverlay } from './overlay';
-import type { PieceLook } from '@/engine/spec/interpret';
+import type { PieceLook } from './pieceLook';
 import { tintForTile } from './tint';
 import { board, players } from '@/theme';
 import { boardHeight, boardWidth, type Grid, type ModeID, type Move, type SideColor } from '@/types/game';
@@ -52,9 +52,11 @@ export interface MiniBoardProps {
    */
   pieceLooks?: Record<string, PieceLook>;
   /**
-   * A picture painted under the whole board, from the mode's `board.art`.
+   * A picture painted under the whole board.
    *
-   * Absent for every built-in mode. Fill it with `modeBackground`.
+   * Nothing sets it today: no mode carries artwork. Kept because the board
+   * already draws it correctly, so a mode format that brings one back needs no
+   * change here.
    */
   boardBackground?: string;
   /** Drawn on top: both squares marked, and an arrow between them. */

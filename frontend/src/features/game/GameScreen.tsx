@@ -18,7 +18,6 @@ import ReachPanel from '@/features/reach/ReachPanel';
 import { useGameOpening } from '@/hooks/useGameOpening';
 import { useReach } from '@/hooks/useReach';
 import Board from '@/features/board/Board';
-import { modeBackground, modeLooks } from '@/features/board/modeArt';
 import {usePieceDrag} from '@/features/board/pieceDrag';
 import { capturedPieces } from '@/features/board/CapturedPieces';
 import GameChat from './GameChat';
@@ -1505,8 +1504,6 @@ export default function GameScreen() {
                 grid={gameState.grid}
                 lastMove={lastMove}
                 modeId={gameState.mode.id}
-                pieceLooks={modeLooks(gameState.mode)}
-                boardBackground={modeBackground(gameState.mode)}
                 movableColor={local ? gameState.currentTurn : undefined}
                 onPieceDrop={movePiece}
                 onTilePress={(square) => {

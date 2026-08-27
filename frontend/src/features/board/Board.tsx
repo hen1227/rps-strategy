@@ -35,7 +35,7 @@ import {
   type ReplayTracks,
 } from '@/engine/replayAnimation';
 import type { MoveGrade } from '@/engine/gameReview';
-import type { PieceLook } from '@/engine/spec/interpret';
+import type { PieceLook } from './pieceLook';
 import { board, players, shadows } from '@/theme';
 import {
   samePosition,
@@ -569,9 +569,11 @@ export interface BoardProps {
    */
   pieceLooks?: Record<string, PieceLook>;
   /**
-   * A picture painted under the whole board, from the mode's `board.art`.
+   * A picture painted under the whole board.
    *
-   * Absent for every built-in mode. Fill it with `modeBackground`.
+   * Nothing sets it today: no mode carries artwork. Kept because the board
+   * already draws it correctly, so a mode format that brings one back needs no
+   * change here.
    */
   boardBackground?: string;
   /**
