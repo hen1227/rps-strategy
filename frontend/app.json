@@ -24,7 +24,15 @@
       "output": "static"
     },
     "plugins": [
-      "expo-router"
+      [
+        "expo-router",
+        {
+          "origin": "https://rps.henhen1227.com"
+        }
+      ],
+      "expo-sqlite",
+      "expo-notifications",
+      "expo-web-browser"
     ],
     "scheme": "rps-strategy",
     "experiments": {

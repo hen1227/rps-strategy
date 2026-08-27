@@ -1,14 +1,17 @@
 // The shape of the one store.
 //
-// Three slices compose into it, and each of them reaches the others through
-// `get()` — the lobby's `selectTile` hands a bot game to the bot slice, and
-// signing in reconnects the socket the lobby owns. Naming the whole store here
+// Five slices compose into it, and each of them reaches the others through
+// `get()` — the lobby's `selectTile` hands a bot game to the bot slice and a
+// local game to the local one, and signing in reconnects the socket the lobby
+// owns. Naming the whole store here
 // is what lets every slice be typed against all of it without any of them
 // having to import the others' code.
 
 import type { BotSlice } from './botSession';
+import type { LocalSlice } from './localSession';
 import type { SessionSlice } from './accountSession';
 import type { LobbySlice } from './gameStore';
+import type { ReachSlice } from './reachTool';
 import type {
   ClockState,
   GameSetup,
@@ -18,7 +21,7 @@ import type {
   TimeControl,
 } from '@/types/game';
 
-export type GameStore = LobbySlice & BotSlice & SessionSlice;
+export type GameStore = LobbySlice & BotSlice & LocalSlice & SessionSlice & ReachSlice;
 
 /** The bot on the other side of a local practice game. */
 export interface BotOpponent {
@@ -29,17 +32,34 @@ export interface BotOpponent {
   rating: number;
 }
 
+/** The two seats of a game being played out on one device. */
+export interface LocalMatch {
+  /**
+   * The side the board is drawn from.
+   *
+   * Here rather than on the session because the screen reads `gameState` and
+   * nothing else to decide which way up to draw a board, and a second place to
+   * ask is a second answer to get wrong.
+   */
+  viewColor: SideColor;
+}
+
 /**
  * A game as every screen sees it.
  *
- * A server match arrives as a `GameState`. A bot game is published in the same
- * shape with `bot` set and no clock, which is what lets one board, one player
- * bar, and one set of sound effects serve both without knowing which they have.
+ * A server match arrives as a `GameState`. A bot game and a local game are
+ * published in the same shape with no clock and their own marker set, which is
+ * what lets one board, one player bar, and one set of sound effects serve all
+ * three without knowing which they have.
+ *
+ * The two markers are mutually exclusive: `bot` means somebody is thinking on
+ * the other side, `local` means both sides are this keyboard.
  */
 export interface ActiveGame extends Omit<GameState, 'clock' | 'timeControl'> {
   clock: ClockState | null;
   timeControl: TimeControl | null;
   bot?: BotOpponent | null;
+  local?: LocalMatch | null;
 }
 
 /** How far the socket has got. */

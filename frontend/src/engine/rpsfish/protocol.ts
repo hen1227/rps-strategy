@@ -144,6 +144,24 @@ export type WorkerResponse =
   | { type: 'cancelled'; requestId: number }
   | { type: 'error'; requestId: number; message: string };
 
+/**
+ * Whatever is running the engine, as the lane in `client.ts` needs it.
+ *
+ * Named for the browser worker it was first written against, and kept to
+ * exactly the members that worker is used for, because the second
+ * implementation is not a worker at all: on iOS the engine runs in this
+ * process behind `nativeSession.ts`, which presents this same shape. A lane
+ * cannot tell them apart, which is the point — the queueing, timeouts and
+ * cancellation are written once.
+ */
+export interface EngineWorker {
+  onmessage: ((event: { data: WorkerResponse }) => void) | null;
+  onerror: ((event: { message?: string }) => void) | null;
+  onmessageerror: (() => void) | null;
+  postMessage: (message: WorkerRequest) => void;
+  terminate: () => void;
+}
+
 /** The board coordinate of a square index, as the engine numbers them. */
 export const squareFromIndex = (index: number): Position => ({
   x: index % 9,

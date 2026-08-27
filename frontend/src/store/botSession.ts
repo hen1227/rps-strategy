@@ -1,3 +1,4 @@
+import type { SeatChoice } from './setupSelectors';
 import { send } from './socketSend';
 import type { ActiveGame, GameStore } from './types';
 import {
@@ -10,6 +11,7 @@ import {
 import { createBot, createSeededRandom, type Bot } from '@/engine/bots/engine';
 import { BOT_TUNING, botProfile } from '@/engine/bots/profiles';
 import { inferMoveBetweenGrids } from '@/engine/moveDiff';
+import { openingLineOf } from '@/engine/openingLine';
 import { encodePGN, encodePosition, resultFor, type WritableMove } from '@/engine/pgn';
 import { analyzeExclusive } from '@/engine/rpsfish/client';
 import {
@@ -50,6 +52,11 @@ export interface BotSessionState {
   botColor: SideColor;
   botName: string;
   botRating: number;
+  // The seat the player *asked for*, which is not the seat they got whenever
+  // they asked for either. Kept because a rematch has to know the difference:
+  // somebody who chose Red meant it, and somebody who chose either came here
+  // to be dealt a side.
+  colorChoice: SeatChoice;
   drawNotice: string | null;
   // `undefined` for "nobody", which is also how the server spells it: the Go
   // fields are `omitempty`, so an absent offer is an absent field.
@@ -113,6 +120,7 @@ const toGameState = (
   game: AnalysisGame,
   session: BotSessionState,
   profiles: { bot: PlayerProfile; human: PlayerProfile },
+  moves: BotMove[],
 ): ActiveGame => ({
   bot: {
     blurb: session.botBlurb,
@@ -131,6 +139,10 @@ const toGameState = (
   grid: game.grid,
   mode: game.mode,
   moveNumber: game.moveNumber,
+  // Written here rather than received, because there is no server in a bot
+  // game to write it. A bot game always starts from the mode's own opening, so
+  // the moves as played are the line.
+  openingLine: openingLineOf(moves),
   redPlayer: session.botColor === 'Red' ? profiles.bot : profiles.human,
   status: game.status,
   timeControl: null,
@@ -152,7 +164,14 @@ export interface BotActions {
   startBotGame: (options: {
     mode?: ModeDefinition | null;
     profileId?: string;
-    playerColor?: SideColor | 'random';
+    /** The seat the player asked for. 'random' is dealt, see `after`. */
+    playerColor?: SeatChoice;
+    /**
+     * The seat they held last game. A dealt side alternates away from it, so a
+     * rematch nobody chose a colour for hands over the other one rather than
+     * flipping a coin that can land the same way four times running.
+     */
+    after?: SideColor;
   }) => void;
   restartBotGame: () => void;
   botSelectTile: (position: Position) => void;
@@ -193,19 +212,25 @@ export const createBotSlice: StateCreator<GameStore, [], [], BotSlice> = (set, g
   // Rebuilds the public snapshot from the private rules state. Every bot action
   // ends here so the screen only ever sees consistent state.
   const publish = (patch: PublishPatch = {}) => {
-    const { account, accountId, botGame, botSession } = get();
+    const { account, accountId, botGame, botMoves, botSession } = get();
     if (!botSession || !botGame) return;
     const session = { ...botSession, ...(patch.session ?? {}) };
     const game = patch.botGame ?? botGame;
+    const moves = patch.botMoves ?? botMoves;
     set({
       botSession: session,
       botGame: game,
       ...(patch.botHistory ? { botHistory: patch.botHistory } : {}),
       ...(patch.botMoves ? { botMoves: patch.botMoves } : {}),
-      gameState: toGameState(game, session, {
-        bot: botPlayerProfile(activeBot ?? { id: session.profileId, name: session.botName }),
-        human: humanPlayerProfile(accountId, account),
-      }),
+      gameState: toGameState(
+        game,
+        session,
+        {
+          bot: botPlayerProfile(activeBot ?? { id: session.profileId, name: session.botName }),
+          human: humanPlayerProfile(accountId, account),
+        },
+        moves,
+      ),
       ...(patch.lastMove !== undefined ? { lastMove: patch.lastMove } : {}),
       ...(patch.selectedTile !== undefined ? { selectedTile: patch.selectedTile } : {}),
       ...(patch.validMoves !== undefined ? { validMoves: patch.validMoves } : {}),
@@ -318,7 +343,7 @@ export const createBotSlice: StateCreator<GameStore, [], [], BotSlice> = (set, g
      * Open a local game against a bot. The server is told only that this
      * player is busy with bots, never what is on the board.
      */
-    startBotGame: ({ mode, profileId, playerColor = 'random' }) => {
+    startBotGame: ({ mode, profileId, playerColor = 'random', after }) => {
       if (!mode) {
         set({ error: 'Choose a game mode before playing a bot.' });
         return;
@@ -342,15 +367,18 @@ export const createBotSlice: StateCreator<GameStore, [], [], BotSlice> = (set, g
       const humanColor: SideColor =
         playerColor === 'Red' || playerColor === 'Blue'
           ? playerColor
-          : Math.random() < 0.5
-            ? 'Red'
-            : 'Blue';
+          : after
+            ? opposingColor(after)
+            : Math.random() < 0.5
+              ? 'Red'
+              : 'Blue';
       const game = createAnalysisGame(mode);
       const session: BotSessionState = {
         botBlurb: profile.blurb,
         botColor: opposingColor(humanColor),
         botName: profile.name,
         botRating: profile.rating,
+        colorChoice: playerColor,
         drawNotice: null,
         drawOfferUsedBy: undefined,
         drawOfferedBy: undefined,
@@ -382,6 +410,7 @@ export const createBotSlice: StateCreator<GameStore, [], [], BotSlice> = (set, g
         opponentReconnectDeadline: null,
         chatMessages: [],
         chatRoomId: null,
+        chatOccupancy: 0,
         error: null,
       });
       publish();
@@ -389,14 +418,21 @@ export const createBotSlice: StateCreator<GameStore, [], [], BotSlice> = (set, g
       if (session.botColor === game.currentTurn) runBotTurn();
     },
 
-    /** Same mode and bot, fresh board, opposite colours. */
+    /**
+     * Same mode and bot, fresh board, and the seat the player asked for the
+     * first time — which for somebody who asked for either is the other one.
+     * A rematch used to swap sides unconditionally, the right guess while the
+     * side was always dealt and the wrong one now that it can be chosen: a
+     * player who picked Red picked it for this bot, not for one game.
+     */
     restartBotGame: () => {
       const { botGame, botSession } = get();
       if (!botSession || !botGame) return;
       get().startBotGame({
+        after: botSession.playerColor,
         mode: botGame.mode,
+        playerColor: botSession.colorChoice,
         profileId: botSession.profileId,
-        playerColor: opposingColor(botSession.playerColor),
       });
     },
 

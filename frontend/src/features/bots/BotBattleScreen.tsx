@@ -27,6 +27,7 @@ import MoveQualityBadge from '@/features/analysis/MoveQualityBadge';
 import ReplayControls from '@/features/analysis/ReplayControls';
 import TerritoryMeter from '@/features/analysis/TerritoryMeter';
 import Board from '@/features/board/Board';
+import { modeBackground, modeLooks } from '@/features/board/modeArt';
 import { capturedPieces } from '@/features/board/CapturedPieces';
 import PlayerBar from '@/features/game/PlayerBar';
 import { colourResultLabel } from '@/features/game/resultLabels';
@@ -464,6 +465,8 @@ function BotBattle({ blueProfile, mode, redProfile }: BotBattleProps) {
           lastMove={visibleMove ? { from: visibleMove.from, to: visibleMove.to } : null}
           lastMoveGrade={visibleMove && !visibleMove.pending ? visibleMove.grade : null}
           modeId={mode.id}
+          pieceLooks={modeLooks(mode)}
+          boardBackground={modeBackground(mode)}
           onPieceDrop={() => {}}
           onTilePress={() => {}}
           playerColor="Red"

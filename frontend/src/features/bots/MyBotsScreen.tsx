@@ -78,14 +78,14 @@ export default function MyBotsScreen() {
         // that was self-evident because the sign-in form was next to it; here it
         // has to say so.
         <Panel>
-          <SectionHeading eyebrow="YOUR BOTS" title="Claim an account first" />
+          <SectionHeading eyebrow="YOUR BOTS" title="Sign in first" />
           <Text style={styles.help}>
-            A bot belongs to an account, so a token cannot be minted for a browser that has
-            not claimed a username. Everything you have played so far comes with it.
+            A bot belongs to an account, so a token cannot be minted for a browser that has not
+            signed in. Everything you have played so far comes with it.
           </Text>
           <View style={styles.actions}>
             <PrimaryButton
-              label="CLAIM A USERNAME"
+              label="SIGN IN WITH DISCORD"
               onPress={() => router.push(links.account())}
             />
           </View>

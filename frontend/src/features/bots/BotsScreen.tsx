@@ -1,13 +1,15 @@
 import {useRouter} from 'expo-router';
 import {useMemo, useState} from 'react';
-import {Platform, StyleSheet, Text, View} from 'react-native';
+import {StyleSheet, Text, View} from 'react-native';
 
 import BotLevelPicker from './BotLevelPicker';
 import BotSeriesPanel from './BotSeriesPanel';
 import EngineBotRow from './EngineBotRow';
 import {BOT_PROFILES, DEFAULT_BOT_PROFILE_ID} from '@/engine/bots/profiles';
+import {isEngineAvailable} from '@/engine/rpsfish/client';
 import {links} from '@/navigation/links';
 import {useGameStore} from '@/store/gameStore';
+import {SEAT_CHOICES, type SeatChoice} from '@/store/setupSelectors';
 import {colors, contentWidth, space, type} from '@/theme';
 import LinkRow from '@/ui/LinkRow';
 import ScreenShell from '@/ui/ScreenShell';
@@ -35,6 +37,9 @@ import type {ModeID} from '@/types/game';
 // your opponent *and* the red side of a battle, and the chips under it pick the
 // blue side, which is one six-tile control instead of three.
 
+/** How a seat reads out loud, where 'random' is not a colour anybody plays. */
+const seatDescription = (seat: SeatChoice) => (seat === 'random' ? 'either side' : seat);
+
 export default function BotsScreen() {
     const router = useRouter();
     const modes = useGameStore((state) => state.modes);
@@ -48,6 +53,11 @@ export default function BotsScreen() {
     const [profileId, setProfileId] = useState(DEFAULT_BOT_PROFILE_ID);
     const [opponentId, setOpponentId] = useState('boulder');
     const [engineModeId, setEngineModeId] = useState<ModeID | null>(null);
+    // Two seats, because the two panels are two games. Sharing one control
+    // across a page break would make a choice made under an engine's name
+    // silently apply to a practice board six inches further down.
+    const [engineSeat, setEngineSeat] = useState<SeatChoice>('random');
+    const [practiceSeat, setPracticeSeat] = useState<SeatChoice>('random');
 
     const playableModes = useMemo(() => modes.filter((mode) => mode.playable !== false), [modes]);
     const profileOptions = useMemo(
@@ -58,7 +68,10 @@ export default function BotsScreen() {
     // RPSFish runs in a browser Worker, so the bots that ship with the app are a
     // website feature. An engine on somebody else's machine is not, which is why
     // only this panel carries the gate.
-    const nativeBotsSupported = Platform.OS === 'web';
+    // Whether RPSFish is here, not which platform this is: the engine ships in
+    // the iOS binary, so the practice board is offered wherever it can actually
+    // be played.
+    const nativeBotsSupported = isEngineAvailable();
     const launchBlocked = !nativeBotsSupported || Boolean(gameState);
     // Challenging an engine is not in conflict with being queued: the server
     // releases the seek when the bot game starts.
@@ -97,6 +110,17 @@ export default function BotsScreen() {
                                 value={engineMode?.id ?? null}
                             />
                         ) : null}
+                        {/*
+              An engine has no opinion about which side it plays, so this is a
+              choice the player simply gets. EITHER hands them Red, which is
+              what a challenge has always done here.
+            */}
+                        <OptionChips<SeatChoice>
+                            label="YOUR SIDE"
+                            onChange={setEngineSeat}
+                            options={SEAT_CHOICES}
+                            value={engineSeat}
+                        />
                         <View style={styles.list}>
                             {engineBots.map((bot) => (
                                 <EngineBotRow
@@ -104,7 +128,7 @@ export default function BotsScreen() {
                                     disabled={challengeBlocked || !engineMode}
                                     key={bot.botId}
                                     modeId={engineMode?.id as ModeID}
-                                    onChallenge={() => challengeBot(bot.botId, engineMode!.id)}
+                                    onChallenge={() => challengeBot(bot.botId, engineMode!.id, engineSeat)}
                                 />
                             ))}
                         </View>
@@ -138,8 +162,8 @@ export default function BotsScreen() {
                 />
                 <Text style={styles.help}>
                     {nativeBotsSupported
-                        ? 'RPSFish plays the other side in your browser. No clock, no rating, and the hint and undo buttons stay switched on.'
-                        : 'These bots run on the RPSFish web engine, so the practice board is available on the website.'}
+                        ? 'RPSFish plays the other side on this device. No clock, no rating, and the hint and undo buttons stay switched on.'
+                        : 'This build does not include the RPSFish engine, so the practice board is unavailable here.'}
                 </Text>
 
                 <BotLevelPicker compact onSelect={setProfileId} selectedProfileId={profile.id}/>
@@ -147,14 +171,30 @@ export default function BotsScreen() {
                     <Text style={styles.blurbName}>{profile.name}</Text> · {profile.blurb}
                 </Text>
 
+                {/*
+          EITHER deals a side, and keeps dealing: a rematch hands over the one
+          you did not just play. Choosing a colour means it, so the rematch
+          button leaves you on it.
+        */}
+                <View style={styles.seat}>
+                    <OptionChips<SeatChoice>
+                        label="YOUR SIDE"
+                        onChange={setPracticeSeat}
+                        options={SEAT_CHOICES}
+                        value={practiceSeat}
+                    />
+                </View>
+
                 <View style={styles.buttonRow}>
                     {playableModes.map((mode) => (
                         <View key={mode.id} style={styles.buttonCell}>
                             <PrimaryButton
-                                accessibilityLabel={`Play ${mode.name} against ${profile.name}`}
+                                accessibilityLabel={`Play ${mode.name} against ${profile.name} as ${seatDescription(practiceSeat)}`}
                                 disabled={launchBlocked}
                                 label={`PLAY ${mode.name.toUpperCase()} ▶`}
-                                onPress={() => startBotGame({mode, profileId: profile.id})}
+                                onPress={() =>
+                                    startBotGame({mode, playerColor: practiceSeat, profileId: profile.id})
+                                }
                             />
                         </View>
                     ))}
@@ -203,6 +243,7 @@ export default function BotsScreen() {
 
 const styles = StyleSheet.create({
     help: {...type.body, color: colors.textMuted, marginTop: space.small},
+    seat: {marginTop: space.small},
     blurb: {...type.body, color: colors.textDim, marginTop: space.small},
     blurbName: {color: colors.textSubtle, fontWeight: '900'},
     buttonRow: {flexDirection: 'row', flexWrap: 'wrap', gap: space.small, marginTop: space.medium},

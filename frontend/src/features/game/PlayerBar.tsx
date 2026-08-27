@@ -3,6 +3,7 @@ import { Animated as NativeAnimated, Easing, StyleSheet, Text, View } from 'reac
 
 import CapturedPieces, { type CaptureTray } from '@/features/board/CapturedPieces';
 import type { TimeExtension } from '@/store/clockSelectors';
+import TitleTag from '@/ui/TitleTag';
 import { clock as clockColors, colors, players, radius } from '@/theme';
 import {
   opposingColor,
@@ -37,7 +38,7 @@ const remainingForColor = (clock: ClockState | null | undefined, color: SideColo
   color === 'Red' ? clock?.redRemainingMs ?? 0 : clock?.blueRemainingMs ?? 0;
 
 /** The parts of a player the bar actually shows. A bot has no account id. */
-type BarProfile = Pick<Partial<PlayerProfile>, 'username' | 'discord'>;
+type BarProfile = Pick<Partial<PlayerProfile>, 'username' | 'discord' | 'title'>;
 
 const profileName = (profile: BarProfile | null | undefined, fallback: string) => {
   const name = profile?.username?.trim();
@@ -251,6 +252,11 @@ export default function PlayerBar({
       </View>
       <View style={styles.playerCopy}>
         <View style={styles.playerNameRow}>
+          {/*
+            Before the name, the way a chess pairing card writes it. Renders
+            nothing when there is no title, which is most players.
+          */}
+          <TitleTag size="medium" title={profile?.title} />
           <Text style={styles.playerName} numberOfLines={1}>
             {profileName(profile, label)}
           </Text>

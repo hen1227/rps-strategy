@@ -16,6 +16,20 @@ export const playerName = (profile: PlayerProfile | null | undefined, fallback: 
   return username && username.toLowerCase() !== 'guest' ? username : fallback;
 };
 
+/**
+ * The same name with its title in front of it: `GM Ada`.
+ *
+ * For the one-line rows — the live rail, a challenge notice — where the name is
+ * part of a sentence rather than a field of its own, and where the `TitleTag`
+ * chip the board and the ladder use has nowhere to sit. Chess writes a pairing
+ * exactly this way, so the string reads as a name rather than as two things.
+ */
+export const titledName = (profile: PlayerProfile | null | undefined, fallback: string) => {
+  const name = playerName(profile, fallback);
+  const title = profile?.title?.trim();
+  return title ? `${title} ${name}` : name;
+};
+
 /* ----------------------------------------------------------- tournaments -- */
 
 /** One live board of a tournament, as something to switch to. */
@@ -124,3 +138,19 @@ export const seriesScoreLabel = (score: SeriesScore) => {
     score.draws === 0 ? '' : ` · ${score.draws === 1 ? '1 draw' : `${score.draws} draws`}`;
   return `${score.firstName} ${score.firstWins} – ${score.secondWins} ${score.secondName}${drawn}`;
 };
+
+/**
+ * Whether a game is still being played, and so is something to watch rather
+ * than something to read back.
+ *
+ * The distinction the series table needs. Every game of a run looks the same in
+ * the run's own record — a number and a result — but the one being played right
+ * now has no archived record to open, so sending somebody to the review screen
+ * for it lands them on "this game cannot be reviewed". The live list is the
+ * authority on which one that is: it is pushed over the socket as games start
+ * and finish, while a run's own rows are fetched and can be a moment behind.
+ */
+export const isGameLive = (
+  liveGames: readonly LiveGameSummary[],
+  gameId: string | null | undefined,
+): boolean => Boolean(gameId) && liveGames.some((game) => game.gameId === gameId);

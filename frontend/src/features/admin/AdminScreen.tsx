@@ -19,15 +19,18 @@ import {
   accountDetail,
   anonymizeAccount,
   deleteGame,
+  grantAccountTitle,
   listAccounts,
   listAdminGames,
   purgeAccount,
   purgeBot,
+  revokeAccountTitle,
   updateAccountFlags,
   type AccountDetail,
   type AccountSummary,
 } from '@/store/api/bots';
-import type { GameRecord } from '@/types/protocol';
+import { getTitleCatalogue } from '@/store/api/accounts';
+import type { Account, GameRecord, Title, TitleID } from '@/types/protocol';
 import { colors, contentWidth, radius, space, type } from '@/theme';
 
 // Account administration.
@@ -101,6 +104,69 @@ function ConfirmButton({
   );
 }
 
+/**
+ * The titles an account holds, and every other title in the catalogue.
+ *
+ * One list rather than a picker and a list: which titles somebody has is the
+ * question being asked, and the answer to "can I give them GM" is the same row
+ * pressed from the other side. Held ones are gold and take them away; the rest
+ * are grey and hand them over.
+ *
+ * Granting is not confirmed twice the way the buttons around it are. Nothing
+ * here is destructive — the worst outcome is a tag on the wrong name, undone by
+ * pressing the same row again.
+ */
+function TitleEditor({
+  account,
+  busy,
+  catalogue,
+  onGrant,
+  onRevoke,
+}: {
+  account: Account;
+  busy: boolean;
+  catalogue: Title[];
+  onGrant: (title: TitleID) => void;
+  onRevoke: (title: TitleID) => void;
+}) {
+  const held = new Map((account.titles ?? []).map((award) => [award.id, award]));
+  if (catalogue.length === 0) {
+    return <Text style={styles.detailNote}>Loading titles…</Text>;
+  }
+  return (
+    <View style={styles.titleRow}>
+      {catalogue.map((title) => {
+        const award = held.get(title.id);
+        return (
+          <Pressable
+            accessibilityLabel={
+              award ? `Revoke ${title.name}` : `Grant ${title.name} to ${account.username}`
+            }
+            accessibilityRole="button"
+            accessibilityState={{ selected: Boolean(award), disabled: busy }}
+            disabled={busy}
+            key={title.id}
+            onPress={() => (award ? onRevoke(title.id) : onGrant(title.id))}
+            style={({ pressed }) => [
+              styles.titleChip,
+              award && styles.titleChipHeld,
+              busy && styles.actionButtonDisabled,
+              pressed && styles.actionButtonPressed,
+            ]}
+          >
+            <Text style={[styles.titleChipText, award && styles.titleChipTextHeld]}>
+              {title.id}
+            </Text>
+            <Text style={styles.titleChipName}>
+              {award?.source === 'granted' ? 'granted' : award ? 'earned' : title.name}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
 /** One game, as a line an administrator can identify it from and delete. */
 function GameRow({
   armed,
@@ -168,6 +234,9 @@ export default function AdminScreen() {
   // removed for being unwatchable, whose result was fair — is a toggle rather
   // than a second button, since it applies to whichever row is pressed next.
   const [revertRatings, setRevertRatings] = useState(true);
+  // The whole catalogue, fetched once: the title editor below needs the titles
+  // an account does *not* hold as much as the ones it does.
+  const [titles, setTitles] = useState<Title[]>([]);
 
   const refresh = useCallback(
     async (searchText = query) => {
@@ -214,6 +283,9 @@ export default function AdminScreen() {
   useEffect(() => {
     refresh();
     refreshGames();
+    getTitleCatalogue()
+      .then(setTitles)
+      .catch((caught) => setError(failureMessage(caught)));
   }, [refresh, refreshGames]);
 
   const run = async <Result,>(action: () => Promise<Result>, successNotice?: string) => {
@@ -319,6 +391,7 @@ export default function AdminScreen() {
                   <View style={styles.row}>
                     <View style={styles.rowCopy}>
                       <Text numberOfLines={1} style={styles.rowName}>
+                        {account.title ? `${account.title} ` : ''}
                         {account.username}{' '}
                         <Text style={styles.rowElo}>({account.elo})</Text>
                       </Text>
@@ -331,9 +404,10 @@ export default function AdminScreen() {
                     {account.isAdmin ? <Badge label="ADMIN" tone="accent" /> : null}
                     {account.disabled ? <Badge label="DISABLED" tone="live" /> : null}
                     {/*
-                      Only for people. A bot has no password either, but calling
-                      it anonymous alongside its BOT badge says the wrong thing:
-                      it has an owner, and that is the opposite of anonymous.
+                      Only for people. A bot has no credential of its own
+                      either, but calling it anonymous alongside its BOT badge
+                      says the wrong thing: it has an owner, and that is the
+                      opposite of anonymous.
                     */}
                     {account.kind === 'bot' || account.registered ? null : (
                       <Badge label="ANON" tone="neutral" />
@@ -415,6 +489,25 @@ export default function AdminScreen() {
                         <Text style={styles.detailNote}>Loading…</Text>
                       ) : (
                         <>
+                          <Text style={styles.detailHeading}>TITLES</Text>
+                          <TitleEditor
+                            account={detail.account}
+                            busy={busy}
+                            catalogue={titles}
+                            onGrant={(title) =>
+                              run(
+                                () => grantAccountTitle(admin.token, account.userId, title),
+                                `Granted ${title} to ${account.username}.`,
+                              )
+                            }
+                            onRevoke={(title) =>
+                              run(
+                                () => revokeAccountTitle(admin.token, account.userId, title),
+                                `Took ${title} from ${account.username}.`,
+                              )
+                            }
+                          />
+
                           <Text style={styles.detailHeading}>BOTS</Text>
                           {detail.bots.length === 0 ? (
                             <Text style={styles.detailNote}>This account owns no bots.</Text>
@@ -538,6 +631,28 @@ export default function AdminScreen() {
 }
 
 const styles = StyleSheet.create({
+  titleRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: space.snug,
+    paddingVertical: space.snug,
+  },
+  titleChip: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: space.tight,
+    paddingHorizontal: space.small,
+    paddingVertical: space.tight,
+    borderRadius: radius.small,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceMuted,
+  },
+  titleChipHeld: { borderColor: colors.goldBorder, backgroundColor: colors.goldSurfaceDeep },
+  titleChipText: { ...type.label, color: colors.textMuted },
+  titleChipTextHeld: { color: colors.goldBright },
+  titleChipName: { fontSize: 8, color: colors.textFaint },
+
   adminPanel: {
     borderColor: colors.goldBorder,
     backgroundColor: colors.goldSurfaceDeep,

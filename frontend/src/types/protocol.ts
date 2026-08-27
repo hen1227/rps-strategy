@@ -19,11 +19,24 @@ import type {
   PlayerColor,
   PlayerProfile,
   Position,
+  SideColor,
   StartingPosition,
   TimeControl,
 } from './game';
 
 /* ---------------------------------------------------------------- shared -- */
+
+/**
+ * Which kinds of device this server can actually reach.
+ *
+ * Sent both on the socket at connect and from `GET /api/push/key`, because a
+ * client needs it before it decides whether to offer anything: a browser reads
+ * `webPush` and a phone reads `apns`.
+ */
+export interface PushTransportSupport {
+  webPush: boolean;
+  apns: boolean;
+}
 
 /**
  * A game somebody is waiting to play.
@@ -89,6 +102,14 @@ export interface LiveGameSeries {
   firstIsRed: boolean;
 }
 
+/** The compact current board published with a live lobby row. */
+export interface LiveGamePosition {
+  /** Nine rows of RPSrps. piece symbols, from Blue's side to Red's. */
+  rows: string[];
+  /** Nine rows of r/b/. territory owners in the same order. */
+  owners: string[];
+}
+
 /** The public lobby row for a game in progress. */
 export interface LiveGameSummary {
   gameId: string;
@@ -100,6 +121,12 @@ export interface LiveGameSummary {
   blueElo: number;
   spectatorCount: number;
   startedAtUnixMs: number;
+  /** Compact current position used by the lobby's live board. */
+  position?: LiveGamePosition;
+  /** Absent on a live row sent by a server from before board previews. */
+  currentTurn?: PlayerColor;
+  /** Completed half-moves. The board labels the next one as moveNumber + 1. */
+  moveNumber?: number;
   /** Present only on a game being played as part of a bot series. */
   series?: LiveGameSeries;
 }
@@ -120,6 +147,12 @@ export interface ChatMessage {
   gameId: string;
   senderUserId: string;
   senderName: string;
+  /**
+   * The tag the sender was wearing, recorded on the message rather than looked
+   * up when it is drawn — so a transcript still reads the way the room read at
+   * the time.
+   */
+  senderTitle?: TitleID;
   senderRole: ChatSenderRole | string;
   senderColor?: PlayerColor;
   text: string;
@@ -138,6 +171,37 @@ export interface ModeRating {
 
 export type AccountKind = 'human' | 'bot';
 
+/* ---------------------------------------------------------------- titles -- */
+
+/**
+ * A title's id *and* the letters it displays as: `GM`, `BSL`, `DEV`.
+ *
+ * One string rather than a slug plus an abbreviation, matching the Go end. Open
+ * rather than a closed union because the catalogue lives on the server and a
+ * client compiled today must not break when a title is added tomorrow — the
+ * literals are the ones that exist now, spelled out so fixtures can be checked.
+ */
+export type TitleID = 'GM' | 'IM' | 'FM' | 'CM' | (string & {});
+
+/** Where a title comes from, which is all a screen needs to explain one. */
+export type TitleKind = 'rating' | 'achievement' | 'granted';
+
+/** One entry of the catalogue: everything there is to know about a title. */
+export interface Title {
+  id: TitleID;
+  name: string;
+  kind: TitleKind;
+  /** How it is earned, in the words shown to the player. */
+  requirement: string;
+}
+
+/** A title an account holds, flattened with its catalogue entry. */
+export interface TitleAward extends Title {
+  /** `earned` by the rules, or `granted` by the host. */
+  source: 'earned' | 'granted';
+  awardedAtUnixMs: number;
+}
+
 export interface Account {
   userId: string;
   kind: AccountKind | string;
@@ -146,6 +210,19 @@ export interface Account {
   isAdmin: boolean;
   disabled: boolean;
   discord: string;
+  /**
+   * Whether Discord vouched for the handle above, rather than the player having
+   * typed it. Optional so an older server, which does not send it, reads as a
+   * self-declared handle — which is exactly what it would be.
+   */
+  discordVerified?: boolean;
+  /** The title worn in front of the name, absent when none is. */
+  title?: TitleID;
+  /**
+   * Everything this account has collected, best first. Absent rather than empty
+   * for the great majority of accounts, which hold none.
+   */
+  titles?: TitleAward[];
   elo: number;
   wins: number;
   losses: number;
@@ -183,6 +260,35 @@ export interface BotPresence {
   busy: boolean;
   allowPublicPlay: boolean;
   clientVersion?: string;
+  /**
+   * An engine on its way out: playing what it already owes and taking nothing
+   * new. Published rather than merely enforced, so the lobby can say so instead
+   * of offering a button that refuses.
+   */
+  draining?: boolean;
+}
+
+/**
+ * A graceful shutdown in progress: the bot is playing out what it already owes
+ * and taking nothing new.
+ *
+ * Connection state, not a stored setting — it lasts exactly as long as the
+ * bot's socket does, so restarting the client is all it takes to put the bot
+ * back in play. That is also why a bot nobody is running has none.
+ */
+export interface BotDrain {
+  draining: boolean;
+  /** True stops the client at the end; false leaves it connected and idle. */
+  exitWhenDone: boolean;
+  /** What asked — "the website", "the engine", "the client". */
+  source?: string;
+  /**
+   * Everything it still owes, already phrased for a person. Empty means the
+   * drain has settled, which is the difference between "shutting down" and
+   * "nothing left — safe to stop".
+   */
+  waitingOn: string[];
+  requestedAtUnixMs?: number;
 }
 
 export type ModeCounts = Partial<Record<ModeID, number>>;
@@ -243,6 +349,8 @@ export interface LeaderboardEntry {
   kind: AccountKind | string;
   username: string;
   discord: string;
+  /** The title worn in front of the name, absent on most rows. */
+  title?: TitleID;
   elo: number;
   wins: number;
   losses: number;
@@ -354,8 +462,16 @@ export type ClientMessage =
   | { type: 'accept_challenge'; challengeId: string }
   | { type: 'decline_challenge'; challengeId: string }
   // No `startingPosition` here either: the server's bot challenge does not
-  // take one.
-  | { type: 'challenge_bot'; botId: string; modeId: ModeID; timeControl?: TimeControl }
+  // take one. `preferredColor` is a plain field rather than a `setup`, because
+  // this message names its mode and its clock the same one-at-a-time way.
+  // Omitted, the challenger is seated Red.
+  | {
+      type: 'challenge_bot';
+      botId: string;
+      modeId: ModeID;
+      preferredColor?: SideColor;
+      timeControl?: TimeControl;
+    }
   | { type: 'bot_session_start'; modeId: ModeID }
   | { type: 'bot_session_end' }
   | { type: 'tournament_ready'; tournamentId: string; matchId: number }
@@ -412,11 +528,19 @@ export interface ConnectionReadyMessage {
    */
   gameId?: string;
   /**
-   * Whether this server can call anybody back. False turns off the whole offer
-   * to wait with the tab closed, rather than leaving a button that quietly
+   * Whether this server can call anybody back at all. False turns off the whole
+   * offer to wait with the tab closed, rather than leaving a button that quietly
    * cannot work.
    */
   pushEnabled?: boolean;
+  /**
+   * By which means, so a client can answer the same question about the device it
+   * is actually running on. A server holding VAPID keys and no Apple key can
+   * call a laptop back and not a phone, and the phone has to be told that
+   * rather than shown the laptop's answer. Absent from a server that predates
+   * iOS.
+   */
+  pushTransports?: PushTransportSupport;
 }
 
 export type ServerMessage =
@@ -430,12 +554,24 @@ export type ServerMessage =
       botPlayerCount?: number;
       onlineCount?: number;
     }
+  /**
+   * This account's own row, resent because something on it changed without the
+   * client asking — a title earned by the game that just finished, or one the
+   * host granted. Only ever about the receiver.
+   */
+  | { type: 'account_updated'; account?: Account }
   | { type: 'live_games'; liveGames?: LiveGameSummary[] }
   | { type: 'open_challenges'; openChallenges?: Challenge[] }
   | { type: 'tournaments'; tournaments?: Tournament[] }
   | { type: 'engine_bots'; engineBots?: BotPresence[] }
   | { type: 'bot_unavailable'; message?: string }
   | { type: 'bot_fault'; message?: string; botName?: string }
+  | {
+      type: 'bot_drain_update';
+      botId?: string;
+      botName?: string;
+      drain?: BotDrain;
+    }
   | { type: 'tournament_rejected'; message?: string }
   | {
       type: 'queue_update';
@@ -460,6 +596,7 @@ export type ServerMessage =
       gameState?: GameState;
       chatMessages?: ChatMessage[];
       chatRoomId?: string;
+      chatOccupancy?: number;
       /**
        * When a board nobody has moved on gives up waiting. Zero or absent for a
        * game that is already being played, which is how a client tells the two
@@ -475,6 +612,7 @@ export type ServerMessage =
       reconnectDeadlineUnixMs?: number;
       chatMessages?: ChatMessage[];
       chatRoomId?: string;
+      chatOccupancy?: number;
       firstMoveDeadlineUnixMs?: number;
     }
   | {
@@ -482,6 +620,7 @@ export type ServerMessage =
       gameState?: GameState;
       chatMessages?: ChatMessage[];
       chatRoomId?: string;
+      chatOccupancy?: number;
     }
   | { type: 'spectator_left' }
   | { type: 'spectate_unavailable'; message?: string }
@@ -491,6 +630,13 @@ export type ServerMessage =
   | { type: 'move_rejected'; message?: string }
   | { type: 'action_rejected'; message?: string }
   | { type: 'chat_message'; chatMessage?: ChatMessage }
+  /**
+   * How many people are in a conversation, sent whenever somebody joins or
+   * leaves it. Counted from the room rather than from the game's spectator
+   * list, which is how the figure survives the result: a finished game leaves
+   * the live table, and its room does not.
+   */
+  | { type: 'chat_presence'; chatRoomId?: string; chatOccupancy?: number }
   | { type: 'chat_rejected'; message?: string }
   | { type: 'opponent_disconnected'; reconnectDeadlineUnixMs?: number }
   | { type: 'opponent_reconnected' }

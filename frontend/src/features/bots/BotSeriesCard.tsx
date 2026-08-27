@@ -1,10 +1,13 @@
 import { type ReactNode } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
+import SeriesLink from './SeriesLink';
 import SeriesScoreTable from './SeriesScoreTable';
-import { seriesMetaLine, seriesView } from './seriesSummary';
+import { seriesMetaLine, seriesStatusTone, seriesView } from './seriesSummary';
+import { seriesURL } from '@/navigation/links';
 import type { BotSeries } from '@/store/api/bots';
 import { colors, radius, space, type } from '@/theme';
+import CopyLinkButton from '@/ui/CopyLinkButton';
 import { Badge } from '@/ui/primitives';
 
 // One run, drawn as the score table it is.
@@ -18,14 +21,11 @@ import { Badge } from '@/ui/primitives';
 // So a run is a card, and the table inside it is the whole of it — both engines
 // named down the side, every game a column, the totals at the end. There is no
 // separate scoreline above it because there is nothing left for one to say.
-
-/** How the run's state reads, and in what colour. */
-const STATUS_TONES: Record<string, 'live' | 'accent' | 'neutral'> = {
-  running: 'live',
-  completed: 'accent',
-  aborted: 'neutral',
-  pending: 'neutral',
-};
+//
+// What the card cannot be is the run's *address*. A feed is a moving window —
+// this card will not be on the Bots page for long — so the two things underneath
+// it point at somewhere that does not scroll away: the run's own page, and a
+// link to that page for somebody who is not here.
 
 export interface BotSeriesCardProps {
   series: BotSeries;
@@ -33,6 +33,12 @@ export interface BotSeriesCardProps {
   currentGameId?: string | null;
   /** Given a game id when somebody picks a column. */
   onSelectGame?: (gameId: string) => void;
+  /**
+   * The games being played right now, so the column two engines are on this
+   * second is drawn as live and opens the board rather than a record that does
+   * not exist yet. See `SeriesScoreTable`.
+   */
+  liveGameIds?: readonly string[];
   /** A STOP button, or anything else the page wants on the run. */
   action?: ReactNode;
   /** "2h ago" — passed in rather than computed, so one clock drives the feed. */
@@ -42,12 +48,12 @@ export interface BotSeriesCardProps {
 export default function BotSeriesCard({
   action,
   currentGameId = null,
+  liveGameIds,
   onSelectGame,
   series,
   when,
 }: BotSeriesCardProps) {
   const view = seriesView(series);
-  const status = String(series.status).toLowerCase();
   const meta = [
     series.modeId,
     // Only a run still going has a number of games left to describe. One that
@@ -62,7 +68,7 @@ export default function BotSeriesCard({
   return (
     <View style={styles.card}>
       <View style={styles.top}>
-        <Badge label={status.toUpperCase()} tone={STATUS_TONES[status] ?? 'neutral'} />
+        <Badge label={String(series.status).toUpperCase()} tone={seriesStatusTone(series)} />
         <Text numberOfLines={2} style={styles.meta}>
           {meta}
         </Text>
@@ -71,9 +77,19 @@ export default function BotSeriesCard({
 
       <SeriesScoreTable
         currentGameId={currentGameId}
+        liveGameIds={liveGameIds}
         onSelect={onSelectGame}
         series={series}
       />
+
+      <View style={styles.links}>
+        <CopyLinkButton
+          accessibilityLabel={`Copy a link to ${view.firstName} versus ${view.secondName}`}
+          label="COPY SERIES LINK"
+          url={seriesURL(series.seriesId)}
+        />
+        <SeriesLink seriesId={series.seriesId} />
+      </View>
     </View>
   );
 }
@@ -89,4 +105,13 @@ const styles = StyleSheet.create({
   },
   top: { flexDirection: 'row', alignItems: 'center', gap: space.snug },
   meta: { ...type.meta, color: colors.textFaint, flexShrink: 1, minWidth: 0 },
+  // Trailing rather than centred, and wrapping, so the pair reads as what to do
+  // *next* with the table above them rather than as the card's own footer.
+  links: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+    gap: space.snug,
+  },
 });

@@ -1,4 +1,12 @@
-// Whether this browser can be called back, and how it becomes able to be.
+// Whether this device can be called back, and how it becomes able to be.
+//
+// Two transports, one state machine. A browser is reached through Web Push and
+// an iPhone through APNs, and those have nothing in common on the wire — a URL
+// and a pair of encryption keys against a device token — but everything in
+// common above it: the same offer, the same statuses, the same one notification,
+// and the same rule that what holds a place in the queue is an address the
+// *server* knows about. Only `detect`, `enable` and `disable` branch, and the
+// iOS half of each lives in `pushApns.ts`.
 //
 // A store of its own rather than a slice of the game store, following
 // `bottomInset` and `reviewHandoff`: nothing in the game store needs push, and
@@ -6,16 +14,24 @@
 // `useQueueCall` reads both and hands the combination to `queueSelectors`,
 // which is what lets that module stay pure.
 //
-// Every browser API here is reached inside a function, never at module scope.
+// Every platform API here is reached inside a function, never at module scope.
 // This file is imported during the static export, which runs in Node with no
 // `window`, no `navigator` and no `Notification` — the same rule
-// `localIdentity.ts` follows for `localStorage`, and for the same reason.
+// `localIdentity.ts` follows for `localStorage`, and for the same reason. It is
+// also why `expo-notifications` is reached through `await import('./pushApns')`
+// rather than imported: a native module at module scope would be evaluated by
+// the export and by every unit test in this directory.
 
+import { Platform } from 'react-native';
 import { create } from 'zustand';
 
+import type { PushTransportSupport } from '@/types/protocol';
+
 import {
+  deletePushDevice,
   deletePushSubscription,
   fetchPushKey,
+  savePushDevice,
   savePushSubscription,
   type PushIdentity,
 } from './api/push';
@@ -33,7 +49,10 @@ import {
 const SNOOZE_MS = 7 * 24 * 60 * 60 * 1000;
 
 export type PushStatus =
-  /** No service worker or no push manager: nothing to offer. */
+  /**
+   * Nothing to offer: no service worker or push manager in a browser, and on a
+   * phone a build that cannot hold a real device token.
+   */
   | 'unsupported'
   /** iOS in a tab. Push arrives only for a site added to the Home Screen. */
   | 'needs-home-screen'
@@ -47,16 +66,80 @@ export type PushStatus =
 
 export type PushCapability = 'ready' | 'needs-home-screen' | 'unsupported';
 
+/** How this build is reached. */
+export type PushTransport = 'web-push' | 'apns';
+
 /**
- * The capability decision, as a pure function of four facts about the browser,
- * so it can be tested without one.
+ * The transport this build can use, or `null` where the server has no way in.
+ *
+ * Android is that `null`: it would be FCM, which this server does not speak.
+ * Saying so here is what stops an Android build from registering an FCM token
+ * on the APNs route and looking reachable for ever while nothing is delivered.
  */
-export const pushCapabilityFrom = (facts: {
+export const activePushTransport = (): PushTransport | null => {
+  switch (Platform.OS) {
+    case 'web':
+      return 'web-push';
+    case 'ios':
+      return 'apns';
+    default:
+      return null;
+  }
+};
+
+/**
+ * Whether the server can call *this* kind of device back.
+ *
+ * A deployment can hold VAPID keys and no Apple key, or the reverse, so the one
+ * `pushEnabled` flag is not an answer a phone can use. `support` is absent when
+ * the server predates iOS, and a browser then falls back to the flag that has
+ * always meant exactly this to it.
+ */
+export const pushEnabledFor = (
+  transport: PushTransport | null,
+  support: PushTransportSupport | undefined,
+  enabled: boolean,
+): boolean => {
+  if (!transport) return false;
+  if (!support) return transport === 'web-push' && enabled;
+  return transport === 'apns' ? support.apns : support.webPush;
+};
+
+/**
+ * What a browser's capability turns on. An absent `transport` is Web Push,
+ * because that is what these four facts have always described.
+ */
+export type WebPushFacts = {
+  transport?: 'web-push';
   hasServiceWorker: boolean;
   hasPushManager: boolean;
   isIOS: boolean;
   isStandalone: boolean;
-}): PushCapability => {
+};
+
+/** What a native build's capability turns on. */
+export type ApnsFacts = {
+  transport: 'apns';
+  /** Whether `expo-notifications` is actually linked into this binary. */
+  hasNotificationsModule: boolean;
+  /**
+   * A simulator is not merely likely to fail. On Apple silicon it hands over a
+   * token that looks entirely real and that only `xcrun simctl push` can ever
+   * deliver to, so registering it would leave an account looking reachable for
+   * ever — the ghost the away queue must not contain.
+   */
+  isSimulator: boolean;
+};
+
+/**
+ * The capability decision, as a pure function of a handful of facts about the
+ * device, so it can be tested without one.
+ */
+export const pushCapabilityFrom = (facts: WebPushFacts | ApnsFacts): PushCapability => {
+  if (facts.transport === 'apns') {
+    if (!facts.hasNotificationsModule || facts.isSimulator) return 'unsupported';
+    return 'ready';
+  }
   if (!facts.hasServiceWorker || !facts.hasPushManager) return 'unsupported';
   if (facts.isIOS && !facts.isStandalone) return 'needs-home-screen';
   return 'ready';
@@ -94,7 +177,7 @@ const serviceWorkerApi = (): ServiceWorkerContainer | null => {
   }
 };
 
-const pushCapability = (): PushCapability => {
+const webPushCapability = (): PushCapability => {
   const navigatorApi = globalThis.navigator as (Navigator & { standalone?: boolean }) | undefined;
   if (!navigatorApi) return 'unsupported';
   // iPadOS reports itself as a Mac, so touch points are the only reliable tell.
@@ -112,6 +195,52 @@ const pushCapability = (): PushCapability => {
   });
 };
 
+/**
+ * What a phone already knows, asked without prompting anybody.
+ *
+ * Permission alone is not the bargain, exactly as on the web: what holds a
+ * place in the queue is a token the server is holding, so a granted permission
+ * with no token of ours reports as unasked and offers to fix itself. The token
+ * is re-read on every launch because iOS is entitled to hand back a different
+ * one — after a restore from backup, most often — and a stored token nobody
+ * re-posts is a subscription that goes quietly stale.
+ */
+const detectDevice = async (sessionToken: string | null): Promise<Partial<PushStore>> => {
+  const apns = await import('./pushApns');
+  if (pushCapabilityFrom(apns.apnsFacts()) !== 'ready') return { status: 'unsupported' };
+
+  const permission = await apns.apnsPermission();
+  if (permission === 'denied') return { status: 'denied' };
+  if (permission !== 'granted') return { status: 'unasked' };
+
+  const known = readPushEndpoint();
+  if (!known) return { status: 'unasked', endpoint: null };
+  const token = await apns.apnsDeviceToken();
+  if (token !== known) {
+    await savePushDevice(token, identity(sessionToken));
+    savePushEndpoint(token);
+  }
+  return { status: 'granted', endpoint: token, error: null };
+};
+
+/**
+ * Turn alerts on for a phone.
+ *
+ * No gesture rule to respect here — that is a web constraint — but the order is
+ * the web's anyway: ask, and only register a device whose owner said yes.
+ */
+const enableDevice = async (sessionToken: string | null): Promise<Partial<PushStore>> => {
+  const apns = await import('./pushApns');
+  const permission = await apns.requestApnsPermission();
+  if (permission !== 'granted') {
+    return { status: permission === 'denied' ? 'denied' : 'unasked' };
+  }
+  const token = await apns.apnsDeviceToken();
+  await savePushDevice(token, identity(sessionToken));
+  savePushEndpoint(token);
+  return { status: 'granted', endpoint: token, error: null };
+};
+
 const identity = (sessionToken: string | null): PushIdentity => ({
   userId: getOrCreateUserId(),
   profileKey: getOrCreateProfileKey(),
@@ -124,9 +253,9 @@ export interface PushStore {
   /** A plain-language reason, when something went wrong. */
   error: string | null;
   snoozedUntil: number;
-  /** Settle what this browser is capable of, and whether it is already set up. */
+  /** Settle what this device is capable of, and whether it is already set up. */
   detect: (sessionToken: string | null) => Promise<void>;
-  /** Must be called straight from a press handler — see below. */
+  /** On the web, must be called straight from a press handler — see below. */
   enable: (sessionToken: string | null) => Promise<void>;
   disable: (sessionToken: string | null) => Promise<void>;
   snoozeOffer: () => void;
@@ -139,8 +268,24 @@ export const usePushStore = create<PushStore>()((set, get) => ({
   snoozedUntil: 0,
 
   detect: async (sessionToken) => {
-    const capability = pushCapability();
     set({ snoozedUntil: readAlertsSnoozedUntil() });
+    const transport = activePushTransport();
+    if (!transport) {
+      set({ status: 'unsupported' });
+      return;
+    }
+    if (transport === 'apns') {
+      try {
+        set(await detectDevice(sessionToken));
+      } catch {
+        // A failure here must never break matchmaking: the queue still works, it
+        // just cannot outlive the app.
+        set({ status: 'unasked' });
+      }
+      return;
+    }
+
+    const capability = webPushCapability();
     if (capability !== 'ready') {
       set({ status: capability === 'needs-home-screen' ? 'needs-home-screen' : 'unsupported' });
       return;
@@ -184,6 +329,21 @@ export const usePushStore = create<PushStore>()((set, get) => ({
   },
 
   enable: async (sessionToken) => {
+    const transport = activePushTransport();
+    if (!transport) {
+      set({ status: 'unsupported' });
+      return;
+    }
+    if (transport === 'apns') {
+      set({ status: 'enabling', error: null });
+      try {
+        set(await enableDevice(sessionToken));
+      } catch (error) {
+        set({ status: 'error', error: enableFailureMessage(error) });
+      }
+      return;
+    }
+
     const notification = notificationApi();
     if (!notification) {
       set({ status: 'unsupported' });
@@ -221,13 +381,7 @@ export const usePushStore = create<PushStore>()((set, get) => ({
       savePushEndpoint(subscription.endpoint);
       set({ status: 'granted', endpoint: subscription.endpoint, error: null });
     } catch (error) {
-      set({
-        status: 'error',
-        error:
-          error instanceof Error
-            ? error.message
-            : 'Alerts could not be turned on. Your place in the queue still works while this tab is open.',
-      });
+      set({ status: 'error', error: enableFailureMessage(error) });
     }
   },
 
@@ -239,6 +393,13 @@ export const usePushStore = create<PushStore>()((set, get) => ({
     clearPushEndpoint();
     set({ status: 'unasked', endpoint: null, error: null });
     try {
+      if (activePushTransport() === 'apns') {
+        // The OS permission is deliberately left alone: it is the player's to
+        // give and take away, and iOS has nothing to unsubscribe from anyway.
+        // Deleting the server's row is what stops the summons.
+        if (endpoint) await deletePushDevice(endpoint, identity(sessionToken));
+        return;
+      }
       const registration = await serviceWorkerApi()?.getRegistration('/');
       const subscription = await registration?.pushManager.getSubscription();
       await subscription?.unsubscribe();
@@ -255,6 +416,11 @@ export const usePushStore = create<PushStore>()((set, get) => ({
     set({ snoozedUntil: until });
   },
 }));
+
+const enableFailureMessage = (error: unknown): string =>
+  error instanceof Error
+    ? error.message
+    : 'Alerts could not be turned on. Your place in the queue still works while this app is open.';
 
 const payloadFrom = (subscription: PushSubscription) => {
   const json = subscription.toJSON();

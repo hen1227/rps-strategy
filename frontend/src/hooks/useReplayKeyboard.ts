@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { Platform } from 'react-native';
 
 /** Whether a key belongs to whatever the viewer is typing into. */
 const isEditingTarget = (target: EventTarget | null) => {
@@ -29,7 +30,10 @@ export function useReplayKeyboard({
   onPrevious,
 }: ReplayKeyboardOptions) {
   useEffect(() => {
-    if (!enabled || typeof window === 'undefined') return undefined;
+    // React Native defines `window` as the global object, so its presence says
+    // nothing about there being a DOM to listen to: off the web this hook has
+    // no keyboard to bind and `window.addEventListener` is not a function.
+    if (!enabled || Platform.OS !== 'web' || typeof window === 'undefined') return undefined;
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (

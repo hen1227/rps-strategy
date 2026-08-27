@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 
+import { isSignedIn } from '@/store/accountSession';
 import { useGameStore } from '@/store/gameStore';
 import { canOfferAlerts, usePushStore } from '@/store/push';
 import { lobbyGate, queueCallState, type LobbyGate, type QueueCall } from '@/store/queueSelectors';
@@ -13,11 +14,18 @@ import { lobbyGate, queueCallState, type LobbyGate, type QueueCall } from '@/sto
  */
 const SEARCH_TICK_MS = 1000;
 
-/** Whether the player is sitting at a real board. A bot game does not count. */
+/**
+ * Whether the player is sitting at a real board.
+ *
+ * Neither browser-local game counts. A bot game and a pass-and-play game are
+ * both unrated, both droppable the instant a real opponent turns up, and
+ * treating either as a board would make a queued player's lobby read-only for
+ * as long as they were practising.
+ */
 const useAtOwnBoard = () => {
   const gameState = useGameStore((state) => state.gameState);
   const isSpectating = useGameStore((state) => state.isSpectating);
-  return Boolean(gameState) && !gameState?.bot && !isSpectating;
+  return Boolean(gameState) && !gameState?.bot && !gameState?.local && !isSpectating;
 };
 
 export const useQueueCall = (): QueueCall | null => {
@@ -84,10 +92,13 @@ export const useLobbyGate = (): LobbyGate => {
   const connectionStatus = useGameStore((state) => state.connectionStatus);
   const outgoingChallenge = useGameStore((state) => state.outgoingChallenge);
   const queue = useGameStore((state) => state.queue);
+  const sessionToken = useGameStore((state) => state.sessionToken);
+  const account = useGameStore((state) => state.account);
   const atOwnBoard = useAtOwnBoard();
+  const signedIn = isSignedIn(sessionToken, account);
 
   return useMemo(
-    () => lobbyGate({ connectionStatus, atOwnBoard, outgoingChallenge, queue }),
-    [atOwnBoard, connectionStatus, outgoingChallenge, queue],
+    () => lobbyGate({ connectionStatus, atOwnBoard, outgoingChallenge, queue, signedIn }),
+    [atOwnBoard, connectionStatus, outgoingChallenge, queue, signedIn],
   );
 };

@@ -11,7 +11,9 @@
 // browser's own move list. That is what lets one review screen serve both.
 
 import {
-  BOARD_SIZE,
+  MAX_BOARD_SIDE,
+  MAX_BOARD_TILES,
+  MIN_BOARD_SIDE,
   type GameEndReason,
   type GameStatus,
   type Grid,
@@ -23,7 +25,9 @@ import {
   type Tile,
 } from '@/types/game';
 
-const FILES = 'abcdefghi';
+// Twenty-six letters because a mode may be that wide, which is also why
+// MAX_BOARD_SIDE is 26. The built-in modes use the first nine.
+const FILES = 'abcdefghijklmnopqrstuvwxyz';
 
 export const RESULT_RED_WIN = '1-0';
 export const RESULT_BLUE_WIN = '0-1';
@@ -69,18 +73,28 @@ export class PGNError extends Error {
   }
 }
 
+/**
+ * A square as the archive writes it: `a1`, and `d10` on a board with ten ranks.
+ *
+ * Bounded by `MAX_BOARD_SIDE` rather than by any particular board, because a
+ * move is named before the board it was played on is known — the FEN beside it
+ * in the same record is what settles the shape. `backend/internal/notation`
+ * draws the same line for the same reason.
+ */
 export const formatSquare = ({ x, y }: Position) => {
-  if (x < 0 || x >= BOARD_SIZE || y < 0 || y >= BOARD_SIZE) return '??';
+  if (x < 0 || x >= MAX_BOARD_SIDE || y < 0 || y >= MAX_BOARD_SIDE) return '??';
   return `${FILES[x]}${y + 1}`;
 };
 
 export const parseSquare = (text: string | undefined): Position => {
   const x = FILES.indexOf(text?.[0] ?? '');
-  const y = Number(text?.[1]) - 1;
-  if (x < 0 || !Number.isInteger(y) || y < 0 || y >= BOARD_SIZE) {
+  // The rank is a decimal number, not one digit: `d10` is a square on a board
+  // that has ten ranks.
+  const rank = /^\d+$/.test(text?.slice(1) ?? '') ? Number(text?.slice(1)) : NaN;
+  if (x < 0 || !Number.isInteger(rank) || rank < 1 || rank > MAX_BOARD_SIDE) {
     throw new PGNError(`"${text}" is not a square.`);
   }
-  return { x, y };
+  return { x, y: rank - 1 };
 };
 
 /** One move as a record spells it, before any board is involved. */
@@ -138,28 +152,77 @@ const SYMBOL_PIECES: Record<string, { occupant: PlayablePiece; owner: SideColor 
 
 const TURN_CODES: Record<string, PlayerColor> = { r: 'Red', b: 'Blue', '-': 'Neutral' };
 
-const decodeRows = (field: string, place: (x: number, y: number, symbol: string) => void) => {
+/**
+ * One rank's runs, so a field can be measured before it is placed.
+ *
+ * A run of empties is a decimal number rather than one digit, because a board
+ * can be wider than nine. That stays unambiguous only because the encoder never
+ * writes two runs side by side: `19` is nineteen empties, and one empty then
+ * nine of them can only appear with a piece between, as `1R9`.
+ */
+const rowRuns = (row: string) => {
+  const runs: { symbol: string; count: number }[] = [];
+  for (let index = 0; index < row.length; index += 1) {
+    const symbol = row[index] ?? '';
+    if (symbol >= '1' && symbol <= '9') {
+      let end = index;
+      while (end < row.length && /\d/.test(row[end] ?? '')) end += 1;
+      runs.push({ symbol: '', count: Number(row.slice(index, end)) });
+      index = end - 1;
+      continue;
+    }
+    if (symbol === '0') throw new PGNError('a gap cannot start with "0"');
+    runs.push({ symbol: symbol === '.' ? '' : symbol, count: 1 });
+  }
+  return runs;
+};
+
+/**
+ * The shape a position field describes.
+ *
+ * The board is not a constant any more, so it is read off the text: the ranks
+ * are the rows and the files are what one rank's runs add up to. That is what
+ * makes an archived position self-describing, so a game played on an eleven by
+ * five board replays with nothing beside it saying so.
+ */
+const measureRows = (field: string) => {
   const rows = field.split('/');
-  if (rows.length !== BOARD_SIZE) {
-    throw new PGNError(`expected ${BOARD_SIZE} ranks, got ${rows.length}`);
+  let columns = -1;
+  rows.forEach((row, y) => {
+    const covered = rowRuns(row).reduce((total, run) => total + run.count, 0);
+    if (columns < 0) {
+      columns = covered;
+      return;
+    }
+    if (covered !== columns) {
+      throw new PGNError(`rank ${y + 1} covers ${covered} tiles, rank 1 covers ${columns}`);
+    }
+  });
+  return { columns: Math.max(columns, 0), rows: rows.length };
+};
+
+const decodeRows = (
+  field: string,
+  shape: { columns: number; rows: number },
+  place: (x: number, y: number, symbol: string) => void,
+) => {
+  const rows = field.split('/');
+  if (rows.length !== shape.rows) {
+    throw new PGNError(`expected ${shape.rows} ranks, got ${rows.length}`);
   }
   rows.forEach((row, y) => {
     let x = 0;
-    for (const symbol of row) {
-      if (symbol >= '1' && symbol <= '9') {
-        x += Number(symbol);
+    for (const run of rowRuns(row)) {
+      if (!run.symbol) {
+        x += run.count;
         continue;
       }
-      if (symbol === '.') {
-        x += 1;
-        continue;
-      }
-      if (x >= BOARD_SIZE) throw new PGNError(`rank ${y + 1} overflows the board`);
-      place(x, y, symbol);
+      if (x >= shape.columns) throw new PGNError(`rank ${y + 1} overflows the board`);
+      place(x, y, run.symbol);
       x += 1;
     }
-    if (x !== BOARD_SIZE) {
-      throw new PGNError(`rank ${y + 1} covers ${x} tiles, expected ${BOARD_SIZE}`);
+    if (x !== shape.columns) {
+      throw new PGNError(`rank ${y + 1} covers ${x} tiles, expected ${shape.columns}`);
     }
   });
 };
@@ -177,9 +240,22 @@ export interface DecodedPosition {
  * follows the pieces — the shape every mode's opening board has.
  */
 export const decodePosition = (text: string | null | undefined): DecodedPosition => {
-  const grid: Grid = Array.from({ length: BOARD_SIZE }, (_unusedRow, y) =>
+  const fields = String(text ?? '').trim().split(/\s+/).filter(Boolean);
+  const pieceField = fields[0];
+  if (pieceField === undefined) throw new PGNError('empty position');
+  const shape = measureRows(pieceField);
+  if (
+    shape.columns < MIN_BOARD_SIDE ||
+    shape.rows < MIN_BOARD_SIDE ||
+    shape.columns > MAX_BOARD_SIDE ||
+    shape.rows > MAX_BOARD_SIDE ||
+    shape.columns * shape.rows > MAX_BOARD_TILES
+  ) {
+    throw new PGNError(`${shape.columns} by ${shape.rows} is not a board`);
+  }
+  const grid: Grid = Array.from({ length: shape.rows }, (_unusedRow, y) =>
     Array.from(
-      { length: BOARD_SIZE },
+      { length: shape.columns },
       (_unusedTile, x): Tile => ({
         x,
         y,
@@ -194,11 +270,7 @@ export const decodePosition = (text: string | null | undefined): DecodedPosition
     if (!tile) throw new PGNError(`square ${x},${y} is off the board`);
     return tile;
   };
-  const fields = String(text ?? '').trim().split(/\s+/).filter(Boolean);
-  const pieceField = fields[0];
-  if (pieceField === undefined) throw new PGNError('empty position');
-
-  decodeRows(pieceField, (x, y, symbol) => {
+  decodeRows(pieceField, shape, (x, y, symbol) => {
     const piece = SYMBOL_PIECES[symbol];
     if (!piece) throw new PGNError(`unsupported piece "${symbol}"`);
     const tile = at(x, y);
@@ -217,7 +289,7 @@ export const decodePosition = (text: string | null | undefined): DecodedPosition
   const territoryField = fields[2];
   if (territoryField !== undefined) {
     for (const row of grid) for (const tile of row) tile.ownerColor = 'Neutral';
-    decodeRows(territoryField, (x, y, symbol) => {
+    decodeRows(territoryField, shape, (x, y, symbol) => {
       const owner = TURN_CODES[symbol];
       if (!owner || owner === 'Neutral') throw new PGNError(`unsupported territory "${symbol}"`);
       at(x, y).ownerColor = owner;

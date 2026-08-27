@@ -1,3 +1,5 @@
+import { deviceStorage } from './deviceStorage';
+
 const USER_ID_KEY = 'rps.userAccountId.v1';
 const PROFILE_KEY_KEY = 'rps.localProfileKey.v1';
 const GAME_SESSION_ID_KEY = 'rps.activeGameSessionId.v1';
@@ -11,21 +13,6 @@ const ALERTS_SNOOZED_UNTIL_KEY = 'rps.alertsSnoozedUntil.v1';
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
-/**
- * The browser's own storage, or `null`.
- *
- * Reached through a function rather than captured once: this module is imported
- * during a static web render, where there is no `localStorage` at all, and a
- * captured `undefined` would then persist into the browser.
- */
-const localStorage = (): Storage | null => {
-  try {
-    return globalThis.localStorage ?? null;
-  } catch {
-    return null;
-  }
-};
 
 const randomByte = () => Math.floor(Math.random() * 256);
 
@@ -55,16 +42,16 @@ export const createProfileKey = (): string => {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
 };
 
-// Both identities are settled once per page load and then remembered. The
-// memo is not an optimisation: where localStorage is blocked the fallback is a
-// fresh random value, so without it a second caller would be issued a
-// different identity from the first.
+// Both identities are settled once per launch and then remembered. The memo is
+// not an optimisation: where storage is blocked the fallback is a fresh random
+// value, so without it a second caller would be issued a different identity
+// from the first.
 let cachedUserId: string | null = null;
 let cachedProfileKey: string | null = null;
 
 export const getOrCreateUserId = (): string => {
   if (cachedUserId) return cachedUserId;
-  const storage = localStorage();
+  const storage = deviceStorage();
   try {
     const existing = storage?.getItem(USER_ID_KEY);
     if (existing && UUID_PATTERN.test(existing)) {
@@ -72,21 +59,22 @@ export const getOrCreateUserId = (): string => {
       return cachedUserId;
     }
   } catch {
-    // A usable in-memory UUID still lets restricted browser contexts connect.
+    // A usable in-memory UUID still lets a device without storage connect.
   }
 
   cachedUserId = createUUID();
   try {
     storage?.setItem(USER_ID_KEY, cachedUserId);
   } catch {
-    // localStorage can be unavailable in private or restricted contexts.
+    // Storage can be unavailable in a private or restricted browser, and a
+    // device database can fail to open.
   }
   return cachedUserId;
 };
 
 export const getOrCreateProfileKey = (): string => {
   if (cachedProfileKey) return cachedProfileKey;
-  const storage = localStorage();
+  const storage = deviceStorage();
   try {
     const existing = storage?.getItem(PROFILE_KEY_KEY);
     if (existing && existing.length >= 32 && existing.length <= 256) {
@@ -94,21 +82,21 @@ export const getOrCreateProfileKey = (): string => {
       return cachedProfileKey;
     }
   } catch {
-    // An in-memory key still authenticates this tab in restricted contexts.
+    // An in-memory key still authenticates this session without storage.
   }
 
   cachedProfileKey = createProfileKey();
   try {
     storage?.setItem(PROFILE_KEY_KEY, cachedProfileKey);
   } catch {
-    // The account will last only for this tab when localStorage is unavailable.
+    // The account will last only for this session when storage is unavailable.
   }
   return cachedProfileKey;
 };
 
 export const readGameSessionId = (): string | null => {
   try {
-    return localStorage()?.getItem(GAME_SESSION_ID_KEY) || null;
+    return deviceStorage()?.getItem(GAME_SESSION_ID_KEY) || null;
   } catch {
     return null;
   }
@@ -116,7 +104,7 @@ export const readGameSessionId = (): string | null => {
 
 export const saveGameSessionId = (gameId: string | null | undefined) => {
   try {
-    if (gameId) localStorage()?.setItem(GAME_SESSION_ID_KEY, gameId);
+    if (gameId) deviceStorage()?.setItem(GAME_SESSION_ID_KEY, gameId);
   } catch {
     // The live in-memory session remains usable even if persistence is blocked.
   }
@@ -124,7 +112,7 @@ export const saveGameSessionId = (gameId: string | null | undefined) => {
 
 export const clearGameSessionId = () => {
   try {
-    localStorage()?.removeItem(GAME_SESSION_ID_KEY);
+    deviceStorage()?.removeItem(GAME_SESSION_ID_KEY);
   } catch {
     // Nothing else is required when storage is unavailable.
   }
@@ -132,7 +120,7 @@ export const clearGameSessionId = () => {
 
 export const readPushEndpoint = (): string | null => {
   try {
-    return localStorage()?.getItem(PUSH_ENDPOINT_KEY) || null;
+    return deviceStorage()?.getItem(PUSH_ENDPOINT_KEY) || null;
   } catch {
     return null;
   }
@@ -140,7 +128,7 @@ export const readPushEndpoint = (): string | null => {
 
 export const savePushEndpoint = (endpoint: string) => {
   try {
-    localStorage()?.setItem(PUSH_ENDPOINT_KEY, endpoint);
+    deviceStorage()?.setItem(PUSH_ENDPOINT_KEY, endpoint);
   } catch {
     // Alerts still work; we just cannot notice a rotated endpoint next time.
   }
@@ -148,7 +136,7 @@ export const savePushEndpoint = (endpoint: string) => {
 
 export const clearPushEndpoint = () => {
   try {
-    localStorage()?.removeItem(PUSH_ENDPOINT_KEY);
+    deviceStorage()?.removeItem(PUSH_ENDPOINT_KEY);
   } catch {
     // Nothing else is required when storage is unavailable.
   }
@@ -156,7 +144,7 @@ export const clearPushEndpoint = () => {
 
 export const readAlertsSnoozedUntil = (): number => {
   try {
-    return Number(localStorage()?.getItem(ALERTS_SNOOZED_UNTIL_KEY)) || 0;
+    return Number(deviceStorage()?.getItem(ALERTS_SNOOZED_UNTIL_KEY)) || 0;
   } catch {
     return 0;
   }
@@ -164,7 +152,7 @@ export const readAlertsSnoozedUntil = (): number => {
 
 export const saveAlertsSnoozedUntil = (untilUnixMs: number) => {
   try {
-    localStorage()?.setItem(ALERTS_SNOOZED_UNTIL_KEY, String(untilUnixMs));
+    deviceStorage()?.setItem(ALERTS_SNOOZED_UNTIL_KEY, String(untilUnixMs));
   } catch {
     // Without storage the offer reappears next session, which is the safe way
     // to be wrong: annoying rather than permanently hidden.

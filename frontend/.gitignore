@@ -49,3 +49,6 @@ yarn-error.*
 
 # built by npm run build:worker
 public/rpsfish/rpsfish-worker.js
+
+# built by npm run build:rpsfish:ios
+modules/rpsfish/ios/RPSFish.xcframework/

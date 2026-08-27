@@ -47,7 +47,6 @@ test('every knob takes a setup out of the standard game', () => {
     casual: { ...base, casual: true },
     seat: { ...base, preferredColor: 'Red' },
     'rule off': { ...base, rules: { noDrawOffers: true } },
-    cap: { ...base, rules: { moveLimit: 60 } },
   };
   for (const [name, setup] of Object.entries(edits)) {
     assert.equal(
@@ -99,7 +98,7 @@ test('the bullets list every departure, and mark them as departures', () => {
     startingPosition: rows('....R....'),
     casual: true,
     preferredColor: 'Blue',
-    rules: { moveLimit: 40, noRepetitionDraw: true, noDrawOffers: true, noTimeExtensions: true },
+    rules: { noRepetitionDraw: true, noDrawOffers: true, noTimeExtensions: true },
   };
   const bullets = describeSetup(setup, TOTAL_WAR, DEFAULT_CLOCK);
   assert.deepEqual(bullets.map((bullet) => bullet.key), [
@@ -107,13 +106,12 @@ test('the bullets list every departure, and mark them as departures', () => {
     'casual',
     'position',
     'seat',
-    'moveLimit',
     'noRepetitionDraw',
     'noDrawOffers',
     'noTimeExtensions',
   ]);
   assert.equal(bullets.every((bullet) => bullet.custom), true);
-  assert.equal(customizationCount(setup, TOTAL_WAR, DEFAULT_CLOCK), 8);
+  assert.equal(customizationCount(setup, TOTAL_WAR, DEFAULT_CLOCK), 7);
   assert.match(setupSummary(setup, TOTAL_WAR, DEFAULT_CLOCK), /Custom position/);
 });
 
@@ -122,10 +120,7 @@ test('the bullets list every departure, and mark them as departures', () => {
 test('the rule summary is the rule bullets and nothing else', () => {
   assert.equal(ruleSummary(undefined), '');
   assert.equal(ruleSummary({}), '');
-  assert.equal(
-    ruleSummary({ moveLimit: 40, noDrawOffers: true }),
-    '40-move cap · No draw offers',
-  );
+  assert.equal(ruleSummary({ noDrawOffers: true }), 'No draw offers');
 });
 
 test('a clock under a minute is written in seconds rather than rounded to zero', () => {

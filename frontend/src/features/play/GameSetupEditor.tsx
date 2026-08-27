@@ -1,9 +1,14 @@
 import { StyleSheet, Text, View } from 'react-native';
 
-import { timeControlLabel, withMode } from '@/store/setupSelectors';
+import {
+  preferredColorOf,
+  SEAT_CHOICES,
+  timeControlLabel,
+  withMode,
+} from '@/store/setupSelectors';
 import { colors, radius, space, type } from '@/theme';
 import { Checkbox, GhostButton, OptionChips } from '@/ui/primitives';
-import type { GameSetup, ModeDefinition, SideColor, TimeControl } from '@/types/game';
+import type { GameSetup, ModeDefinition, TimeControl } from '@/types/game';
 
 // Every knob on a game, in one panel.
 //
@@ -26,14 +31,6 @@ const CLOCK_PRESETS: readonly TimeControl[] = [
   { initialTimeMs: 900_000, incrementMs: 0 },
 ];
 
-const MOVE_CAPS: readonly number[] = [0, 40, 60, 100];
-
-const SEATS: readonly { value: SideColor | 'random'; label: string }[] = [
-  { value: 'random', label: 'EITHER' },
-  { value: 'Red', label: 'RED · FIRST' },
-  { value: 'Blue', label: 'BLUE · SECOND' },
-];
-
 /** A clock as a chip value: primitives compare, objects do not. */
 const clockKey = ({ initialTimeMs, incrementMs }: TimeControl) => `${initialTimeMs}:${incrementMs}`;
 
@@ -48,6 +45,15 @@ export interface GameSetupEditorProps {
   positionIsCustom: boolean;
   defaultTimeControl?: TimeControl | null;
   disabled?: boolean;
+  /**
+   * Ranked games need an account and this player has none.
+   *
+   * The chip is shown locked rather than hidden: a guest should be able to see
+   * that rated games exist and what would unlock them. The server forces casual
+   * for them anyway, so this is the honest version of what will happen rather
+   * than a second rule.
+   */
+  rankedLocked?: boolean;
 }
 
 export default function GameSetupEditor({
@@ -59,6 +65,7 @@ export default function GameSetupEditor({
   positionIsCustom,
   defaultTimeControl,
   disabled,
+  rankedLocked,
 }: GameSetupEditorProps) {
   const mode = modes.find((candidate) => candidate.id === setup.modeId) ?? null;
   const rules = setup.rules ?? {};
@@ -111,8 +118,8 @@ export default function GameSetupEditor({
         <View style={styles.pairCell}>
           <OptionChips
             changed={Boolean(setup.casual)}
-            disabled={disabled}
-            label="STAKES"
+            disabled={disabled || rankedLocked}
+            label={rankedLocked ? 'STAKES · SIGN IN FOR RANKED' : 'STAKES'}
             onChange={(casual) => onChange({ ...setup, casual })}
             options={[
               { value: false, label: 'RATED' },
@@ -129,27 +136,9 @@ export default function GameSetupEditor({
             changed={Boolean(setup.preferredColor)}
             disabled={disabled}
             label="YOUR SIDE"
-            onChange={(seat) =>
-              onChange({
-                ...setup,
-                preferredColor: seat === 'random' ? undefined : (seat as SideColor),
-              })
-            }
-            options={SEATS}
+            onChange={(seat) => onChange({ ...setup, preferredColor: preferredColorOf(seat) })}
+            options={SEAT_CHOICES}
             value={setup.preferredColor ?? 'random'}
-          />
-        </View>
-        <View style={styles.pairCell}>
-          <OptionChips
-            changed={Boolean(rules.moveLimit)}
-            disabled={disabled}
-            label="MOVE CAP"
-            onChange={(moveLimit) => setRules({ moveLimit: moveLimit || undefined })}
-            options={MOVE_CAPS.map((cap) => ({
-              value: cap,
-              label: cap === 0 ? 'NONE' : `${cap} MOVES`,
-            }))}
-            value={rules.moveLimit ?? 0}
           />
         </View>
       </View>
@@ -209,7 +198,15 @@ export default function GameSetupEditor({
 }
 
 const styles = StyleSheet.create({
-  editor: { gap: space.medium, marginTop: space.medium },
+  // flexGrow rather than flex, so the groups spread to fill a column that has
+  // been stretched to the preview beside them and behave exactly as before in a
+  // container that has no height to give.
+  editor: {
+    flexGrow: 1,
+    justifyContent: 'space-between',
+    gap: space.medium,
+    marginTop: space.medium,
+  },
   pair: { flexDirection: 'row', flexWrap: 'wrap', gap: space.medium },
   pairCell: { flexGrow: 1, flexBasis: 240 },
 

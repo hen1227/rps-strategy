@@ -1,3 +1,4 @@
+import { Link, type Href } from 'expo-router';
 import type { ReactNode } from 'react';
 import {
   ActivityIndicator,
@@ -162,6 +163,59 @@ export function GhostButton({
   );
 }
 
+export interface GhostLinkProps {
+  href: Href;
+  label: string;
+  accessibilityLabel?: string;
+  compact?: boolean;
+  /** `accent` for the one link on a card that is worth finding. */
+  tone?: 'default' | 'accent';
+  /** Swap the current page rather than stacking on top of it. */
+  replace?: boolean;
+}
+
+/**
+ * A ghost button that is a real link.
+ *
+ * Same chrome as `GhostButton`, because a button that navigates and a link are
+ * the same thing to look at — but on the web this renders an anchor, so it can
+ * be middle-clicked into a new tab and right-clicked to copy its address. That
+ * is what `LinkRow` is built on and for the same reason: the pages this leads to
+ * are meant to be handed to other people.
+ */
+export function GhostLink({
+  href,
+  label,
+  accessibilityLabel,
+  compact,
+  replace,
+  tone = 'default',
+}: GhostLinkProps) {
+  return (
+    <Link asChild href={href} replace={replace}>
+      <Pressable
+        accessibilityLabel={accessibilityLabel ?? label}
+        accessibilityRole="link"
+        // `StyleSheet.flatten`, not an array and not the usual `({ pressed })`
+        // function: `Link asChild` clones this child into a real anchor and
+        // accepts one resolved style object. An array is not dropped quietly —
+        // it reaches the DOM node's `style` as something with numeric keys and
+        // throws on the way in, which takes the whole page down with it. See
+        // the longer note in SidebarNav.
+        style={StyleSheet.flatten([
+          styles.ghostButton,
+          compact && styles.ghostButtonCompact,
+          tone === 'accent' && styles.ghostLinkAccent,
+        ])}
+      >
+        <Text style={[styles.ghostButtonText, tone === 'accent' && styles.ghostLinkAccentText]}>
+          {label}
+        </Text>
+      </Pressable>
+    </Link>
+  );
+}
+
 export interface LabeledInputProps extends TextInputProps {
   label: string;
   hint?: string;
@@ -221,7 +275,7 @@ export interface OptionChipsProps<Value> {
  *
  * A radio group would be the same information in four times the height, and
  * every knob on the game setup screen is a choice between three or four named
- * things — a clock, a seat, a move cap. Values are compared with `===`, so pass
+ * things — a clock, a seat, a game mode. Values are compared with `===`, so pass
  * primitives and keep the mapping to objects outside.
  */
 export function OptionChips<Value extends string | number | boolean | null>({
@@ -387,6 +441,11 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     letterSpacing: 0.8,
   },
+  ghostLinkAccent: {
+    borderColor: colors.accentBorder,
+    backgroundColor: colors.accentSurfaceQuiet,
+  },
+  ghostLinkAccentText: { color: colors.accentSoft },
 
   inputGroup: { marginTop: 12 },
   inputLabel: {

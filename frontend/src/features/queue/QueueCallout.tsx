@@ -1,4 +1,4 @@
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { useGameStore } from '@/store/gameStore';
 import { usePushStore } from '@/store/push';
@@ -21,6 +21,9 @@ import { GhostButton, PrimaryButton } from '@/ui/primitives';
 // It says nothing about being matched, because being matched is no longer a
 // state you sit in. Pairing opens the board, and the board takes the screen.
 
+/** No tab to close on a phone, and no address bar to find it in. */
+const IS_NATIVE = Platform.OS !== 'web';
+
 export default function QueueCallout({ call }: { call: QueueCall }) {
   const leaveQueue = useGameStore((state) => state.leaveQueue);
   const cancelChallenge = useGameStore((state) => state.cancelChallenge);
@@ -40,7 +43,7 @@ export default function QueueCallout({ call }: { call: QueueCall }) {
             {copy.title(call)}
           </Text>
           <Text numberOfLines={2} style={styles.detail}>
-            {copy.detail(call)}
+            {(IS_NATIVE ? copy.nativeDetail ?? copy.detail : copy.detail)(call)}
           </Text>
         </View>
         <GhostButton
@@ -65,15 +68,22 @@ export default function QueueCallout({ call }: { call: QueueCall }) {
       */}
       {call.offerAlerts ? (
         <View style={styles.pitch}>
-          <Text style={styles.pitchLine}>{ALERTS_PITCH.line}</Text>
+          <Text style={styles.pitchLine}>
+            {IS_NATIVE ? ALERTS_PITCH.nativeLine : ALERTS_PITCH.line}
+          </Text>
           <PrimaryButton
-            accessibilityLabel="Turn on match alerts so you can close this tab"
+            accessibilityLabel={
+              IS_NATIVE
+                ? 'Turn on match alerts so you can leave the app'
+                : 'Turn on match alerts so you can close this tab'
+            }
             compact
             label={ALERTS_PITCH.action}
             onPress={() => {
               // Called straight from the press handler with nothing awaited
-              // first: iOS shows the permission prompt only while the gesture
-              // that asked for it is still live.
+              // first: iOS Safari shows the permission prompt only while the
+              // gesture that asked for it is still live. The app has no such
+              // rule, and obeys it anyway rather than having two shapes.
               void enablePush(sessionToken ?? null);
             }}
             tone="quiet"

@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { useContext } from 'react';
 import {
   KeyboardAvoidingView,
   Modal,
@@ -8,6 +9,7 @@ import {
   Text,
   View,
 } from 'react-native';
+import { SafeAreaInsetsContext } from 'react-native-safe-area-context';
 
 import { colors, overlay, radius, shadows, space, type } from '@/theme';
 
@@ -48,11 +50,23 @@ export default function ModalCard({
   closeLabel,
 }: ModalCardProps) {
   const dismissLabel = closeLabel ?? `Close ${title}`;
+  // A modal is its own window: it covers the notch and the home indicator that
+  // the app's own screens are already padded away from, so on a phone the
+  // eyebrow sat beside the Dynamic Island and the footer sat under the swipe
+  // bar. Read through the context rather than the hook, which throws when
+  // there is no provider — a dialog is not the place to take an app down.
+  const insets = useContext(SafeAreaInsetsContext);
+  const safeArea = {
+    paddingTop: space.medium + (insets?.top ?? 0),
+    paddingBottom: space.medium + (insets?.bottom ?? 0),
+    paddingLeft: space.medium + (insets?.left ?? 0),
+    paddingRight: space.medium + (insets?.right ?? 0),
+  };
   return (
     <Modal animationType="fade" onRequestClose={onClose} transparent visible={visible}>
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        style={styles.root}
+        style={[styles.root, safeArea]}
       >
         {/*
           The backdrop is a sibling of the card rather than its parent, so a tap
@@ -90,7 +104,7 @@ export default function ModalCard({
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: space.medium },
+  root: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   backdrop: { ...StyleSheet.absoluteFill, backgroundColor: overlay },
   card: {
     width: '100%',

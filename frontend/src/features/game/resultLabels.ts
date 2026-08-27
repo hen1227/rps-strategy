@@ -12,6 +12,7 @@
 // writing rather than the same one formatted differently.
 
 import type { GameEndReason, PlayerColor } from '@/types/game';
+import type { GameRecord } from '@/types/protocol';
 
 /**
  * The words for *how* a game ended, or undefined when the reason adds nothing.
@@ -65,4 +66,45 @@ export const namedResultLabel = (options: {
   if (!winnerName) return `${redName} and ${blueName} drew${suffix}`;
   const loser = winnerName === redName ? blueName : redName;
   return `${winnerName} beat ${loser}${suffix}`;
+};
+
+/** The name of whoever won a stored game, or null on a draw. */
+export const recordWinnerName = (record: GameRecord) => {
+  if (record.winnerUserId === record.redPlayer.userId) return record.redPlayer.username;
+  if (record.winnerUserId === record.bluePlayer.userId) return record.bluePlayer.username;
+  return null;
+};
+
+/**
+ * `namedResultLabel` for a game the server has filed.
+ *
+ * The bot feed and a player's own history are lists of the same thing, and
+ * both were unpacking a record into the four fields above by hand. One place
+ * that knows how a `GameRecord` reads, so a row cannot say "beat" on one page
+ * and "drew" on the next for the same game.
+ */
+export const recordResultLabel = (record: GameRecord) =>
+  namedResultLabel({
+    blueName: record.bluePlayer.username,
+    endReason: record.endReason,
+    redName: record.redPlayer.username,
+    winnerName: recordWinnerName(record),
+  });
+
+/**
+ * How a stored game went for one of the two people in it.
+ *
+ * `unknown` covers the reader who was not playing — a spectator, or anybody
+ * who opened a shared link — because "not a win" and "a loss" are different
+ * things and a row must not claim the second when it means the first.
+ */
+export const resultForPlayer = (
+  record: GameRecord,
+  userId: string,
+): 'win' | 'loss' | 'draw' | 'unknown' => {
+  const seated =
+    userId === record.redPlayer.userId || userId === record.bluePlayer.userId;
+  if (!seated) return 'unknown';
+  if (!record.winnerUserId) return 'draw';
+  return record.winnerUserId === userId ? 'win' : 'loss';
 };

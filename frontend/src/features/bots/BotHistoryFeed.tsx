@@ -5,13 +5,25 @@ import { StyleSheet, Text, View } from 'react-native';
 import BotSeriesCard from './BotSeriesCard';
 import { relativeTime } from './relativeTime';
 import { failureMessage } from '@/errors';
-import { namedResultLabel } from '@/features/game/resultLabels';
-import { links } from '@/navigation/links';
+import { recordResultLabel } from '@/features/game/resultLabels';
+import { useWideScreen } from '@/hooks/useBoardLayout';
+import { useOpenGame } from '@/hooks/useOpenGame';
+import { gameReviewURL, links } from '@/navigation/links';
 import { botMatches, listBotSeries, type BotMatch, type BotSeries } from '@/store/api/bots';
 import { listTournaments } from '@/store/api/tournaments';
+import { useGameStore } from '@/store/gameStore';
 import { colors, space, type } from '@/theme';
+import CopyLinkButton from '@/ui/CopyLinkButton';
 import ListRow from '@/ui/ListRow';
-import { Badge, Banner, EmptyState, GhostButton, Panel, SectionHeading } from '@/ui/primitives';
+import {
+  Badge,
+  Banner,
+  EmptyState,
+  GhostButton,
+  GhostLink,
+  Panel,
+  SectionHeading,
+} from '@/ui/primitives';
 import type { ModeID } from '@/types/game';
 import type { Tournament } from '@/types/protocol';
 
@@ -34,6 +46,12 @@ import type { Tournament } from '@/types/protocol';
 // One component for both pages, for the reason the list it replaced gave: the
 // difference between the two is a filter, and a second copy would be a second
 // place for "what counts as bot history" to be decided.
+//
+// Every occasion in it carries its own address, because a feed is where somebody
+// looks for the game they want to *send*: a run links to its own page and copies
+// a link to it, and a bot game that belongs to no run copies a link to its
+// review. None of those addresses are built here — they come from `links.ts`,
+// which is the only thing that knows what a page is called.
 
 /** How long the feed can go without being wrong about a running series. */
 const REFRESH_MS = 20_000;
@@ -42,13 +60,6 @@ type FeedEntry =
   | { kind: 'series'; at: number; key: string; series: BotSeries }
   | { kind: 'tournament'; at: number; key: string; tournament: Tournament; games: number }
   | { kind: 'game'; at: number; key: string; match: BotMatch };
-
-/** The name of whoever won, or null on a draw. */
-const winnerName = (match: BotMatch) => {
-  if (match.winnerUserId === match.redPlayer.userId) return match.redPlayer.username;
-  if (match.winnerUserId === match.bluePlayer.userId) return match.bluePlayer.username;
-  return null;
-};
 
 /**
  * When an occasion happened, for ordering.
@@ -93,6 +104,17 @@ export default function BotHistoryFeed({
   title = 'What the bots have been playing',
 }: BotHistoryFeedProps) {
   const router = useRouter();
+  // On a phone the two buttons go under the row rather than beside it, the same
+  // way an account's own history stacks them: at 390 points a result line
+  // squeezed past both truncates to "Kestrel beat Ang…", which is the only thing
+  // the row is for.
+  const wide = useWideScreen();
+  // A run in this feed can be one somebody is playing right now, so its live
+  // column has to open the board rather than a record the archive does not have
+  // yet. The lobby's list is what tells them apart.
+  const openGame = useOpenGame();
+  const liveGames = useGameStore((state) => state.liveGames);
+  const liveGameIds = useMemo(() => liveGames.map((live) => live.gameId), [liveGames]);
   const [series, setSeries] = useState<BotSeries[]>([]);
   const [matches, setMatches] = useState<BotMatch[]>([]);
   const [tournaments, setTournaments] = useState<Tournament[]>([]);
@@ -222,7 +244,8 @@ export default function BotHistoryFeed({
                 <BotSeriesCard
                   action={seriesAction?.(entry.series)}
                   key={entry.key}
-                  onSelectGame={(gameId) => router.push(links.review(gameId))}
+                  liveGameIds={liveGameIds}
+                  onSelectGame={openGame}
                   series={entry.series}
                   when={relativeTime(entry.at)}
                 />
@@ -243,32 +266,51 @@ export default function BotHistoryFeed({
             }
             return (
               <View key={entry.key} style={styles.looseRow}>
-                <ListRow
-                  divided={false}
-                  meta={`${entry.match.modeName} · ${entry.match.moveNumber} moves · ${relativeTime(
-                    entry.at,
-                  )}`}
-                  title={namedResultLabel({
-                    blueName: entry.match.bluePlayer.username,
-                    endReason: entry.match.endReason,
-                    redName: entry.match.redPlayer.username,
-                    winnerName: winnerName(entry.match),
-                  })}
-                  trailing={
-                    <GhostButton
-                      accessibilityLabel={`Review ${entry.match.redPlayer.username} versus ${entry.match.bluePlayer.username}`}
-                      compact
-                      label="REVIEW"
-                      onPress={() => router.push(links.review(entry.match.gameId))}
-                    />
-                  }
-                />
+                <GameEntry match={entry.match} when={relativeTime(entry.at)} wide={wide} />
               </View>
             );
           })}
         </View>
       )}
     </Panel>
+  );
+}
+
+interface GameEntryProps {
+  match: BotMatch;
+  when: string;
+  wide: boolean;
+}
+
+// A bot game that belonged to no run and no event: one row, in its place in the
+// order, with the two things a row about a stored game can offer — the review,
+// and the address of that review for somebody who is not here.
+function GameEntry({ match, when, wide }: GameEntryProps) {
+  const between = `${match.redPlayer.username} versus ${match.bluePlayer.username}`;
+  const actions = (
+    <View style={[styles.actions, !wide && styles.actionsStacked]}>
+      <CopyLinkButton
+        accessibilityLabel={`Copy a link to ${between}`}
+        url={gameReviewURL(match.gameId)}
+      />
+      <GhostLink
+        accessibilityLabel={`Review ${between}`}
+        compact
+        href={links.review(match.gameId)}
+        label="REVIEW"
+      />
+    </View>
+  );
+
+  return (
+    <ListRow
+      detail={wide ? undefined : actions}
+      divided={false}
+      meta={`${match.modeName} · ${match.moveNumber} moves · ${when}`}
+      style={wide ? undefined : styles.rowStacked}
+      title={recordResultLabel(match)}
+      trailing={wide ? actions : undefined}
+    />
   );
 }
 
@@ -328,6 +370,10 @@ function TournamentEntry({ games, onOpen, tournament, when }: TournamentEntryPro
 const styles = StyleSheet.create({
   help: { ...type.body, color: colors.textFaint, marginTop: space.small },
   feed: { gap: space.small, marginTop: space.medium },
+
+  actions: { flexDirection: 'row', alignItems: 'center', gap: space.snug },
+  actionsStacked: { marginTop: space.small, marginBottom: space.tight, flexWrap: 'wrap' },
+  rowStacked: { alignItems: 'flex-start', paddingTop: space.snug },
 
   looseRow: {
     paddingHorizontal: space.medium,

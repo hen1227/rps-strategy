@@ -1,18 +1,16 @@
 // The opening book: an imported engine scan, plus the names people give its
 // lines.
 //
-// The tree itself is produced offline and published by an admin; this module
-// only reads it. The naming rules are the interesting part, and they are
-// borrowed wholesale from chess — see `openingNameForLine`.
-
-export const OPENING_BOOK_FORMAT = 'rps-opening-book/v1';
-/** The flat position graph the server stores and serves a layer at a time. */
-export const OPENING_GRAPH_FORMAT = 'rps-opening-book/v2';
+// The scan itself is produced offline and published by an admin from a shell;
+// this module only reads it. The naming rules are the interesting part, and
+// they are two: a hierarchy borrowed wholesale from chess — see `titleFor` —
+// and the fact that half the book is the other half seen in a mirror, which
+// chess has no equivalent of. See `canonicalOpeningLine`.
 
 /** A line of play, as move notation, from the opening position. */
 export type OpeningLine = string[];
 
-/** A named line, as published by an admin. */
+/** A named line, as published by a curator. */
 export interface OpeningName {
   modeId: string;
   line: OpeningLine;
@@ -29,50 +27,67 @@ export interface OpeningNameSuggestion {
   createdAtUnixMs: number;
 }
 
-/** One position in the scan, as the engine's exporter wrote it. */
-export interface OpeningNode {
-  turn: string;
-  score: number;
-  depth: number;
-  selectiveDepth: number;
-  nodes: number;
-  moves: OpeningEdge[];
-}
-
-/** One move out of a scanned position. */
-export interface OpeningEdge {
-  move: string;
-  rank: number;
-  score: number;
-  mainLine?: boolean;
-  /** True when the branch transposes back into a line already in the book. */
-  repetition?: boolean;
-  /** True when the scan reached this move but recorded no child of its own. */
-  searched?: boolean;
-  child?: OpeningNode | null;
-}
-
-/** The scan itself: what an admin pastes in, and what the server stores. */
-export interface OpeningBookDocument {
-  format: string;
-  modeId: string;
-  modeName?: string;
-  engineVersion?: string;
-  rulesVersion?: number;
-  weights?: string;
-  symmetry?: string;
-  maxPly?: number;
-  width?: number;
-  /** How many positions the scan searched, which the importer checks. */
-  positionCount: number;
-  root: OpeningNode;
-  mainLine: OpeningLine;
-}
-
 export const lineKey = (line: OpeningLine) => line.join(' ');
 
-const nameMap = (names: OpeningName[] | null | undefined) =>
-  new Map((names ?? []).map((opening) => [lineKey(opening.line ?? []), opening]));
+// ---------------------------------------------------------------------------
+// Mirror-image lines
+// ---------------------------------------------------------------------------
+//
+// Reversing files — a↔i, b↔h, c↔g, d↔f, e alone — maps every legal move onto a
+// legal move and every position onto an equivalent one, for a mode whose
+// opening layout reads the same right to left. So `d8-c7` and `f8-g7` are one
+// opening drawn twice, and the book contains both, because both are boards you
+// can reach.
+//
+// Naming has to fold them back together, or the same opening is named twice
+// and the two names drift. Of a line and its mirror, the one that sorts first
+// is the key both are stored under, on the server as well — which is why this
+// has to agree with `opening_mirror.go` exactly.
+
+const MIRRORED_FILES: Record<string, string> = {
+  a: 'i',
+  b: 'h',
+  c: 'g',
+  d: 'f',
+  e: 'e',
+  f: 'd',
+  g: 'c',
+  h: 'b',
+  i: 'a',
+};
+
+const mirrorSquare = (square: string) => (MIRRORED_FILES[square[0]] ?? square[0]) + square.slice(1);
+
+/** `d8-c7` becomes `f8-g7`. Notation this cannot read is left alone. */
+export const mirrorOpeningMove = (move: string): string => {
+  const [from, to] = move.split('-');
+  if (!from || !to) return move;
+  return `${mirrorSquare(from)}-${mirrorSquare(to)}`;
+};
+
+export const mirrorOpeningLine = (line: OpeningLine): OpeningLine => line.map(mirrorOpeningMove);
+
+/**
+ * The key a line's name is stored under.
+ *
+ * The whole line mirrors or none of it does. Mirroring move by move — taking
+ * whichever of `d8-c7` and `f8-g7` sorts first at every ply — would produce a
+ * key that is not a line anybody can play, and two real lines could collide
+ * on it.
+ *
+ * Every prefix of a canonical line is itself canonical, because the comparison
+ * turns on the first move that differs from its own mirror and every longer
+ * prefix contains it. That is what lets the hierarchy below walk prefixes.
+ */
+export const canonicalOpeningLine = (line: OpeningLine, mirrors: boolean): OpeningLine => {
+  if (!mirrors || line.length === 0) return line;
+  const mirrored = mirrorOpeningLine(line);
+  return lineKey(mirrored) < lineKey(line) ? mirrored : line;
+};
+
+// ---------------------------------------------------------------------------
+// What a line is called
+// ---------------------------------------------------------------------------
 
 /** What a line is called, and whether anybody has actually named it. */
 export interface OpeningTitle {
@@ -83,40 +98,127 @@ export interface OpeningTitle {
   suggestionNeeded: boolean;
 }
 
-// Chess names form a hierarchy: a named opening can acquire defenses and
-// variations below it without inventing a brand-new family name each time.
-// Exact human names always win. Otherwise the nearest named ancestor lends
-// its name to the last move, which keeps every branch readable while leaving
-// room for someone to give it a better name later.
-export const openingNameForLine = (
-  names: OpeningName[] | null | undefined,
-  line: OpeningLine | null | undefined,
-): OpeningTitle => {
-  if (!line?.length) {
-    return {
-      exact: false,
-      inherited: false,
-      label: 'The Opening Book',
-      namedAncestor: null,
-      suggestionNeeded: false,
-    };
+/** Every name proposed for one line, with the context a curator needs. */
+export interface OpeningSuggestionGroup {
+  /** The canonical line, so two mirrored proposals are one group. */
+  line: OpeningLine;
+  suggestions: OpeningNameSuggestion[];
+  /** The nearest named ancestor, which is what this line would hang under. */
+  ancestor: OpeningName | null;
+  /**
+   * True when the line one move shorter has no published name.
+   *
+   * Naming out of order is the thing that makes a book read strangely: a
+   * variation published under an opening nobody has named yet inherits
+   * nothing, and looks — to whoever suggested the shallower name — as though
+   * their suggestion was thrown away. The queue surfaces this rather than
+   * silently sorting around it.
+   */
+  parentUnnamed: boolean;
+}
+
+/** The naming layer of one book, indexed once and asked many times. */
+export interface OpeningNaming {
+  /** Whether this mode's lines have mirror twins at all. */
+  mirrors: boolean;
+  canonical: (line: OpeningLine) => OpeningLine;
+  /** The other line that shares this one's name, or null when it is its own. */
+  mirrorOf: (line: OpeningLine) => OpeningLine | null;
+  /** The published name for this exact line, mirror included. */
+  nameFor: (line: OpeningLine) => OpeningName | null;
+  titleFor: (line: OpeningLine) => OpeningTitle;
+  /** Everything people have proposed for this exact line, oldest first. */
+  suggestionsFor: (line: OpeningLine) => OpeningNameSuggestion[];
+  /** Every line still waiting for a name, shallowest first. */
+  queue: OpeningSuggestionGroup[];
+  namedCount: number;
+  pendingCount: number;
+}
+
+/**
+ * What the index is built from -- which is exactly what the bootstrap carries,
+ * field for field, so a screen hands it the book it already has rather than
+ * three fields it has to remember to keep in step.
+ */
+export interface OpeningNamingInput {
+  names?: OpeningName[] | null;
+  suggestions?: OpeningNameSuggestion[] | null;
+  /** True when this mode folds mirror-image lines onto one name. */
+  mirrorNaming?: boolean;
+}
+
+/**
+ * Index a book's names and open proposals.
+ *
+ * Every screen that shows a line — the hero, twenty move cards, the curator's
+ * queue — asks the same three questions about it, so they are answered from
+ * one pair of maps built once, rather than by re-scanning the name list per
+ * card as this used to.
+ */
+export const openingNaming = ({
+  names,
+  suggestions,
+  mirrorNaming: mirrors = false,
+}: OpeningNamingInput): OpeningNaming => {
+  const canonical = (line: OpeningLine) => canonicalOpeningLine(line ?? [], mirrors);
+  const keyOf = (line: OpeningLine | null | undefined) => lineKey(canonical(line ?? []));
+
+  const byLine = new Map<string, OpeningName>();
+  for (const opening of names ?? []) byLine.set(keyOf(opening.line), opening);
+
+  const proposals = new Map<string, OpeningNameSuggestion[]>();
+  for (const suggestion of suggestions ?? []) {
+    const key = keyOf(suggestion.line);
+    const group = proposals.get(key);
+    if (group) group.push(suggestion);
+    else proposals.set(key, [suggestion]);
+  }
+  // Oldest first, everywhere it is read. Part of a proposal's standing is that
+  // somebody said it first, and a list that reorders itself as names arrive is
+  // a list a curator has to re-read.
+  for (const group of proposals.values()) {
+    group.sort((first, second) => first.createdAtUnixMs - second.createdAtUnixMs);
   }
 
-  const byLine = nameMap(names);
-  const exact = byLine.get(lineKey(line));
-  if (exact) {
-    return {
-      exact: true,
-      inherited: false,
-      label: exact.name,
-      namedAncestor: exact,
-      suggestionNeeded: false,
-    };
-  }
+  const nameFor = (line: OpeningLine) => byLine.get(keyOf(line)) ?? null;
+  const suggestionsFor = (line: OpeningLine) => proposals.get(keyOf(line)) ?? [];
 
-  const lastMove = line[line.length - 1];
-  for (let length = line.length - 1; length > 0; length -= 1) {
-    const ancestor = byLine.get(lineKey(line.slice(0, length)));
+  // Chess names form a hierarchy: a named opening acquires defenses and
+  // variations below it without inventing a brand-new family name each time.
+  // Exact human names always win. Otherwise the nearest named ancestor lends
+  // its name to the last move, which keeps every branch readable while leaving
+  // room for somebody to give it a better one.
+  const ancestorOf = (line: OpeningLine): OpeningName | null => {
+    const folded = canonical(line);
+    for (let length = folded.length - 1; length > 0; length -= 1) {
+      const ancestor = byLine.get(lineKey(folded.slice(0, length)));
+      if (ancestor) return ancestor;
+    }
+    return null;
+  };
+
+  const titleFor = (line: OpeningLine | null | undefined): OpeningTitle => {
+    if (!line?.length) {
+      return {
+        exact: false,
+        inherited: false,
+        label: 'The Opening Book',
+        namedAncestor: null,
+        suggestionNeeded: false,
+      };
+    }
+    const exact = nameFor(line);
+    if (exact) {
+      return {
+        exact: true,
+        inherited: false,
+        label: exact.name,
+        namedAncestor: exact,
+        suggestionNeeded: false,
+      };
+    }
+    const lastMove = line[line.length - 1];
+    const ancestor = ancestorOf(line);
     if (ancestor) {
       return {
         exact: false,
@@ -126,15 +228,131 @@ export const openingNameForLine = (
         suggestionNeeded: true,
       };
     }
-  }
+    return {
+      exact: false,
+      inherited: false,
+      label: `Suggest a name · ${lastMove}`,
+      namedAncestor: null,
+      suggestionNeeded: true,
+    };
+  };
+
+  // Shallowest first, which is the order a book wants to be named in: an
+  // opening, then its defenses, then their variations.
+  const queue: OpeningSuggestionGroup[] = [...proposals.entries()]
+    .map(([key, group]) => {
+      const line = group[0]?.line ?? (key ? key.split(' ') : []);
+      return {
+        line: canonical(line),
+        suggestions: group,
+        ancestor: ancestorOf(line),
+        parentUnnamed: line.length > 1 && !nameFor(line.slice(0, -1)),
+      };
+    })
+    .sort(
+      (first, second) =>
+        first.line.length - second.line.length || lineKey(first.line).localeCompare(lineKey(second.line)),
+    );
 
   return {
-    exact: false,
-    inherited: false,
-    label: `Suggest a name · ${lastMove}`,
-    namedAncestor: null,
-    suggestionNeeded: true,
+    mirrors,
+    canonical,
+    mirrorOf: (line) => {
+      if (!mirrors || !line?.length) return null;
+      const mirrored = mirrorOpeningLine(line);
+      return lineKey(mirrored) === lineKey(line) ? null : mirrored;
+    },
+    nameFor,
+    titleFor,
+    suggestionsFor,
+    queue,
+    namedCount: byLine.size,
+    pendingCount: suggestions?.length ?? 0,
   };
+};
+
+// ---------------------------------------------------------------------------
+// The opening a game is playing
+// ---------------------------------------------------------------------------
+
+/**
+ * How far into a game the opening runs.
+ *
+ * The book itself goes fifty plies deep, because a scan is a search tree and a
+ * search tree is worth having deep. Names are not: nobody calls the twentieth
+ * move of a game an opening, and asking a player to name one would be asking
+ * them to name a position rather than an idea. Past this the board says
+ * nothing, which is the honest answer.
+ */
+export const OPENING_PLIES = 12;
+
+/** What a game in progress is playing, as far as the book is concerned. */
+export interface GameOpening {
+  /**
+   * The line the title describes: the deepest named prefix of the game, or —
+   * when nothing along it is named — the first move, which is where a book
+   * starts naming and where a reader would look for this opening.
+   */
+  line: OpeningLine;
+  /** The published name covering `line`, or null when nobody has given one. */
+  name: OpeningName | null;
+  title: OpeningTitle;
+  /**
+   * The shallowest prefix with no published name: the line worth naming next,
+   * and the one a "name this" prompt should open. Null when every ply within
+   * the opening already has a name.
+   *
+   * Shallowest rather than deepest on purpose. Naming out of order is the one
+   * thing that makes a book read strangely afterwards — a variation published
+   * under an opening nobody has named inherits nothing — so the line a game
+   * offers up is the one its own naming hierarchy wants first.
+   */
+  wants: OpeningLine | null;
+}
+
+/**
+ * What to call the opening of a game that has been played this far.
+ *
+ * One walk, two questions, because a game asks both at once and they have
+ * different answers: what this opening is *called* is the deepest name anybody
+ * has published along the line, and what still *wants* a name is the shallowest
+ * ply that has none. A game deep in a named opening is both — "Skipping Stone",
+ * and a fourth move nobody has titled yet.
+ */
+export const openingOfGame = (
+  naming: OpeningNaming,
+  played: OpeningLine | null | undefined,
+  plies = OPENING_PLIES,
+): GameOpening | null => {
+  const line = (played ?? []).slice(0, Math.max(0, plies));
+  if (line.length === 0) return null;
+
+  let name: OpeningName | null = null;
+  let named: OpeningLine | null = null;
+  let wants: OpeningLine | null = null;
+  for (let length = 1; length <= line.length; length += 1) {
+    const prefix = line.slice(0, length);
+    const published = naming.nameFor(prefix);
+    if (published) {
+      name = published;
+      named = prefix;
+    } else if (!wants) wants = prefix;
+  }
+
+  // One of the two always exists: every prefix is named, or one of them is the
+  // first that is not. The line itself is the answer to neither, and is here
+  // only so this cannot return something that is not a line.
+  const subject = named ?? wants ?? line;
+  return { line: subject, name, title: naming.titleFor(subject), wants };
+};
+
+export type OpeningKind = 'Book' | 'Opening' | 'Defense' | 'Variation';
+
+export const openingKind = (line: OpeningLine | null | undefined): OpeningKind => {
+  if (!line?.length) return 'Book';
+  if (line.length === 1) return 'Opening';
+  if (line.length === 2) return 'Defense';
+  return 'Variation';
 };
 
 // ---------------------------------------------------------------------------
@@ -195,6 +413,10 @@ export interface OpeningBookMeta {
  */
 export interface OpeningBookBootstrap extends OpeningBookMeta {
   names: OpeningName[];
+  /** Every name people have put forward and nobody has published yet. */
+  suggestions: OpeningNameSuggestion[];
+  /** Whether this mode's lines share their names with their mirrors. */
+  mirrorNaming?: boolean;
   root: OpeningNodeView;
   /** Every position along every featured line, deduplicated by key. */
   featuredPositions: OpeningNodeView[];
@@ -242,88 +464,63 @@ export const seedOpeningCache = (
   return cache;
 };
 
-export type OpeningKind = 'Book' | 'Opening' | 'Defense' | 'Variation';
+// ---------------------------------------------------------------------------
+// Keeping the page in step
+// ---------------------------------------------------------------------------
+//
+// Naming a line changes two things at once: the name, and the proposals that
+// were waiting for it. The server does both in one transaction, and these do
+// the same to the copy already on screen -- so a curator watches the queue
+// shorten as they work rather than after a reload, and never sees the state
+// the server has already left behind.
 
-export const openingKind = (line: OpeningLine | null | undefined): OpeningKind => {
-  if (!line?.length) return 'Book';
-  if (line.length === 1) return 'Opening';
-  if (line.length === 2) return 'Defense';
-  return 'Variation';
+const matchesLine = (book: OpeningBookBootstrap, line: OpeningLine) => {
+  const wanted = lineKey(canonicalOpeningLine(line ?? [], Boolean(book.mirrorNaming)));
+  return (candidate: OpeningLine | null | undefined) =>
+    lineKey(canonicalOpeningLine(candidate ?? [], Boolean(book.mirrorNaming))) === wanted;
 };
 
-/**
- * Walk a *nested* v1 tree. The served book is a graph now, so this is only for
- * a document pasted into the curator studio, which is still the tree shape.
- */
-export const nodeAtLine = (
-  root: OpeningNode | null | undefined,
-  line: OpeningLine | null | undefined,
-): OpeningNode | null => {
-  let node: OpeningNode | null = root ?? null;
-  for (const notation of line ?? []) {
-    const edge = node?.moves?.find((candidate) => candidate.move === notation);
-    if (!edge) return null;
-    node = edge.child ?? null;
-  }
-  return node;
+/** A published name folded in, replacing any name for the same line. */
+export const withPublishedName = (
+  book: OpeningBookBootstrap,
+  published: OpeningName,
+): OpeningBookBootstrap => {
+  const isTheLine = matchesLine(book, published.line);
+  return {
+    ...book,
+    names: [...book.names.filter((name) => !isTheLine(name.line)), published],
+    // Publishing a name answers every proposal for that line, which is exactly
+    // what the server has just done to them.
+    suggestions: book.suggestions.filter((suggestion) => !isTheLine(suggestion.line)),
+  };
 };
 
-export const exactOpeningName = (
-  names: OpeningName[] | null | undefined,
-  line: OpeningLine | null | undefined,
-): OpeningName | null =>
-  (names ?? []).find((opening) => lineKey(opening.line ?? []) === lineKey(line ?? [])) ?? null;
-
-/** A flat position graph, as `book export --format graph` writes it. */
-export interface OpeningGraphDocument {
-  format: string;
-  modeId: string;
-  modeName?: string;
-  engineVersion?: string;
-  rulesVersion?: number;
-  weights?: string;
-  symmetry?: string;
-  maxPly?: number;
-  rootKey: string;
-  positionCount: number;
-  mainLine: OpeningLine;
-  featured: OpeningLine[];
-  positions: OpeningNodeView[];
-}
-
-/** Either shape the curator studio and the import route accept. */
-export type OpeningBookUpload = OpeningBookDocument | OpeningGraphDocument;
-
-/**
- * Check a pasted file before it is uploaded.
- *
- * Both shapes are allowed: the graph is what the engine writes now, and the
- * nested tree is what older exports are. The server accepts either and stores
- * a graph, so the only thing worth catching here is a file for the wrong mode
- * or a file that is not a book at all -- the two mistakes a curator actually
- * makes, and the two the server's own error would report far less clearly.
- */
-export const validateOpeningBookDocument = (
-  book: unknown,
-  expectedModeId: string,
-): OpeningBookUpload => {
-  if (!book || typeof book !== 'object') throw new Error('Paste an opening-book JSON object.');
-  const candidate = book as Partial<OpeningBookDocument & OpeningGraphDocument>;
-  if (candidate.format !== OPENING_GRAPH_FORMAT && candidate.format !== OPENING_BOOK_FORMAT) {
-    throw new Error(`Expected ${OPENING_GRAPH_FORMAT} or ${OPENING_BOOK_FORMAT}.`);
-  }
-  if (candidate.modeId !== expectedModeId) {
-    throw new Error(`This is a ${candidate.modeId ?? 'mode-less'} book, not ${expectedModeId}.`);
-  }
-  if (!Array.isArray(candidate.mainLine)) {
-    throw new Error('The opening book has no main line.');
-  }
-  if (candidate.format === OPENING_GRAPH_FORMAT) {
-    if (!candidate.rootKey || !Array.isArray(candidate.positions) || !candidate.positions.length) {
-      throw new Error('The opening-book graph is incomplete.');
-    }
-  } else if (!candidate.root || !Array.isArray(candidate.root.moves)) {
-    throw new Error('The opening-book tree is incomplete.');
-  }
-  return candidate as OpeningBookUpload;
+/** A name taken back off a line, leaving it unnamed. */
+export const withoutOpeningName = (
+  book: OpeningBookBootstrap,
+  line: OpeningLine,
+): OpeningBookBootstrap => {
+  const isTheLine = matchesLine(book, line);
+  return { ...book, names: book.names.filter((name) => !isTheLine(name.line)) };
 };
+
+/** Somebody's new proposal, so they can see it land. */
+export const withSuggestion = (
+  book: OpeningBookBootstrap,
+  suggestion: OpeningNameSuggestion,
+): OpeningBookBootstrap => ({
+  ...book,
+  suggestions: [
+    ...book.suggestions.filter((candidate) => candidate.suggestionId !== suggestion.suggestionId),
+    suggestion,
+  ],
+});
+
+/** One proposal turned down. */
+export const withoutSuggestion = (
+  book: OpeningBookBootstrap,
+  suggestionId: number,
+): OpeningBookBootstrap => ({
+  ...book,
+  suggestions: book.suggestions.filter((candidate) => candidate.suggestionId !== suggestionId),
+});

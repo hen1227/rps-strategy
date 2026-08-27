@@ -3,8 +3,9 @@ import { StyleSheet, Text, View } from 'react-native';
 
 import { gridFromRows } from '@/engine/analysisGame';
 import MiniBoard from '@/features/board/MiniBoard';
+import { modeBackground, modeLooks } from '@/features/board/modeArt';
 import { colors, radius } from '@/theme';
-import { BOARD_SIZE, type ModeDefinition, type StartingPosition } from '@/types/game';
+import { isBoardRows, type ModeDefinition, type StartingPosition } from '@/types/game';
 
 const DEFAULT_ROWS = [
   'R.P.S.P.R',
@@ -28,11 +29,6 @@ const FRAME_PADDING = 8;
 const pieceSizeFor = (size: number) =>
   Math.max(5, Math.round((size * PREVIEW_PIECE_SIZE) / PREVIEW_SIZE));
 
-const validRows = (rows: unknown): rows is string[] =>
-  Array.isArray(rows) &&
-  rows.length === BOARD_SIZE &&
-  rows.every((row) => typeof row === 'string' && row.length === BOARD_SIZE);
-
 export interface ModePreviewProps {
   mode: ModeDefinition | null | undefined;
   /**
@@ -46,8 +42,8 @@ export interface ModePreviewProps {
 }
 
 export default function ModePreview({ mode, position, size = PREVIEW_SIZE }: ModePreviewProps) {
-  const custom = validRows(position?.rows) ? position.rows : null;
-  const rows = custom ?? (validRows(mode?.startingPosition?.rows)
+  const custom = isBoardRows(position?.rows) ? position.rows : null;
+  const rows = custom ?? (isBoardRows(mode?.startingPosition?.rows)
     ? mode.startingPosition.rows
     : DEFAULT_ROWS);
   const grid = useMemo(() => gridFromRows(rows), [rows.join('/')]);
@@ -62,6 +58,8 @@ export default function ModePreview({ mode, position, size = PREVIEW_SIZE }: Mod
       <MiniBoard
         grid={grid}
         modeId={mode?.id}
+        pieceLooks={modeLooks(mode)}
+        boardBackground={modeBackground(mode)}
         pieceSize={pieceSizeFor(size)}
         size={size - FRAME_PADDING * 2}
       />

@@ -6,8 +6,13 @@
 // `backend/internal/game`, and the comments mark the places where matching the
 // server exactly is the whole point.
 
+import { positionKey } from './positionKey';
+import { alphabetFor, specApplyMove, specMovesFor } from './spec/interpret';
 import {
   BOARD_SIZE,
+  boardHeight,
+  boardWidth,
+  isOnBoard,
   opposingColor,
   samePosition,
   type GameEndReason,
@@ -25,12 +30,13 @@ import {
 
 export { BOARD_SIZE };
 
-// The archive's squares, not a second convention: files a to i run left to
-// right and ranks 1 to 9 run from Blue's home boundary to Red's, exactly as
+// The archive's squares, not a second convention: files run left to right and
+// ranks from Blue's home boundary to Red's, exactly as
 // `backend/internal/notation` writes them. A review shows a stored game, so
 // the board it draws and the record it came from have to name a square the
-// same way.
-const FILES = 'abcdefghi';
+// same way. Twenty-six letters because a mode may be that wide; the built-in
+// modes use the first nine.
+const FILES = 'abcdefghijklmnopqrstuvwxyz';
 
 /**
  * A position with everything needed to ask the engine about it.
@@ -56,14 +62,51 @@ export interface AnalysisGame extends PositionLike {
   repetitionHistory: string[];
 }
 
-const inBounds = ({ x, y }: Position) => x >= 0 && x < BOARD_SIZE && y >= 0 && y < BOARD_SIZE;
+/**
+ * The board a mode is played on.
+ *
+ * Read off the mode's own starting position rather than assumed, because a
+ * spec-defined mode may be any rectangle. `BOARD_SIZE` is the fallback for a
+ * synthetic mode built without one — a PGN whose tags were incomplete, say —
+ * and never a bound on anything.
+ */
+export const modeBoardShape = (
+  mode: Pick<ModeDefinition, 'startingPosition'> | null | undefined,
+): { columns: number; rows: number } => {
+  const rows = mode?.startingPosition?.rows;
+  if (!rows?.length) return { columns: BOARD_SIZE, rows: BOARD_SIZE };
+  return { columns: rows[0]?.length ?? BOARD_SIZE, rows: rows.length };
+};
 
-const canCapture = (attacker: PlayablePiece, defender: PlayablePiece) =>
+export const canCapture = (attacker: PlayablePiece, defender: PlayablePiece) =>
   (attacker === 'Rock' && defender === 'Scissors') ||
   (attacker === 'Scissors' && defender === 'Paper') ||
   (attacker === 'Paper' && defender === 'Rock');
 
-const PIECES: Record<string, { occupant: PlayablePiece; occupantOwner: SideColor }> = {
+// The hierarchy is a single three-cycle, so each kind has exactly one of each.
+// Named after `PieceKind::predator` and `::prey` in `RPSFish/src/model.rs` so
+// that a rule expressed in one language is greppable in the other two.
+
+/** The one kind that captures this one. */
+export const predatorOf = (piece: PlayablePiece): PlayablePiece =>
+  piece === 'Rock' ? 'Paper' : piece === 'Paper' ? 'Scissors' : 'Rock';
+
+/** The one kind this one captures. */
+export const preyOf = (piece: PlayablePiece): PlayablePiece =>
+  piece === 'Rock' ? 'Scissors' : piece === 'Paper' ? 'Rock' : 'Paper';
+
+/**
+ * What one letter in a layout means: which kind, and whose.
+ *
+ * Upper case is Blue and lower case is Red, which is the whole of the
+ * convention. A mode that declares its own pieces brings its own alphabet —
+ * `alphabetFor` in `spec/interpret.ts` builds one — because `L` is a Lizard in
+ * a mode that has one and nothing at all in a mode that does not.
+ */
+export type PieceAlphabet = Record<string, { occupant: PlayablePiece; occupantOwner: SideColor }>;
+
+/** The letters the built-in modes are written with. */
+export const STANDARD_ALPHABET: PieceAlphabet = {
   R: { occupant: 'Rock', occupantOwner: 'Blue' },
   P: { occupant: 'Paper', occupantOwner: 'Blue' },
   S: { occupant: 'Scissors', occupantOwner: 'Blue' },
@@ -78,10 +121,13 @@ const PIECES: Record<string, { occupant: PlayablePiece; occupantOwner: SideColor
  * Exported because a diagram of a starting position has rows and no game: the
  * lobby thumbnail draws one before anybody has played a move.
  */
-export const gridFromRows = (rows: readonly string[] | undefined): Grid =>
-  Array.from({ length: BOARD_SIZE }, (_unusedRow, y) =>
-    Array.from({ length: BOARD_SIZE }, (_unusedTile, x): Tile => {
-      const piece = PIECES[rows?.[y]?.[x] ?? ''];
+export const gridFromRows = (
+  rows: readonly string[] | undefined,
+  alphabet: PieceAlphabet = STANDARD_ALPHABET,
+): Grid =>
+  Array.from({ length: rows?.length ?? BOARD_SIZE }, (_unusedRow, y) =>
+    Array.from({ length: rows?.[y]?.length ?? BOARD_SIZE }, (_unusedTile, x): Tile => {
+      const piece = alphabet[rows?.[y]?.[x] ?? ''];
       return {
         x,
         y,
@@ -92,13 +138,14 @@ export const gridFromRows = (rows: readonly string[] | undefined): Grid =>
     }),
   );
 
-const repetitionKey = (game: PositionLike): string =>
-  JSON.stringify([
-    game.currentTurn,
-    game.grid.map((row) =>
-      row.map((tile) => [tile.occupant, tile.occupantOwner, tile.ownerColor]),
-    ),
-  ]);
+/**
+ * Everything about a position that decides whether it has been seen before.
+ *
+ * The answer itself lives in `positionKey.ts` so the spec interpreter can reach
+ * it without importing this module back.
+ */
+export const repetitionKey = (game: PositionLike): string =>
+  positionKey(game.grid, game.currentTurn);
 
 const newGame = (mode: ModeDefinition, grid: Grid, currentTurn: SideColor): AnalysisGame => {
   const game = {
@@ -117,22 +164,38 @@ const newGame = (mode: ModeDefinition, grid: Grid, currentTurn: SideColor): Anal
 export const createAnalysisGame = (
   mode: ModeDefinition,
   startingPosition: StartingPosition | undefined = mode.startingPosition,
-): AnalysisGame => newGame(mode, gridFromRows(startingPosition?.rows), 'Red');
+): AnalysisGame =>
+  newGame(mode, gridFromRows(startingPosition?.rows, alphabetOf(mode)), 'Red');
 
-const SYMBOL_BY_PIECE: Record<SideColor, Record<PlayablePiece, string>> = {
-  Blue: { Rock: 'R', Paper: 'P', Scissors: 'S' },
-  Red: { Rock: 'r', Paper: 'p', Scissors: 's' },
+/**
+ * The letters this mode's layouts are written with.
+ *
+ * A spec-defined mode declares its own pieces, so its alphabet comes from the
+ * spec; a built-in mode uses the standard six. This is the one place the two
+ * meet, so nothing else has to know which kind of mode it is holding.
+ */
+export const alphabetOf = (mode: ModeDefinition | null | undefined): PieceAlphabet =>
+  mode?.spec ? alphabetFor(mode.spec) : STANDARD_ALPHABET;
+
+/** `gridFromRows` backwards: the letter a tile is written with. */
+const pieceSymbol = (tile: Tile | undefined, alphabet: PieceAlphabet): string => {
+  if (!tile || tile.occupant === 'Empty' || tile.occupantOwner === 'Neutral') return '.';
+  for (const [symbol, piece] of Object.entries(alphabet)) {
+    if (piece.occupant === tile.occupant && piece.occupantOwner === tile.occupantOwner) {
+      return symbol;
+    }
+  }
+  return '.';
 };
 
-const pieceSymbol = (tile: Tile | undefined): string => {
-  if (!tile || tile.occupant === 'Empty') return '.';
-  if (tile.occupantOwner === 'Neutral') return '.';
-  return SYMBOL_BY_PIECE[tile.occupantOwner][tile.occupant] ?? '.';
-};
-
-export const startingPositionFromGrid = (grid: Grid | undefined): StartingPosition => ({
-  rows: Array.from({ length: BOARD_SIZE }, (_unusedRow, y) =>
-    Array.from({ length: BOARD_SIZE }, (_unusedTile, x) => pieceSymbol(grid?.[y]?.[x])).join(''),
+export const startingPositionFromGrid = (
+  grid: Grid | undefined,
+  alphabet: PieceAlphabet = STANDARD_ALPHABET,
+): StartingPosition => ({
+  rows: Array.from({ length: boardHeight(grid) }, (_unusedRow, y) =>
+    Array.from({ length: boardWidth(grid) }, (_unusedTile, x) =>
+      pieceSymbol(grid?.[y]?.[x], alphabet),
+    ).join(''),
   ),
 });
 
@@ -154,34 +217,54 @@ export const createAnalysisGameFrom = (
     currentTurn === 'Blue' ? 'Blue' : 'Red',
   );
 
-export const validMovesFor = (
-  game: AnalysisGame | null | undefined,
+/**
+ * The squares one piece could step to, whoever's turn it is.
+ *
+ * The movement rule on its own, with no game around it: eight neighbours, minus
+ * the ones holding a friend, minus the ones holding an enemy this kind does not
+ * beat. `validMovesFor` is this plus the turn, and the reach maps in
+ * `engine/reach.ts` are this without one — asking where a piece *could* go is
+ * not a question about whose move it is, and there must not be a second copy of
+ * the rule to answer it.
+ */
+export const stepTargets = (
+  grid: Grid,
   from: Position,
+  mover: SideColor,
+  piece: PlayablePiece,
 ): Position[] => {
-  if (!game || game.status !== 'InProgress' || !inBounds(from)) return [];
-  const source = game.grid[from.y]?.[from.x];
-  if (!source || source.occupantOwner !== game.currentTurn) return [];
-  if (source.occupant === 'Empty') return [];
-
+  if (!isOnBoard(grid, from)) return [];
   const result: Position[] = [];
   for (let yOffset = -1; yOffset <= 1; yOffset += 1) {
     for (let xOffset = -1; xOffset <= 1; xOffset += 1) {
       if (xOffset === 0 && yOffset === 0) continue;
       const to = { x: from.x + xOffset, y: from.y + yOffset };
-      if (!inBounds(to)) continue;
-      const destination = game.grid[to.y]?.[to.x];
+      if (!isOnBoard(grid, to)) continue;
+      const destination = grid[to.y]?.[to.x];
       if (!destination) continue;
-      if (destination.occupantOwner === game.currentTurn) continue;
-      if (
-        destination.occupant !== 'Empty' &&
-        !canCapture(source.occupant, destination.occupant)
-      ) {
+      if (destination.occupantOwner === mover) continue;
+      if (destination.occupant !== 'Empty' && !canCapture(piece, destination.occupant)) {
         continue;
       }
       result.push(to);
     }
   }
   return result;
+};
+
+export const validMovesFor = (
+  game: AnalysisGame | null | undefined,
+  from: Position,
+): Position[] => {
+  if (!game || game.status !== 'InProgress' || !isOnBoard(game.grid, from)) return [];
+  // A mode that brought its own rules is played by them. Every screen goes
+  // through this function, so this one line is what makes a mode somebody
+  // invented playable on the analysis board, against a bot, and in a replay.
+  if (game.mode.spec) return specMovesFor(game.mode.spec, game, from);
+  const source = game.grid[from.y]?.[from.x];
+  if (!source || source.occupantOwner !== game.currentTurn) return [];
+  if (source.occupant === 'Empty' || source.occupantOwner === 'Neutral') return [];
+  return stepTargets(game.grid, from, source.occupantOwner, source.occupant);
 };
 
 const countPieces = (grid: Grid, color: PlayerColor) =>
@@ -225,6 +308,7 @@ export const applyAnalysisMove = (
   from: Position,
   to: Position,
 ): AppliedMove | null => {
+  if (game.mode.spec) return specApplyMove(game.mode.spec, game, from, to);
   if (!validMovesFor(game, from).some((candidate) => samePosition(candidate, to))) {
     return null;
   }
@@ -272,7 +356,8 @@ export const applyAnalysisMove = (
     decide(mover, 'annihilation');
   } else if (
     game.mode.id === 'V3' &&
-    ((mover === 'Red' && to.y === 0) || (mover === 'Blue' && to.y === BOARD_SIZE - 1))
+    ((mover === 'Red' && to.y === 0) ||
+      (mover === 'Blue' && to.y === boardHeight(grid) - 1))
   ) {
     decide(mover, 'infiltration');
   } else if (game.mode.id === 'V5') {
@@ -344,6 +429,15 @@ export const allValidMoves = (game: AnalysisGame | null | undefined): Move[] => 
   }
   return moves;
 };
+
+/**
+ * The one letter a kind is written with: `R`, `P`, `S`.
+ *
+ * Case-free, unlike the record's `RPSrps` symbols, because this names a kind
+ * rather than a kind belonging to a side — an overlay says `R5` and colours it
+ * to say whose rock it is.
+ */
+export const pieceLetter = (piece: PlayablePiece) => piece.charAt(0).toUpperCase();
 
 export const squareLabel = ({ x, y }: Position) => `${FILES[x] ?? '?'}${y + 1}`;
 

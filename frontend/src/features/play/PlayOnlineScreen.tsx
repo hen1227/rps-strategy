@@ -2,7 +2,9 @@ import { useRouter } from 'expo-router';
 import { useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
-import GameSetupEditor from './GameSetupEditor';
+import GameSettingsModal from './GameSettingsModal';
+import LocalPlayPanel from './LocalPlayPanel';
+import LiveNowPanel from '@/features/live/LiveNowPanel';
 import MatchAlertsPanel from '@/features/queue/MatchAlertsPanel';
 import HowToPlayModal from '@/features/game/HowToPlayModal';
 import ModePreview from '@/features/game/ModePreview';
@@ -18,13 +20,12 @@ import { links } from '@/navigation/links';
 import { useGameStore } from '@/store/gameStore';
 import { useReviewHandoff } from '@/store/reviewHandoff';
 import {
-  customizationCount,
   hasCustomPosition,
   isStandardSetup,
   setupSummary,
   standardSetup,
 } from '@/store/setupSelectors';
-import { playerName } from '@/store/spectateSelectors';
+import { titledName } from '@/store/spectateSelectors';
 import { colors, contentWidth, radius, space, type } from '@/theme';
 import ListRow from '@/ui/ListRow';
 import ScreenShell from '@/ui/ScreenShell';
@@ -78,11 +79,11 @@ export default function PlayOnlineScreen() {
   // Null until somebody touches a knob, so the draft follows the mode catalog
   // as it arrives instead of being pinned to whatever was known at first render.
   const [draft, setDraft] = useState<GameSetup | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [positionOpen, setPositionOpen] = useState(false);
   const [pgnOpen, setPgnOpen] = useState(false);
 
   const isConnected = connectionStatus === 'connected';
-  const isWide = useWideScreen();
   // A retired mode keeps its analysis board but accepts no new matches.
   const playableModes = useMemo(() => modes.filter((mode) => mode.playable !== false), [modes]);
   const retiredModes = useMemo(() => modes.filter((mode) => mode.playable === false), [modes]);
@@ -96,6 +97,7 @@ export default function PlayOnlineScreen() {
   // seek the moment a game starts.
   const gate = useLobbyGate();
   const queueCall = useQueueCall();
+  const wide = useWideScreen();
   // Empty is not a mistake here: it is what makes the game open to the lobby.
   const namedOpponent = challengeUsername.trim();
 
@@ -107,9 +109,32 @@ export default function PlayOnlineScreen() {
   // on the board that would never appear.
   const setupIsPlainSearch =
     Boolean(setup) && !namedOpponent && isStandardSetup(setup!, setupMode, defaultTimeControl);
-  const setupChanges = setup ? customizationCount(setup, setupMode, defaultTimeControl) : 0;
+  // Who ends up with this game: the one thing about it the preview card cannot
+  // read off the setup, and the difference between posting a game and queueing.
+  const setupAudience = namedOpponent
+    ? `Only ${namedOpponent} can take it.`
+    : setupIsPlainSearch
+      ? 'Nothing is changed, so this is the standard rated game.'
+      : 'Anyone in the lobby can take it.';
 
   const resetDraft = () => setDraft(null);
+
+  // The game being written out, drawn once and hung in whichever place the
+  // width allows: its own column beside the form, or — on a phone, where there
+  // is no beside — straight under the heading, above the fields. Wrapping it to
+  // the end of the column instead left it *below the button*, which is the one
+  // position that makes a preview useless: the decision it exists to inform has
+  // already been taken by the time you scroll to it.
+  const setupCard = setup ? (
+    <SetupPreview
+      caption={setupAudience}
+      defaultTimeControl={defaultTimeControl}
+      mode={setupMode}
+      setup={setup}
+      size="feature"
+      stretch={!wide}
+    />
+  ) : null;
 
   // Somebody else's open games. Your own is already shown as outgoing, and the
   // server would refuse it anyway.
@@ -126,7 +151,7 @@ export default function PlayOnlineScreen() {
           <SectionHeading eyebrow="INVITES" title="Your challenges" />
           <View style={styles.inbox}>
             {incomingChallenges.map((challenge) => {
-              const from = playerName(challenge.challenger, 'Another player');
+              const from = titledName(challenge.challenger, 'Another player');
               const accepting = acceptingChallengeId === challenge.id;
               return (
                 <ListRow
@@ -134,10 +159,10 @@ export default function PlayOnlineScreen() {
                   key={challenge.id}
                   leading={
                     <SetupPreview
-                      compact
                       defaultTimeControl={defaultTimeControl}
                       mode={modes.find((mode) => mode.id === challenge.setup.modeId)}
                       setup={challenge.setup}
+                      size="compact"
                     />
                   }
                   meta={`${challenge.modeName} · ${setupSummary(
@@ -156,14 +181,22 @@ export default function PlayOnlineScreen() {
                         label="DECLINE"
                         onPress={() => declineChallenge(challenge.id)}
                       />
-                      <PrimaryButton
-                        accessibilityLabel={`Accept the challenge from ${from}`}
-                        compact
-                        disabled={gate.atBoard}
-                        label="ACCEPT"
-                        loading={accepting}
-                        onPress={() => acceptChallenge(challenge.id)}
-                      />
+                      {gate.needsAccount && !challenge.setup.casual ? (
+                        <TakeGameButton
+                          accessibilityLabel={`Accept the challenge from ${from}`}
+                          locked
+                          onPlay={() => acceptChallenge(challenge.id)}
+                        />
+                      ) : (
+                        <PrimaryButton
+                          accessibilityLabel={`Accept the challenge from ${from}`}
+                          compact
+                          disabled={gate.atBoard}
+                          label="ACCEPT"
+                          loading={accepting}
+                          onPress={() => acceptChallenge(challenge.id)}
+                        />
+                      )}
                     </View>
                   }
                 />
@@ -174,10 +207,10 @@ export default function PlayOnlineScreen() {
                 divided={false}
                 leading={
                   <SetupPreview
-                    compact
                     defaultTimeControl={defaultTimeControl}
                     mode={modes.find((mode) => mode.id === outgoingChallenge.setup.modeId)}
                     setup={outgoingChallenge.setup}
+                    size="compact"
                   />
                 }
                 meta={`${setupSummary(
@@ -294,10 +327,20 @@ export default function PlayOnlineScreen() {
                         />
                       ) : (
                         <PrimaryButton
-                          accessibilityLabel={`Play ${mode.name} online`}
+                          accessibilityLabel={
+                            gate.needsAccount
+                              ? `Play ${mode.name} online, casually`
+                              : `Play ${mode.name} online`
+                          }
                           compact
                           disabled={gate.atBoard || Boolean(outgoingChallenge)}
-                          label={isConnected ? 'PLAY ▶' : 'CONNECTING'}
+                          label={
+                            isConnected
+                              ? gate.needsAccount
+                                ? 'PLAY CASUAL ▶'
+                                : 'PLAY ▶'
+                              : 'CONNECTING'
+                          }
                           onPress={() => joinQueue(mode.id)}
                         />
                       )}
@@ -310,48 +353,49 @@ export default function PlayOnlineScreen() {
         </View>
       </View>
 
+      {/*
+        What is on, for the screens with no room for the rail beside them. The
+        rail is the wide layout's answer to the same question, so a screen that
+        has one does not want this as well.
+      */}
+      {wide ? null : <LiveNowPanel />}
+
       <MatchAlertsPanel />
+
+      {/*
+        Gated on already being at a board, and deliberately *not* on `gate`,
+        which reads a disconnected socket as a reason to start nothing. Every
+        other way into a game on this page needs the server; this one is the
+        answer for when it is down, so the gate that serves them would take it
+        away at precisely the moment it is the only thing that still works.
+      */}
+      <LocalPlayPanel disabled={Boolean(gameState)} modes={playableModes} />
 
       {setup ? (
         <Panel>
-          <SectionHeading
-            eyebrow="CUSTOM GAMES"
-            title="Set up your own game"
-            trailing={
-              <Badge
-                label={setupChanges === 0 ? 'STANDARD' : `${setupChanges} CHANGED`}
-                tone={setupChanges === 0 ? 'neutral' : 'accent'}
-              />
-            }
-          />
-          <Text style={styles.help}>
-            This is the ordinary game with the knobs exposed. Change nothing and the button
-            below just finds you a match; change something and it becomes a game of your own,
-            posted to the board or sent to one person.
-          </Text>
+          {/*
+            The game itself on the right, at the size a thing you are about to
+            put in front of a stranger deserves. Without it this was a form with
+            a summary line in it, which reads as a second way to press play —
+            and the rows on the open board below are drawn from exactly this
+            preview, so seeing it here is seeing what they will see.
 
-          <View style={[styles.builder, isWide && styles.builderWide]}>
-            <View style={styles.builderControls}>
-              <GameSetupEditor
-                defaultTimeControl={defaultTimeControl}
-                disabled={Boolean(outgoingChallenge)}
-                modes={playableModes}
-                onChange={setDraft}
-                onEditPosition={() => setPositionOpen(true)}
-                onResetPosition={() =>
-                  setupMode
-                    ? setDraft({ ...setup, startingPosition: setupMode.startingPosition })
-                    : undefined
-                }
-                positionIsCustom={hasCustomPosition(setup, setupMode)}
-                setup={setup}
-              />
+            The heading comes inside the row rather than sitting above it, so
+            the card runs the full height of the panel instead of hanging off
+            the top of a form that is shorter than it is.
+          */}
+          <View style={[styles.challengeBody, wide && styles.challengeBodyWide]}>
+            <View style={[styles.challengeForm, wide && styles.challengeFormWide]}>
+              <View>
+                <SectionHeading eyebrow="CUSTOM GAMES" title="Create a challenge" />
+                <Text style={styles.help}>
+                  Name a player to invite them directly, or leave it blank to make the game open
+                  to anyone.
+                </Text>
+              </View>
 
-              {/*
-                Who the game is for is a *property* of it, not a different kind
-                of thing — the server takes the same message either way — so it
-                is one optional field rather than a second set of buttons.
-              */}
+              {wide ? null : setupCard}
+
               <View style={styles.opponentField}>
                 <Text style={styles.groupLabel}>OPPONENT — OPTIONAL</Text>
                 <TextInput
@@ -361,7 +405,7 @@ export default function PlayOnlineScreen() {
                   editable={!outgoingChallenge}
                   maxLength={40}
                   onChangeText={setChallengeUsername}
-                  placeholder="Leave blank for anyone"
+                  placeholder="Username or anyone"
                   placeholderTextColor={colors.textFaint}
                   returnKeyType="done"
                   selectionColor={colors.accent}
@@ -369,51 +413,78 @@ export default function PlayOnlineScreen() {
                   value={challengeUsername}
                 />
               </View>
+
+              <View style={styles.settingsRow}>
+                <View style={styles.settingsCopy}>
+                  <Text style={styles.groupLabel}>GAME SETUP</Text>
+                  <Text style={styles.settingsBlurb}>
+                    Mode, clock, stakes, which side you play, the opening position, and the rules
+                    you drop.
+                  </Text>
+                </View>
+                <GhostButton
+                  accessibilityLabel="Adjust game settings"
+                  disabled={Boolean(outgoingChallenge)}
+                  label="GAME SETTINGS"
+                  onPress={() => setSettingsOpen(true)}
+                />
+              </View>
+
+              {/*
+                Pushed to the bottom of its column rather than sitting under the
+                last field, so the thing you press and the game you are pressing
+                it about finish on the same line.
+              */}
+              <View style={styles.builderAction}>
+                <View style={styles.builderButton}>
+                  <PrimaryButton
+                    accessibilityLabel={
+                      namedOpponent
+                        ? `Challenge ${namedOpponent}`
+                        : setupIsPlainSearch
+                          ? 'Find a match'
+                          : 'Post this game to the lobby'
+                    }
+                    disabled={gate.atBoard || gate.seekTaken}
+                    label={
+                      namedOpponent
+                        ? `CHALLENGE ${namedOpponent.toUpperCase()} ▶`
+                        : setupIsPlainSearch
+                          ? 'FIND A GAME ▶'
+                          : 'POST THIS GAME ▶'
+                    }
+                    onPress={() => {
+                      const sent = namedOpponent
+                        ? challengePlayer(namedOpponent, setup)
+                        : postOpenChallenge(setup);
+                      if (!sent) return;
+                      setChallengeUsername('');
+                      resetDraft();
+                      setSettingsOpen(false);
+                    }}
+                  />
+                  {/*
+                    What the button does, not who the game is for — the preview's
+                    caption has already said that, and saying it twice under two
+                    different headings is how a panel stops being read at all.
+                  */}
+                  <Text style={styles.actionHint}>
+                    {namedOpponent
+                      ? 'It waits ten minutes for them to answer.'
+                      : setupIsPlainSearch
+                        ? 'You go straight into matchmaking.'
+                        : 'It sits on the open board for ten minutes, and pairs you at once with anybody waiting for the same game.'}
+                  </Text>
+                  {gate.needsAccount ? (
+                    <Text style={styles.actionHint}>
+                      Casual while you are signed out. Sign in with Discord to play for a rating.
+                    </Text>
+                  ) : null}
+                </View>
+              </View>
             </View>
 
-            {/* The thing itself, as everybody else will see it on the board. */}
-            <View style={styles.builderPreview}>
-              <SetupPreview
-                defaultTimeControl={defaultTimeControl}
-                mode={setupMode}
-                setup={setup}
-              />
-            </View>
-          </View>
-
-          <View style={styles.builderAction}>
-            <PrimaryButton
-              accessibilityLabel={
-                namedOpponent
-                  ? `Challenge ${namedOpponent}`
-                  : setupIsPlainSearch
-                    ? 'Find a match'
-                    : 'Post this game to the lobby'
-              }
-              disabled={gate.atBoard || gate.seekTaken}
-              label={
-                namedOpponent
-                  ? `CHALLENGE ${namedOpponent.toUpperCase()} ▶`
-                  : setupIsPlainSearch
-                    ? 'FIND A GAME ▶'
-                    : 'POST THIS GAME ▶'
-              }
-              onPress={() => {
-                const sent = namedOpponent
-                  ? challengePlayer(namedOpponent, setup)
-                  : postOpenChallenge(setup);
-                if (!sent) return;
-                setChallengeUsername('');
-                resetDraft();
-              }}
-            />
-            <Text style={styles.actionHint}>
-              {namedOpponent
-                ? `Only ${namedOpponent} will see it. It waits ten minutes.`
-                : setupIsPlainSearch
-                  ? 'Nothing is changed, so this is an ordinary rated match: you go straight into matchmaking.'
-                  : 'It goes on the open board for ten minutes, and pairs you at once with anybody waiting for the same game.'}
-            </Text>
+            {wide ? setupCard : null}
           </View>
         </Panel>
       ) : null}
@@ -445,7 +516,7 @@ export default function PlayOnlineScreen() {
             */}
             {otherOpenChallenges.map((challenge, index) => {
               const mode = modes.find((candidate) => candidate.id === challenge.setup.modeId);
-              const who = playerName(challenge.challenger, 'Someone');
+              const who = titledName(challenge.challenger, 'Someone');
               return (
                 <ListRow
                   divided={index > 0}
@@ -463,17 +534,15 @@ export default function PlayOnlineScreen() {
                   style={styles.setupRow}
                   title={who}
                   trailing={
-                    <PrimaryButton
+                    <TakeGameButton
                       accessibilityLabel={`Play ${who}: ${setupSummary(
                         challenge.setup,
                         mode,
                         defaultTimeControl,
                       )}`}
-                      compact
-                      disabled={gate.atBoard}
-                      label="PLAY ▶"
                       loading={acceptingChallengeId === challenge.id}
-                      onPress={() => acceptChallenge(challenge.id)}
+                      locked={gate.needsAccount && !challenge.setup.casual}
+                      onPlay={() => acceptChallenge(challenge.id)}
                     />
                   }
                 />
@@ -488,6 +557,30 @@ export default function PlayOnlineScreen() {
         onClose={() => setHowToPlayMode(null)}
         visible={Boolean(howToPlayMode)}
       />
+      {setup ? (
+        <GameSettingsModal
+          defaultTimeControl={defaultTimeControl}
+          disabled={Boolean(outgoingChallenge)}
+          mode={setupMode}
+          modes={playableModes}
+          onChange={setDraft}
+          onClose={() => setSettingsOpen(false)}
+          onEditPosition={() => {
+            setSettingsOpen(false);
+            setPositionOpen(true);
+          }}
+          onReset={resetDraft}
+          onResetPosition={() =>
+            setupMode
+              ? setDraft({ ...setup, startingPosition: setupMode.startingPosition })
+              : undefined
+          }
+          positionIsCustom={hasCustomPosition(setup, setupMode)}
+          rankedLocked={gate.needsAccount}
+          setup={setup}
+          visible={settingsOpen}
+        />
+      ) : null}
       <PositionSetupModal
         initialPosition={setup?.startingPosition ?? null}
         mode={setupMode}
@@ -495,8 +588,12 @@ export default function PlayOnlineScreen() {
         onApply={(position) => {
           if (setup) setDraft({ ...setup, startingPosition: position });
           setPositionOpen(false);
+          setSettingsOpen(true);
         }}
-        onClose={() => setPositionOpen(false)}
+        onClose={() => {
+          setPositionOpen(false);
+          setSettingsOpen(true);
+        }}
         title="Custom game setup"
         visible={positionOpen}
       />
@@ -557,20 +654,48 @@ const styles = StyleSheet.create({
   help: { ...type.body, color: colors.textMuted, marginTop: space.small },
   groupLabel: { ...type.eyebrow, color: colors.textFaint, marginBottom: space.tight },
 
-  // Controls on one side, the game they describe on the other. Narrow screens
-  // stack them, which puts the preview directly above the button that posts it.
-  builder: { gap: space.large, marginTop: space.small },
-  builderWide: { flexDirection: 'row', alignItems: 'flex-start' },
-  builderControls: { flex: 1, gap: space.medium },
-  builderPreview: { alignItems: 'center' },
-  builderAction: { gap: space.snug, marginTop: space.large, maxWidth: 420 },
+  // The form and the game it describes, side by side. The panel used to run out
+  // of things to say a third of the way across the page, which made writing a
+  // game out look like a smaller act than pressing PLAY on a mode card.
+  // A column on a phone and two columns on a desktop, chosen rather than
+  // wrapped: the order of a wrapped row is the order of the source, and the
+  // source order that reads correctly beside the form — form, then game — is
+  // the wrong one underneath it.
+  challengeBody: { gap: space.large },
+  challengeBodyWide: { flexDirection: 'row', alignItems: 'stretch' },
+  challengeForm: { flex: 1, gap: space.medium },
+  // A floor for the form's column, so the preview beside it cannot squeeze the
+  // fields down to a stack of labels — and a floor a phone must not honour,
+  // since 300 points of minimum on a 320-point screen is an overflow.
+  challengeFormWide: { minWidth: 300 },
+  settingsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: space.medium,
+    padding: space.medium,
+    borderRadius: radius.medium,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceSunken,
+  },
+  settingsCopy: { flex: 1, minWidth: 220 },
+  settingsBlurb: { ...type.bodyStrong, color: colors.textSoft },
+  builderAction: {
+    marginTop: 'auto',
+    paddingTop: space.medium,
+      width: '100%',
+    borderTopWidth: 1,
+    borderTopColor: colors.borderSoft,
+  },
+  builderButton: { gap: space.snug },
   actionHint: { ...type.meta, color: colors.textFaint },
 
   // A row carrying a board is taller than one carrying two lines of text, and
   // centring the copy against it reads as two unrelated things side by side.
   setupRow: { alignItems: 'flex-start', paddingVertical: space.small },
 
-  opponentField: { flexGrow: 1, flexBasis: 220, width: '100%' },
+  opponentField: { alignSelf: 'stretch' },
   // A username is short. Letting the field run the width of a desktop panel
   // made it look like the main event rather than an optional detail.
   input: {
@@ -588,3 +713,45 @@ const styles = StyleSheet.create({
   disabled: { opacity: 0.35 },
   pressed: { opacity: 0.7 },
 });
+
+/**
+ * The button on somebody else's game: play it, or go and get an account.
+ *
+ * A guest is refused a rated game by the server, because the setup belongs to
+ * whoever posted it — silently turning their game casual would change what they
+ * advertised. So rather than greying the control out, this offers the thing
+ * that would make it work. Casual rows are unaffected and stay playable.
+ */
+function TakeGameButton({
+  accessibilityLabel,
+  loading,
+  locked,
+  onPlay,
+}: {
+  accessibilityLabel: string;
+  loading?: boolean;
+  locked: boolean;
+  onPlay: () => void;
+}) {
+  const router = useRouter();
+  if (locked) {
+    return (
+      <PrimaryButton
+        accessibilityLabel="Sign in to play ranked games"
+        compact
+        label="SIGN IN"
+        onPress={() => router.push(links.account())}
+        tone="quiet"
+      />
+    );
+  }
+  return (
+    <PrimaryButton
+      accessibilityLabel={accessibilityLabel}
+      compact
+      label="PLAY ▶"
+      loading={loading}
+      onPress={onPlay}
+    />
+  );
+}

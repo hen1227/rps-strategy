@@ -12,10 +12,14 @@ import type { ModeID, TimeControl } from '@/types/game';
 import type {
   Account,
   AccountKind,
+  BotDrain,
   BotPresence,
   GameRecord,
+  TitleID,
   Tournament,
 } from '@/types/protocol';
+
+export type { BotDrain };
 
 const request = apiClient('bot registry');
 
@@ -27,20 +31,69 @@ export interface SessionReply {
   account: Account;
 }
 
-export const registerAccount = (
-  profileKey: string,
-  userId: string,
-  username: string,
-  password: string,
-  reservationToken = '',
+/**
+ * Begin a Discord sign-in.
+ *
+ * The credential is optional and says who is asking. A session token means an
+ * account with a password is linking Discord to itself; a profile key plus the
+ * matching user id means this browser is asking for its anonymous account to be
+ * upgraded in place, keeping its rating and its games. Neither means a new
+ * account.
+ *
+ * The reply is a URL to send the player to, not a redirect: a `fetch` that
+ * followed one to discord.com would be stopped by CORS, and a top-level
+ * navigation could not have carried the credential above.
+ */
+export const startDiscordAuth = (
+  returnTo: string,
+  identity: { userId: string; credential: string | null },
 ) =>
-  request<SessionReply>('/api/auth/register', {
+  request<{ authorizeUrl: string }>('/api/auth/discord/start', {
     method: 'POST',
-    token: profileKey,
-    body: { userId, username, password, reservationToken },
-    what: 'Registering',
+    token: identity.credential,
+    body: { returnTo, userId: identity.userId },
+    what: 'Starting Discord sign-in',
   });
 
+/**
+ * What redeeming a ticket produced: a session, or a request for a username.
+ *
+ * Which one depends on facts only the server has — whether this Discord account
+ * has been seen before — so the app cannot know in advance and has to branch on
+ * `needsUsername`.
+ */
+export interface DiscordExchangeReply {
+  account?: Account;
+  token?: string;
+  needsUsername?: boolean;
+  suggestedUsername?: string;
+  discordHandle?: string;
+}
+
+export const exchangeDiscordTicket = (ticket: string) =>
+  request<DiscordExchangeReply>('/api/auth/discord/exchange', {
+    method: 'POST',
+    body: { ticket },
+    what: 'Finishing Discord sign-in',
+  });
+
+export const completeDiscordSignup = (
+  ticket: string,
+  username: string,
+  reservationToken = '',
+) =>
+  request<SessionReply>('/api/auth/discord/complete', {
+    method: 'POST',
+    body: { ticket, username, reservationToken },
+    what: 'Claiming your username',
+  });
+
+/**
+ * Sign in with a password.
+ *
+ * Legacy, and the only thing left of the old system: no new password account
+ * can be created, and this goes when the last one has linked a Discord account.
+ */
 export const loginAccount = (username: string, password: string) =>
   request<SessionReply>('/api/auth/login', {
     method: 'POST',
@@ -98,9 +151,15 @@ export interface DirectoryBot extends Bot {
   online: boolean;
 }
 
+/** An owned bot, with the two things about it that are not in the registry. */
+export interface OwnedBot extends Bot {
+  online: boolean;
+  drain?: BotDrain;
+}
+
 /** What the owner's own list carries: their bots, and how many more they may make. */
 export interface OwnedBots {
-  bots: Bot[];
+  bots: OwnedBot[];
   limit: number;
   remaining: number;
 }
@@ -145,6 +204,38 @@ export const rotateBotToken = (token: string, botId: string) =>
 
 export const retireBot = (token: string, botId: string) =>
   request<unknown>(`/api/bots/${botId}`, { method: 'DELETE', token, what: 'Retiring the bot' });
+
+/** What both shutdown calls answer with. */
+export interface BotShutdownReply {
+  /** False for a bot nobody is running, whose drain is therefore the empty one. */
+  online: boolean;
+  drain: BotDrain;
+}
+
+/**
+ * Take a bot out of play without ending the game it is in.
+ *
+ * `exit` is the whole of the difference between the two buttons: true stops the
+ * client once the last commitment is settled, false leaves it connected and
+ * idle. Both refuse every new game from the moment they are called; what they
+ * wait for is the game on the board, the current pair of a series, and every
+ * match of a tournament that has already started.
+ */
+export const shutdownBot = (token: string, botId: string, exit: boolean) =>
+  request<BotShutdownReply>(`/api/bots/${botId}/shutdown`, {
+    method: 'POST',
+    token,
+    body: { exit },
+    what: exit ? 'Shutting the bot down' : 'Pausing the bot',
+  });
+
+/** Call a drain off, putting the bot back in play. Only while it is connected. */
+export const resumeBot = (token: string, botId: string) =>
+  request<BotShutdownReply>(`/api/bots/${botId}/shutdown`, {
+    method: 'DELETE',
+    token,
+    what: 'Putting the bot back in play',
+  });
 
 /* ----------------------------------------------------------------- series -- */
 
@@ -383,6 +474,8 @@ export interface AccountSummary {
   kind: AccountKind | string;
   username: string;
   discord: string;
+  /** The title this account wears, absent for most. */
+  title?: TitleID;
   registered: boolean;
   isAdmin: boolean;
   disabled: boolean;
@@ -413,6 +506,31 @@ export const updateAccountFlags = (adminToken: string, userId: string, flags: Ac
     body: flags,
     what: 'Updating the account',
   });
+
+/**
+ * Hand somebody a title, earned or not.
+ *
+ * The title is in the path rather than in a body so that the revoke below —
+ * a DELETE — needs no body at all, and the two calls are the same shape.
+ */
+export const grantAccountTitle = (adminToken: string, userId: string, title: TitleID) =>
+  request<Account>(
+    `/api/admin/accounts/${encodeURIComponent(userId)}/titles/${encodeURIComponent(title)}`,
+    { method: 'PUT', token: adminToken, what: 'Granting the title' },
+  );
+
+/**
+ * Take one back, and take it off the name if it was being worn.
+ *
+ * Not a ban on the title: an earned one the rules still award comes back on
+ * that player's next finished game. Removing the games that earned it is what
+ * makes a revocation stick.
+ */
+export const revokeAccountTitle = (adminToken: string, userId: string, title: TitleID) =>
+  request<Account>(
+    `/api/admin/accounts/${encodeURIComponent(userId)}/titles/${encodeURIComponent(title)}`,
+    { method: 'DELETE', token: adminToken, what: 'Revoking the title' },
+  );
 
 export const anonymizeAccount = (adminToken: string, userId: string) =>
   request<unknown>(`/api/admin/accounts/${userId}`, {

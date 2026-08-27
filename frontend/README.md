@@ -87,6 +87,19 @@ because the desktop rail, the phone's collapsed bar and — later — the game
 screen all ask the same questions, and three copies of "is this row a bot fight"
 is how one of them ends up counting a tournament board twice.
 
+The first human game — or the first bot fight when no people are playing — is
+the rail's featured live board. `live_games` carries its current pieces and
+territory as compact nine-character rows, plus the turn and move number, and is
+republished after each move. `liveGameGrid` expands that wire picture into the
+ordinary grid consumed by `MiniBoard`; the rail does not invent a second board
+renderer. Entering the board remains an ordinary `spectate_game`, which opens
+the full clocks and shared game chat.
+
+The featured card uses a smaller fixed board in the mobile sheet. During a
+mixed-version deploy, if a live preview has not arrived yet, it falls back to
+the registered mode's opening position so the start of a match never appears as
+an empty board.
+
 A bot fight is a live game carrying the server's own `series` marker, so the
 split needs no guess about who the players are. Your own open challenge stays on
 the board marked as yours, with a Cancel button rather than an Accept one: hiding
@@ -169,6 +182,50 @@ grades and accuracies are built on; re-run it after an evaluation change and
 put the result in `WIN_PROBABILITY_SCALE`. See
 [`../docs/review.md`](../docs/review.md) for the whole design.
 
+## Local games
+
+Two people, one device. **Play someone next to you** on the lobby opens a board
+both players share and take it in turns at: no clock, nothing rated, and — the
+part that matters — nothing sent anywhere. `store/localSession.ts` runs the
+whole game off `engine/analysisGame.ts` and publishes a server-shaped
+`gameState` with a `local` marker, exactly as the bot session publishes one with
+a `bot` marker, so the live board, the player bars, the captured tallies, the
+sound effects and the review all serve it without knowing what they have.
+
+It is the only game in the app that generates **no traffic at all**. A bot game
+still tells the server that this player is busy, so the lobby can count them;
+this one says nothing, which is what lets it be started and finished with the
+connection down — the mode catalog it needs is the fallback catalog the store
+ships with.
+
+Four things differ from a bot board, and each of them is the same fact seen from
+a different angle: *nobody owns a colour here*.
+
+- **`playerColor` is null**, and `gameState.local` answers the questions it
+  usually would. `movableColor` is what makes the board work: it is the side to
+  move rather than the viewer's own, which is the arrangement the analysis
+  board already used for one person playing both sides.
+- **The board is turned by hand**, with **Flip board**, and never by the turn.
+  Facing the board at whoever is to move is the obvious thing to do with a
+  device lying on a table between two people, and it is wrong for the far
+  commoner case of two people sitting side by side: the board would spin under a
+  hand already reaching for it.
+- **Undo takes back one move**, not two. The bot board undoes a move and its
+  reply because it has to get back to the player's own turn; here every turn is
+  theirs.
+- **A draw is one press**, and the resign button names the side giving up
+  (`Red resigns`). An offer that the other half of the same person has to accept
+  is ceremony rather than consent — the two players are in the same room, so the
+  negotiation happened out loud before anybody touched the screen.
+
+There is no chat, for the same reason, and no hint: RPSFish's own best move is
+practice against a bot and cheating against a person.
+
+The record is written by the browser (`localGamePGN`) in the archive's dialect,
+so a finished local game reviews through exactly the same screen as an online
+one, with both seats named after their colours and no reviewer's own side to
+grade from.
+
 ## Bots
 
 The **Bots** section is one screen: play a bot, watch two of them fight, and
@@ -181,9 +238,23 @@ fits without paging: one difficulty ladder picks your opponent *and* the red
 side of a battle, and the chips under it pick the blue side.
 
 The **Play a bot** panel opens a practice board where RPSFish
-plays the other side. It runs entirely in the browser — the same WebAssembly
-worker the analysis board uses — so the server never sees a bot move and a bot
-game keeps working while the connection is down.
+plays the other side. It runs entirely on the device — the same engine the
+analysis board uses, as a WebAssembly worker in a browser and as a static
+library in the iOS app — so the server never sees a bot move and a bot game
+keeps working while the connection is down.
+
+**Your side** is a choice, in the same three words the challenge editor uses:
+EITHER, RED · FIRST, BLUE · SECOND. Both bot panels carry it — the practice
+ladder and the engine list — because "play a bot" means two different things on
+this page and only one of them is local.
+
+The session records the *choice* rather than only the seat it produced, which is
+what the rematch button reads. Somebody who picked a colour keeps it; somebody
+who asked for either is handed the other one each time, so a rematch alternates
+the way it always has instead of flipping a coin that can land the same way four
+times running. An engine challenge with no preference seats the challenger Red —
+the courtesy every other challenge here carries — and the server decides that,
+not the client.
 
 A bot game deliberately reads like a real match: the same board, player bars,
 captured-piece tallies, territory meter, move sounds, resignation dialog, and
@@ -368,14 +439,147 @@ rating, record, and games the browser has already accumulated. A signed-in
 player can rename themselves and add a Discord handle from the same screen;
 nobody can set either without an account.
 
-`store/accountSession.ts` owns the session token, holds it in `localStorage`,
-and reconnects the socket whenever it changes. The browser also generates a
-256-bit local profile key alongside its account UUID and keeps the raw key in
-`localStorage`; the socket authenticates with the session token when there is
+Under the lifetime record on the same screen is **Your games**, the account's
+finished games newest first — the result in words, the mode, whether it was
+ranked, how long it ran, and how it went for the player, with a **REVIEW**
+button and a **COPY LINK** button on every row. Ten arrive at a time and
+**LOAD MORE** asks for the next ten. It is `features/game/GameHistoryPanel.tsx`,
+keyed by account id rather than by "the signed-in player", so a profile page for
+somebody else would use the same panel unchanged; the list it reads,
+`GET /api/accounts/{userId}/games`, is as public as the archive it points into.
+See [Game review](../docs/review.md#getting-there) for what the link is and who
+can open it.
+
+`store/accountSession.ts` owns the session token, holds it in device storage,
+and reconnects the socket whenever it changes. Each client also generates a
+256-bit local profile key alongside its account UUID and keeps the raw key
+beside the token; the socket authenticates with the session token when there is
 one and with the UUID and key otherwise, and the server stores only the key
-hash. Clearing site data loses the local identity but not the account — signing
+hash. Device storage is `localStorage` in a browser and `expo-sqlite/kv-store`
+on a phone — see [Run on iOS](#run-on-ios). Clearing site data loses the local identity but not the account — signing
 in restores it. A session the server rejects is dropped by the client, which
 reconnects as the browser's anonymous identity.
+
+## Run on iOS
+
+```sh
+npm run build:rpsfish:ios
+npx expo run:ios --device
+```
+
+The first command compiles `../RPSFish` for the three Apple targets, packs them
+into `RPSFish.xcframework` and copies it to `modules/rpsfish/ios/`, where the
+local Expo module vendors it. It is a build artifact rather than source, so it
+is not in the repository and a clean checkout has to run it before the first
+`pod install`; `npm run ios` does both in that order. `npx expo prebuild -p ios`
+regenerates the ignored `ios/` directory from `app.json` — which is where the
+URL scheme, the `expo-router` `origin` and the APNs entitlement come from, and a
+project generated before any of them was set will refuse to render a page that
+asks for a handoff URL, or will fail to register for notifications with "no
+valid aps-environment entitlement string found".
+
+### RPSFish in the app rather than in a worker
+
+The browser runs the engine as WebAssembly inside a Web Worker. iOS has
+neither, so the same Rust crate is compiled to a static library and reached
+through a native module in `modules/rpsfish`.
+
+What is *not* duplicated is the engine's behaviour. Iterative deepening, the
+review walk, the paired search that scores a played move, every clamp on a
+caller's request and all the warm-table bookkeeping live in
+`engine/rpsfish/session.ts`, which both platforms run. Each platform supplies
+only an `EngineBackend` — a handful of methods that forward to the ABI and read
+the result back — and the worker is what is left of the browser's half, about a
+hundred lines of loading WebAssembly. `client.ts` cannot tell the two apart,
+because `nativeSession.ts` presents the same few members the request lane uses
+on a `Worker`, so the queueing, the deadlines and the cancellation are written
+once.
+
+One difference between the platforms is visible in the design. A browser worker
+owns its WebAssembly instance, so two workers are two independent engines —
+which is why analysis and review are given one each, and why a deep review does
+not have to be torn down every time a bot thinks. The static library's search
+state is process-global: there is one engine however many sessions ask for one.
+Sequences of calls are therefore serialised, at the granularity of a single
+search — one deepening step, or one graded position — so an analysis waits for
+the review's current position rather than for the whole review, and neither
+cancels the other. Every search states the line it needs before it runs, and
+the engine is stood back on that line if something else has moved it since.
+
+Nothing touches the JavaScript thread or the UI thread: every ABI call is
+dispatched to one serial background queue, at `userInitiated`, because somebody
+is watching a spinner. Positions cross the bridge as 32-bit halves — a 9x9
+bitboard fills bits past the 53 a double holds exactly — and are put back
+together in Swift.
+
+Screens ask `isEngineAvailable()` rather than which platform they are on. The
+two stopped being the same question when the engine started shipping inside the
+app: it is a build-time fact there, not a platform one, so a bundle running in
+an app built without the engine can say so instead of offering a board it
+cannot play.
+
+### What the phone stores
+
+`localStorage` does not exist off the web, and what the web build keeps in it is
+the account itself: the account UUID and the 256-bit profile key. Unstored, both
+would be minted fresh on every launch, so every launch would be a new player.
+`store/deviceStorage.ts` resolves per platform — `localStorage` in a browser,
+`expo-sqlite/kv-store` on a device — and both halves are synchronous, which
+`getOrCreateUserId` needs because it has to answer before the first socket
+frame is sent.
+
+### Match alerts on a phone
+
+The queue outlives a closed tab only because the server can call somebody back,
+so a phone that cannot be called back is a phone that has to sit and watch a
+spinner. It is reached through APNs, which shares nothing with Web Push on the
+wire — a device token against a URL and a pair of encryption keys — and
+everything above it.
+
+`store/push.ts` is where the two meet. `activePushTransport()` reads the
+platform once: `web-push` in a browser, `apns` on iOS, and `null` on Android,
+which would be FCM and is not built. `pushCapabilityFrom` stays pure and now
+takes either set of facts, so both arms are tested in Node without a device.
+Only `detect`, `enable` and `disable` branch; the statuses, the snooze, the
+offer rule in `canOfferAlerts` and the panel are shared.
+
+`expo-notifications` is reached through `await import('./pushApns')` rather than
+imported. `push.ts` is loaded by the static web export and by the unit tests,
+both of which run in Node, and a native module at module scope would be
+evaluated by both — the same rule the rest of the file follows for `navigator`.
+
+Three things about iOS are worth knowing before debugging a silence:
+
+- **A simulator reports `unsupported`.** On Apple silicon it will hand over a
+  device token that looks entirely real and that only `xcrun simctl push` can
+  deliver to. Registering one would leave the account looking reachable for ever
+  while every summons went nowhere, which is the one failure the away queue
+  cannot contain. Alerts need a real device.
+- **A debug build's token is a sandbox token.** The APNs entitlement is
+  `development` for anything `expo run:ios` builds, and Xcode rewrites it to
+  `production` in a release archive. The server has to be pointed at the
+  matching host — `RPS_APNS_ENVIRONMENT=sandbox` for a build off this Mac — or
+  Apple answers `BadDeviceToken` and the row is pruned.
+- **iOS asks once.** A declined prompt never appears again, and a later request
+  resolves without showing anything, so `denied` is a state the panel talks
+  about rather than a button that silently does nothing.
+
+`hooks/useNativeAlerts.ts` keeps the promise `sw.js` keeps for a browser: a
+summons that arrives while the app is open is recorded and not banner-ed, and
+coming back to the app clears any that are waiting. There is deliberately no tap
+handler — tapping brings the app to the front, the socket reconnects, and the
+`gameId` effect in `_layout` navigates to the board.
+
+### Not on iOS yet
+
+Keyboard replay navigation is web-only: there is no DOM `keydown` to bind off
+the web, and `useReplayKeyboard` returns without doing anything. React Native
+defines `window` as the global object, so its presence proves nothing — guarding
+on `typeof window` alone is how that hook came to throw on a phone.
+
+Android alerts are the other gap. `activePushTransport()` answers `null` there
+rather than guessing: an FCM token posted to the APNs route would store cleanly
+and never deliver.
 
 ## Publish the web build
 
@@ -434,12 +638,12 @@ cached for as long as you like, as they always could.
 ```nginx
 location = /sw.js { add_header Cache-Control "no-cache"; }
 
-# nginx has no mime type for .webmanifest before 1.21, so it falls through to
-# `application/octet-stream` — and a manifest served as a binary blob is a
-# manifest the browser may decline to read. That matters more than it looks:
-# `display: standalone` in the manifest is what makes an iOS Home Screen
-# install a context where Web Push works at all, so a mistyped manifest is an
-# iPhone that can never be notified.
+# Debian/Ubuntu nginx ships no mime type for .webmanifest — still absent in
+# 1.24 — so it falls through to `application/octet-stream`, and a manifest
+# served as a binary blob is a manifest the browser may decline to read. That
+# matters more than it looks: `display: standalone` in the manifest is what
+# makes an iOS Home Screen install a context where Web Push works at all, so a
+# mistyped manifest is an iPhone that can never be notified.
 location = /manifest.webmanifest {
     types { } default_type application/manifest+json;
     add_header Cache-Control "no-cache";

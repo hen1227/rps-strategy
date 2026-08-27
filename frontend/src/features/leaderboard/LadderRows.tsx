@@ -5,6 +5,7 @@ import { botIconUrl } from '@/store/api/bots';
 import { useGameStore } from '@/store/gameStore';
 import { colors, radius, space, type } from '@/theme';
 import ListRow from '@/ui/ListRow';
+import TitleTag from '@/ui/TitleTag';
 import { Badge } from '@/ui/primitives';
 import type { ModeID } from '@/types/game';
 import type { LeaderboardEntry } from '@/types/protocol';
@@ -76,6 +77,7 @@ export default function LadderRows({
           style={entry.userId === highlightUserId ? styles.you : undefined}
           title={
             <View style={styles.nameRow}>
+              <TitleTag title={entry.title} />
               <Text numberOfLines={1} style={styles.name}>
                 {entry.username}
               </Text>

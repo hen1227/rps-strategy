@@ -25,7 +25,7 @@ export const FIRST_MOVE_CRITICAL_MS = 10_000;
 export const MISS_NOTICE_MS = 8_000;
 
 export type QueueCallKind =
-  /** Queued, but closing the tab would drop you. */
+  /** Queued, but closing the tab — or leaving the app — would drop you. */
   | 'searching_tethered'
   /** Queued with alerts on: go anywhere. */
   | 'searching_untethered'
@@ -195,6 +195,12 @@ export const firstMoveCall = (
 export interface QueueCopy {
   title: (call: QueueCall) => string;
   detail: (call: QueueCall) => string;
+  /**
+   * The same line for a device with no tab in it. Present only on the two kinds
+   * that describe what closing one costs you, which is the pair that stopped
+   * being true when alerts started working in the app.
+   */
+  nativeDetail?: (call: QueueCall) => string;
   action: string;
   /** A second, quieter action. Absent when the card has only one. */
   secondary?: string;
@@ -204,11 +210,15 @@ export const QUEUE_COPY: Record<QueueCallKind, QueueCopy> = {
   searching_tethered: {
     title: (call) => `Looking for a ${call.modeName} opponent`,
     detail: (call) => `${formatWait(call.waitedMs)} in · this tab has to stay open to hold your place`,
+    nativeDetail: (call) =>
+      `${formatWait(call.waitedMs)} in · RPS has to stay open to hold your place`,
     action: 'LEAVE QUEUE',
   },
   searching_untethered: {
     title: (call) => `Looking for a ${call.modeName} opponent`,
     detail: (call) => `${formatWait(call.waitedMs)} in · close the tab if you like, we will call you back`,
+    nativeDetail: (call) =>
+      `${formatWait(call.waitedMs)} in · leave the app if you like, we will call you back`,
     action: 'LEAVE QUEUE',
   },
   posted: {
@@ -234,9 +244,16 @@ export const QUEUE_COPY: Record<QueueCallKind, QueueCopy> = {
   },
 };
 
-/** The alerts offer, kept here because it is queue copy. */
+/**
+ * The alerts offer, kept here because it is queue copy.
+ *
+ * Two lines because there is no tab to close on a phone. The choice is the
+ * caller's rather than this module's: everything here is a pure function of the
+ * queue, and reading the platform would make it a function of the build too.
+ */
 export const ALERTS_PITCH = {
   line: 'Turn on alerts and you can close the tab — we will call you back.',
+  nativeLine: 'Turn on alerts and you can leave the app — we will call you back.',
   action: 'TURN ON ALERTS ▶',
   dismissLabel: 'Not now — hide the alerts offer',
 };
@@ -257,6 +274,15 @@ export interface LobbyGate {
   atBoard: boolean;
   /** A second seek would be refused, because one is already out. */
   seekTaken: boolean;
+  /**
+   * Ranked play needs an account and this player has none.
+   *
+   * Not a reason to disable anything outright: casual games and bots are still
+   * open, and the server downgrades a guest's own search rather than refusing
+   * it. What it gates is the *rated* option — and accepting somebody else's
+   * rated game, which the server does refuse, because that setup is theirs.
+   */
+  needsAccount: boolean;
 }
 
 export const lobbyGate = (source: {
@@ -264,12 +290,14 @@ export const lobbyGate = (source: {
   atOwnBoard: boolean;
   outgoingChallenge: Challenge | null;
   queue: QueueState;
+  signedIn: boolean;
 }): LobbyGate => ({
   atBoard: source.atOwnBoard || source.connectionStatus !== 'connected',
   // Taking somebody's game off the board while queued is not a conflict: it is
   // the same act as being matched, only faster, and the server drops your seek
   // the moment a game starts. So only *creating* a second seek is gated here.
   seekTaken: source.queue.isSearching || Boolean(source.outgoingChallenge),
+  needsAccount: !source.signedIn,
 });
 
 /* -------------------------------------------------------- lobby counting -- */

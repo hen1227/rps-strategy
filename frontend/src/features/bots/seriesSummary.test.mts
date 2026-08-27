@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { seriesMetaLine, seriesView } from './seriesSummary.ts';
+import {
+  seriesContains,
+  seriesGameIsOpen,
+  seriesMetaLine,
+  seriesStatusTone,
+  seriesView,
+} from './seriesSummary.ts';
 import type { BotSeries, BotSeriesGame } from '../../store/api/bots.ts';
 
 const game = (over: Partial<BotSeriesGame> & { gameNumber: number }): BotSeriesGame => ({
@@ -161,4 +167,70 @@ test('describes a finished run by what it actually played', () => {
     ),
     '2 games · 3 opening plies · 1 min',
   );
+});
+
+test('knows which games belong to a run', () => {
+  const played = run({
+    games: [
+      game({ gameNumber: 1, result: 'first_win' }),
+      game({ gameNumber: 2, result: 'pending' }),
+    ],
+  });
+  // The live game being game two of this run is what keeps the chat on screen
+  // while somebody looks back at game one: they are the same room.
+  assert.equal(seriesContains(played, 'g2'), true);
+  assert.equal(seriesContains(played, 'g9'), false);
+  assert.equal(seriesContains(played, null), false);
+  assert.equal(seriesContains(null, 'g1'), false);
+  // A row with no id is a game that never started, and matches nothing — least
+  // of all another game that also has no id.
+  assert.equal(seriesContains(run({ games: [game({ gameNumber: 1, gameId: '' })] }), ''), false);
+});
+
+test('every game says which engine held which seat', () => {
+  const view = seriesView(
+    run({
+      games: [
+        game({ gameNumber: 1, result: 'first_win', endReason: 'infiltration' }),
+        game({ gameNumber: 2, result: 'first_win', endReason: 'infiltration' }),
+      ],
+    }),
+  );
+  // The second game of a pair is the same opening with the colours exchanged,
+  // which is the whole reason a run's score means anything. Both games went to
+  // Alpha, from opposite sides of the board.
+  assert.deepEqual(
+    view.games.map((entry) => `${entry.redName} v ${entry.blueName}`),
+    ['Alpha v Beta', 'Beta v Alpha'],
+  );
+});
+
+test('a game is only openable when there is something behind it', () => {
+  const view = seriesView(
+    run({
+      status: 'aborted',
+      games: [
+        game({ gameNumber: 1, result: 'first_win', endReason: 'resignation' }),
+        game({ gameNumber: 2 }),
+        game({ gameNumber: 3, gameId: '' }),
+      ],
+    }),
+  );
+  const [decided, unfinished, never] = view.games;
+  // A finished game has a record to read back.
+  assert.equal(seriesGameIsOpen(decided!, false), true);
+  // The game a stopped run was in the middle of has neither a record nor a
+  // board — unless it is still being played, which only the live list knows.
+  assert.equal(seriesGameIsOpen(unfinished!, false), false);
+  assert.equal(seriesGameIsOpen(unfinished!, true), true);
+  // A game that never started has no id at all, live or not.
+  assert.equal(seriesGameIsOpen(never!, true), false);
+});
+
+test('a run badges its own state', () => {
+  assert.equal(seriesStatusTone(run({ status: 'running' })), 'live');
+  assert.equal(seriesStatusTone(run({ status: 'completed' })), 'accent');
+  assert.equal(seriesStatusTone(run({ status: 'aborted' })), 'neutral');
+  // Anything the server invents later reads as neutral rather than as nothing.
+  assert.equal(seriesStatusTone(run({ status: 'paused' })), 'neutral');
 });

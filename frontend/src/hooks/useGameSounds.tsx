@@ -88,6 +88,10 @@ export const getGameSoundForTransition = (
   const captureSound = captureSoundForTransition(previous, next);
   if (captureSound) return captureSound;
 
+  // Every move at a shared board was made by the hand on this device, so there
+  // is no opponent's move to tell apart. Without this the whole game would play
+  // in the opponent's voice, `playerColor` being nobody's there.
+  if (next.local) return 'moveSelf';
   return previous.currentTurn === playerColor ? 'moveSelf' : 'moveOpponent';
 };
 

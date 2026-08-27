@@ -1,16 +1,26 @@
-import { Platform } from 'react-native';
-
+import { createEngineWorker, isEngineAvailable } from './engineWorker';
 import type { EnginePosition } from '../analysisGame';
 import type {
   Analysis,
   AnalyzePositionRequest,
   AnalyzeRequest,
+  EngineWorker,
   ReviewEntry,
   ReviewRequest,
   SearchLimits,
   WorkerResponse,
 } from './protocol';
 import type { Move } from '@/types/game';
+
+/**
+ * Whether RPSFish can run here at all.
+ *
+ * Re-exported so that a screen deciding whether to offer analysis asks the
+ * engine's own module rather than asking which platform it is on. The two
+ * stopped being the same question when the engine started shipping inside the
+ * iOS app.
+ */
+export { isEngineAvailable };
 
 export const ANALYSIS_PRESETS = {
   standard: {
@@ -75,11 +85,6 @@ let nextRequestId = 1;
 const DEFAULT_MAX_TIME_MS = 3_000;
 const MAX_ENGINE_TIME_MS = 120_000;
 const RESPONSE_GRACE_MS = 5_000;
-// The worker and WASM are copied from public/ without hashed filenames. Keep
-// this in step with engine/worker releases so browsers cannot combine builds.
-// `review2` adds `analyzeFrom` to the review request: a cached `review1` worker
-// would ignore it and regrade a live game from move one on every instalment.
-const RPSFISH_ASSET_VERSION = 'abi4-rules2-review2';
 
 const abortError = () => {
   const error = new Error('RPSFish analysis was cancelled.');
@@ -129,7 +134,7 @@ type LaneMessage =
  * worker of its own.
  */
 const createLane = () => {
-  let worker: Worker | undefined;
+  let worker: EngineWorker | undefined;
   const pending = new Map<number, PendingRequest>();
   let queue: Promise<void> = Promise.resolve();
 
@@ -149,20 +154,9 @@ const createLane = () => {
   };
 
   const createWorker = () => {
-    if (Platform.OS !== 'web' || typeof Worker === 'undefined') {
-      throw new Error('RPSFish analysis is currently available on the website.');
-    }
+    const nextWorker = createEngineWorker();
 
-    const basePath = process.env.EXPO_BASE_URL || '/';
-    const normalizedBase = basePath.endsWith('/') ? basePath : `${basePath}/`;
-    const workerUrl = new URL(
-      `${normalizedBase}rpsfish/rpsfish-worker.js`,
-      window.location.origin,
-    );
-    workerUrl.searchParams.set('v', RPSFISH_ASSET_VERSION);
-    const nextWorker = new Worker(workerUrl);
-
-    nextWorker.onmessage = ({ data }: MessageEvent<WorkerResponse>) => {
+    nextWorker.onmessage = ({ data }: { data: WorkerResponse }) => {
       const request = pending.get(data?.requestId);
       if (!request) return;
       if (data.type === 'analysis-update') {
@@ -202,7 +196,7 @@ const createLane = () => {
     return nextWorker;
   };
 
-  const stopWorker = (targetWorker: Worker | undefined, pendingMessage?: string) => {
+  const stopWorker = (targetWorker: EngineWorker | undefined, pendingMessage?: string) => {
     if (!targetWorker || worker !== targetWorker) return;
     targetWorker.terminate();
     worker = undefined;

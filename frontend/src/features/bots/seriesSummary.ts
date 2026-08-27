@@ -1,5 +1,6 @@
 import { endReasonPhrase } from '@/features/game/resultLabels';
 import type { BotSeries, BotSeriesGame } from '@/store/api/bots';
+import type { BadgeTone } from '@/ui/tones';
 
 // Reading a run.
 //
@@ -42,6 +43,17 @@ export interface SeriesGameView {
   label: string;
   /** Absent for a game that never started, which cannot be reviewed. */
   gameId: string | null;
+  /**
+   * Who sat where, which the stored row only says as a `swapped` flag.
+   *
+   * The swap is the reason a run is trustworthy — the same opening played from
+   * both sides cancels the first move's worth — so a page listing the games has
+   * to be able to say which way round each one was, and working that out from a
+   * boolean at the call site is exactly the reading error the score table exists
+   * to prevent.
+   */
+  redName: string;
+  blueName: string;
 }
 
 export interface SeriesView {
@@ -133,6 +145,8 @@ export const seriesView = (series: BotSeries): SeriesView => {
       abandonedBy,
       label,
       gameId: game.gameId || null,
+      redName: game.swapped ? secondName : firstName,
+      blueName: game.swapped ? firstName : secondName,
     };
   });
 
@@ -150,6 +164,52 @@ export const seriesView = (series: BotSeries): SeriesView => {
     played: games.filter((entry) => entry.side !== 'pending').length,
     planned: running ? series.pairs * 2 : null,
   };
+};
+
+/**
+ * Whether there is anything behind this game yet.
+ *
+ * A column with no result is one of two things and they are not the same: a
+ * board two engines are on this second, or the game a stopped run was in the
+ * middle of. The first is worth watching; the second cannot be opened at all —
+ * no archived record exists, so sending anybody to its review lands them on
+ * "this game cannot be reviewed". Only the live list can tell them apart, which
+ * is why it is an argument.
+ *
+ * Written once because two surfaces answer it: the score table decides whether
+ * a column is pressable, and the run's own page decides whether a row offers a
+ * link. Those two disagreeing would mean a page offering an address that the
+ * table beside it knows is empty.
+ */
+export const seriesGameIsOpen = (entry: SeriesGameView, live: boolean): boolean =>
+  Boolean(entry.gameId) && (entry.side !== 'pending' || live);
+
+/**
+ * Whether a game is one of this run's, and so shares everything a run shares.
+ *
+ * Asked about the *live* game by the review screen, which is a different
+ * question from "is this the game on screen". Every game of a series shares one
+ * chat room — that is the point of the room outliving its board — so somebody
+ * who steps back to game two while game five is being played has not left the
+ * conversation, and hiding the chat there would tell them they had.
+ */
+export const seriesContains = (
+  series: BotSeries | null | undefined,
+  gameId: string | null | undefined,
+): boolean =>
+  Boolean(gameId) && (series?.games ?? []).some((game) => game.gameId === gameId);
+
+/**
+ * How a run's state reads, and in what colour.
+ *
+ * Here rather than in the card that first needed it, because three surfaces now
+ * badge the same word — the card in the feed, the run's own page, and anything
+ * that lists runs next — and a run that is LIVE green in one place and grey in
+ * the next is two runs to a reader.
+ */
+export const seriesStatusTone = (series: BotSeries): BadgeTone => {
+  const tones: Record<string, BadgeTone> = { running: 'live', completed: 'accent' };
+  return tones[String(series.status).toLowerCase()] ?? 'neutral';
 };
 
 /** "3 pairs · 3 opening plies · 1 min · started by ada" — a run's provenance. */

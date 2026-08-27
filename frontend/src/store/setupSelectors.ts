@@ -28,6 +28,27 @@ export const FALLBACK_TIME_CONTROL: TimeControl = {
   incrementMs: 3 * 1000,
 };
 
+/** Which seat somebody asked for, or 'random' for "I don't mind". */
+export type SeatChoice = SideColor | 'random';
+
+/**
+ * The seat question as a row of chips.
+ *
+ * Asked in three places now — writing out a challenge, practising against
+ * RPSFish, and challenging somebody's engine — and it has to be the same three
+ * words every time, because "EITHER" is a promise about what happens next and
+ * the player cannot see which screen resolves it how.
+ */
+export const SEAT_CHOICES: readonly { value: SeatChoice; label: string }[] = [
+  { value: 'random', label: 'EITHER' },
+  { value: 'Red', label: 'RED · FIRST' },
+  { value: 'Blue', label: 'BLUE · SECOND' },
+];
+
+/** A seat choice as the wire spells it: a colour, or nothing for no preference. */
+export const preferredColorOf = (seat: SeatChoice): SideColor | undefined =>
+  seat === 'random' ? undefined : seat;
+
 export const defaultTimeControlOf = (fromServer?: TimeControl | null): TimeControl =>
   fromServer ?? FALLBACK_TIME_CONTROL;
 
@@ -50,8 +71,7 @@ const sameTimeControl = (first: TimeControl, second: TimeControl): boolean =>
 const noRuleFlags = (rules: RuleFlags | undefined): boolean =>
   !rules?.noRepetitionDraw &&
   !rules?.noDrawOffers &&
-  !rules?.noTimeExtensions &&
-  !rules?.moveLimit;
+  !rules?.noTimeExtensions;
 
 /** The normal game for a mode: its own board, the default clock, rated. */
 export const standardSetup = (
@@ -177,14 +197,6 @@ export const describeSetup = (
  */
 export const ruleBullets = (rules: RuleFlags | undefined): SetupBullet[] => {
   const bullets: SetupBullet[] = [];
-  if (rules?.moveLimit) {
-    bullets.push({
-      key: 'moveLimit',
-      icon: '⇥',
-      label: `${rules.moveLimit}-move cap`,
-      custom: true,
-    });
-  }
   if (rules?.noRepetitionDraw) {
     bullets.push({ key: 'noRepetitionDraw', icon: '↻', label: 'No repetition draw', custom: true });
   }

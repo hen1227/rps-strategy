@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { canOfferAlerts, pushCapabilityFrom, urlBase64ToUint8Array } from './push.ts';
+import {
+  activePushTransport,
+  canOfferAlerts,
+  pushCapabilityFrom,
+  pushEnabledFor,
+  urlBase64ToUint8Array,
+} from './push.ts';
 
 // Importing this module in Node at all is the assertion that matters most: it
 // touches `Notification`, `serviceWorker` and `PushManager`, and if any of that
@@ -95,4 +101,61 @@ test('the alerts offer is made once, and not when it would be a lie', () => {
   // Dismissed a week ago is still dismissed.
   assert.equal(canOfferAlerts('unasked', now + 1000, true, now), false);
   assert.equal(canOfferAlerts('unasked', now - 1000, true, now), true);
+});
+
+// A phone asks the same question and gets an answer from different facts. The
+// two arms of `pushCapabilityFrom` share nothing but their three outcomes,
+// which is the point: one state machine, two transports.
+test('a real iPhone is ready, and a simulator is not', () => {
+  assert.equal(
+    pushCapabilityFrom({
+      transport: 'apns',
+      hasNotificationsModule: true,
+      isSimulator: false,
+    }),
+    'ready',
+  );
+  // A simulator is handed a token that looks real and that only `simctl push`
+  // can deliver to. Registering it would leave the account looking reachable
+  // for ever while every summons went nowhere.
+  assert.equal(
+    pushCapabilityFrom({
+      transport: 'apns',
+      hasNotificationsModule: true,
+      isSimulator: true,
+    }),
+    'unsupported',
+  );
+  assert.equal(
+    pushCapabilityFrom({
+      transport: 'apns',
+      hasNotificationsModule: false,
+      isSimulator: false,
+    }),
+    'unsupported',
+  );
+});
+
+test('each device is told about its own transport, not the other one', () => {
+  const webOnly = { webPush: true, apns: false };
+  const appleOnly = { webPush: false, apns: true };
+  assert.equal(pushEnabledFor('web-push', webOnly, true), true);
+  // The case this exists for: VAPID keys and no Apple key. A phone offered the
+  // browser's answer would be shown a button this deployment cannot honour.
+  assert.equal(pushEnabledFor('apns', webOnly, true), false);
+  assert.equal(pushEnabledFor('apns', appleOnly, true), true);
+  assert.equal(pushEnabledFor('web-push', appleOnly, true), false);
+  // A server from before iOS says nothing about transports, and `enabled` has
+  // always meant Web Push to a browser.
+  assert.equal(pushEnabledFor('web-push', undefined, true), true);
+  assert.equal(pushEnabledFor('web-push', undefined, false), false);
+  assert.equal(pushEnabledFor('apns', undefined, true), false);
+  // Android would be FCM, which this server does not send.
+  assert.equal(pushEnabledFor(null, { webPush: true, apns: true }, true), false);
+});
+
+// Node is neither a browser nor a phone, and the same is true of Android as far
+// as this server is concerned.
+test('a platform with no way in has no transport', () => {
+  assert.equal(activePushTransport(), null);
 });

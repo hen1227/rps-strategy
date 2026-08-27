@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useState } from 'react';
 
+import { deviceStorage } from '@/store/deviceStorage';
 import { verifyAdminToken } from '@/store/api/tournaments';
 import { useGameStore } from '@/store/gameStore';
 
 // The host-token unlock, in one place.
 //
 // This pattern — paste a token, verify it against /api/admin/session, keep it
-// in localStorage, show the gold panel while it holds — was copied between the
+// in device storage, show the gold panel while it holds — was copied between the
 // tournament screen and the opening book screen. A third surface needed it,
 // and three copies of an auth check is how one of them ends up subtly
 // different, so it lives here now.
@@ -27,7 +28,7 @@ const STORAGE_KEY = 'rpsAdminToken';
 
 const readStored = (): string => {
   try {
-    return globalThis.localStorage?.getItem(STORAGE_KEY)?.trim() ?? '';
+    return deviceStorage()?.getItem(STORAGE_KEY)?.trim() ?? '';
   } catch {
     return '';
   }
@@ -35,8 +36,8 @@ const readStored = (): string => {
 
 const writeStored = (token: string) => {
   try {
-    if (token) globalThis.localStorage?.setItem(STORAGE_KEY, token);
-    else globalThis.localStorage?.removeItem(STORAGE_KEY);
+    if (token) deviceStorage()?.setItem(STORAGE_KEY, token);
+    else deviceStorage()?.removeItem(STORAGE_KEY);
   } catch {
     // Restricted storage: the token lives for this page view only.
   }

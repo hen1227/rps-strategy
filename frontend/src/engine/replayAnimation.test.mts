@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { buildReplayPieceTracks, type ReplayTracks } from './replayAnimation';
+import {
+  animatedReplayPieceTracks,
+  buildReplayPieceTracks,
+  type ReplayTracks,
+} from './replayAnimation';
 import type { Piece, PlayerColor, Tile } from '@/types/game';
 
 interface Placement {
@@ -148,5 +152,43 @@ describe('replay piece tracks', () => {
       { color: 'Blue', piece: 'Scissors', x: 2, y: 2 },
     ]);
     assert.equal(buildReplayPieceTracks([before, after]), null);
+  });
+
+  it('animates only pieces that move, appear, or are captured', () => {
+    const before = position([
+      { color: 'Red', piece: 'Rock', x: 0, y: 0 },
+      { color: 'Blue', piece: 'Paper', x: 1, y: 0 },
+      { color: 'Blue', piece: 'Scissors', x: 2, y: 2 },
+    ]);
+    const after = position([
+      { color: 'Red', piece: 'Rock', x: 1, y: 0 },
+      { color: 'Blue', piece: 'Scissors', x: 2, y: 2 },
+    ]);
+    const replay = tracksOf([before, after]);
+    const animated = animatedReplayPieceTracks(replay, before, after);
+
+    assert.deepEqual(
+      animated.map((track) => `${track.color}:${track.piece}`).sort(),
+      ['Blue:Paper', 'Red:Rock'],
+    );
+  });
+
+  it('animates a piece restored while rewinding but leaves bystanders settled', () => {
+    const beforeCapture = position([
+      { color: 'Red', piece: 'Rock', x: 0, y: 0 },
+      { color: 'Blue', piece: 'Paper', x: 1, y: 0 },
+      { color: 'Blue', piece: 'Scissors', x: 2, y: 2 },
+    ]);
+    const afterCapture = position([
+      { color: 'Red', piece: 'Rock', x: 1, y: 0 },
+      { color: 'Blue', piece: 'Scissors', x: 2, y: 2 },
+    ]);
+    const replay = tracksOf([afterCapture, beforeCapture]);
+    const animated = animatedReplayPieceTracks(replay, afterCapture, beforeCapture);
+
+    assert.deepEqual(
+      animated.map((track) => `${track.color}:${track.piece}`).sort(),
+      ['Blue:Paper', 'Red:Rock'],
+    );
   });
 });

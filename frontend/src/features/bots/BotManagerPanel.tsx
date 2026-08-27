@@ -19,11 +19,14 @@ import {
   createBot,
   exampleEngineUrl,
   listMyBots,
+  resumeBot,
   retireBot,
   rotateBotToken,
+  shutdownBot,
   updateBot,
-  type Bot,
+  type OwnedBot,
 } from '@/store/api/bots';
+import type { BotDrain } from '@/types/protocol';
 import { ApiError } from '@/store/api/http';
 import { useGameStore } from '@/store/gameStore';
 import { colors, radius } from '@/theme';
@@ -38,13 +41,45 @@ import { colors, radius } from '@/theme';
 // is the one the store holds, which is the same one the lobby socket connects
 // with, so it takes no props at all.
 
+/**
+ * The badge a bot wears in its owner's own list.
+ *
+ * Deliberately not the lobby's `engineStatus`: that one answers "can I play
+ * this", which is a stranger's question. This list is answering "what is mine
+ * doing", where a slot that has never connected and a bot that is on its way
+ * out are the two states worth calling out.
+ */
+const statusOf = (bot: OwnedBot): { label: string; tone: 'accent' | 'neutral' } => {
+  if (bot.drain) {
+    return {
+      label: bot.drain.exitWhenDone ? 'SHUTTING DOWN' : 'PAUSED',
+      tone: 'neutral',
+    };
+  }
+  if (bot.online) return { label: 'ONLINE', tone: 'accent' };
+  if (bot.claimed) return { label: 'OFFLINE', tone: 'neutral' };
+  return { label: 'AWAITING FIRST RUN', tone: 'neutral' };
+};
+
+/** What a draining bot is still waiting for, or that it is waiting for nothing. */
+const drainDetail = (drain: BotDrain): string => {
+  const asked = drain.source ? ` (asked by ${drain.source})` : '';
+  if (drain.waitingOn.length === 0) {
+    return drain.exitWhenDone
+      ? `Nothing left to finish — stopping${asked}`
+      : `Nothing left to finish — idle and safe to stop${asked}`;
+  }
+  return `Waiting for: ${drain.waitingOn.join(', ')}${asked}`;
+};
+
 export default function BotManagerPanel() {
   const token = useGameStore((state) => state.sessionToken);
   const clearSession = useGameStore((state) => state.clearSession);
+  const lastBotDrain = useGameStore((state) => state.lastBotDrain);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [bots, setBots] = useState<Bot[]>([]);
+  const [bots, setBots] = useState<OwnedBot[]>([]);
   const [remaining, setRemaining] = useState<number | null>(null);
   // A freshly minted token, shown once. Never fetched again.
   const [freshToken, setFreshToken] = useState<string | null>(null);
@@ -71,6 +106,13 @@ export default function BotManagerPanel() {
     refresh(token);
   }, [token, refresh]);
 
+  // A drain settles on its own, minutes or hours after the button was pressed,
+  // so the interesting change to this list is one nobody on this page caused.
+  // The server pushes to the owner's open tabs; this is the page acting on it.
+  useEffect(() => {
+    if (lastBotDrain) refresh(token);
+  }, [lastBotDrain, token, refresh]);
+
   const run = async <Result,>(action: () => Promise<Result>, successNotice?: string) => {
     setBusy(true);
     setError(null);
@@ -96,7 +138,7 @@ export default function BotManagerPanel() {
       return created;
     });
 
-  const toggle = (bot: Bot, field: 'allowPublicPlay' | 'enterTournaments') =>
+  const toggle = (bot: OwnedBot, field: 'allowPublicPlay' | 'enterTournaments') =>
     run(async () => {
       if (!token) return;
       await updateBot(token, bot.botId, {
@@ -108,7 +150,7 @@ export default function BotManagerPanel() {
       await refresh(token);
     }, 'Updated. Note that rpsbot.conf re-applies its own settings when the bot restarts.');
 
-  const rotate = (bot: Bot) =>
+  const rotate = (bot: OwnedBot) =>
     run(async () => {
       if (!token) return;
       const rotated = await rotateBotToken(token, bot.botId);
@@ -116,12 +158,31 @@ export default function BotManagerPanel() {
       await refresh(token);
     }, 'New token issued. The bot keeps its rating and history.');
 
-  const retire = (bot: Bot) =>
+  const retire = (bot: OwnedBot) =>
     run(async () => {
       if (!token) return;
       await retireBot(token, bot.botId);
       await refresh(token);
     }, 'Bot retired and its name released.');
+
+  // The two halves of one request. `exit` decides only what happens when the
+  // last commitment settles; both refuse every new game from this moment.
+  const drainBot = (bot: OwnedBot, exit: boolean) =>
+    run(async () => {
+      if (!token) return;
+      const reply = await shutdownBot(token, bot.botId, exit);
+      await refresh(token);
+      return reply;
+    }, exit
+      ? 'No new games. It will stop once it has finished what it owes.'
+      : 'No new games. It will sit idle once it has finished what it owes.');
+
+  const putBackInPlay = (bot: OwnedBot) =>
+    run(async () => {
+      if (!token) return;
+      await resumeBot(token, bot.botId);
+      await refresh(token);
+    }, 'Back in play.');
 
   // Bots hang off a real account, so there is nothing to show without one. The
   // account screen offers registration in this panel's place.
@@ -181,8 +242,8 @@ export default function BotManagerPanel() {
                 <Text style={styles.rowName}>
                   {bot.name || 'Unclaimed slot'}{' '}
                   <Badge
-                    label={bot.claimed ? 'CONNECTED ONCE' : 'AWAITING FIRST RUN'}
-                    tone={bot.claimed ? 'accent' : 'neutral'}
+                    label={statusOf(bot).label}
+                    tone={statusOf(bot).tone}
                   />
                 </Text>
                 {bot.engineName ? (
@@ -190,6 +251,12 @@ export default function BotManagerPanel() {
                     {bot.engineName}
                     {bot.engineModes?.length ? ` · ${bot.engineModes.join(' · ')}` : ''}
                   </Text>
+                ) : null}
+                {/* What it is still waiting for, in the server's own words.
+                    Without this, "shutting down" is a state an owner stares at
+                    wondering whether it is stuck. */}
+                {bot.drain ? (
+                  <Text style={styles.rowDrain}>{drainDetail(bot.drain)}</Text>
                 ) : null}
               </View>
               <Checkbox
@@ -202,6 +269,34 @@ export default function BotManagerPanel() {
                 label="Tournaments"
                 onToggle={() => toggle(bot, 'enterTournaments')}
               />
+              {/* Only for a bot somebody is running: there is nothing to drain
+                  on a slot with no connection behind it, and the server would
+                  say so rather than do anything. */}
+              {bot.online ? (
+                bot.drain ? (
+                  <GhostButton
+                    compact
+                    disabled={busy}
+                    label="RESUME"
+                    onPress={() => putBackInPlay(bot)}
+                  />
+                ) : (
+                  <>
+                    <GhostButton
+                      compact
+                      disabled={busy}
+                      label="PAUSE"
+                      onPress={() => drainBot(bot, false)}
+                    />
+                    <GhostButton
+                      compact
+                      disabled={busy}
+                      label="FINISH AND STOP"
+                      onPress={() => drainBot(bot, true)}
+                    />
+                  </>
+                )
+              ) : null}
               <GhostButton compact label="NEW TOKEN" onPress={() => rotate(bot)} />
               <GhostButton compact label="RETIRE" onPress={() => retire(bot)} />
             </View>
@@ -224,6 +319,14 @@ export default function BotManagerPanel() {
         its own values the next time the bot restarts. Edit the file for a lasting change.
         The picture comes from the same file: point its icon line at a square PNG of at
         most 128×128 and restart the bot.
+      </Text>
+      <Text style={styles.help}>
+        FINISH AND STOP takes a bot out of play without ending the game it is in:
+        it is offered nothing new, finishes the game on the board, the current pair of any
+        series, and every match of a tournament that has started, and then stops. PAUSE is
+        the same but leaves it connected and idle. Both last until the bot restarts, so
+        starting it again is all it takes to put it back in play. Ctrl-C on your own machine
+        does the same thing — press it twice to stop immediately.
       </Text>
     </Panel>
   );
@@ -274,4 +377,5 @@ const styles = StyleSheet.create({
   rowCopy: { flex: 1, minWidth: 160 },
   rowName: { color: colors.text, fontSize: 12, fontWeight: '800' },
   rowMeta: { color: colors.textFaint, fontSize: 10, marginTop: 2 },
+  rowDrain: { color: colors.textFaint, fontSize: 10, fontStyle: 'italic', marginTop: 3 },
 });

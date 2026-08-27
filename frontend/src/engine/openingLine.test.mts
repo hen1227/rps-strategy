@@ -3,8 +3,10 @@ import test from 'node:test';
 
 import { startingPositionFromGrid } from './analysisGame';
 import {
+  formatBookMove,
   gameAfterWalk,
   lastStepOfWalk,
+  openingLineOf,
   parseBookMove,
   playBookMove,
   walkOpeningLine,
@@ -106,4 +108,21 @@ test('a capture is reported so the diagram can ring the square', () => {
     walk.steps.slice(0, -1).map((step) => step.captured),
     [false, false, false, false, false],
   );
+});
+
+test('a record of moves becomes the line the book keys names by', () => {
+  const moves = [
+    { from: { x: 3, y: 8 }, to: { x: 2, y: 7 } },
+    { from: { x: 3, y: 1 }, to: { x: 2, y: 2 } },
+  ];
+  assert.deepEqual(openingLineOf(moves), ['d9-c8', 'd2-c3']);
+  assert.deepEqual(openingLineOf(moves, 1), ['d9-c8']);
+  assert.deepEqual(openingLineOf(null), []);
+});
+
+test('a book move written out is a book move read back', () => {
+  for (const notation of ['d9-c8', 'a1-i9', 'e5-e6']) {
+    const move = parseBookMove(notation);
+    assert.equal(move && formatBookMove(move), notation);
+  }
 });

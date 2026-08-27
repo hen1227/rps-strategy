@@ -144,10 +144,16 @@ export default function BotSeriesPanel({ bots, modes }: BotSeriesPanelProps) {
     }
   };
 
-  // A bot that is mid-game cannot be entered into a new run. A bot whose owner
-  // has not opened it to public play is still listed, marked, because its owner
-  // is allowed to enter it and the server is the one that knows who that is.
-  const idle = useMemo(() => bots.filter((bot) => !bot.busy), [bots]);
+  // A bot that is mid-game cannot be entered into a new run, and neither can one
+  // that is shutting down — that one is dropped rather than marked, because
+  // unlike a private bot there is nobody, owner included, who can enter it. A
+  // bot whose owner has not opened it to public play is still listed, marked,
+  // because its owner is allowed to enter it and the server is the one that
+  // knows who that is.
+  const idle = useMemo(
+    () => bots.filter((bot) => !bot.busy && !bot.draining),
+    [bots],
+  );
   const botOptions = useMemo(
     () =>
       idle.map((bot) => ({

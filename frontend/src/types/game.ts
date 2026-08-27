@@ -1,3 +1,5 @@
+import type { RuleSpec } from '@/engine/spec/types';
+
 // The game as the server describes it.
 //
 // Every type here mirrors a Go struct in `backend/internal/game`, field for
@@ -5,13 +7,47 @@
 // struct there gains a field, it belongs here too — that is the only thing
 // keeping the client's idea of a game and the server's from drifting apart.
 
+/**
+ * The side of the standard board, and the size of every built-in mode.
+ *
+ * A default rather than a rule: a spec-defined mode may be any rectangle within
+ * `MIN_BOARD_SIDE` and `MAX_BOARD_SIDE`, so nothing may bound a coordinate
+ * against this. Read the shape off the grid with `boardWidth`/`boardHeight`, or
+ * ask `isOnBoard`.
+ */
 export const BOARD_SIZE = 9;
 
-export type Piece = 'Empty' | 'Rock' | 'Paper' | 'Scissors';
+/** A board with somewhere to move. Mirrors `game.MinBoardSide` in the backend. */
+export const MIN_BOARD_SIDE = 3;
+
+/**
+ * Twenty-six because a file is one letter, `a` to `z`, in every notation this
+ * project writes. Mirrors `game.MaxBoardSide`.
+ */
+export const MAX_BOARD_SIDE = 26;
+
+/** Mirrors `game.MaxBoardTiles`: a cap on how much work one position can be. */
+export const MAX_BOARD_TILES = 361;
+
+/**
+ * What stands on a tile.
+ *
+ * Deliberately open, for the same reason `ModeID` is: the set of kinds is
+ * decided by a mode, and a mode may be one somebody wrote this morning. The
+ * three literals are the kinds the built-in modes use and the ones fixtures and
+ * piece-keyed tables are checked against; a spec-defined mode declares its own,
+ * and **a kind's id in the spec is exactly the string that appears here** — one
+ * name per piece, with no translation table between the rules and the board.
+ *
+ * `Empty` is the one reserved value. Mirrors `game.Piece` in the backend, which
+ * is an open string for the same reason.
+ */
+export type Piece = 'Empty' | 'Rock' | 'Paper' | 'Scissors' | (string & {});
 
 /** A piece that can actually stand on the board. */
-export type PlayablePiece = Exclude<Piece, 'Empty'>;
+export type PlayablePiece = 'Rock' | 'Paper' | 'Scissors' | (string & {});
 
+/** The kinds the built-in modes play with, not the kinds that exist. */
 export const PLAYABLE_PIECES: readonly PlayablePiece[] = ['Rock', 'Paper', 'Scissors'];
 
 export type PlayerColor = 'Neutral' | 'Red' | 'Blue';
@@ -55,13 +91,46 @@ export type GameEndReason =
   | 'abandonment'
   | 'move_limit';
 
-/** Nine rows of nine characters: upper case Blue, lower case Red, `.` empty. */
+/**
+ * A board as rows of characters: upper case Blue, lower case Red, `.` empty.
+ *
+ * Rectangular, and no longer nine by nine — a spec-defined mode may be any
+ * shape `isBoardRows` accepts. The number of rows is the board's height and
+ * their common length is its width, so a layout needs nothing beside it to say
+ * what shape it is. Mirrors `game.StartingPosition` in the backend, whose JSON
+ * is this shape even though the Go type stores one string.
+ */
 export interface StartingPosition {
   rows: string[];
 }
 
 /**
- * The engine rules a custom game switched off, plus the one it added.
+ * Whether an unknown value is a board layout: a rectangle of rows, within the
+ * sizes this project can play, name and draw.
+ *
+ * One implementation rather than one per screen. Two places decode a layout
+ * that arrived over the wire — a mode's own opening and the lobby's compact
+ * live board — and a disagreement between them shows up as one screen drawing a
+ * board the other calls malformed.
+ */
+export const isBoardRows = (rows: unknown): rows is string[] => {
+  if (!Array.isArray(rows)) return false;
+  const height = rows.length;
+  const width = typeof rows[0] === 'string' ? rows[0].length : -1;
+  if (
+    height < MIN_BOARD_SIDE ||
+    height > MAX_BOARD_SIDE ||
+    width < MIN_BOARD_SIDE ||
+    width > MAX_BOARD_SIDE ||
+    width * height > MAX_BOARD_TILES
+  ) {
+    return false;
+  }
+  return rows.every((row) => typeof row === 'string' && row.length === width);
+};
+
+/**
+ * The engine rules a custom game switched off.
  *
  * Every field is a *deviation*, so an all-false value is the normal game. That
  * is what lets the lobby render one icon per non-standard field and nothing at
@@ -71,8 +140,6 @@ export interface RuleFlags {
   noRepetitionDraw?: boolean;
   noDrawOffers?: boolean;
   noTimeExtensions?: boolean;
-  /** A draw once this many moves have been played by both sides together. */
-  moveLimit?: number;
 }
 
 /**
@@ -104,6 +171,25 @@ export interface ModeDefinition {
   playable: boolean;
   features: ModeFeature[];
   startingPosition: StartingPosition;
+  /**
+   * The rules, for a mode nobody wrote code for.
+   *
+   * Present on a spec-defined mode and absent on the two built-in ones, whose
+   * rules are hand-written on both sides. It travels with the definition — and
+   * therefore inside every `GameState` — because that is what lets a client that
+   * has never heard of a mode play it anyway: the rules arrive with the game.
+   *
+   * See `docs/rulespec.md`, and `engine/spec/interpret.ts` for the reader.
+   */
+  spec?: RuleSpec;
+  /**
+   * Where the mode came from. Absent means built-in.
+   *
+   * The lobby catalogue is the built-in modes only — an unbounded community set
+   * must not be broadcast to every socket — so this is what the catalogue
+   * filters on.
+   */
+  origin?: 'builtin' | 'community';
 }
 
 export const modeHasFeature = (mode: ModeDefinition | null | undefined, feature: ModeFeature) =>
@@ -113,6 +199,12 @@ export interface PlayerProfile {
   userId: string;
   username: string;
   discord?: string;
+  /**
+   * The short tag worn in front of the name — `GM`, `DEV` — and absent for most
+   * players. At most three characters, which every row that draws one budgets
+   * for. See `TitleTag`.
+   */
+  title?: string;
 }
 
 export interface Tile {
@@ -145,8 +237,21 @@ export interface Move {
  */
 export type Grid = Tile[][];
 
-export const isOnBoard = ({ x, y }: Position) =>
-  x >= 0 && x < BOARD_SIZE && y >= 0 && y < BOARD_SIZE;
+/** The number of files, taken from the board itself. */
+export const boardWidth = (grid: Grid | null | undefined) => grid?.[0]?.length ?? 0;
+
+/** The number of ranks. */
+export const boardHeight = (grid: Grid | null | undefined) => grid?.length ?? 0;
+
+/**
+ * Whether a coordinate is on this board.
+ *
+ * Takes the grid rather than assuming a size, which is the whole point: a
+ * comparison against `BOARD_SIZE` would be wrong on any mode that is not nine
+ * by nine.
+ */
+export const isOnBoard = (grid: Grid | null | undefined, { x, y }: Position) =>
+  y >= 0 && y < (grid?.length ?? 0) && x >= 0 && x < (grid?.[y]?.length ?? 0);
 
 /** The tile at a coordinate, or `null` when it is off the board. */
 export const tileAt = (grid: Grid, x: number, y: number): Tile | null =>
@@ -191,4 +296,15 @@ export interface GameState {
   moveNumber: number;
   redPlayer: PlayerProfile;
   bluePlayer: PlayerProfile;
+  /**
+   * The game so far in the opening book's notation — `d8-c7`, squares only —
+   * for as long as it is still an opening.
+   *
+   * The board cannot work this out for itself. A player who refreshed and a
+   * spectator who arrived at move twenty never saw the moves that made the
+   * opening, and they are exactly the people the badge is for, so the line
+   * travels with the position instead. Absent is an answer: this game has no
+   * opening to name, because it began from a board somebody drew.
+   */
+  openingLine?: string[];
 }

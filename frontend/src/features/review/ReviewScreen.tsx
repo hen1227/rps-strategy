@@ -28,18 +28,23 @@ import MoveQualityBadge from '@/features/analysis/MoveQualityBadge';
 import ReplayControls from '@/features/analysis/ReplayControls';
 import TerritoryMeter from '@/features/analysis/TerritoryMeter';
 import Board from '@/features/board/Board';
+import { modeBackground, modeLooks } from '@/features/board/modeArt';
+import { usePieceDrag } from '@/features/board/pieceDrag';
+import SeriesLink from '@/features/bots/SeriesLink';
+import { seriesContains } from '@/features/bots/seriesSummary';
 import SeriesScoreTable from '@/features/bots/SeriesScoreTable';
 import GameChat from '@/features/game/GameChat';
 import GameTransition from '@/features/game/GameTransition';
 import { failureMessage } from '@/errors';
 import { useBoardLayout } from '@/hooks/useBoardLayout';
 import { useBoardSelection } from '@/hooks/useBoardSelection';
+import { useSeriesForGame } from '@/hooks/useBotSeries';
 import useGameAnalysis from '@/hooks/useGameAnalysis';
 import { usePositionAnalysis } from '@/hooks/usePositionAnalysis';
 import useReplayKeyboard from '@/hooks/useReplayKeyboard';
 import { useReplayCursor } from '@/hooks/useReplayCursor';
-import { links } from '@/navigation/links';
-import { botSeriesForGame, type BotSeries } from '@/store/api/bots';
+import { gameReviewURL, links } from '@/navigation/links';
+import { isGameLive } from '@/store/spectateSelectors';
 import { getGamePGN, putGameAccuracy } from '@/store/api/review';
 import { roomSpansSeries } from '@/store/chatSelectors';
 import { useGameStore } from '@/store/gameStore';
@@ -124,6 +129,32 @@ const moveVerdict = (move: GradedMove) => {
   return `Best was ${best} · ${move.lossPercent.toFixed(1)} points of expected score given up.`;
 };
 
+/**
+ * The line under GAME RECORD when nothing has been copied yet.
+ *
+ * A stored game has an address; a bot game or a pasted record does not, so the
+ * card must not offer a link there is nothing behind. A game that belongs to a
+ * run has a second address — the run itself — and says so, because the link
+ * somebody was handed is to one game of six and nothing else on the page would
+ * tell them the other five are one press away.
+ */
+const recordCardHint = (options: { shareable: boolean; inSeries: boolean }) => {
+  if (!options.shareable) return 'Copy this game to save it or analyze it again later.';
+  return options.inSeries
+    ? 'Copy the link to hand this game to anybody, or open the run it was one game of.'
+    : 'Copy the link to hand this review to anybody, or the PGN to keep the game.';
+};
+
+/** The same line once a button has been pressed, for whichever button it was. */
+const copiedMessage = (copied: { what: 'pgn' | 'link'; ok: boolean }) => {
+  if (copied.what === 'link') {
+    return copied.ok
+      ? 'Link copied. Whoever opens it gets this game, graded the same way.'
+      : 'The link could not be copied.';
+  }
+  return copied.ok ? 'PGN copied to your clipboard.' : 'The PGN could not be copied.';
+};
+
 interface CurrentMoveCardProps {
   analysis: Analysis | null;
   /**
@@ -202,13 +233,20 @@ export default function ReviewScreen() {
   const modes = useGameStore((state) => state.modes);
   const accountId = useGameStore((state) => state.accountId);
   const profileKey = useGameStore((state) => state.profileKey);
+  const draggingPiece = usePieceDrag((state) => state.dragging);
 
   // Chat is a property of the live session, not of the review: staying on the
   // same finished game means the room the players are already in stays open
   // while they look at the board together.
   const liveGameId = useGameStore((state) => state.gameState?.gameId ?? null);
+  const liveGames = useGameStore((state) => state.liveGames);
+  // Joined once rather than mapped in the render, so the table is not handed a
+  // fresh array on every tick of the lobby.
+  const liveGameIds = useMemo(() => liveGames.map((live) => live.gameId), [liveGames]);
+  const spectateGame = useGameStore((state) => state.spectateGame);
   const chatMessages = useGameStore((state) => state.chatMessages);
   const chatRoomId = useGameStore((state) => state.chatRoomId);
+  const chatOccupancy = useGameStore((state) => state.chatOccupancy);
   const chatVisible = useGameStore((state) => state.chatVisible);
   const showSpectatorMessages = useGameStore((state) => state.showSpectatorMessages);
   const isSpectating = useGameStore((state) => state.isSpectating);
@@ -219,9 +257,12 @@ export default function ReviewScreen() {
 
   const [pgnText, setPgnText] = useState<string | null>(providedPGN);
   const [loadError, setLoadError] = useState<string | null>(null);
-  // The run this game is one game of, when it is one. Fetched by game id rather
-  // than carried on the link, so a pasted URL gets the strip too.
-  const [series, setSeries] = useState<BotSeries | null>(null);
+  // The run this game is one game of, when it is one. Asked by game id rather
+  // than carried on the link, so a pasted URL gets the strip too — and asked
+  // through the same hook the spectate rail uses, so the two screens cannot end
+  // up with two ideas of what a failed lookup looks like. A game that is not
+  // part of a run simply answers nothing, and none of this appears.
+  const { series } = useSeriesForGame(gameId);
   // The game asked for while the one on screen is still up, which is what drives
   // the board's hand-off. Cleared when the new record lands. See GameTransition:
   // this is the same animation the spectate screen plays when a series moves on
@@ -229,8 +270,18 @@ export default function ReviewScreen() {
   const [switchingTo, setSwitchingTo] = useState<string | null>(null);
   const [preset, setPreset] = useState<AnalysisPreset>(DEFAULT_ANALYSIS_PRESET);
   const [branch, setBranch] = useState<ReviewBranch | null>(null);
-  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'error'>('idle');
+  // Which of the two things this card copies was last copied, and whether the
+  // clipboard took it. One piece of state rather than two, because the line of
+  // text under the eyebrow reports for both buttons and only ever says one
+  // thing.
+  const [copyState, setCopyState] = useState<{
+    what: 'pgn' | 'link';
+    ok: boolean;
+  } | null>(null);
   const [widePanelHeight, setWidePanelHeight] = useState<number | null>(null);
+  // How much room the run's table over the board is taking, so the board can
+  // give it up rather than pushing what is under it off the screen.
+  const [seriesTableHeight, setSeriesTableHeight] = useState(0);
   // The key of the accuracy already reported, so it is reported once.
   const savedRef = useRef<string | null>(null);
 
@@ -262,40 +313,32 @@ export default function ReviewScreen() {
     };
   }, [gameId, pgnText]);
 
-  // The run behind this game. A game that is not part of one answers null, and
-  // the strip simply does not appear; a failure does the same, because a missing
-  // strip is a smaller problem than an error banner over a board somebody is
-  // trying to read.
-  useEffect(() => {
-    if (!gameId) {
-      setSeries(null);
-      return undefined;
-    }
-    let cancelled = false;
-    botSeriesForGame(gameId)
-      .then((found) => {
-        if (!cancelled) setSeries(found);
-      })
-      .catch(() => {
-        if (!cancelled) setSeries(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [gameId]);
-
-  // Stepping to another game of the same run. `replace` rather than `push`, so
-  // that walking a six-game series does not leave six entries to back out of,
-  // and the PGN is dropped here so the effect above fetches the new one.
+  // Stepping to another game of the same run.
+  //
+  // A game still being played is watched rather than read back: it has no
+  // archived record yet, so reviewing it lands on "this game cannot be
+  // reviewed", and the thing somebody clicking the live column wants is
+  // obviously the board. Spectating from here needs the navigation spelled out —
+  // the global effect that sends a new board to /play deliberately leaves the
+  // review screen alone, so that opening a review does not bounce you off it.
+  //
+  // For a finished one, `replace` rather than `push`, so that walking a
+  // six-game series does not leave six entries to back out of; the PGN is
+  // dropped here so the effect above fetches the new one.
   const watchSeriesGame = useCallback(
     (nextGameId: string) => {
       if (!nextGameId || nextGameId === gameId) return;
+      if (isGameLive(liveGames, nextGameId)) {
+        spectateGame(nextGameId);
+        router.replace(links.play());
+        return;
+      }
       setSwitchingTo(nextGameId);
       setPgnText(null);
       setBranch(null);
       router.replace(links.review(nextGameId));
     },
-    [gameId, router],
+    [gameId, liveGames, router, spectateGame],
   );
 
   // A record that cannot be read is shown as a message rather than thrown:
@@ -491,10 +534,22 @@ export default function ReviewScreen() {
 
   // Chat lives under the board on a wide screen, so the board leaves room for
   // it rather than pushing it off the bottom.
-  const showChat = Boolean(liveGameId) && liveGameId === gameId;
+  //
+  // Shown for any game of the run, not only the one the socket is seated on.
+  // Every game of a bot series shares one room — that is the whole point of the
+  // room outliving its board — so stepping back to game two of six to look at
+  // something is not leaving the conversation, and hiding the chat there would
+  // make it look like it was.
+  const showChat =
+    Boolean(liveGameId) && (liveGameId === gameId || seriesContains(series, liveGameId));
+  // The run's table sits above the board and is measured rather than guessed:
+  // it is two rows and a header, plus a line for every game somebody walked away
+  // from, so its height is not a constant. Without this the board keeps the room
+  // it had before there was a table over it and the chat underneath is pushed
+  // off the bottom of the window.
   const { boardSize, isWide } = useBoardLayout({
     sidePanel: 440,
-    below: showChat ? 240 : 0,
+    below: (showChat ? 240 : 0) + seriesTableHeight,
   });
 
   if (loadError && !record) {
@@ -571,6 +626,7 @@ export default function ReviewScreen() {
       onSend={sendChat}
       onToggleChat={toggleChat}
       onToggleSpectatorMessages={toggleSpectatorMessages}
+      roomOccupancy={chatOccupancy}
       series={roomSpansSeries(chatRoomId, liveGameId)}
       showSpectatorMessages={showSpectatorMessages}
       spectatorCount={0}
@@ -578,13 +634,26 @@ export default function ReviewScreen() {
     />
   ) : null;
 
+  const presetPicker = <AnalysisPresetPicker onChange={setPreset} value={preset} />;
+
   const boardBlock = (
     <View style={styles.boardStack}>
       {series ? (
-        <View style={[styles.seriesStrip, { maxWidth: boardSize + EVAL_BAR_GUTTER }]}>
+        <View
+          onLayout={(event) => {
+            // Rounded up to a step, and only ever grown by a step, because the
+            // measurement feeds the board size that feeds this width: a strip
+            // whose wrapping changed by a pixel could otherwise chase the board
+            // back and forth for ever.
+            const measured = Math.ceil(event.nativeEvent.layout.height / 8) * 8;
+            setSeriesTableHeight((current) => (current === measured ? current : measured));
+          }}
+          style={[styles.seriesStrip, { maxWidth: boardSize + EVAL_BAR_GUTTER }]}
+        >
           <SeriesScoreTable
             compact
             currentGameId={gameId ?? null}
+            liveGameIds={liveGameIds}
             onSelect={watchSeriesGame}
             series={series}
           />
@@ -601,6 +670,8 @@ export default function ReviewScreen() {
         lastMove={lastMoveShown ? { from: lastMoveShown.from, to: lastMoveShown.to } : null}
         lastMoveGrade={onMainLine && !currentMove?.pending ? currentMove?.grade : null}
         modeId={record.mode.id}
+        pieceLooks={modeLooks(record.mode)}
+        boardBackground={modeBackground(record.mode)}
         movableColor={game.currentTurn}
         onPieceDrop={playMove}
         onTilePress={selection.selectTile}
@@ -650,30 +721,62 @@ export default function ReviewScreen() {
         <View style={styles.recordCopy}>
           <Text style={styles.cardEyebrow}>GAME RECORD</Text>
           <Text accessibilityLiveRegion="polite" style={styles.recordDetail}>
-            {copyState === 'copied'
-              ? 'PGN copied to your clipboard.'
-              : copyState === 'error'
-                ? 'The PGN could not be copied.'
-                : 'Copy this game to save it or analyze it again later.'}
+            {copyState
+              ? copiedMessage(copyState)
+              : recordCardHint({ inSeries: Boolean(series), shareable: Boolean(gameId) })}
           </Text>
         </View>
-        <Pressable
-          accessibilityLabel="Copy game PGN"
-          accessibilityRole="button"
-          onPress={async () => {
-            try {
-              await Clipboard.setStringAsync(record.pgn);
-              setCopyState('copied');
-            } catch {
-              setCopyState('error');
-            }
-          }}
-          style={({ pressed }) => [styles.copyButton, pressed && styles.pressed]}
-        >
-          <Text style={styles.copyButtonText}>
-            {copyState === 'copied' ? 'COPIED ✓' : 'COPY PGN'}
-          </Text>
-        </Pressable>
+        <View style={[styles.recordActions, isWide && styles.recordActionsWide]}>
+          {/*
+            Only for a game the server has: a bot game or a pasted record is
+            here through the handoff store and has no address anybody else
+            could open, so there is nothing to hand over but the text.
+          */}
+          {gameId ? (
+            <Pressable
+              accessibilityLabel="Copy a link to this game review"
+              accessibilityRole="button"
+              onPress={async () => {
+                try {
+                  await Clipboard.setStringAsync(gameReviewURL(gameId));
+                  setCopyState({ what: 'link', ok: true });
+                } catch {
+                  setCopyState({ what: 'link', ok: false });
+                }
+              }}
+              style={({ pressed }) => [styles.copyButton, pressed && styles.pressed]}
+            >
+              <Text style={styles.copyButtonText}>
+                {copyState?.what === 'link' && copyState.ok ? 'COPIED ✓' : 'COPY GAME LINK'}
+              </Text>
+            </Pressable>
+          ) : null}
+          <Pressable
+            accessibilityLabel="Copy game PGN"
+            accessibilityRole="button"
+            onPress={async () => {
+              try {
+                await Clipboard.setStringAsync(record.pgn);
+                setCopyState({ what: 'pgn', ok: true });
+              } catch {
+                setCopyState({ what: 'pgn', ok: false });
+              }
+            }}
+            style={({ pressed }) => [styles.copyButton, pressed && styles.pressed]}
+          >
+            <Text style={styles.copyButtonText}>
+              {copyState?.what === 'pgn' && copyState.ok ? 'COPIED ✓' : 'COPY PGN'}
+            </Text>
+          </Pressable>
+          {/*
+            The way out to the whole run, for the person this link was sent to.
+            The strip over the board already lets them step between the games;
+            this is the other question — how the *match* went — and it is here
+            rather than up there because the board should not pay a line of
+            height for it.
+          */}
+          {series ? <SeriesLink label="SERIES RESULTS ›" seriesId={series.seriesId} /> : null}
+        </View>
       </View>
 
       <AccuracyCard
@@ -716,24 +819,34 @@ export default function ReviewScreen() {
     <SafeAreaView style={styles.safeArea} edges={['top', 'right', 'bottom', 'left']}>
       <View style={styles.screen}>
         <View style={styles.topBar}>
-          <Pressable
-            accessibilityLabel="Leave the review"
-            accessibilityRole="button"
-            onPress={() => router.back()}
-            style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}
-          >
-            <Text style={styles.backIcon}>‹</Text>
-          </Pressable>
-          <View style={styles.titleCopy}>
-            <Text numberOfLines={1} style={styles.kicker}>
-              {record.mode.shortCode ?? record.mode.id} · GAME REVIEW ·{' '}
-              {reviewState === 'running' ? `${progress}%` : record.result}
-            </Text>
-            <Text numberOfLines={1} style={styles.title}>
-              {record.players.Red?.name || 'Red'} vs {record.players.Blue?.name || 'Blue'}
-            </Text>
+          <View style={styles.topBarRow}>
+            <Pressable
+              accessibilityLabel="Leave the review"
+              accessibilityRole="button"
+              onPress={() => router.back()}
+              style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}
+            >
+              <Text style={styles.backIcon}>‹</Text>
+            </Pressable>
+            <View style={styles.titleCopy}>
+              <Text numberOfLines={1} style={styles.kicker}>
+                {record.mode.shortCode ?? record.mode.id} · GAME REVIEW ·{' '}
+                {reviewState === 'running' ? `${progress}%` : record.result}
+              </Text>
+              <Text numberOfLines={1} style={styles.title}>
+                {record.players.Red?.name || 'Red'} vs {record.players.Blue?.name || 'Blue'}
+              </Text>
+            </View>
+            {/*
+              Beside the matchup where there is room for both, and on its own
+              line where there is not — three depth chips took enough of a phone's
+              header to cut `Henhen1227 vs Guest` down to `Henhen1227 v…`, and
+              whose game this is matters more up here than how deep it is being
+              read.
+            */}
+            {isWide ? presetPicker : null}
           </View>
-          <AnalysisPresetPicker onChange={setPreset} value={preset} />
+          {isWide ? null : <View style={styles.presetRow}>{presetPicker}</View>}
         </View>
 
         {isWide ? (
@@ -765,6 +878,9 @@ export default function ReviewScreen() {
           <ScrollView
             contentContainerStyle={styles.mobileContent}
             keyboardShouldPersistTaps="handled"
+            // The board is inside this scroller on a phone, and dragging a
+            // piece must not drag the page with it.
+            scrollEnabled={!draggingPiece}
             showsVerticalScrollIndicator={false}
           >
             {boardBlock}
@@ -800,13 +916,12 @@ const styles = StyleSheet.create({
   emptyButtonText: { color: colors.textStrong, fontWeight: '900' },
   pressed: { opacity: 0.68 },
   topBar: {
-    minHeight: 64,
-    flexDirection: 'row',
-    alignItems: 'center',
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
     marginBottom: 12,
   },
+  topBarRow: { minHeight: 64, flexDirection: 'row', alignItems: 'center' },
+  presetRow: { flexDirection: 'row', justifyContent: 'flex-end', paddingBottom: 8 },
   backButton: {
     width: 38,
     height: 38,
@@ -848,6 +963,10 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
   },
   recordCopy: { flex: 1, minWidth: 0 },
+  // Stacked on a phone, where two buttons side by side would squeeze the line
+  // of text beside them into one word per row.
+  recordActions: { gap: 6 },
+  recordActionsWide: { flexDirection: 'row', alignItems: 'center' },
   recordDetail: { color: colors.textMuted, fontSize: 9, lineHeight: 14, marginTop: 4 },
   copyButton: {
     minHeight: 36,

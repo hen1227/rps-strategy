@@ -5,7 +5,7 @@
 // belongs to the mode rather than to whichever component is drawing it, which
 // is why the live board and every diagram of one read it from here.
 
-import { BOARD_SIZE, type ModeID, type PlayerColor, type Tile } from '@/types/game';
+import type { ModeID, PlayerColor, Tile } from '@/types/game';
 
 const MODE_INFILTRATION = 'V3';
 const MODE_TOTAL_WAR = 'V5';
@@ -16,10 +16,18 @@ export interface TileTint {
   kind: 'goal' | 'territory';
 }
 
-export const tintForTile = (modeId: ModeID | undefined, tile: Tile): TileTint | null => {
+/**
+ * `rows` is the board's height, not a constant: Blue's home boundary is the last
+ * rank of whatever board this is, and a mode may be any rectangle.
+ */
+export const tintForTile = (
+  modeId: ModeID | undefined,
+  tile: Tile,
+  rows: number,
+): TileTint | null => {
   if (modeId === MODE_INFILTRATION) {
     if (tile.y === 0) return { color: 'Red', kind: 'goal' };
-    if (tile.y === BOARD_SIZE - 1) return { color: 'Blue', kind: 'goal' };
+    if (tile.y === rows - 1) return { color: 'Blue', kind: 'goal' };
     return null;
   }
 

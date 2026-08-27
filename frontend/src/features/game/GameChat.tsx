@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { colors, players, radius } from '@/theme';
+import TitleTag from '@/ui/TitleTag';
 import type { GameStatus } from '@/types/game';
 import type { ChatMessage } from '@/types/protocol';
 
@@ -22,6 +23,13 @@ export interface GameChatProps {
   onSend: (text: string) => boolean;
   onToggleChat: () => void;
   onToggleSpectatorMessages: () => void;
+  /**
+   * How many people are in the room. Zero means nobody has said — a server
+   * from before the count, or a screen with no room behind it — and is read
+   * as "unknown" rather than as an empty room, which is not a thing anybody
+   * looking at this can be in.
+   */
+  roomOccupancy: number;
   /**
    * Whether this room spans a bot series rather than a single game. Worth
    * saying: the conversation carries across the run's boards, so a message
@@ -45,6 +53,7 @@ export default function GameChat({
   onSend,
   onToggleChat,
   onToggleSpectatorMessages,
+  roomOccupancy,
   series,
   showSpectatorMessages,
   spectatorCount,
@@ -70,6 +79,15 @@ export default function GameChat({
   const canSend = connected && draft.trim().length > 0;
   const spectatorLabel =
     spectatorCount === 1 ? '1 spectator' : `${spectatorCount} spectators`;
+  // The spectator figure comes off the lobby's live row, which a finished game
+  // does not have any more. The room does still have people in it, and saying
+  // how many is the difference between a conversation and shouting into a
+  // closed door — so the result swaps one count for the other rather than
+  // dropping to none at all.
+  const occupancyLabel = roomOccupancy > 0 ? `${roomOccupancy} here` : null;
+  const audienceLabel = isFinished
+    ? [finishedLabel, occupancyLabel].filter(Boolean).join(' · ')
+    : spectatorLabel;
 
   useEffect(() => {
     if (!chatVisible) return;
@@ -88,7 +106,7 @@ export default function GameChat({
         <View>
           <Text style={styles.eyebrow}>{title}</Text>
           <Text style={styles.closedCopy}>
-            Chat hidden · {isFinished ? finishedLabel.toLowerCase() : spectatorLabel}
+            Chat hidden · {isFinished ? audienceLabel.toLowerCase() : audienceLabel}
           </Text>
         </View>
         <Pressable
@@ -111,7 +129,7 @@ export default function GameChat({
           <View>
             <Text style={styles.eyebrow}>{title}</Text>
             <Text style={styles.messageCount}>
-              {isFinished ? finishedLabel : spectatorLabel} ·{' '}
+              {audienceLabel} ·{' '}
               {messages.length === 1 ? '1 message' : `${messages.length} messages`}
             </Text>
           </View>
@@ -170,6 +188,12 @@ export default function GameChat({
           visibleMessages.map((message) => (
             <View key={message.id} style={styles.messageRow}>
               <View style={styles.messageMeta}>
+                {/*
+                  The title the sender was wearing when they typed it, which
+                  travels on the message rather than being looked up now — so
+                  scrolling back reads the way the room read at the time.
+                */}
+                <TitleTag title={message.senderTitle} />
                 <Text style={styles.senderName} numberOfLines={1}>
                   {senderLabel(message, accountId)}
                 </Text>

@@ -34,7 +34,7 @@ const sections: PolicySection[] = [
     eyebrow: 'KEPT INDEFINITELY',
     title: 'What I store',
     paragraphs: [
-      'Your account: a random account ID your browser generates, your username, your Discord handle, a SHA-256 hash of your local account key, and, once you register, a salted PBKDF2 hash of your password. Never the key or the password themselves.',
+      'Your account: a random account ID your browser generates, your username, a SHA-256 hash of your local account key, and — once you sign in with Discord — your Discord user ID and handle, as Discord reports them. Never the key itself. Accounts made before Discord sign-in also hold a salted PBKDF2 hash of their password, which is deleted the moment they link a Discord account.',
       'Every finished online game, kept indefinitely and linked to both players: who played, the game mode, who won, how it ended, whether it was ranked, both ratings before and after, the number of moves, the time control, and when it started and finished.',
       'Your totals: wins, losses, draws, games played, and a separate Elo rating per game mode.',
       'Tournaments: your entry name, Discord handle, your matches, and their results.',
@@ -60,7 +60,7 @@ const sections: PolicySection[] = [
     title: 'Deleting your data',
     paragraphs: [
       `Message me on Discord (${CONTACT_DISCORD}) and I will delete your account and profile. Finished games involve another player, so I may keep the bare result with your name removed — otherwise your opponents' histories and ratings would break.`,
-      "Clearing this site's browser data also throws away your local account key. If you have registered, your username and password get you back in; if you have not, that key was the only way back.",
+      "Clearing this site's browser data also throws away your local account key. If you have an account, signing in with Discord gets you back in; if you have not, that key was the only way back.",
     ],
   },
   {

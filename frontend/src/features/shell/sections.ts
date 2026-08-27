@@ -1,3 +1,4 @@
+import { LAB_ENABLED } from '@/featureFlags';
 import { links } from '@/navigation/links';
 import type { Account } from '@/types/protocol';
 import type { Href } from 'expo-router';
@@ -5,13 +6,14 @@ import type { Href } from 'expo-router';
 // The navigation, in one place.
 //
 // Three surfaces render this list — the desktop sidebar, the phone's tab bar,
-// and the More sheet behind it — so a new section is one entry here rather than
+// and the More menu above it — so a new section is one entry here rather than
 // three edits that have to agree. `links.ts` still owns the addresses; this owns
 // what they are called and in which order they appear.
 
 export type SectionId =
   | 'play'
   | 'bots'
+  | 'library'
   | 'openings'
   | 'tournaments'
   | 'leaderboard'
@@ -24,14 +26,12 @@ export interface Section {
   label: string;
   /** The shorter tab-bar label, when the full one will not fit. */
   shortLabel?: string;
-  /** One line of explanation, for the More list. */
-  detail: string;
   href: Href;
   /** The path this section owns, for deciding which entry is current. */
   path: string;
   /**
    * A phone shows four sections plus More. These four are the ones worth a
-   * permanent tab; the rest live behind it.
+   * permanent tab; the rest are listed in the menu behind it.
    */
   primary?: boolean;
   /** Sections not everyone may see. */
@@ -43,7 +43,6 @@ export const SECTIONS: readonly Section[] = [
     id: 'play',
     label: 'Play Online',
     shortLabel: 'Play',
-    detail: 'Ranked matches, challenges, and custom games.',
     href: links.lobby(),
     path: '/',
     primary: true,
@@ -51,7 +50,6 @@ export const SECTIONS: readonly Section[] = [
   {
     id: 'bots',
     label: 'Bots',
-    detail: 'Play one, watch two fight, or challenge an engine somebody connected.',
     href: links.bots(),
     path: '/bots',
     primary: true,
@@ -60,7 +58,6 @@ export const SECTIONS: readonly Section[] = [
     id: 'tournaments',
     label: 'Tournaments',
     shortLabel: 'Events',
-    detail: 'Signups, live rounds, and every past event.',
     href: links.tournaments(),
     path: '/tournaments',
     primary: true,
@@ -68,29 +65,35 @@ export const SECTIONS: readonly Section[] = [
   {
     id: 'account',
     label: 'Account',
-    detail: 'Your name, your ratings, and your record.',
     href: links.account(),
     path: '/account',
     primary: true,
   },
   {
+    id: 'library',
+    label: 'Mode Library',
+    shortLabel: 'Modes',
+    href: links.library(),
+    path: '/library',
+    // Hidden in a build the Lab is off in: a library nobody can add to is a
+    // shelf of somebody else's games.
+    visible: () => LAB_ENABLED,
+  },
+  {
     id: 'leaderboard',
     label: 'Leaderboard',
-    detail: 'The best players and the best bots.',
     href: links.leaderboard(),
     path: '/leaderboard',
   },
   {
     id: 'openings',
     label: 'Openings',
-    detail: 'Browse the opening book and name what has no name.',
     href: links.openings(),
     path: '/openings',
   },
   {
     id: 'admin',
     label: 'Admin',
-    detail: 'Accounts, tournaments, bot series, and the opening book.',
     href: links.admin(),
     path: '/admin',
     // Gated on the account flag rather than on holding the host token, so an

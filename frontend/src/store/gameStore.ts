@@ -9,11 +9,19 @@ import {
   saveGameSessionId,
 } from './localIdentity';
 import { createBotSlice, initialBotState } from './botSession';
+import { createLocalSlice, initialLocalState } from './localSession';
 import { createSessionSlice } from './accountSession';
+import { createReachSlice } from './reachTool';
 import { chatRoomIdOf, withChatMessage } from './chatSelectors';
 import { grantedTimeExtension, type TimeExtension } from './clockSelectors';
+import { activePushTransport, pushEnabledFor } from './push';
 import { WS_URL } from './serverConfig';
-import { isStandardSetup, standardSetup } from './setupSelectors';
+import {
+  isStandardSetup,
+  preferredColorOf,
+  standardSetup,
+  type SeatChoice,
+} from './setupSelectors';
 import { send } from './socketSend';
 import type {
   ActiveGame,
@@ -35,6 +43,7 @@ import {
 } from '@/types/game';
 import type {
   Account,
+  BotDrain,
   BotPresence,
   Challenge,
   ChatMessage,
@@ -238,6 +247,15 @@ export interface LobbyState {
   modes: ModeDefinition[];
   engineBots: BotPresence[];
   botFault: { message?: string; botName?: string } | null;
+  /**
+   * The last graceful shutdown one of this account's own bots reported.
+   *
+   * A signal rather than a copy of the state: the owner's page fetches the
+   * authoritative list from `/api/bots/mine`, and this is what tells it there
+   * is something new to fetch. Holding the drain here too would give the same
+   * fact two homes that can disagree.
+   */
+  lastBotDrain: { botId?: string; botName?: string; drain?: BotDrain } | null;
   modePlayerCounts: ModeCounts;
   modeQueueCounts: ModeCounts;
   botPlayerCount: number;
@@ -272,7 +290,11 @@ export interface LobbyState {
   queueMiss: QueueMiss | null;
   /** People per mode who are waiting *and* at the keyboard right now. */
   modeReadyCounts: ModeCounts;
-  /** Whether this server can call anybody back when their tab is closed. */
+  /**
+   * Whether this server can call *this* device back once it is closed. Already
+   * narrowed to this build's transport, because a phone reading a browser's
+   * answer would be offered a button this deployment could never honour.
+   */
   pushEnabled: boolean;
   playerColor: PlayerColor | null;
   isSpectating: boolean;
@@ -298,6 +320,13 @@ export interface LobbyState {
    * board stays in the same chat as the board left behind.
    */
   chatRoomId: string | null;
+  /**
+   * How many people are in that conversation. Not the same figure as the live
+   * table's spectator count and it outlives it: a finished game leaves the
+   * lobby, taking its row and that count with it, while the room it left
+   * behind still has people talking in it.
+   */
+  chatOccupancy: number;
   chatVisible: boolean;
   showSpectatorMessages: boolean;
 }
@@ -330,7 +359,12 @@ export interface LobbyActions {
   acceptChallenge: (challengeId: string) => void;
   declineChallenge: (challengeId: string) => void;
   cancelChallenge: (challengeId: string) => void;
-  challengeBot: (botId: string, modeId: ModeID) => void;
+  /**
+   * Play a connected engine. `seat` is the side the challenger wants; 'random'
+   * lets the server seat them, which it does as Red — the first move, the same
+   * courtesy any other challenge carries.
+   */
+  challengeBot: (botId: string, modeId: ModeID, seat?: SeatChoice) => void;
   dismissBotFault: () => void;
   spectateGame: (gameId: string) => void;
   loadTournaments: () => Promise<void>;
@@ -370,6 +404,7 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
   // bot and means very nearly the opposite thing.
   engineBots: [],
   botFault: null,
+  lastBotDrain: null,
   modePlayerCounts: {},
   // Players waiting in matchmaking right now, per mode. The bot board watches
   // this so someone practising against a bot still hears the door knock.
@@ -401,6 +436,7 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
   opponentReconnectDeadline: null,
   chatMessages: [],
   chatRoomId: null,
+  chatOccupancy: 0,
   chatVisible: true,
   showSpectatorMessages: true,
 
@@ -531,7 +567,11 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
           return {
             queue,
             queueMiss: null,
-            pushEnabled: message.pushEnabled ?? false,
+            pushEnabled: pushEnabledFor(
+              activePushTransport(),
+              message.pushTransports,
+              message.pushEnabled ?? false,
+            ),
             modeReadyCounts: message.modeReadyCounts ?? state.modeReadyCounts,
             challengeNotice: lostQueue
               ? 'Your search ended while you were offline. Press play to start again.'
@@ -611,6 +651,17 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
         });
         break;
       }
+      case 'account_updated':
+        // Only ever this client's own row, resent because something on it
+        // changed without the client asking — a title the last game earned, or
+        // one the host granted. Guarded rather than defaulted to null, so an
+        // envelope with no account cannot blank the one already loaded.
+        //
+        // Deliberately not applyAccountUpdate, which reconnects the socket:
+        // this message *came* from the server, so the profile it hands out is
+        // already current and a reconnect would only drop the game in progress.
+        if (message.account) set({ account: message.account });
+        break;
       case 'live_games':
         set({ liveGames: message.liveGames ?? [] });
         break;
@@ -627,6 +678,18 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
         break;
       case 'bot_unavailable':
         set({ error: message.message ?? 'That bot is not available right now.' });
+        break;
+      case 'bot_drain_update':
+        // Only the owner of a bot receives this. It arrives when a drain
+        // starts, when it is called off, and when it settles — that last one
+        // being the moment the page has to stop saying "shutting down".
+        set({
+          lastBotDrain: {
+            botId: message.botId,
+            botName: message.botName,
+            drain: message.drain,
+          },
+        });
         break;
       case 'bot_fault':
         // Only the owner of a bot receives this, and it is the only place the
@@ -681,6 +744,7 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
           opponentReconnectDeadline: null,
           chatMessages: [],
           chatRoomId: null,
+          chatOccupancy: 0,
           queueMiss: { message: message.message ?? '', atUnixMs: Date.now() },
           challengeNotice: message.message ?? null,
           error: null,
@@ -760,11 +824,14 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
         break;
       case 'match_found': {
         const gameSessionId = persistGame(message.gameState);
-        // A found opponent takes the board: the bot game is local and
-        // unrated, so it is dropped rather than queued behind the match.
+        // A found opponent takes the board: a bot game and a pass-and-play
+        // game are both local and unrated, so either is dropped rather than
+        // queued behind the match.
         get().endBotSession();
+        get().endLocalSession();
         set({
           ...initialBotState,
+          ...initialLocalState,
           playerColor: message.color,
           isSpectating: false,
           spectatedGameId: null,
@@ -784,6 +851,7 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
           opponentReconnectDeadline: null,
           chatMessages: message.chatMessages ?? [],
           chatRoomId: chatRoomIdOf(message.chatRoomId, message.gameState?.gameId),
+          chatOccupancy: message.chatOccupancy ?? 0,
           error: null,
         });
         break;
@@ -805,6 +873,7 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
           opponentReconnectDeadline: message.reconnectDeadlineUnixMs || null,
           chatMessages: message.chatMessages ?? [],
           chatRoomId: chatRoomIdOf(message.chatRoomId, message.gameState?.gameId),
+          chatOccupancy: message.chatOccupancy ?? 0,
           error: null,
         });
         break;
@@ -826,6 +895,7 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
           opponentReconnectDeadline: null,
           chatMessages: message.chatMessages ?? [],
           chatRoomId: chatRoomIdOf(message.chatRoomId, message.gameState?.gameId),
+          chatOccupancy: message.chatOccupancy ?? 0,
           error: null,
         });
         break;
@@ -844,6 +914,7 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
           opponentReconnectDeadline: null,
           chatMessages: [],
           chatRoomId: null,
+          chatOccupancy: 0,
           error: null,
         });
         break;
@@ -859,6 +930,7 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
           opponentReconnectDeadline: null,
           chatMessages: [],
           chatRoomId: null,
+          chatOccupancy: 0,
           connectionStatus: 'connected',
           error: message.message ?? 'That game is no longer available to spectate.',
         });
@@ -907,6 +979,16 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
           return chatMessages === state.chatMessages ? {} : { chatMessages };
         });
         break;
+      case 'chat_presence':
+        set((state) => {
+          // Matched on the room for the same reason a message is: a series
+          // changeover moves the board without moving the conversation.
+          const room = chatRoomIdOf(state.chatRoomId, state.gameState?.gameId);
+          if (!room || (message.chatRoomId ?? room) !== room) return {};
+          const chatOccupancy = message.chatOccupancy ?? 0;
+          return chatOccupancy === state.chatOccupancy ? {} : { chatOccupancy };
+        });
+        break;
       case 'spectator_left':
         if (get().isSpectating) {
           set({
@@ -919,6 +1001,7 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
             validMoves: [],
             chatMessages: [],
             chatRoomId: null,
+            chatOccupancy: 0,
           });
         }
         break;
@@ -1081,8 +1164,9 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
     }
   },
 
-  challengeBot: (botId, modeId) => {
-    if (!botId || !send(get().socket, { type: 'challenge_bot', botId, modeId })) {
+  challengeBot: (botId, modeId, seat = 'random') => {
+    const preferredColor = preferredColorOf(seat);
+    if (!botId || !send(get().socket, { type: 'challenge_bot', botId, modeId, preferredColor })) {
       set({ error: 'Connect to the server before challenging a bot.' });
       return;
     }
@@ -1143,6 +1227,12 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
       get().botSelectTile(position);
       return;
     }
+    // A local game has no server session and no opponent either — both sides
+    // are this keyboard, so the colour check below would refuse half the moves.
+    if (gameState.local) {
+      get().localSelectTile(position);
+      return;
+    }
 
     if (selectedTile && validMoves.some((move) => samePosition(move, position))) {
       if (send(socket, { type: 'make_move', from: selectedTile, to: position })) {
@@ -1170,9 +1260,15 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
 
   movePiece: (from, to) => {
     const { gameState, playerColor, socket } = get();
-    if (!gameState || gameState.status !== 'InProgress' || gameState.currentTurn !== playerColor) {
+    if (!gameState || gameState.status !== 'InProgress') return;
+    // Checked before the turn guard rather than after it: nobody owns a colour
+    // at a local board, so `playerColor` is null there and the guard below
+    // would reject every move.
+    if (gameState.local) {
+      get().localMovePiece(from, to);
       return;
     }
+    if (gameState.currentTurn !== playerColor) return;
     if (gameState.bot) {
       get().botMovePiece(from, to);
       return;
@@ -1192,6 +1288,12 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
   offerDraw: () => {
     if (get().gameState?.bot) {
       get().offerBotDraw();
+      return;
+    }
+    // Both players are in the room, so there is nobody to send the offer to:
+    // the agreement already happened and this records it.
+    if (get().gameState?.local) {
+      get().drawLocalGame();
       return;
     }
     if (!send(get().socket, { type: 'offer_draw' })) {
@@ -1234,6 +1336,10 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
       get().resignBotGame();
       return;
     }
+    if (get().gameState?.local) {
+      get().resignLocalGame();
+      return;
+    }
     if (!send(get().socket, { type: 'resign_game' })) {
       set({ error: 'Reconnect to the server before resigning.' });
     }
@@ -1260,6 +1366,12 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
       get().endBotSession();
       return;
     }
+    // A local game was never announced to anybody, so leaving it says nothing
+    // at all.
+    if (get().gameState?.local) {
+      get().endLocalSession();
+      return;
+    }
     // Leaving the screen is what closes a finished game's chat room, so the
     // server hears about it whether we were playing or watching.
     send(get().socket, { type: 'leave_game' });
@@ -1276,6 +1388,7 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
       opponentReconnectDeadline: null,
       chatMessages: [],
       chatRoomId: null,
+      chatOccupancy: 0,
       error: null,
     });
   },
@@ -1294,5 +1407,7 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
 export const useGameStore = create<GameStore>()((...args) => ({
   ...createLobbySlice(...args),
   ...createBotSlice(...args),
+  ...createLocalSlice(...args),
   ...createSessionSlice(...args),
+  ...createReachSlice(...args),
 }));

@@ -13,8 +13,8 @@ import {
   createAnalysisGame,
   type AnalysisGame,
 } from '@/engine/analysisGame';
-import type { OpeningLine } from '@/engine/openingBook';
-import { parseSquare } from '@/engine/pgn';
+import { OPENING_PLIES, type OpeningLine } from '@/engine/openingBook';
+import { formatSquare, parseSquare } from '@/engine/pgn';
 import type { ModeDefinition, Move, SideColor } from '@/types/game';
 
 /**
@@ -27,11 +27,28 @@ import type { ModeDefinition, Move, SideColor } from '@/types/game';
  */
 const BOOK_MOVE = /^[RPS]?([a-i][1-9])[-x][RPS]?([a-i][1-9])$/;
 
+/** A move as the book spells it: `d9-c8`, squares only. */
+export const formatBookMove = ({ from, to }: Move): string =>
+  `${formatSquare(from)}-${formatSquare(to)}`;
+
 export const parseBookMove = (notation: string | null | undefined): Move | null => {
   const match = BOOK_MOVE.exec((notation ?? '').trim());
   if (!match) return null;
   return { from: parseSquare(match[1]), to: parseSquare(match[2]) };
 };
+
+/**
+ * A game's moves as a book line.
+ *
+ * Server games arrive with this already written — see `GameState.openingLine`,
+ * which is the only way a player who refreshed or a spectator who arrived late
+ * can have it at all. A bot game and a shared board have no server, so they
+ * write their own here, from the record they are already keeping.
+ */
+export const openingLineOf = (
+  moves: readonly Move[] | null | undefined,
+  plies = OPENING_PLIES,
+): string[] => (moves ?? []).slice(0, Math.max(0, plies)).map(formatBookMove);
 
 /** One move of a line, and the board it produced. */
 export interface OpeningStep {

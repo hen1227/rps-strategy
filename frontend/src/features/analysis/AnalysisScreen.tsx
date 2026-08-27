@@ -18,10 +18,14 @@ import { reviewSourceFromPGN, type GradedMove, type ReviewMove } from '@/engine/
 import { ANALYSIS_PRESETS, type AnalysisPresetName } from '@/engine/rpsfish/client';
 import type { Analysis } from '@/engine/rpsfish/protocol';
 import Board from '@/features/board/Board';
+import { modeBackground, modeLooks } from '@/features/board/modeArt';
+import { usePieceDrag } from '@/features/board/pieceDrag';
 import PGNImportModal from '@/features/pgn/PGNImportModal';
 import PositionSetupModal from '@/features/pgn/PositionSetupModal';
 import { useBoardLayout } from '@/hooks/useBoardLayout';
 import { useBoardSelection } from '@/hooks/useBoardSelection';
+import { useReach } from '@/hooks/useReach';
+import ReachPanel from '@/features/reach/ReachPanel';
 import useGameAnalysis from '@/hooks/useGameAnalysis';
 import { usePositionAnalysis, type SearchStatus } from '@/hooks/usePositionAnalysis';
 import useReplayKeyboard from '@/hooks/useReplayKeyboard';
@@ -91,6 +95,9 @@ interface AnalysisPanelProps {
   onAnalysisModeChange: (mode: AnalysisSearchMode) => void;
   onMakeBestMove: () => void;
   onSetPosition: () => void;
+  /** Absent in a mode with no goal row for the reach tool to measure against. */
+  onToggleReach?: () => void;
+  reachShowing?: boolean;
 }
 
 function AnalysisPanel({
@@ -104,6 +111,8 @@ function AnalysisPanel({
   onAnalysisModeChange,
   onMakeBestMove,
   onSetPosition,
+  onToggleReach,
+  reachShowing = false,
 }: AnalysisPanelProps) {
   const lastMove = gradedMoves[gradedMoves.length - 1];
   const activeColor = game.currentTurn;
@@ -171,6 +180,29 @@ function AnalysisPanel({
           >
             <Text style={styles.setPositionButtonText}>SET POSITION</Text>
           </Pressable>
+          {onToggleReach && (
+            <Pressable
+              accessibilityHint="Shows how far every piece is from every square, and which runs to the goal cannot be cut off."
+              accessibilityLabel={reachShowing ? 'Hide the reach maps' : 'Show the reach maps'}
+              accessibilityRole="switch"
+              accessibilityState={{ checked: reachShowing }}
+              onPress={onToggleReach}
+              style={({ pressed }) => [
+                styles.analysisModeButton,
+                reachShowing && styles.analysisModeButtonActive,
+                pressed && styles.buttonPressed,
+              ]}
+            >
+              <Text
+                style={[
+                  styles.analysisModeButtonText,
+                  reachShowing && styles.analysisModeButtonTextActive,
+                ]}
+              >
+                REACH
+              </Text>
+            </Pressable>
+          )}
         </View>
         <Pressable
           accessibilityRole="button"
@@ -304,6 +336,7 @@ export default function AnalysisScreen() {
 function AnalysisBoard({ mode }: { mode: ModeDefinition }) {
   const router = useRouter();
   const modes = useGameStore((state) => state.modes);
+  const draggingPiece = usePieceDrag((state) => state.dragging);
   const [game, setGame] = useState(() => createAnalysisGame(mode));
   const [analysisMode, setAnalysisMode] = useState<AnalysisSearchMode>('standard');
   const [history, setHistory] = useState<BoardMove[]>([]);
@@ -391,6 +424,11 @@ function AnalysisBoard({ mode }: { mode: ModeDefinition }) {
   });
   const { clearSelection, selectedTile, validMoves } = selection;
 
+  // The hand-built position is what makes this the endgame-study board: set a
+  // rook and its hunter down with `SET POSITION`, then walk one of them a
+  // square at a time and watch the verdict turn over.
+  const reachTool = useReach(game);
+
   const undoMove = useCallback(() => {
     const previousGame = pastGames[pastGames.length - 1];
     if (!previousGame) return;
@@ -455,9 +493,15 @@ function AnalysisBoard({ mode }: { mode: ModeDefinition }) {
         lastMove={history[history.length - 1]?.move ?? null}
         lastMoveGrade={lastGradedMove?.grade ?? null}
         modeId={game.mode.id}
+        pieceLooks={modeLooks(game.mode)}
+        boardBackground={modeBackground(game.mode)}
         movableColor={game.currentTurn}
         onPieceDrop={performMove}
-        onTilePress={selection.selectTile}
+        onTilePress={(square) => {
+          if (reachTool.handleTilePress(square)) return;
+          selection.selectTile(square);
+        }}
+        overlay={reachTool.overlay}
         playerColor="Red"
         selectedTile={selectedTile}
         validMoves={validMoves}
@@ -466,21 +510,26 @@ function AnalysisBoard({ mode }: { mode: ModeDefinition }) {
   );
 
   const panel = (
-    <AnalysisPanel
-      analysis={analysis}
-      analysisMode={analysisMode}
-      canMakeBestMove={game.status === 'InProgress' && Boolean(analysis?.lines[0])}
-      engineState={engineState}
-      game={game}
-      gradeError={gradeAnalysis.error}
-      gradedMoves={gradedMoves}
-      onAnalysisModeChange={setAnalysisMode}
-      onMakeBestMove={makeBestMove}
-      onSetPosition={() => {
-        setPositionModalInitial(startingPositionFromGrid(game.grid));
-        setPositionModalOpen(true);
-      }}
-    />
+    <>
+      <AnalysisPanel
+        analysis={analysis}
+        analysisMode={analysisMode}
+        canMakeBestMove={game.status === 'InProgress' && Boolean(analysis?.lines[0])}
+        engineState={engineState}
+        game={game}
+        gradeError={gradeAnalysis.error}
+        gradedMoves={gradedMoves}
+        onAnalysisModeChange={setAnalysisMode}
+        onMakeBestMove={makeBestMove}
+        onSetPosition={() => {
+          setPositionModalInitial(startingPositionFromGrid(game.grid));
+          setPositionModalOpen(true);
+        }}
+        onToggleReach={reachTool.available ? reachTool.toggle : undefined}
+        reachShowing={reachTool.active}
+      />
+      <ReachPanel tool={reachTool} />
+    </>
   );
 
   return (
@@ -568,6 +617,9 @@ function AnalysisBoard({ mode }: { mode: ModeDefinition }) {
         ) : (
           <ScrollView
             contentContainerStyle={styles.mobileContent}
+            // The board is inside this scroller on a phone, and dragging a
+            // piece must not drag the page with it.
+            scrollEnabled={!draggingPiece}
             showsVerticalScrollIndicator={false}
           >
             {board}
@@ -673,7 +725,7 @@ const styles = StyleSheet.create({
   boardColumn: { alignItems: 'center' },
   boardWithEval: { flexDirection: 'row', alignItems: 'stretch', gap: 7 },
   widePanel: { width: 350 },
-  widePanelContent: { paddingBottom: 18 },
+  widePanelContent: { paddingBottom: 18, gap: 10 },
   mobileContent: { alignItems: 'center', paddingBottom: 24, gap: 14 },
   panelStack: { width: '100%', gap: 10 },
   coachCard: {

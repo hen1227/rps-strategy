@@ -189,6 +189,8 @@ test('every call kind has usable copy', () => {
   for (const [kind, copy] of Object.entries(QUEUE_COPY)) {
     assert.ok(copy.title({ ...call, kind } as typeof call).length > 0, kind);
     assert.ok(copy.detail({ ...call, kind } as typeof call).length > 0, kind);
+    // A native line is optional, but one that exists has to say something.
+    assert.ok((copy.nativeDetail?.({ ...call, kind } as typeof call) ?? 'x').length > 0, kind);
     assert.equal(copy.action, copy.action.toUpperCase(), kind);
   }
 });
@@ -200,6 +202,7 @@ const gateSource = (overrides: Partial<Parameters<typeof lobbyGate>[0]> = {}) =>
   atOwnBoard: false,
   outgoingChallenge: null,
   queue: idleQueue(),
+  signedIn: true,
   ...overrides,
 });
 
@@ -218,6 +221,28 @@ test('a real game and a dead socket both count as being at a board', () => {
 
 test('an outgoing challenge is already a seek', () => {
   assert.equal(lobbyGate(gateSource({ outgoingChallenge: openChallenge() })).seekTaken, true);
+});
+
+// Ranked play needs an account, and that is the *only* thing being signed out
+// changes here. A guest can still take a casual game off the board and still
+// press play, so folding this into `atBoard` would make the lobby read-only for
+// exactly the people most likely to be trying it for the first time.
+test('being signed out asks for an account without closing the lobby', () => {
+  const guest = lobbyGate(gateSource({ signedIn: false }));
+  assert.equal(guest.needsAccount, true);
+  assert.equal(guest.atBoard, false);
+  assert.equal(guest.seekTaken, false);
+});
+
+test('being signed in asks for nothing', () => {
+  assert.equal(lobbyGate(gateSource()).needsAccount, false);
+});
+
+test('the three reasons are independent of one another', () => {
+  const busyGuest = lobbyGate(
+    gateSource({ signedIn: false, atOwnBoard: true, queue: searching() }),
+  );
+  assert.deepEqual(busyGuest, { atBoard: true, seekTaken: true, needsAccount: true });
 });
 
 /* ---------------------------------------------------------------- board -- */

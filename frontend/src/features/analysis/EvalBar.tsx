@@ -13,6 +13,23 @@ export const formatScore = (score: number | null | undefined) => {
 };
 
 /**
+ * The same score, trimmed to what fits inside the bar.
+ *
+ * The badge is a plate roughly 27pt across on a 31pt bar, which is five glyphs
+ * at this size and no more — so `+12.34` wrapped onto a second line the bar
+ * then clipped, and the score read as `+12.3` with a sliver of something under
+ * it. Hundredths are what gives: nobody reads the second decimal of a position
+ * that is already twelve points won, and the bar beside the number is saying
+ * the same thing less precisely anyway.
+ */
+const badgeScore = (score: number) => {
+  if (Math.abs(score) >= 29_000) return formatScore(score);
+  const value = Math.abs(score) / 100;
+  const digits = value >= 100 ? 0 : value >= 10 ? 1 : 2;
+  return `${score >= 0 ? '+' : '\u2212'}${value.toFixed(digits)}`;
+};
+
+/**
  * The vertical evaluation bar beside a board: Red fills from the bottom.
  *
  * `tanh` rather than a linear scale because the bar has to stay readable in
@@ -44,8 +61,8 @@ export default function EvalBar({ height, redScore }: EvalBarProps) {
       </View>
       <View style={[styles.evalDivider, { top: `${blueShare}%` }]} />
       <View style={[styles.evalBadge, score < 0 && styles.evalBadgeOnBlue]}>
-        <Text style={[styles.evalValue, score < 0 && styles.evalValueOnBlue]}>
-          {formatScore(score)}
+        <Text numberOfLines={1} style={[styles.evalValue, score < 0 && styles.evalValueOnBlue]}>
+          {badgeScore(score)}
         </Text>
       </View>
     </View>
@@ -86,9 +103,9 @@ const styles = StyleSheet.create({
   },
   evalBadge: {
     position: 'absolute',
-    right: 2,
+    right: 0,
     bottom: 19,
-    left: 2,
+    left: 0,
     alignItems: 'center',
     paddingVertical: 3,
     borderRadius: 4,

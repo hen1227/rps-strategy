@@ -98,7 +98,13 @@ export default function BotIcon({ profileId, name, uri, size = 52 }: BotIconProp
         },
       ]}
     >
-      <Text style={[styles.monogramText, { fontSize: Math.round(size * 0.36) }]}>
+      {/*
+        Proportional down to the point where two capitals stop being letters.
+        The score table's own icons are 16px, and 0.36 of that is a 6px smudge:
+        below the floor the monogram is only a coloured square, which is the one
+        thing it exists not to be.
+      */}
+      <Text style={[styles.monogramText, { fontSize: Math.max(8, Math.round(size * 0.36)) }]}>
         {monogramOf(label)}
       </Text>
     </View>

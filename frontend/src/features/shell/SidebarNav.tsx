@@ -100,7 +100,7 @@ export default function SidebarNav() {
           style={({ pressed }) => [styles.video, pressed && styles.pressed]}
         >
           <Text style={styles.videoMark}>▶</Text>
-          <Text style={styles.videoText}>The video behind this</Text>
+          <Text style={styles.videoText}>The video behind this game</Text>
         </Pressable>
 
         <Link href={links.policy()} replace style={styles.policy}>

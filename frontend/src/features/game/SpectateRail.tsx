@@ -1,5 +1,5 @@
 import { useRouter } from 'expo-router';
-import { useEffect, useRef, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, type ReactNode } from 'react';
 import {
   Animated as NativeAnimated,
   Easing,
@@ -13,9 +13,11 @@ import {
 import SeriesScoreTable from '@/features/bots/SeriesScoreTable';
 import { useBotSeries } from '@/hooks/useBotSeries';
 import { useWideScreen } from '@/hooks/useBoardLayout';
+import { useGameStore } from '@/store/gameStore';
 import { links } from '@/navigation/links';
 import type { SpectateContext } from '@/hooks/useSpectateContext';
 import {
+  isGameLive,
   seriesProgressLabel,
   seriesScoreOf,
   type TournamentBoard,
@@ -145,18 +147,36 @@ function SeriesRail({
 }: SeriesRailProps) {
   const isWide = useWideScreen();
   const router = useRouter();
+  const liveGames = useGameStore((state) => state.liveGames);
+  const liveGameIds = useMemo(() => liveGames.map((live) => live.gameId), [liveGames]);
   // Refetched when the run moves on to its next game, which is the only thing
-  // that changes what the strip should say.
-  const full = useBotSeries(series.seriesId, series.gameNumber);
+  // that changes what the strip should say. Only the run itself is wanted here:
+  // a rail with no table is still a rail, so there is nothing for this screen to
+  // do with the difference between "still loading" and "no such run".
+  const full = useBotSeries(series.seriesId, series.gameNumber).series;
+
+  // Picking a game off the table. A game still in play is another board to
+  // watch, and swapping to it is what the NEXT GAME button beside this already
+  // does; a finished one has no live board left to put anybody on, so it opens
+  // its record instead.
+  const watchSeriesGame = (gameId: string) => {
+    if (gameId === currentGameId) return;
+    if (isGameLive(liveGames, gameId)) {
+      onWatch(gameId);
+      return;
+    }
+    router.push(links.review(gameId));
+  };
   const score = seriesScoreOf(series, redName, blueName);
   const played = series.firstWins + series.secondWins + series.draws;
   const canAdvance = Boolean(nextGame) && !disabled && !isPending;
   const isOver = !nextGame && series.gameNumber >= series.totalGames;
 
-  // The score sits beside the run on a wide screen and under it on a narrow
-  // one. Three things across one phone-width row leaves none of them legible.
+  // The score in words, for the moment before the run's games arrive. Once they
+  // do the table below says the same thing with both names and both totals in
+  // it, and saying it twice is what made this bar as tall as it was.
   const scoreboard = (
-    <View style={isWide ? styles.railScore : styles.railScoreStacked}>
+    <View style={isWide ? styles.scoreBlock : styles.scoreBlockStacked}>
       <Text style={styles.scoreLine} numberOfLines={1}>
         {score.firstName}{' '}
         <Text style={styles.scoreValue}>
@@ -172,6 +192,23 @@ function SeriesRail({
     </View>
   );
 
+  // Every game of the run, not only the one on screen and the one after it.
+  // The bar says where you are; this says what has happened, which is the
+  // question somebody arriving at game five actually has.
+  //
+  // A finished game opens in review rather than on this board, because there is
+  // no live board to put you on — the engines have moved on. The game being
+  // played is the current chip and is already where you are.
+  const table = full ? (
+    <SeriesScoreTable
+      compact
+      currentGameId={currentGameId}
+      liveGameIds={liveGameIds}
+      onSelect={watchSeriesGame}
+      series={full}
+    />
+  ) : null;
+
   return (
     <View style={styles.seriesFrame}>
     <View style={styles.railRow}>
@@ -181,9 +218,20 @@ function SeriesRail({
           {seriesProgressLabel(series)}
         </Text>
         <SeriesMeter played={played} position={series.gameNumber} total={series.totalGames} />
-        {!isWide && scoreboard}
+        {!isWide && !table && scoreboard}
       </View>
-      {isWide && scoreboard}
+      {/*
+        On a wide screen the table is the scoreboard, in the room the score line
+        used to sit in: the bar was a strip of copy with an empty middle and the
+        whole table stacked underneath, which is two blocks off the top of the
+        screen to say one thing. A phone keeps them stacked — a fixed names
+        column, the games and the button will not go across one phone width.
+      */}
+      {isWide ? (
+        <View style={styles.railSlot}>
+          {table ? <View style={styles.railTable}>{table}</View> : scoreboard}
+        </View>
+      ) : null}
       <Pressable
         accessibilityLabel="Watch the next game of this series"
         accessibilityRole="button"
@@ -202,25 +250,7 @@ function SeriesRail({
       </Pressable>
     </View>
 
-      {/*
-        Every game of the run, not only the one on screen and the one after it.
-        The bar above says where you are; this says what has happened, which is
-        the question somebody arriving at game five actually has.
-
-        A finished game opens in review rather than on this board, because there
-        is no live board to put you on — the engines have moved on. The game
-        being played is the current chip and is already where you are.
-      */}
-      {full ? (
-        <SeriesScoreTable
-          compact
-          currentGameId={currentGameId}
-          onSelect={(gameId) =>
-            gameId === currentGameId ? undefined : router.push(links.review(gameId))
-          }
-          series={full}
-        />
-      ) : null}
+      {!isWide && table}
     </View>
   );
 }
@@ -309,26 +339,37 @@ function TournamentRail({
 const styles = StyleSheet.create({
   // The steering bar and the run's own games, stacked: one says where you are,
   // the other says what has happened.
-  seriesFrame: { gap: space.small },
+  seriesFrame: { gap: space.snug },
   rail: {
-    marginBottom: 7,
-    paddingHorizontal: 11,
-    paddingVertical: 9,
+    marginBottom: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
     borderRadius: radius.large,
     borderWidth: 1,
     borderColor: colors.borderSoft,
     backgroundColor: colors.surfaceSunken,
   },
-  railRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  railRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   railColumn: { gap: 8 },
   // A fixed width so the meter reads as a meter rather than stretching into a
   // rule across the bar.
-  railCopy: { gap: 3, width: 210, flexShrink: 1 },
-  railCopyStacked: { gap: 3, flex: 1 },
+  railCopy: { gap: 2, width: 186, flexShrink: 1 },
+  railCopyStacked: { gap: 2, flex: 1 },
   // Reads as a scoreboard: the run on the left, the score up against the
-  // button that moves you along it.
-  railScore: { flex: 1, alignItems: 'flex-end' },
-  railScoreStacked: { marginTop: 1 },
+  // button that moves you along it. The score shrinks rather than pushing the
+  // button off the bar, so a long run scrolls its games inside this instead.
+  railSlot: {
+    flex: 1,
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    flexShrink: 1,
+    minWidth: 0,
+  },
+  // Allowed to shrink, so a fifty-game run scrolls its games inside the bar
+  // rather than growing across the button that moves you along it.
+  railTable: { flexShrink: 1, minWidth: 0 },
+  scoreBlock: { alignItems: 'flex-end' },
+  scoreBlockStacked: { marginTop: 1 },
   scoreLine: { color: colors.textMuted, fontSize: 11 },
   scoreValue: { color: colors.textStrong, fontWeight: '900' },
   scoreDraws: { color: colors.textFaint, fontSize: 10, marginTop: 1 },
@@ -339,12 +380,12 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     letterSpacing: 1.1,
   },
-  railTitle: { color: colors.textStrong, fontSize: 14, fontWeight: '900' },
+  railTitle: { color: colors.textStrong, fontSize: 13, fontWeight: '900' },
   railCount: { color: colors.textMuted, fontSize: 11, fontWeight: '700' },
 
   meter: {
-    height: 4,
-    marginTop: 1,
+    height: 3,
+    marginTop: 2,
     borderRadius: 2,
     backgroundColor: colors.surfaceMuted,
     overflow: 'hidden',
@@ -366,8 +407,8 @@ const styles = StyleSheet.create({
   },
 
   advance: {
-    minHeight: 36,
-    paddingHorizontal: 13,
+    minHeight: 30,
+    paddingHorizontal: 11,
     justifyContent: 'center',
     borderRadius: radius.medium,
     borderWidth: 1,
@@ -375,7 +416,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surfaceRaised,
   },
   advanceReady: { borderColor: colors.accentBorder, backgroundColor: colors.accentSurfaceRaised },
-  advanceText: { color: colors.textFaint, fontSize: 11, fontWeight: '900', letterSpacing: 0.6 },
+  advanceText: { color: colors.textFaint, fontSize: 10, fontWeight: '900', letterSpacing: 0.6 },
   advanceTextReady: { color: colors.accentTextStrong },
 
   boardStrip: { flexDirection: 'row', gap: 7, paddingRight: 2 },

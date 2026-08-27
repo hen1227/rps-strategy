@@ -1,4 +1,5 @@
 import { Slot } from 'expo-router';
+import { useEffect } from 'react';
 import { StyleSheet, View, type LayoutChangeEvent } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -7,7 +8,6 @@ import MobileTopBar from './MobileTopBar';
 import SidebarNav from './SidebarNav';
 import { useBottomInset } from './bottomInset';
 import LiveRail from '@/features/live/LiveRail';
-import LiveSummaryBar from '@/features/live/LiveSummaryBar';
 import { useWideScreen } from '@/hooks/useBoardLayout';
 import { colors } from '@/theme';
 import { Banner } from '@/ui/primitives';
@@ -34,9 +34,17 @@ export default function ShellLayout() {
   const clearError = useGameStore((state) => state.clearError);
 
   // Measured rather than guessed, because the tournament call-out floats over
-  // every page and has to clear whatever is actually down there.
+  // every page and has to clear whatever is actually down there — a tab bar
+  // plus however much of the phone's chin the safe area claims.
   const measureChrome = (event: LayoutChangeEvent) =>
     setBottomInset(event.nativeEvent.layout.height);
+
+  // The measured bottom chrome disappears with the phone layout. Clear
+  // its old measurement after a resize so floating callouts do not keep
+  // reserving space for a bar that is no longer there.
+  useEffect(() => {
+    if (isWide) setBottomInset(0);
+  }, [isWide, setBottomInset]);
 
   const banner = error ? (
     <View style={styles.banner}>
@@ -44,37 +52,41 @@ export default function ShellLayout() {
     </View>
   ) : null;
 
-  if (isWide) {
-    return (
-      <SafeAreaView edges={['top', 'right', 'bottom', 'left']} style={styles.screen}>
-        <View style={styles.columns}>
-          <SidebarNav />
+  // One tree, not two.
+  //
+  // The chrome swaps around the page; the page itself keeps its place in the
+  // tree, because `Slot` is a navigator and a replaced navigator can come up
+  // on a different route than the one it was showing. Two returns, each with
+  // its own `<Slot />`, meant a fresh mount of this layout built one navigator
+  // and then, one render later, another — see the note above about the phone
+  // layout always painting first — and the second came up on the group's
+  // index. Nothing noticed while the only way in was the lobby, which *is* the
+  // index; a link from the board to any other section landed on the lobby.
+  return (
+    <SafeAreaView
+      edges={isWide ? ['top', 'right', 'bottom', 'left'] : ['top', 'right', 'left']}
+      style={styles.screen}
+    >
+      <View style={isWide ? styles.columns : styles.stack}>
+        {isWide ? <SidebarNav /> : <MobileTopBar />}
+        <View style={styles.mainColumn}>
           <View style={styles.main}>
             {banner}
             <Slot />
           </View>
-          <LiveRail />
         </View>
-      </SafeAreaView>
-    );
-  }
-
-  return (
-    <SafeAreaView edges={['top', 'right', 'left']} style={styles.screen}>
-      <MobileTopBar />
-      <View style={styles.main}>
-        {banner}
-        <Slot />
-      </View>
-      {/*
-        One measured stack so the two pieces of bottom chrome cannot disagree
-        about how tall they are between them.
-      */}
-      <View onLayout={measureChrome}>
-        <LiveSummaryBar />
-        <SafeAreaView edges={['bottom']} style={styles.tabHolder}>
-          <BottomTabBar />
-        </SafeAreaView>
+        {isWide ? (
+          <LiveRail />
+        ) : (
+          /*
+            The tab bar and nothing else. A one-line summary of the live rail
+            used to sit above it, opening the whole rail in a sheet — see
+            `LiveNowPanel` for where that went and why.
+          */
+          <SafeAreaView edges={['bottom']} onLayout={measureChrome} style={styles.tabHolder}>
+            <BottomTabBar />
+          </SafeAreaView>
+        )}
       </View>
     </SafeAreaView>
   );
@@ -83,6 +95,8 @@ export default function ShellLayout() {
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.background },
   columns: { flex: 1, flexDirection: 'row', alignItems: 'stretch' },
+  stack: { flex: 1, flexDirection: 'column' },
+  mainColumn: { flex: 1, minWidth: 0 },
   main: { flex: 1, minWidth: 0 },
   banner: { paddingHorizontal: 16, paddingTop: 12 },
   tabHolder: { backgroundColor: colors.surfaceSunken },

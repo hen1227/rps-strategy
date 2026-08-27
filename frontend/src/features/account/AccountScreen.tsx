@@ -6,6 +6,7 @@ import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-nati
 import LinkRow from '@/ui/LinkRow';
 import ScreenShell from '@/ui/ScreenShell';
 import {
+  Badge,
   Banner,
   GhostButton,
   LabeledInput,
@@ -13,14 +14,20 @@ import {
   PrimaryButton,
   SectionHeading,
 } from '@/ui/primitives';
-import AccountAuthPanel from '@/features/account/AccountAuthPanel';
+import AccountSignInPanel from '@/features/account/AccountSignInPanel';
+import DiscordLinkPrompt from '@/features/account/DiscordLinkPrompt';
+import UsernameSetupPanel from '@/features/account/UsernameSetupPanel';
+import TitlesPanel from '@/features/account/TitlesPanel';
+import GameHistoryPanel from '@/features/game/GameHistoryPanel';
 import MatchAlertsPanel from '@/features/queue/MatchAlertsPanel';
 import { getAccount, updateAccount } from '@/store/api/accounts';
+import { isSignedIn } from '@/store/accountSession';
 import { useGameStore } from '@/store/gameStore';
 import { isReservedIn, useIdentityPolicy } from '@/hooks/useIdentityPolicy';
 import { links } from '@/navigation/links';
 import type { ModeDefinition, ModeID } from '@/types/game';
 import type { Account } from '@/types/protocol';
+import TitleTag from '@/ui/TitleTag';
 import { colors, contentWidth, radius } from '@/theme';
 
 // The account screen, which is now first and foremost where you get an
@@ -116,7 +123,11 @@ export default function AccountScreen() {
     };
   }, [accountId, storedAccount]);
 
-  const signedIn = Boolean(sessionToken && account?.registered);
+  const signedIn = isSignedIn(sessionToken, account);
+  // A verified handle is Discord's answer, not the player's, so it is shown
+  // rather than edited. Only a legacy account that has not linked yet still
+  // types one.
+  const discordVerified = Boolean(account?.discordVerified);
   const username = edits?.username ?? account?.username ?? '';
   const discord = edits?.discord ?? account?.discord ?? '';
   const setField = (field: 'username' | 'discord', value: string) => {
@@ -126,16 +137,20 @@ export default function AccountScreen() {
 
   const trimmedUsername = username.trim();
   const trimmedDiscord = discord.trim();
-  const needsReservationToken =
-    isReservedIn(policy, trimmedUsername) || isReservedIn(policy, trimmedDiscord);
-  const changed =
-    trimmedUsername !== (account?.username ?? '') || trimmedDiscord !== (account?.discord ?? '');
+  // Usernames only. A verified handle is Discord's own answer and cannot be
+  // forged, so reserving it would prevent no impersonation — while a real
+  // Discord user whose name happened to match a reserved one would be
+  // permanently unable to save any change to their profile.
+  const needsReservationToken = isReservedIn(policy, trimmedUsername);
+  const discordChanged = !discordVerified && trimmedDiscord !== (account?.discord ?? '');
+  const changed = trimmedUsername !== (account?.username ?? '') || discordChanged;
   const canSave =
     !saving &&
     changed &&
     trimmedUsername.length >= policy.minLength &&
     trimmedUsername.length <= policy.maxLength &&
-    (trimmedDiscord === '' ||
+    (discordVerified ||
+      trimmedDiscord === '' ||
       (trimmedDiscord.length >= MINIMUM_DISCORD_LENGTH &&
         trimmedDiscord.length <= MAXIMUM_DISCORD_LENGTH &&
         !/\s/.test(trimmedDiscord))) &&
@@ -186,9 +201,12 @@ export default function AccountScreen() {
             <Text style={styles.subtitle}>
               {account?.registered
                 ? 'These details appear to your opponent in every online game.'
-                : 'Claim a username and everything you have played so far comes with it.'}
+                : 'Sign in with Discord and everything you have played so far comes with it.'}
             </Text>
           </View>
+
+          <UsernameSetupPanel />
+          {signedIn && account && !discordVerified ? <DiscordLinkPrompt /> : null}
 
           {loading ? (
             <View style={styles.loadingCard}>
@@ -204,7 +222,12 @@ export default function AccountScreen() {
                   </Text>
                 </View>
                 <View style={styles.profileIdentity}>
-                  <Text style={styles.profileName}>{visibleName(account) || 'Guest player'}</Text>
+                  <View style={styles.profileNameRow}>
+                    <TitleTag size="large" title={account?.title} />
+                    <Text numberOfLines={1} style={styles.profileName}>
+                      {visibleName(account) || 'Guest player'}
+                    </Text>
+                  </View>
                   <Text style={styles.profileDiscord}>
                     {signedIn
                       ? trimmedDiscord
@@ -250,18 +273,34 @@ export default function AccountScreen() {
                     {username.length}/{policy.maxLength}
                   </Text>
 
-                  <LabeledInput
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                    label="DISCORD HANDLE"
-                    maxLength={MAXIMUM_DISCORD_LENGTH}
-                    onChangeText={(value) => setField('discord', value)}
-                    placeholder="username (optional)"
-                    value={discord}
-                  />
-                  <Text style={styles.characterCount}>
-                    {discord.length}/{MAXIMUM_DISCORD_LENGTH}
-                  </Text>
+                  {discordVerified ? (
+                    <View style={styles.verifiedRow}>
+                      <Text style={styles.fieldLabel}>DISCORD</Text>
+                      <View style={styles.verifiedValue}>
+                        <Text style={styles.verifiedHandle}>{discord}</Text>
+                        <Badge label="VERIFIED" tone="accent" />
+                      </View>
+                      <Text style={styles.helper}>
+                        Confirmed by Discord when you signed in, so nobody can enter it as
+                        theirs.
+                      </Text>
+                    </View>
+                  ) : (
+                    <>
+                      <LabeledInput
+                        autoCapitalize="none"
+                        autoCorrect={false}
+                        label="DISCORD HANDLE"
+                        maxLength={MAXIMUM_DISCORD_LENGTH}
+                        onChangeText={(value) => setField('discord', value)}
+                        placeholder="username (optional)"
+                        value={discord}
+                      />
+                      <Text style={styles.characterCount}>
+                        {discord.length}/{MAXIMUM_DISCORD_LENGTH}
+                      </Text>
+                    </>
+                  )}
 
                   {needsReservationToken && (
                     <LabeledInput
@@ -293,8 +332,15 @@ export default function AccountScreen() {
                   </View>
                 </Panel>
               ) : (
-                <AccountAuthPanel />
+                <AccountSignInPanel />
               )}
+
+              {/*
+                Under the identity form, because a title is part of the name
+                rather than a statistic: it is chosen next to the field it will
+                sit in front of, not down beside the ratings that earned it.
+              */}
+              <TitlesPanel account={account} sessionToken={sessionToken} />
 
               {/*
                 Always here, whatever state alerts are in — including the states
@@ -368,6 +414,14 @@ export default function AccountScreen() {
                 </View>
               </Panel>
 
+              {/*
+                The detail behind the totals above it: the same games those
+                wins and losses were counted from, each one openable as a
+                review and copyable as a link. It sits under the record rather
+                than above the ratings because it is that record, itemised.
+              */}
+              <GameHistoryPanel title="Your games" userId={account?.userId ?? accountId} />
+
               <Panel style={styles.keyPanel}>
                 <View style={styles.keyIcon}>
                   <Text style={styles.keyIconText}>◆</Text>
@@ -427,7 +481,8 @@ const styles = StyleSheet.create({
   },
   avatarText: { color: colors.accentSoft, fontSize: 19, fontWeight: '900' },
   profileIdentity: { flex: 1, minWidth: 0, paddingHorizontal: 12 },
-  profileName: { color: colors.textStrong, fontSize: 16, fontWeight: '900' },
+  profileNameRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  profileName: { color: colors.textStrong, fontSize: 16, fontWeight: '900', flexShrink: 1 },
   profileDiscord: { color: colors.textMuted, fontSize: 10, marginTop: 3 },
   eloBadge: { alignItems: 'flex-end', paddingLeft: 8 },
   eloLabel: { color: colors.textFaint, fontSize: 8, fontWeight: '900', letterSpacing: 1 },
@@ -450,6 +505,15 @@ const styles = StyleSheet.create({
   ratingEloUnplayed: { color: colors.textMuted },
 
   characterCount: { alignSelf: 'flex-end', color: colors.textFaint, fontSize: 9, marginTop: 4 },
+  verifiedRow: { marginTop: 14 },
+  fieldLabel: {
+    color: colors.textFaint,
+    fontSize: 9,
+    fontWeight: '900',
+    letterSpacing: 1.2,
+  },
+  verifiedValue: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 6 },
+  verifiedHandle: { color: colors.text, fontSize: 14, fontWeight: '700' },
   banners: { gap: 8, marginTop: 14 },
   saveAction: { marginTop: 15 },
 

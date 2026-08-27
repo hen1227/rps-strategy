@@ -9,9 +9,12 @@
 //   extensionless paths — the app writes `from './analysisGame'`, which Metro
 //   resolves and Node does not.
 //
-//   `react-native` — `engine/rpsfish/client.ts` imports `Platform` only to
-//   refuse to start a Worker off the web. The arena injects its own `analyze`,
-//   so that code never runs, but a static import still has to resolve.
+//   `react-native`, `expo` and `expo-sqlite/kv-store` — Node resolves the
+//   *native* half of every platform-split module, because it knows nothing of
+//   Metro's `.web.ts`. So it reaches the native engine session and the device
+//   store, neither of which exists here. The arena and the tests inject their
+//   own `analyze`, so the engine never runs; storage is answered with a plain
+//   in-memory map, which is what a device store does minus the device.
 //
 // TypeScript itself needs no help beyond a nudge: Node strips types on its own,
 // but only for files it already knows are ES modules, and a `.ts` file in a
@@ -21,12 +24,16 @@
 import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 
-const STUB_URL = 'rpsfish-arena:react-native';
+const REACT_NATIVE_STUB = 'rpsfish-arena:react-native';
+const EXPO_STUB = 'rpsfish-arena:expo';
+const KV_STORE_STUB = 'rpsfish-arena:kv-store';
 const SOURCE_ROOT = pathToFileURL(new URL('../src/', import.meta.url).pathname);
 const EXTENSIONS = ['.ts', '.tsx', '.js', '.mts'];
 
 export const resolve = async (specifier, context, next) => {
-  if (specifier === 'react-native') return { shortCircuit: true, url: STUB_URL };
+  if (specifier === 'react-native') return { shortCircuit: true, url: REACT_NATIVE_STUB };
+  if (specifier === 'expo') return { shortCircuit: true, url: EXPO_STUB };
+  if (specifier === 'expo-sqlite/kv-store') return { shortCircuit: true, url: KV_STORE_STUB };
 
   if (specifier.startsWith('@/')) {
     return resolve(new URL(specifier.slice(2), SOURCE_ROOT).href, context, next);
@@ -35,7 +42,11 @@ export const resolve = async (specifier, context, next) => {
   try {
     return await next(specifier, context);
   } catch (error) {
-    if (error?.code !== 'ERR_MODULE_NOT_FOUND') throw error;
+    // A directory is reported as its own kind of failure rather than as a
+    // missing module, and `modules/rpsfish` is imported as one.
+    const recoverable =
+      error?.code === 'ERR_MODULE_NOT_FOUND' || error?.code === 'ERR_UNSUPPORTED_DIR_IMPORT';
+    if (!recoverable) throw error;
     if (!specifier.startsWith('.') && !specifier.startsWith('file:')) throw error;
     for (const extension of EXTENSIONS) {
       try {
@@ -57,11 +68,35 @@ export const resolve = async (specifier, context, next) => {
 };
 
 export const load = async (url, context, next) => {
-  if (url === STUB_URL) {
+  if (url === REACT_NATIVE_STUB) {
     return {
       format: 'module',
       shortCircuit: true,
       source: 'export const Platform = { OS: "node" };',
+    };
+  }
+  if (url === KV_STORE_STUB) {
+    return {
+      format: 'module',
+      shortCircuit: true,
+      source: [
+        'const entries = new Map();',
+        'export default {',
+        '  getItemSync: (key) => (entries.has(key) ? entries.get(key) : null),',
+        '  setItemSync: (key, value) => { entries.set(key, String(value)); },',
+        '  removeItemSync: (key) => entries.delete(key),',
+        '};',
+      ].join('\n'),
+    };
+  }
+  if (url === EXPO_STUB) {
+    return {
+      format: 'module',
+      shortCircuit: true,
+      // Node has no native modules, which is exactly what the optional form of
+      // the lookup is for: the session reports the engine as unavailable
+      // instead of throwing on import.
+      source: 'export const requireOptionalNativeModule = () => null;',
     };
   }
   // `module-typescript` is Node's own type-stripping format. Naming it here is

@@ -3,6 +3,7 @@
 // usage:
 //   npm run arena -- --ladder --pairs 25
 //   npm run arena -- --a crane --b boulder --mode V3 --pairs 40
+//   npm run arena -- --a racer --b snips --mode V3   (the searchless racer)
 //   npm run arena -- --spread            (root-score gaps per mode)
 //   npm run arena -- --ladder --adjudicate   (faster, less faithful)
 //
@@ -28,8 +29,11 @@ import {
   randomOpening,
   type BuildBots,
 } from '../src/engine/bots/arena';
-import { createBot } from '../src/engine/bots/engine';
+import { createBot, type Bot } from '../src/engine/bots/engine';
 import { BOT_PROFILES, botProfile, type BotProfile } from '../src/engine/bots/profiles';
+import { RACER_PROFILE, createRacerBot } from '../src/engine/bots/racer';
+import { RACER_DEFAULTS, type RacerOptions } from '../src/engine/racer';
+import { supportsReachRace } from '../src/engine/reach';
 import { testMode } from '../src/testing/modes';
 import type { ModeDefinition, ModeID } from '../src/types/game';
 import type { AnalyzeFn } from '../src/engine/rpsfish/client';
@@ -57,6 +61,34 @@ const modeOf = (modeId: string): ModeDefinition => {
 };
 
 const pad = (value: string | number, width: number) => String(value).padStart(width);
+
+// The racer is not a rung of the ladder — see `bots/racer.ts` — so it is
+// resolved here rather than through `botProfile`, which answers an unknown id
+// with the default rung instead of an error.
+//
+// Its own switches ride on the id as `racer:blind:vacates`, so an ablation is a
+// matchup rather than a second script: `--a racer --b racer:blind` prices the
+// capture guard, and the two sides of `--a racer --b racer` must draw exactly
+// half, because a racer with no randomness in it is a function of the position.
+const isRacer = (id: string) => id === RACER_PROFILE.id || id.startsWith(`${RACER_PROFILE.id}:`);
+
+const racerOptions = (id: string): RacerOptions => ({
+  ...RACER_DEFAULTS,
+  answerCaptures: !id.includes(':blind'),
+  obstacles: id.includes(':vacates') ? 'friendlyVacates' : RACER_DEFAULTS.obstacles,
+});
+
+const contender = (id: string): BotProfile =>
+  isRacer(id) ? { ...RACER_PROFILE, name: id === RACER_PROFILE.id ? RACER_PROFILE.name : id } : botProfile(id);
+
+const buildContender = (id: string, analyze: AnalyzeFn, seed: number): Bot =>
+  isRacer(id)
+    ? createRacerBot({ racer: racerOptions(id) })
+    : createBot(botProfile(id), {
+        analyze,
+        random: createSeededRandom(seed),
+        sleep: () => Promise.resolve(),
+      });
 
 const main = async () => {
   const { analyze } = await startEngineWorker();
@@ -91,25 +123,21 @@ const main = async () => {
   );
 
   for (const [aId, bId] of matchups) {
-    const aProfile = botProfile(aId);
-    const bProfile = botProfile(bId);
+    const aProfile = contender(aId);
+    const bProfile = contender(bId);
     console.log(`${aProfile.name} vs ${bProfile.name}`);
     for (const modeId of modeIds) {
       const mode = modeOf(modeId);
+      if ((isRacer(aId) || isRacer(bId)) && !supportsReachRace(modeId)) {
+        console.log(`  ${mode.name.padEnd(13)} skipped: the racer only plays Infiltration.`);
+        continue;
+      }
       const started = performance.now();
       // Both bots are rebuilt per game from the pair seed, so the two colour
       // assignments of one opening see identical random streams.
       const buildBots: BuildBots = (pairSeed) => ({
-        firstBot: createBot(aProfile, {
-          analyze,
-          random: createSeededRandom(pairSeed * 31 + 7),
-          sleep: () => Promise.resolve(),
-        }),
-        secondBot: createBot(bProfile, {
-          analyze,
-          random: createSeededRandom(pairSeed * 7919 + 13),
-          sleep: () => Promise.resolve(),
-        }),
+        firstBot: buildContender(aId, analyze, pairSeed * 31 + 7),
+        secondBot: buildContender(bId, analyze, pairSeed * 7919 + 13),
       });
       const result = await playBotMatch({
         // Off unless asked for: the app never lets a bot resign against a

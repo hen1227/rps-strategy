@@ -3,8 +3,8 @@ import { create } from 'zustand';
 // How much chrome the shell has stacked along the bottom edge.
 //
 // `TournamentCallout` floats above every page and has to clear whatever is down
-// there, which on a phone inside the shell is the tab bar and the live summary
-// bar, and on every other page is nothing. Two screens used to hard-code a
+// there, which on a phone inside the shell is the tab bar and the safe area
+// under it, and on every other page is nothing. Two screens used to hard-code a
 // guess at this — 96 in the lobby, 88 on the board — and a guess goes stale the
 // moment the chrome changes height. The shell measures it instead and publishes
 // it here, and a page outside the shell simply never sets it.

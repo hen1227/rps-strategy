@@ -51,6 +51,44 @@ export interface ReplayTracks {
   tracks: PieceTrack[];
 }
 
+const sameTrackPosition = (
+  first: Position | null | undefined,
+  second: Position | null | undefined,
+) =>
+  first === null || first === undefined
+    ? second === null || second === undefined
+    : second !== null &&
+      second !== undefined &&
+      first.x === second.x &&
+      first.y === second.y;
+
+const trackMatchesGrid = (track: PieceTrack, grid: Tile[][], step: number) => {
+  const position = track.positions[step];
+  const tile = position ? grid[position.y]?.[position.x] : undefined;
+  return Boolean(tile && isOccupied(tile) && sameOccupant(track, tile));
+};
+
+/**
+ * Keep only the tracks that actually change during a replay transition.
+ *
+ * The settled board remains mounted underneath the transition so its image
+ * elements do not disappear and reappear around every move. A track belongs
+ * in the animated layer when it moves, appears, or is captured; pieces that
+ * occupy the same square in both endpoint grids can stay in the settled layer.
+ */
+export const animatedReplayPieceTracks = (
+  replay: ReplayTracks,
+  firstGrid: Tile[][],
+  finalGrid: Tile[][],
+) =>
+  replay.tracks.filter((track) => {
+    if (!trackMatchesGrid(track, firstGrid, 0)) return true;
+    if (!trackMatchesGrid(track, finalGrid, replay.steps)) return true;
+    return track.positions.some(
+      (position, step) => step > 0 && !sameTrackPosition(track.positions[step - 1], position),
+    );
+  });
+
 interface DetectedMove {
   color: PlayerColor;
   from: Position;

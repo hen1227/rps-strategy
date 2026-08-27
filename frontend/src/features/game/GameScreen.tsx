@@ -10,15 +10,22 @@ import {
   View,
   type LayoutChangeEvent,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import TerritoryMeter from '@/features/analysis/TerritoryMeter';
+import { NameThisOpening, OpeningBadge } from '@/features/openings/OpeningBadge';
+import ReachPanel from '@/features/reach/ReachPanel';
+import { useGameOpening } from '@/hooks/useGameOpening';
+import { useReach } from '@/hooks/useReach';
 import Board from '@/features/board/Board';
+import { modeBackground, modeLooks } from '@/features/board/modeArt';
+import {usePieceDrag} from '@/features/board/pieceDrag';
 import { capturedPieces } from '@/features/board/CapturedPieces';
 import GameChat from './GameChat';
 import GameTransition from './GameTransition';
 import PlayerBar from './PlayerBar';
 import SpectateRail from './SpectateRail';
+import type { GameOpening } from '@/engine/openingBook';
 import { useBoardLayout } from '@/hooks/useBoardLayout';
 import { useSettled } from '@/hooks/useSettled';
 import { useSpectateContext } from '@/hooks/useSpectateContext';
@@ -79,7 +86,62 @@ interface GameOutcome {
   result: string;
 }
 
+/**
+ * The same outcome, for a board where "you" names both players.
+ *
+ * Every line below is written in the second person, which is right for a game
+ * with somebody on the other end of it and meaningless at a local board: one
+ * person made both sets of moves, so "you resigned" and "your opponent
+ * resigned" are the same sentence. This says which colour instead.
+ */
+const localOutcomeFor = (gameState: ActiveGame): GameOutcome => {
+    const isDraw = gameState.winner === 'Neutral';
+    const winner = gameState.winner;
+    const loser = winner === 'Red' ? 'Blue' : 'Red';
+    const reasons: Partial<Record<GameEndReason, {method: string; detail: string}>> = {
+        annihilation: {
+            method: 'ANNIHILATION',
+            detail: `${winner} captured every one of ${loser}'s pieces.`,
+        },
+        draw_agreement: {method: 'AGREEMENT', detail: 'The players agreed to a draw.'},
+        repetition: {method: 'REPETITION', detail: 'The same position occurred three times.'},
+        stalemate: {
+            method: 'STALEMATE',
+            detail: 'A player had no legal move, which is a draw.',
+        },
+        move_limit: {
+            method: 'MOVE LIMIT',
+            detail: 'This game was set up with a move cap, and it ran out.',
+        },
+        infiltration: {
+            method: 'INFILTRATION',
+            detail: `${winner} reached ${loser}'s home boundary.`,
+        },
+        resignation: {method: 'RESIGNATION', detail: `${loser} resigned.`},
+        territory: {
+            method: 'TERRITORY',
+            detail: isDraw
+                ? 'The board filled with equal territory.'
+                : `${winner} controlled more territory when the board filled.`,
+        },
+    };
+    const reason = reasons[gameState.endReason ?? 'game_rule'] ?? {
+        method: 'GAME RULE',
+        detail: isDraw ? 'The game ended in a draw.' : 'The game is complete.',
+    };
+    return {
+        detail: reason.detail,
+        // Nobody at this board won or lost — both players are here — so the
+        // card is drawn in its neutral colours rather than green or red.
+        didWin: false,
+        isDraw,
+        method: reason.method,
+        result: isDraw ? 'Draw' : `${winner} won`,
+    };
+};
+
 const outcomeFor = (gameState: ActiveGame, playerColor: PlayerColor | null): GameOutcome => {
+    if (gameState.local) return localOutcomeFor(gameState);
     const isDraw = gameState.winner === 'Neutral';
     const didWin = gameState.winner === playerColor;
     const result = isDraw ? 'Draw' : didWin ? 'You won' : 'You lost';
@@ -396,6 +458,9 @@ interface BotGameActionsProps {
     onHint: () => void;
     onResign: () => void;
     onUndo: () => void;
+    /** Absent in a mode with no goal row for the reach tool to measure against. */
+    onReach?: () => void;
+    reachShowing?: boolean;
 }
 
 function BotGameActions({
@@ -410,6 +475,8 @@ function BotGameActions({
                             onHint,
                             onResign,
                             onUndo,
+                            onReach,
+                            reachShowing = false,
                         }: BotGameActionsProps) {
     const hintDisabled = !isMyTurn || hintPending;
 
@@ -451,6 +518,29 @@ function BotGameActions({
                         ← Undo
                     </Text>
                 </Pressable>
+                {onReach && (
+                    <Pressable
+                        accessibilityHint="Shows how far every piece is from every square, and which runs to the goal cannot be cut off."
+                        accessibilityLabel={reachShowing ? 'Hide the reach maps' : 'Show the reach maps'}
+                        accessibilityRole="switch"
+                        accessibilityState={{checked: reachShowing}}
+                        onPress={onReach}
+                        style={({pressed}) => [
+                            styles.actionButton,
+                            reachShowing && styles.reachButtonOn,
+                            pressed && styles.buttonPressed,
+                        ]}
+                    >
+                        <Text
+                            style={[
+                                styles.actionButtonText,
+                                reachShowing && styles.reachButtonTextOn,
+                            ]}
+                        >
+                            {reachShowing ? 'Hide reach' : '◇ Reach'}
+                        </Text>
+                    </Pressable>
+                )}
             </View>
             <View style={styles.gameActions}>
                 <Pressable
@@ -485,6 +575,86 @@ function BotGameActions({
                     ]}
                 >
                     <Text style={styles.resignButtonText}>Resign</Text>
+                </Pressable>
+            </View>
+        </View>
+    );
+}
+
+// Two players at one device. Nothing is riding on the result and there is no
+// clock, so the controls are the four a shared board actually wants: turn it
+// round for the person on the other side, take back a move, and the two ways to
+// stop. Notably absent is a hint: this is a game between two people, and one of
+// them consulting RPSFish is cheating rather than practising.
+interface LocalGameActionsProps {
+    canUndo: boolean;
+    onDraw: () => void;
+    onFlip: () => void;
+    onResign: () => void;
+    onUndo: () => void;
+    /** Whose turn it is, because the resign button says who is giving up. */
+    turnColor: SideColor;
+}
+
+function LocalGameActions({
+                              canUndo,
+                              onDraw,
+                              onFlip,
+                              onResign,
+                              onUndo,
+                              turnColor,
+                          }: LocalGameActionsProps) {
+    return (
+        <View style={styles.botActions}>
+            <View style={styles.gameActions}>
+                <Pressable
+                    accessibilityHint="Draws the board from the other player's side."
+                    accessibilityLabel="Turn the board around"
+                    accessibilityRole="button"
+                    onPress={onFlip}
+                    style={({pressed}) => [styles.actionButton, pressed && styles.buttonPressed]}
+                >
+                    <Text style={styles.actionButtonText}>⇅ Flip board</Text>
+                </Pressable>
+                <Pressable
+                    accessibilityHint="Takes back the last move, whoever played it."
+                    accessibilityLabel="Take back the last move"
+                    accessibilityRole="button"
+                    accessibilityState={{disabled: !canUndo}}
+                    disabled={!canUndo}
+                    onPress={onUndo}
+                    style={({pressed}) => [
+                        styles.actionButton,
+                        !canUndo && styles.actionButtonDisabled,
+                        pressed && canUndo && styles.buttonPressed,
+                    ]}
+                >
+                    <Text style={[styles.actionButtonText, !canUndo && styles.actionButtonTextDisabled]}>
+                        ← Undo
+                    </Text>
+                </Pressable>
+            </View>
+            <View style={styles.gameActions}>
+                <Pressable
+                    accessibilityHint="Ends the game as a draw."
+                    accessibilityLabel="Agree a draw"
+                    accessibilityRole="button"
+                    onPress={onDraw}
+                    style={({pressed}) => [styles.actionButton, pressed && styles.buttonPressed]}
+                >
+                    <Text style={styles.actionButtonText}>Agree a draw</Text>
+                </Pressable>
+                <Pressable
+                    accessibilityLabel={`Resign as ${turnColor}`}
+                    accessibilityRole="button"
+                    onPress={onResign}
+                    style={({pressed}) => [
+                        styles.actionButton,
+                        styles.resignButton,
+                        pressed && styles.buttonPressed,
+                    ]}
+                >
+                    <Text style={styles.resignButtonText}>{turnColor} resigns</Text>
                 </Pressable>
             </View>
         </View>
@@ -586,6 +756,8 @@ function ConfirmResignModal({detail, onCancel, onConfirm, visible}: ConfirmResig
 interface FinishedGameCardProps {
     canReview: boolean;
     gameState: ActiveGame;
+    /** The opening just played, for the line of it nobody has named. */
+    opening: GameOpening | null;
     /** Absent for a game that cannot be replayed, such as a spectated one. */
     onRematch?: (() => void) | null;
     onReviewGame: () => void;
@@ -597,6 +769,7 @@ interface FinishedGameCardProps {
 function FinishedGameCard({
                               canReview,
                               gameState,
+                              opening,
                               onRematch,
                               onReviewGame,
                               onReturn,
@@ -639,12 +812,25 @@ function FinishedGameCard({
                 </View>
                 <Text style={styles.outcomeDetail}>{outcome.detail}</Text>
             </View>
-            {Boolean(gameState.bot) && (
-                <Text style={styles.outcomeUnrated}>
-                    Bot games are unrated. Nothing was added to your record.
-                </Text>
-            )}
-            {canReview ? (
+            {/* These don't look good. Too much unuseful information. */}
+            {/*{Boolean(gameState.bot) && (*/}
+            {/*    <Text style={styles.outcomeUnrated}>*/}
+            {/*        Bot games are unrated. Nothing was added to your record.*/}
+            {/*    </Text>*/}
+            {/*)}*/}
+            {/*{Boolean(gameState.local) && (*/}
+            {/*    <Text style={styles.outcomeUnrated}>*/}
+            {/*        Local games are unrated, and never left this device.*/}
+            {/*    </Text>*/}
+            {/*)}*/}
+            {/*
+              The book's names come from the people who play the lines, and
+              this is the moment somebody has just played one. Above the review
+              button because it is about the game that happened; the review is
+              already the way off this screen.
+            */}
+            <NameThisOpening modeId={gameState.mode.id} opening={opening}/>
+            {canReview && (
                 <Pressable
                     accessibilityHint="Opens a move-by-move RPSFish analysis."
                     accessibilityRole="button"
@@ -659,13 +845,13 @@ function FinishedGameCard({
                     </View>
                     <Text style={styles.reviewGameButtonArrow}>→</Text>
                 </Pressable>
-            ) : (
-                <Text style={styles.noReviewDetail}>No moves were played, so there is nothing to review.</Text>
             )}
             <View style={styles.finishedActions}>
                 {Boolean(onRematch) && (
                     <Pressable
-                        accessibilityLabel={`Play ${gameState.bot?.name} again`}
+                        accessibilityLabel={
+                            gameState.bot ? `Play ${gameState.bot.name} again` : 'Play again'
+                        }
                         accessibilityRole="button"
                         onPress={onRematch}
                         style={({pressed}) => [
@@ -731,10 +917,25 @@ function StatusContent({
 
     if (gameState.status === 'Finished') {
         const isDraw = gameState.winner === 'Neutral';
+        const outcome = outcomeFor(gameState, playerColor);
+        if (gameState.local) {
+            return {title: outcome.result, detail: outcome.detail, tone: 'neutral'};
+        }
         const didWin = gameState.winner === playerColor;
         const title = isDraw ? 'Draw' : didWin ? 'You won' : 'Opponent won';
-        const detail = outcomeFor(gameState, playerColor).detail;
-        return {title, detail, tone: didWin ? 'positive' : isDraw ? 'neutral' : 'negative'};
+        return {title, detail: outcome.detail, tone: didWin ? 'positive' : isDraw ? 'neutral' : 'negative'};
+    }
+
+    // Both players are here, so there is no such thing as the other person's
+    // move: the card names the colour to play rather than an owner.
+    if (gameState.local) {
+        return {
+            title: `${gameState.currentTurn} to move`,
+            detail: selectedTile
+                ? 'Tap a marked square or drag the piece there.'
+                : 'Tap a piece or drag it to a legal square.',
+            tone: 'positive',
+        };
     }
 
     if (!isMyTurn) {
@@ -777,6 +978,7 @@ function StatusContent({
 
 interface StatusCardProps extends StatusContentProps {
     canReview: boolean;
+    opening: GameOpening | null;
     onRematch?: (() => void) | null;
     onReturn: () => void;
     onReviewGame: () => void;
@@ -789,6 +991,7 @@ function StatusCard({
                         gameState,
                         isMyTurn,
                         isSpectating,
+                        opening,
                         onRematch,
                         onReturn,
                         onReviewGame,
@@ -804,6 +1007,7 @@ function StatusCard({
                 onRematch={onRematch}
                 onReturn={onReturn}
                 onReviewGame={onReviewGame}
+                opening={opening}
                 playerColor={playerColor}
                 wide={wide}
             />
@@ -880,6 +1084,7 @@ export default function GameScreen() {
     // tells an empty screen whether a board is on its way back.
     const gameSessionId = useGameStore((state) => state.gameSessionId);
     const lastMove = useGameStore((state) => state.lastMove);
+    const draggingPiece = usePieceDrag((state) => state.dragging);
     const playerColor = useGameStore((state) => state.playerColor);
     const isSpectating = useGameStore((state) => state.isSpectating);
     const connectionStatus = useGameStore((state) => state.connectionStatus);
@@ -905,6 +1110,7 @@ export default function GameScreen() {
     const accountId = useGameStore((state) => state.accountId);
     const chatMessages = useGameStore((state) => state.chatMessages);
     const chatRoomId = useGameStore((state) => state.chatRoomId);
+    const chatOccupancy = useGameStore((state) => state.chatOccupancy);
     const liveGames = useGameStore((state) => state.liveGames);
     const spectatedGameId = useGameStore((state) => state.spectatedGameId);
     const spectateGame = useGameStore((state) => state.spectateGame);
@@ -929,8 +1135,17 @@ export default function GameScreen() {
     const undoBotMove = useGameStore((state) => state.undoBotMove);
     const restartBotGame = useGameStore((state) => state.restartBotGame);
     const botGamePGN = useGameStore((state) => state.botGamePGN);
+    const localHistoryLength = useGameStore((state) => state.localHistory.length);
+    const undoLocalMove = useGameStore((state) => state.undoLocalMove);
+    const flipLocalBoard = useGameStore((state) => state.flipLocalBoard);
+    const restartLocalGame = useGameStore((state) => state.restartLocalGame);
+    const localGamePGN = useGameStore((state) => state.localGamePGN);
     const tournamentCall = useTournamentCall();
     const spectateContext = useSpectateContext();
+    // The phone's chin, taken as padding at the end of the scrolled content
+    // rather than as a margin around the scroller — see `safeArea` below for
+    // why the two are not the same thing to look at.
+    const insets = useSafeAreaInsets();
 
     // Opening the review is guarded so a double press cannot hand the same
     // record over twice; coming back to this page arms it again.
@@ -977,6 +1192,18 @@ export default function GameScreen() {
     // and disagreeing with the pre-rendered HTML would cost the whole page, so
     // that render says it is still looking rather than claiming there is
     // nothing.
+    // The reach maps, and only on a practice board: a game against a person is
+    // rated, and handing one side a solved picture of the race is not a helper
+    // tool, it is an engine. A mode with no goal row switches itself off.
+    const reachTool = useReach(gameState?.bot ? gameState : null, {
+        viewerSide: playerColor === 'Blue' ? 'Blue' : 'Red',
+    });
+    // What the game on the board is called. Read once and handed to both the
+    // badge and the card at the end, from the line the game itself carries —
+    // see `GameState.openingLine`, which is why a refresh and a spectator who
+    // arrived late get the name too.
+    const opening = useGameOpening(gameState);
+
     const settled = useSettled();
     const lookingForGame = !settled || Boolean(gameSessionId);
 
@@ -1015,18 +1242,34 @@ export default function GameScreen() {
     // A bot game is local: it needs no socket, shows no clock, and nothing it
     // does can change a rating.
     const bot = gameState.bot ?? null;
+    // Two players at one device. All of the above, and one thing more: there is
+    // no side the person at the keyboard owns, so `playerColor` is null and
+    // every question that would normally be answered with it — which way up to
+    // draw the board, whose turn this is, who just won — is answered from the
+    // game instead.
+    const local = gameState.local ?? null;
     // A spectator watches from Red's side. A player watches from their own,
-    // and `Neutral` is not a side anybody sits on.
+    // and `Neutral` is not a side anybody sits on. A local board is drawn from
+    // whichever side its players last turned it to.
     const ownColor: SideColor = playerColor === 'Blue' ? 'Blue' : 'Red';
-    const viewColor: SideColor = isSpectating ? 'Red' : ownColor;
-    const topColor: SideColor = isSpectating ? 'Blue' : opposingColor(ownColor);
-    const bottomColor: SideColor = isSpectating ? 'Red' : ownColor;
+    const seatColor: SideColor = local ? local.viewColor : ownColor;
+    // Whoever is to move is the only side a resignation can come from: there is
+    // nobody else at this keyboard to give up. `Neutral` is not a side, so it
+    // reads as Red, which is the side that opens.
+    const turnSide: SideColor = gameState.currentTurn === 'Blue' ? 'Blue' : 'Red';
+    const viewColor: SideColor = isSpectating ? 'Red' : seatColor;
+    const topColor: SideColor = isSpectating ? 'Blue' : opposingColor(seatColor);
+    const bottomColor: SideColor = isSpectating ? 'Red' : seatColor;
     const captured = capturedPieces(gameState);
     const topProfile = topColor === 'Red' ? gameState.redPlayer : gameState.bluePlayer;
     const bottomProfile = bottomColor === 'Red' ? gameState.redPlayer : gameState.bluePlayer;
     const isConnected = connectionStatus === 'connected';
-    const isMyTurn =
-        !isSpectating &&
+    // At a local board every turn is this keyboard's, which is the whole point:
+    // the same person plays both sides. Everywhere else it is the usual
+    // question of whether the colour to move is yours.
+    const isMyTurn = local
+        ? gameState.status === 'InProgress'
+        : !isSpectating &&
         (isConnected || Boolean(bot)) &&
         gameState.status === 'InProgress' &&
         gameState.currentTurn === playerColor;
@@ -1035,6 +1278,7 @@ export default function GameScreen() {
     // the server's own way of saying it, so this cannot go stale.
     const awaitingFirstMove =
         !bot &&
+        !local &&
         gameState.status === 'InProgress' &&
         gameState.clock?.activeColor === 'Neutral';
     const opponentName = topProfile?.username?.trim() || null;
@@ -1070,9 +1314,13 @@ export default function GameScreen() {
         canAnswerOffers && gameState.drawOfferedBy && gameState.drawOfferedBy !== playerColor;
     const hasOpponentTimeOffer =
         canAnswerOffers && gameState.timeOfferedBy && gameState.timeOfferedBy !== playerColor;
-    // A game nobody moved in has nothing to review, and a bot game can only
-    // be reviewed from the move list this browser kept.
-    const canReview = bot ? botHistoryLength > 0 : gameState.moveNumber > 0;
+    // A game nobody moved in has nothing to review, and a game the server never
+    // saw can only be reviewed from the move list this browser kept.
+    const canReview = bot
+        ? botHistoryLength > 0
+        : local
+            ? localHistoryLength > 0
+            : gameState.moveNumber > 0;
 
     const returnToModes = () => {
         clearGame();
@@ -1089,16 +1337,18 @@ export default function GameScreen() {
         // A server game is addressed by its id, which makes the review a page
         // somebody can link to. A bot game never reached the server, so its
         // record is written here and handed over.
-        if (!bot) {
+        if (!bot && !local) {
             router.push(links.review(gameState.gameId));
             return;
         }
-        const pgn = botGamePGN();
+        const pgn = local ? localGamePGN() : botGamePGN();
         if (!pgn) {
             reviewOpeningRef.current = false;
             return;
         }
-        handReview({pgn, playerColor: isSpectating ? null : playerColor});
+        // A local game has no reviewer's own side to grade from: both accuracy
+        // figures belong to somebody in the room.
+        handReview({pgn, playerColor: local || isSpectating ? null : playerColor});
         router.push(links.review());
     };
 
@@ -1122,14 +1372,14 @@ export default function GameScreen() {
                     <Text style={styles.selfReconnectText}>{botSession.engineError}</Text>
                 </View>
             ) : null}
-            {!bot && !isConnected && gameState.status === 'InProgress' && (
+            {!bot && !local && !isConnected && gameState.status === 'InProgress' && (
                 <View style={styles.selfReconnectNotice}>
                     <Text style={styles.selfReconnectText}>
                         {isSpectating ? 'Reconnecting to the live game…' : 'Reconnecting to your match…'}
                     </Text>
                 </View>
             )}
-            {!isSpectating && !bot && awaitingFirstMove && (
+            {!isSpectating && !bot && !local && awaitingFirstMove && (
                 <FirstMoveNotice
                     deadline={firstMoveDeadline}
                     opponentName={opponentName}
@@ -1141,7 +1391,7 @@ export default function GameScreen() {
               abandoned anything: the game is simply waiting, and it says so
               above rather than threatening a win that is not on offer.
             */}
-            {!isSpectating && !bot && !awaitingFirstMove && (
+            {!isSpectating && !bot && !local && !awaitingFirstMove && (
                 <OpponentReconnectNotice deadline={opponentReconnectDeadline}/>
             )}
             {hasOpponentDrawOffer && (
@@ -1168,7 +1418,16 @@ export default function GameScreen() {
     );
 
     const gameActions =
-        isSpectating || gameState.status !== 'InProgress' ? null : bot ? (
+        isSpectating || gameState.status !== 'InProgress' ? null : local ? (
+            <LocalGameActions
+                canUndo={localHistoryLength > 0}
+                onDraw={offerDraw}
+                onFlip={flipLocalBoard}
+                onResign={() => setShowResignConfirmation(true)}
+                onUndo={undoLocalMove}
+                turnColor={turnSide}
+            />
+        ) : bot ? (
             <BotGameActions
                 botName={bot.name}
                 canUndo={botHistoryLength > 0}
@@ -1179,8 +1438,10 @@ export default function GameScreen() {
                 isMyTurn={isMyTurn}
                 onDraw={offerDraw}
                 onHint={requestBotHint}
+                onReach={reachTool.available ? reachTool.toggle : undefined}
                 onResign={() => setShowResignConfirmation(true)}
                 onUndo={undoBotMove}
+                reachShowing={reachTool.active}
             />
         ) : (
             <GameActions
@@ -1197,6 +1458,20 @@ export default function GameScreen() {
         );
 
     const hint = bot ? botSession?.hint ?? null : null;
+    // "Thinking" is what a bar says about somebody you are waiting for, and at
+    // a shared board there is nobody to wait for — the other player is holding
+    // the same device. The seat says whether it is its go instead, which also
+    // spares the idle bar from reading "Blue · Blue", and once the game is over
+    // it says how it went rather than leaving a turn on the board that has
+    // stopped taking them.
+    const localMeta = (color: SideColor) => {
+        if (!local) return undefined;
+        if (gameState.status === 'Finished') {
+            if (gameState.winner === 'Neutral') return 'Drew';
+            return gameState.winner === color ? 'Won' : 'Lost';
+        }
+        return gameState.currentTurn === color ? 'To move' : 'Waiting';
+    };
     const playerBars = (
         <>
             <PlayerBar
@@ -1205,7 +1480,7 @@ export default function GameScreen() {
                 clock={gameState.clock}
                 color={topColor}
                 extension={timeExtension}
-                fallbackLabel={isSpectating ? `${topColor} player` : 'Opponent'}
+                fallbackLabel={isSpectating || local ? `${topColor} player` : 'Opponent'}
                 gameStatus={gameState.status}
                 isYou={false}
                 metaOverride={
@@ -1213,11 +1488,16 @@ export default function GameScreen() {
                         ? `Level ${bot.rating} · ${
                             gameState.currentTurn === bot.color ? 'thinking' : 'waiting'
                         }`
-                        : undefined
+                        : localMeta(topColor)
                 }
                 profile={topProfile}
                 turnColor={gameState.currentTurn}
             />
+            {/*
+              `movableColor` is what makes a shared board work: one person plays
+              both sides, so what may be picked up is whatever is to move rather
+              than the viewer's own colour, which is nobody's here.
+            */}
             <Board
                 analysisArrows={hint ? [hint] : []}
                 boardSize={boardSize}
@@ -1225,8 +1505,19 @@ export default function GameScreen() {
                 grid={gameState.grid}
                 lastMove={lastMove}
                 modeId={gameState.mode.id}
+                pieceLooks={modeLooks(gameState.mode)}
+                boardBackground={modeBackground(gameState.mode)}
+                movableColor={local ? gameState.currentTurn : undefined}
                 onPieceDrop={movePiece}
-                onTilePress={selectTile}
+                onTilePress={(square) => {
+                    // The tool only ever swallows a tap while it is waiting for
+                    // somewhere to put a ghost piece. Everything else falls
+                    // through, so selecting and moving behave the same whether
+                    // the overlay is on or off.
+                    if (reachTool.handleTilePress(square)) return;
+                    selectTile(square);
+                }}
+                overlay={reachTool.overlay}
                 playerColor={viewColor}
                 selectedTile={selectedTile}
                 validMoves={validMoves}
@@ -1237,17 +1528,19 @@ export default function GameScreen() {
                 clock={gameState.clock}
                 color={bottomColor}
                 extension={timeExtension}
-                fallbackLabel={isSpectating ? `${bottomColor} player` : 'You'}
+                fallbackLabel={isSpectating || local ? `${bottomColor} player` : 'You'}
                 gameStatus={gameState.status}
-                isYou={!isSpectating}
+                isYou={!isSpectating && !local}
+                metaOverride={localMeta(bottomColor)}
                 profile={bottomProfile}
                 turnColor={gameState.currentTurn}
             />
         </>
     );
 
-    // Nobody is listening on the other side of a bot game, so it has no chat.
-    const gameChat = bot ? null : (
+    // Nobody is listening on the other side of a bot game, and at a local board
+    // the other player is close enough to talk to. Neither has a chat.
+    const gameChat = bot || local ? null : (
         <GameChat
             accountId={accountId}
             chatVisible={chatVisible}
@@ -1258,13 +1551,14 @@ export default function GameScreen() {
             onSend={sendChat}
             onToggleChat={toggleChat}
             onToggleSpectatorMessages={toggleSpectatorMessages}
+            roomOccupancy={chatOccupancy}
             series={roomSpansSeries(chatRoomId, gameState.gameId)}
             showSpectatorMessages={showSpectatorMessages}
             spectatorCount={spectatorCount}
             wide={isWide}
         />
     );
-    const rematch = bot ? restartBotGame : null;
+    const rematch = bot ? restartBotGame : local ? restartLocalGame : null;
     const statusCard = (wide = false) => (
         <StatusCard
             botThinking={Boolean(botSession?.thinking)}
@@ -1272,6 +1566,7 @@ export default function GameScreen() {
             gameState={gameState}
             isMyTurn={isMyTurn}
             isSpectating={isSpectating}
+            opening={opening}
             onRematch={rematch}
             onReturn={returnToModes}
             onReviewGame={openReview}
@@ -1282,9 +1577,12 @@ export default function GameScreen() {
     );
 
     return (
-        <SafeAreaView style={styles.safeArea} edges={['top', 'right', 'bottom', 'left']}>
-            <View style={styles.screen}>
-                <View onLayout={measureHeader}>
+        <SafeAreaView
+            style={styles.safeArea}
+            edges={isWide ? ['top', 'right', 'bottom', 'left'] : ['top', 'right', 'left']}
+        >
+            <View onLayout={measureHeader} style={styles.header}>
+                <View style={styles.headerInner}>
                     <View style={styles.topBar}>
                         <View style={styles.matchIdentity}>
                             <Text style={styles.matchKicker}>
@@ -1293,9 +1591,11 @@ export default function GameScreen() {
                                     ? 'FINAL'
                                     : bot
                                         ? 'BOT GAME · UNRATED'
-                                        : isSpectating
-                                            ? 'SPECTATING LIVE'
-                                            : 'LIVE MATCH'}
+                                        : local
+                                            ? 'LOCAL GAME · UNRATED'
+                                            : isSpectating
+                                                ? 'SPECTATING LIVE'
+                                                : 'LIVE MATCH'}
                             </Text>
                             <Text style={styles.modeName}>{gameState.mode.name}</Text>
                             {/*
@@ -1308,11 +1608,24 @@ export default function GameScreen() {
                                     {customTerms}
                                 </Text>
                             ) : null}
+                            {/*
+                              What the opening is called, while it is still
+                              being played. A custom board never gets one: the
+                              book is measured from the mode's own opening, and
+                              a line from anywhere else is not one it knows.
+                            */}
+                            <OpeningBadge
+                                linked={gameState.status === 'Finished'}
+                                modeId={gameState.mode.id}
+                                opening={opening}
+                            />
                         </View>
                         <View style={styles.timeControlBadge}>
-                            <Text style={styles.timeControlLabel}>{bot ? 'OPPONENT' : 'TIME CONTROL'}</Text>
+                            <Text style={styles.timeControlLabel}>
+                                {bot || local ? 'OPPONENT' : 'TIME CONTROL'}
+                            </Text>
                             <Text style={styles.timeControlValue} numberOfLines={1}>
-                                {bot ? bot.name : timeControlLabel}
+                                {bot ? bot.name : local ? 'Same device' : timeControlLabel}
                             </Text>
                         </View>
                     </View>
@@ -1329,7 +1642,9 @@ export default function GameScreen() {
                         />
                     )}
                 </View>
+            </View>
 
+            <View style={styles.screen}>
                 <GameTransition
                     gameKey={gameState.gameId}
                     leaving={switchingBoards}
@@ -1372,6 +1687,7 @@ export default function GameScreen() {
                                     {gameActions}
 
                                     {hasTerritory && <TerritoryMeter grid={gameState.grid}/>}
+                                    <ReachPanel tool={reachTool}/>
 
                                     {/*
                                       The cards that fill the panel when the chat
@@ -1405,10 +1721,26 @@ export default function GameScreen() {
                                                   next to a practice board. Its
                                                   rating is the useful figure.
                                                 */}
+                                                {/*
+                                                  A local game's second fact is
+                                                  which way round the board is.
+                                                  Whose turn it is would be a
+                                                  third copy of the status card
+                                                  two cards above; the
+                                                  orientation is the one piece
+                                                  of this game's state that is
+                                                  written down nowhere else.
+                                                */}
                                                 <View>
-                                                    <Text style={styles.factLabel}>{bot ? 'LEVEL' : 'CLOCK'}</Text>
+                                                    <Text style={styles.factLabel}>
+                                                        {bot ? 'LEVEL' : local ? 'VIEW' : 'CLOCK'}
+                                                    </Text>
                                                     <Text style={styles.factValue}>
-                                                        {bot ? bot.rating : timeControlLabel}
+                                                        {bot
+                                                            ? bot.rating
+                                                            : local
+                                                                ? `${local.viewColor}'s side`
+                                                                : timeControlLabel}
                                                     </Text>
                                                 </View>
                                             </View>
@@ -1423,14 +1755,18 @@ export default function GameScreen() {
                         <ScrollView
                             contentContainerStyle={[
                                 styles.mobileLayout,
-                                Boolean(tournamentCall) && styles.calloutClearance,
+                                {paddingBottom: (tournamentCall ? 88 : 6) + insets.bottom},
                             ]}
                             keyboardShouldPersistTaps="handled"
+                            // The board is inside this scroller on a phone, and
+                            // dragging a piece must not drag the page with it.
+                            scrollEnabled={!draggingPiece}
                             showsVerticalScrollIndicator={false}
                         >
                             {gameState.status === 'Finished' && !isSpectating ? statusCard() : null}
                             {playerBars}
                             {hasTerritory && <TerritoryMeter grid={gameState.grid}/>}
+                            <ReachPanel tool={reachTool}/>
                             {matchNotices}
                             {gameActions}
                             {gameChat}
@@ -1444,7 +1780,7 @@ export default function GameScreen() {
                         accessibilityRole="button"
                         accessibilityLabel="Dismiss error"
                         onPress={clearError}
-                        style={styles.errorBanner}
+                        style={[styles.errorBanner, {bottom: 12 + insets.bottom}]}
                     >
                         <Text style={styles.errorText}>{error}</Text>
                         <Text style={styles.errorDismiss}>×</Text>
@@ -1456,7 +1792,9 @@ export default function GameScreen() {
                         detail={
                             bot
                                 ? `${bot.name} wins this practice game. Nothing is recorded.`
-                                : undefined
+                                : local
+                                    ? `${turnSide} resigns, so ${opposingColor(turnSide)} wins this local game. Nothing is recorded.`
+                                    : undefined
                         }
                         onCancel={() => setShowResignConfirmation(false)}
                         onConfirm={confirmResign}
@@ -1469,6 +1807,12 @@ export default function GameScreen() {
 }
 
 const styles = StyleSheet.create({
+    // No bottom edge on a phone: the scroller below runs to the physical foot
+    // of the screen, and the chin is padded into the end of its content instead
+    // (see `insets` above). Taken as a margin here, it read as the page being
+    // cut off a finger's width short of the edge — the content stopped, and a
+    // strip of empty background sat under it while there was still more to
+    // scroll to. A wide screen has no chin worth the trouble and keeps the edge.
     safeArea: {flex: 1, backgroundColor: colors.background},
     screen: {
         flex: 1,
@@ -1476,8 +1820,6 @@ const styles = StyleSheet.create({
         maxWidth: 1180,
         alignSelf: 'center',
         paddingHorizontal: 10,
-        paddingTop: 7,
-        paddingBottom: 8,
     },
     centered: {flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24},
     // Room for the floating tournament call to action.
@@ -1503,13 +1845,32 @@ const styles = StyleSheet.create({
         backgroundColor: colors.accent,
     },
     statusReviewText: {color: colors.textStrong, fontSize: 10, fontWeight: '900'},
+    // The part of the page that does not scroll, and it has to look like it:
+    // a bar of its own, the same sunken panel and hairline the lobby's header
+    // uses, rather than the same background as the board sliding past under it.
+    // The negative margins take it back out to the screen's edges, since the
+    // page's own padding is what the scrolling content wants, not the bar.
+    header: {
+        marginBottom: 7,
+        borderBottomWidth: 1,
+        borderBottomColor: colors.border,
+        backgroundColor: colors.surfaceSunken,
+    },
+    // The bar's contents keep the page's column; only its background and rule
+    // run the full width of the window.
+    headerInner: {
+        width: '100%',
+        maxWidth: 1180,
+        alignSelf: 'center',
+        gap: 7,
+        paddingVertical: 7,
+        paddingHorizontal: 14,
+    },
     topBar: {
         minHeight: 47,
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        marginBottom: 7,
-        paddingHorizontal: 4,
     },
     // Takes the slack in the top bar so a long mode name cannot squeeze the
     // time-control badge.
@@ -1547,7 +1908,9 @@ const styles = StyleSheet.create({
     // The hand-off wrapper sits between the screen and the layout, so it has to
     // pass the height it was given straight through.
     transition: {flex: 1},
-    mobileLayout: {flexGrow: 1, alignItems: 'center', gap: 7, paddingBottom: 4},
+    // `paddingBottom` is set inline, from the phone's chin and whether the
+    // floating call-out is over the foot of the page.
+    mobileLayout: {flexGrow: 1, alignItems: 'center', gap: 7},
     wideLayout: {
         flex: 1,
         flexDirection: 'row',
@@ -1629,14 +1992,22 @@ const styles = StyleSheet.create({
     },
     drawAcceptText: {color: colors.textStrong, fontSize: 9, fontWeight: '900'},
     gameActions: {width: '100%', flexDirection: 'row', gap: 7},
-    // Four bot controls do not fit one comfortable row on a phone, so they sit
-    // in two: what the engine can do for you, then how the game ends.
+    // Five bot controls do not fit one comfortable row on a phone, so they sit
+    // in two: what the engine and the reach maps can do for you, then how the
+    // game ends.
     botActions: {width: '100%', gap: 7},
     hintButton: {
         borderColor: colors.accentBorder,
         backgroundColor: colors.accentSurface,
     },
     hintButtonText: {color: colors.accentSoft, fontSize: 10, fontWeight: '900'},
+    // Lit only while the overlay is on the board, so the button reads as the
+    // switch it is rather than as a second hint.
+    reachButtonOn: {
+        borderColor: colors.accentBorder,
+        backgroundColor: colors.accentSurface,
+    },
+    reachButtonTextOn: {color: colors.accentSoft},
     searchNotice: {
         width: '100%',
         flexDirection: 'row',
