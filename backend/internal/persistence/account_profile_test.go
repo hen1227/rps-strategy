@@ -9,62 +9,89 @@ import (
 
 const testProfileKey = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
-func TestAccountProfileUsesLocalKeyAndPersistsDiscord(t *testing.T) {
+func TestAccountProfileBelongsToRegisteredAccounts(t *testing.T) {
 	store, err := Open(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
+	ctx := t.Context()
 
-	account, err := store.EnsureAccountWithProfileKey(
-		t.Context(), "profile-user", "Guest", testProfileKey,
-	)
+	account, err := store.EnsureAccountWithProfileKey(ctx, "profile-user", "Guest", testProfileKey)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if account.Username != "Guest" || account.Discord != "" {
 		t.Fatalf("unexpected initial account: %#v", account)
 	}
+	// An anonymous browser identity has no profile to edit. Naming yourself is
+	// what registering is for.
+	if _, err := store.UpdateAccountProfile(
+		ctx, "profile-user", "RockStar", "rock.star",
+	); !errors.Is(err, ErrNotRegistered) {
+		t.Fatalf("expected an anonymous profile edit to be refused, got %v", err)
+	}
 
-	updated, err := store.UpdateAccountProfile(
-		t.Context(), "profile-user", testProfileKey, "Rock Star", "rock.star",
-	)
+	// A legacy account on purpose: a typed Discord handle is only editable
+	// while the account has no verified one, so this is the shape that still
+	// exercises the field.
+	seedLegacyPasswordAccount(t, store, "profile-user", "RockStar", authTestPassword)
+	updated, err := store.UpdateAccountProfile(ctx, "profile-user", "RockStar", "rock.star")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if updated.Username != "Rock Star" || updated.Discord != "rock.star" {
+	if updated.Username != "RockStar" || updated.Discord != "rock.star" {
 		t.Fatalf("profile was not updated: %#v", updated)
 	}
 
-	if _, err := store.EnsureAccountWithProfileKey(
-		t.Context(), "profile-user", "Guest", testProfileKey,
-	); err != nil {
-		t.Fatalf("the same local key should reconnect: %v", err)
-	}
-	if _, err := store.EnsureAccountWithProfileKey(
-		t.Context(),
-		"profile-user",
-		"Guest",
-		"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-	); !errors.Is(err, ErrInvalidProfileKey) {
-		t.Fatalf("expected the wrong local key to be rejected, got %v", err)
-	}
-	if _, err := store.UpdateAccountProfile(
-		t.Context(),
-		"profile-user",
-		"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-		"Impostor",
-		"impostor",
-	); !errors.Is(err, ErrInvalidProfileKey) {
-		t.Fatalf("expected an unauthorized edit to be rejected, got %v", err)
-	}
-
-	persisted, err := store.Account(t.Context(), "profile-user")
+	// A rename has to move the uniqueness key with it, or the old name stays
+	// claimed and the new one never is.
+	renamed, err := store.UpdateAccountProfile(ctx, "profile-user", "Rock.Star-2", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if persisted.Username != "Rock Star" || persisted.Discord != "rock.star" {
-		t.Fatalf("unauthorized edit changed the profile: %#v", persisted)
+	if renamed.Username != "Rock.Star-2" || renamed.Discord != "" {
+		t.Fatalf("rename did not take: %#v", renamed)
+	}
+	if _, err := store.AuthenticateAccount(ctx, "Rock.Star-2", authTestPassword); err != nil {
+		t.Fatalf("the new name should sign in: %v", err)
+	}
+	if _, err := store.AuthenticateAccount(ctx, "RockStar", authTestPassword); !errors.Is(
+		err, ErrInvalidCredentials,
+	) {
+		t.Fatalf("the released name should no longer sign in: %v", err)
+	}
+}
+
+func TestAccountProfileRenameCannotTakeAClaimedName(t *testing.T) {
+	store, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := t.Context()
+	const otherKey = "abababababababababababababababababababababababababababababababab"
+
+	for _, account := range []struct{ userID, username, key string }{
+		{"rename-first", "Taken", testProfileKey},
+		{"rename-second", "Renamer", otherKey},
+	} {
+		if _, err := store.EnsureAccountWithProfileKey(
+			ctx, account.userID, "Guest", account.key,
+		); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.ClaimAccountWithDiscord(
+			ctx, account.userID, account.username, "discord-"+account.userID, account.username,
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if _, err := store.UpdateAccountProfile(ctx, "rename-second", "taken", ""); !errors.Is(
+		err, ErrUsernameTaken,
+	) {
+		t.Fatalf("expected a claimed name to be refused, got %v", err)
 	}
 }
 
@@ -87,10 +114,16 @@ func TestExistingAccountIsClaimedByFirstLocalKey(t *testing.T) {
 	if account.Username != "Legacy Name" {
 		t.Fatalf("claiming should retain an existing display name: %#v", account)
 	}
-	if _, err := store.UpdateAccountProfile(
-		t.Context(), "legacy-user", testProfileKey, "Claimed Name", "claimed.user",
-	); err != nil {
+	// The display name they have been playing under for months comes with them
+	// into the account system, minus the space the username rule does not take.
+	registered, err := store.ClaimAccountWithDiscord(
+		t.Context(), "legacy-user", "LegacyName", "discord-legacy-user", "legacyname",
+	)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if registered.Username != "LegacyName" || !registered.Registered {
+		t.Fatalf("legacy account did not carry into a real one: %#v", registered)
 	}
 }
 
@@ -145,28 +178,36 @@ func TestAccountProfileValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
+	ctx := t.Context()
 	if _, err := store.EnsureAccountWithProfileKey(
-		t.Context(), "validation-user", "Guest", testProfileKey,
+		ctx, "validation-user", "Guest", testProfileKey,
 	); err != nil {
 		t.Fatal(err)
 	}
+	// Legacy for the same reason as above: validateDiscord guards the typed
+	// handle, and a verified one never passes through it.
+	seedLegacyPasswordAccount(t, store, "validation-user", "Validator", authTestPassword)
 
 	for _, testCase := range []struct {
 		name    string
 		discord string
+		want    error
 	}{
-		{"", "valid.discord"},
-		{"Valid Name", "has spaces"},
-		{"Valid Name", "x"},
+		{"", "valid.discord", ErrInvalidUsername},
+		{"has spaces", "valid.discord", ErrInvalidUsername},
+		{"Valid", "has spaces", ErrInvalidAccountProfile},
+		{"Valid", "x", ErrInvalidAccountProfile},
 	} {
 		if _, err := store.UpdateAccountProfile(
-			t.Context(),
-			"validation-user",
-			testProfileKey,
-			testCase.name,
-			testCase.discord,
-		); !errors.Is(err, ErrInvalidAccountProfile) {
-			t.Fatalf("expected validation error for %#v, got %v", testCase, err)
+			ctx, "validation-user", testCase.name, testCase.discord,
+		); !errors.Is(err, testCase.want) {
+			t.Fatalf("expected %v for %#v, got %v", testCase.want, testCase, err)
 		}
+	}
+
+	// Discord is optional: registering asks for a username and a password, and
+	// nothing else is required to play.
+	if _, err := store.UpdateAccountProfile(ctx, "validation-user", "Validator", ""); err != nil {
+		t.Fatalf("an empty Discord handle should be allowed: %v", err)
 	}
 }

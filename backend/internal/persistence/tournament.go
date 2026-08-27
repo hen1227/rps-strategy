@@ -701,3 +701,57 @@ WHERE tournament_id = ? AND match_id = ? AND result = ?
 	}
 	return store.Tournament(ctx, tournamentID)
 }
+
+// WithdrawFromTournament removes a signup from a tournament that has not
+// started.
+//
+// Only from registration, and that is the whole of the rule. Before the start
+// there are no pairings, no results and no standings, so a name leaving costs
+// nothing; after it, every other entrant's round robin is built around that
+// name being there, and removing it would quietly rewrite games that have
+// already been played.
+//
+// Returns false when there was nothing to remove, so a caller doing this
+// speculatively — a bot draining out of every event it is in — does not have to
+// look first.
+func (store *Store) WithdrawFromTournament(
+	ctx context.Context,
+	tournamentID string,
+	userID string,
+) (bool, error) {
+	tournamentID = strings.TrimSpace(tournamentID)
+	userID = strings.TrimSpace(userID)
+
+	transaction, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("withdraw from tournament: begin transaction: %w", err)
+	}
+	defer func() { _ = transaction.Rollback() }()
+
+	var status TournamentStatus
+	if err := transaction.QueryRowContext(ctx, `
+SELECT status FROM tournaments WHERE tournament_id = ?
+`, tournamentID).Scan(&status); errors.Is(err, sql.ErrNoRows) {
+		return false, ErrTournamentNotFound
+	} else if err != nil {
+		return false, fmt.Errorf("withdraw from tournament: read tournament: %w", err)
+	}
+	if status != TournamentRegistration {
+		return false, ErrTournamentAlreadyStarted
+	}
+
+	outcome, err := transaction.ExecContext(ctx, `
+DELETE FROM tournament_players WHERE tournament_id = ? AND user_id = ?
+`, tournamentID, userID)
+	if err != nil {
+		return false, fmt.Errorf("withdraw from tournament: delete player: %w", err)
+	}
+	removed, _ := outcome.RowsAffected()
+	if removed == 0 {
+		return false, nil
+	}
+	if err := transaction.Commit(); err != nil {
+		return false, fmt.Errorf("withdraw from tournament: commit: %w", err)
+	}
+	return true, nil
+}

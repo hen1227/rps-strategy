@@ -60,7 +60,11 @@ func (server *Server) signupForTournament(writer http.ResponseWriter, request *h
 		writeAPIError(writer, http.StatusBadRequest, err.Error())
 		return
 	}
-	if usesReservedIdentity(signup.IGN, signup.Discord) &&
+	// Both halves still apply here, unlike the account routes: a tournament
+	// signup types its own Discord handle into a form, so nothing has proved
+	// the person entering it owns it.
+	if (persistence.IsReservedUsername(signup.IGN) ||
+		persistence.IsReservedContact(signup.Discord)) &&
 		!server.hasValidAdminTokenValue(signup.ReservationToken) {
 		writeAPIError(writer, http.StatusForbidden, "this username or Discord handle is reserved; paste the special token")
 		return
@@ -135,6 +139,9 @@ func (server *Server) startTournament(writer http.ResponseWriter, request *http.
 		writeTournamentError(writer, err)
 		return
 	}
+	// The host entering the last result finishes the tournament just as the
+	// last game finishing does, so it crowns a champion the same way.
+	server.awardTournamentTitles(request.Context(), tournament)
 	server.broadcastTournaments()
 	writeJSON(writer, http.StatusOK, tournament)
 }

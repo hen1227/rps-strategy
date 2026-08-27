@@ -30,6 +30,12 @@ func (store *Store) ensureAccountProfileColumns(ctx context.Context) error {
 	}{
 		{name: "discord", definition: "TEXT NOT NULL DEFAULT ''"},
 		{name: "profile_key_hash", definition: "TEXT NOT NULL DEFAULT ''"},
+		// The title worn in front of the name. One column rather than a join,
+		// because every read of an account needs it and at most one title is
+		// ever worn; the collection it is chosen from lives in
+		// `account_titles`. Empty means no tag, which is the default and stays
+		// allowed forever.
+		{name: "title", definition: "TEXT NOT NULL DEFAULT ''"},
 	} {
 		if columns[migration.name] {
 			continue
@@ -104,13 +110,34 @@ ON CONFLICT(user_id) DO NOTHING
 		return Account{}, fmt.Errorf("authenticate account: create account: %w", err)
 	}
 
-	var storedHash string
+	var storedHash, storedPasswordHash, storedDiscordUserID, kind string
+	var disabled int
 	if err := transaction.QueryRowContext(ctx, `
-SELECT profile_key_hash FROM accounts WHERE user_id = ?
-`, userID).Scan(&storedHash); err != nil {
+SELECT profile_key_hash, password_hash, discord_user_id, kind, disabled
+FROM accounts WHERE user_id = ?
+`, userID).Scan(
+		&storedHash, &storedPasswordHash, &storedDiscordUserID, &kind, &disabled,
+	); err != nil {
 		return Account{}, fmt.Errorf("authenticate account: read profile key: %w", err)
 	}
+	if disabled != 0 {
+		return Account{}, ErrAccountDisabled
+	}
+	// Only an anonymous, unregistered account may be claimed by whoever turns
+	// up with a key. "Unregistered" has to mean no credential *of any kind*:
+	// a Discord account has no password, so testing the password alone would
+	// hand every Discord account to anyone who read its user ID. Every user ID in this database is public — it appears in
+	// live-game listings, PGN tags, and history rows — so without this guard
+	// anyone could connect as somebody else's bot, or as a registered player
+	// whose row happened to have no key, and play as them. Bot accounts are
+	// additionally sealed with a discarded random key at creation, making this
+	// the second of two locks rather than the only one.
+	claimable := kind == AccountKindHuman &&
+		!accountIsRegistered(storedPasswordHash, storedDiscordUserID)
 	if storedHash == "" {
+		if !claimable {
+			return Account{}, ErrInvalidProfileKey
+		}
 		if _, err := transaction.ExecContext(ctx, `
 UPDATE accounts SET profile_key_hash = ? WHERE user_id = ? AND profile_key_hash = ''
 `, profileKeyHash, userID); err != nil {
@@ -120,13 +147,23 @@ UPDATE accounts SET profile_key_hash = ? WHERE user_id = ? AND profile_key_hash 
 		return Account{}, ErrInvalidProfileKey
 	}
 
+	// A claimed name belongs to its owner, so the display name a client sends
+	// on connect may only rename an anonymous account. Letting it through for
+	// a registered account would desynchronise username from username_lower —
+	// renaming without touching the unique index, which is how one player ends
+	// up wearing another's name.
 	if _, err := transaction.ExecContext(ctx, `
 UPDATE accounts
 SET username = CASE WHEN ? = 'Guest' THEN username ELSE ? END,
     updated_at_unix_ms = ?
-WHERE user_id = ?
-`, username, username, now, userID); err != nil {
+WHERE user_id = ? AND username_lower = '' AND kind = ?
+`, username, username, now, userID, AccountKindHuman); err != nil {
 		return Account{}, fmt.Errorf("authenticate account: refresh account: %w", err)
+	}
+	if _, err := transaction.ExecContext(ctx, `
+UPDATE accounts SET updated_at_unix_ms = ? WHERE user_id = ?
+`, now, userID); err != nil {
+		return Account{}, fmt.Errorf("authenticate account: touch account: %w", err)
 	}
 	if err := transaction.Commit(); err != nil {
 		return Account{}, fmt.Errorf("authenticate account: commit: %w", err)
@@ -134,95 +171,99 @@ WHERE user_id = ?
 	return store.Account(ctx, userID)
 }
 
+// UpdateAccountProfile renames a registered account and sets its Discord
+// handle.
+//
+// There is no profile key here because there is no anonymous profile left to
+// edit: the route behind this holds a session, and only a registered account
+// has a name of its own. An anonymous browser identity plays as "Guest" until
+// it registers, which is what makes a name in this game mean one person rather
+// than whoever typed it last.
 func (store *Store) UpdateAccountProfile(
 	ctx context.Context,
 	userID string,
-	profileKey string,
-	displayName string,
+	username string,
 	discord string,
 ) (Account, error) {
 	userID = strings.TrimSpace(userID)
-	if userID == "" || utf8.RuneCountInString(userID) > 128 {
-		return Account{}, fmt.Errorf(
-			"%w: user ID must be between 1 and 128 characters",
-			ErrInvalidAccountProfile,
-		)
-	}
-	profileKeyHash, err := hashProfileKey(profileKey)
+	username, err := ValidateUsername(username)
 	if err != nil {
 		return Account{}, err
 	}
-	displayName, discord, err = normalizeAccountProfile(displayName, discord)
-	if err != nil {
-		return Account{}, err
-	}
-
-	transaction, err := store.db.BeginTx(ctx, nil)
-	if err != nil {
-		return Account{}, fmt.Errorf("update account profile: begin transaction: %w", err)
-	}
-	defer func() { _ = transaction.Rollback() }()
-
-	var storedHash string
-	if err := transaction.QueryRowContext(ctx, `
-SELECT profile_key_hash FROM accounts WHERE user_id = ?
-`, userID).Scan(&storedHash); errors.Is(err, sql.ErrNoRows) {
+	var passwordHash, discordUserID, storedDiscord string
+	var disabled int
+	err = store.db.QueryRowContext(ctx, `
+SELECT password_hash, discord_user_id, discord, disabled FROM accounts WHERE user_id = ?
+`, userID).Scan(&passwordHash, &discordUserID, &storedDiscord, &disabled)
+	if errors.Is(err, sql.ErrNoRows) {
 		return Account{}, ErrAccountNotFound
-	} else if err != nil {
-		return Account{}, fmt.Errorf("update account profile: read profile key: %w", err)
 	}
-	if storedHash == "" {
-		if _, err := transaction.ExecContext(ctx, `
-UPDATE accounts SET profile_key_hash = ? WHERE user_id = ? AND profile_key_hash = ''
-`, profileKeyHash, userID); err != nil {
-			return Account{}, fmt.Errorf("update account profile: claim account: %w", err)
-		}
-	} else if !profileKeyHashesMatch(storedHash, profileKeyHash) {
-		return Account{}, ErrInvalidProfileKey
+	if err != nil {
+		return Account{}, fmt.Errorf("update account profile: read account: %w", err)
+	}
+	if disabled != 0 {
+		return Account{}, ErrAccountDisabled
+	}
+	if !accountIsRegistered(passwordHash, discordUserID) {
+		return Account{}, ErrNotRegistered
 	}
 
-	if _, err := transaction.ExecContext(ctx, `
+	// A verified handle is Discord's answer, not the account holder's, so it is
+	// not editable here. Ignored rather than refused: a client that read the
+	// account and sent it back unchanged would otherwise get an error for a
+	// field it never touched, and the reply below carries the authoritative
+	// value anyway.
+	//
+	// Skipping validateDiscord with it is deliberate. That rule was written for
+	// a handle somebody typed, and Discord is not obliged to satisfy it.
+	if discordUserID != "" {
+		discord = storedDiscord
+	} else if discord, err = validateDiscord(discord); err != nil {
+		return Account{}, err
+	}
+
+	// The WHERE clause repeats both checks so the write cannot land on a row
+	// that stopped qualifying between the read and here.
+	if _, err := store.db.ExecContext(ctx, `
 UPDATE accounts
-SET username = ?, discord = ?, updated_at_unix_ms = ?
-WHERE user_id = ?
-`, displayName, discord, time.Now().UnixMilli(), userID); err != nil {
+SET username = ?, username_lower = ?, discord = ?, updated_at_unix_ms = ?
+WHERE user_id = ? AND `+registeredSQL("")+` AND disabled = 0
+`, username, UsernameKey(username), discord, time.Now().UnixMilli(), userID); err != nil {
+		if isUniqueConstraint(err) {
+			return Account{}, ErrUsernameTaken
+		}
 		return Account{}, fmt.Errorf("update account profile: save profile: %w", err)
 	}
-	if err := transaction.Commit(); err != nil {
-		return Account{}, fmt.Errorf("update account profile: commit: %w", err)
+	// Renaming is the other way to claim a name, and it reaches the same rule.
+	if err := grantOwnerAdmin(ctx, store.db, userID, username); err != nil {
+		return Account{}, err
 	}
 	return store.Account(ctx, userID)
 }
 
-func normalizeAccountProfile(displayName string, discord string) (string, string, error) {
-	displayName = strings.TrimSpace(displayName)
+// validateDiscord checks the one free-form field an account still has.
+//
+// It is optional. Registering asks for a username and a password, and a player
+// who never enters a tournament never needs to be reachable on Discord.
+func validateDiscord(discord string) (string, error) {
 	discord = strings.TrimSpace(discord)
-	if utf8.RuneCountInString(displayName) < 1 || utf8.RuneCountInString(displayName) > 40 {
-		return "", "", fmt.Errorf(
-			"%w: display name must be between 1 and 40 characters",
-			ErrInvalidAccountProfile,
-		)
-	}
-	if strings.IndexFunc(displayName, unicode.IsControl) >= 0 {
-		return "", "", fmt.Errorf(
-			"%w: display name cannot contain control characters",
-			ErrInvalidAccountProfile,
-		)
+	if discord == "" {
+		return "", nil
 	}
 	if utf8.RuneCountInString(discord) < 2 || utf8.RuneCountInString(discord) > 64 {
-		return "", "", fmt.Errorf(
+		return "", fmt.Errorf(
 			"%w: Discord must be between 2 and 64 characters",
 			ErrInvalidAccountProfile,
 		)
 	}
 	if strings.IndexFunc(discord, unicode.IsSpace) >= 0 ||
 		strings.IndexFunc(discord, unicode.IsControl) >= 0 {
-		return "", "", fmt.Errorf(
+		return "", fmt.Errorf(
 			"%w: Discord cannot contain spaces or control characters",
 			ErrInvalidAccountProfile,
 		)
 	}
-	return displayName, discord, nil
+	return discord, nil
 }
 
 func hashProfileKey(profileKey string) (string, error) {

@@ -118,9 +118,7 @@ func TestArchiveGameIgnoresARepeat(t *testing.T) {
 	}
 }
 
-// A game is archived even when its players share an account, which the rating
-// transaction refuses. Self-play is exactly the data worth keeping.
-func TestArchiveGameKeepsGamesTheRatingTableRejects(t *testing.T) {
+func TestArchiveGameRejectsSelfPlay(t *testing.T) {
 	store, err := Open(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -132,22 +130,13 @@ func TestArchiveGameKeepsGamesTheRatingTableRejects(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	state, err := played.Resign(game.Red)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.RecordCompletedGame(
-		context.Background(), state, time.Now(), time.Now(), true,
-	); err == nil {
-		t.Fatal("expected the rating transaction to refuse a self-play game")
-	}
 	if _, err := store.ArchiveGame(
 		context.Background(), played.Record(), notation.Metadata{}, "",
-	); err != nil {
-		t.Fatalf("self-play game was not archived: %v", err)
+	); err == nil {
+		t.Fatal("expected the archive to refuse a self-play game")
 	}
-	if _, err := store.ArchivedGame(context.Background(), "self-play"); err != nil {
-		t.Fatal(err)
+	if total, err := store.CountArchivedGames(context.Background()); err != nil || total != 0 {
+		t.Fatalf("self-play must not reach the archive: total=%d err=%v", total, err)
 	}
 }
 

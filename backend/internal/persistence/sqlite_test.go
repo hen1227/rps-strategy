@@ -52,7 +52,7 @@ func TestCompletedRankedGameUpdatesEloHistoryAndHeadToHeadExactlyOnce(t *testing
 
 	red := game.PlayerProfile{UserID: "red-id", Username: "Red Player"}
 	blue := game.PlayerProfile{UserID: "blue-id", Username: "Blue Player"}
-	newGame, err := game.NewGame("ranked-game", game.ModeAnnihilation, red, blue)
+	newGame, err := game.NewGame("ranked-game", game.ModeInfiltration, red, blue)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,11 +89,11 @@ func TestCompletedRankedGameUpdatesEloHistoryAndHeadToHeadExactlyOnce(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if redAccount.ModeElo(game.ModeAnnihilation) != 1216 || redAccount.Wins != 1 ||
+	if redAccount.ModeElo(game.ModeInfiltration) != 1216 || redAccount.Wins != 1 ||
 		redAccount.GamesPlayed != 1 {
 		t.Fatalf("unexpected Red account: %#v", redAccount)
 	}
-	if blueAccount.ModeElo(game.ModeAnnihilation) != 1184 || blueAccount.Losses != 1 ||
+	if blueAccount.ModeElo(game.ModeInfiltration) != 1184 || blueAccount.Losses != 1 ||
 		blueAccount.GamesPlayed != 1 {
 		t.Fatalf("unexpected Blue account: %#v", blueAccount)
 	}
@@ -103,8 +103,8 @@ func TestCompletedRankedGameUpdatesEloHistoryAndHeadToHeadExactlyOnce(t *testing
 		t.Fatalf("ranked play moved the shared seed rating: %d, %d",
 			redAccount.Elo, blueAccount.Elo)
 	}
-	if redAccount.ModeRatings[game.ModeAnnihilation].Wins != 1 ||
-		blueAccount.ModeRatings[game.ModeAnnihilation].Losses != 1 {
+	if redAccount.ModeRatings[game.ModeInfiltration].Wins != 1 ||
+		blueAccount.ModeRatings[game.ModeInfiltration].Losses != 1 {
 		t.Fatalf("mode record was not counted: %#v, %#v",
 			redAccount.ModeRatings, blueAccount.ModeRatings)
 	}
@@ -136,7 +136,7 @@ func TestDrawIsRecordedWithoutChangingEqualRatings(t *testing.T) {
 
 	red := game.PlayerProfile{UserID: "draw-red", Username: "Red"}
 	blue := game.PlayerProfile{UserID: "draw-blue", Username: "Blue"}
-	newGame, err := game.NewGame("draw-game", game.ModeAnnihilation, red, blue)
+	newGame, err := game.NewGame("draw-game", game.ModeInfiltration, red, blue)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,20 +210,20 @@ func TestModeRatingsRateIndependentlyFromTheSharedSeed(t *testing.T) {
 		return update
 	}
 
-	annihilation := record("seed-annihilation", game.ModeAnnihilation, game.Blue)
-	if annihilation.ModeID != game.ModeAnnihilation ||
-		annihilation.RedEloBefore != 1300 || annihilation.BlueEloBefore != 1100 {
-		t.Fatalf("the first game in a mode must start from the shared seed: %#v", annihilation)
+	infiltration := record("seed-infiltration", game.ModeInfiltration, game.Blue)
+	if infiltration.ModeID != game.ModeInfiltration ||
+		infiltration.RedEloBefore != 1300 || infiltration.BlueEloBefore != 1100 {
+		t.Fatalf("the first game in a mode must start from the shared seed: %#v", infiltration)
 	}
-	if annihilation.RedEloAfter != 1308 || annihilation.BlueEloAfter != 1092 {
-		t.Fatalf("unexpected Annihilation rating update: %#v", annihilation)
+	if infiltration.RedEloAfter != 1308 || infiltration.BlueEloAfter != 1092 {
+		t.Fatalf("unexpected Infiltration rating update: %#v", infiltration)
 	}
 
 	// Total War has not been played yet, so it still sits on the shared seed
-	// rather than inheriting the Annihilation result.
+	// rather than inheriting the Infiltration result.
 	totalWar := record("seed-total-war", game.ModeTotalWar, game.Red)
 	if totalWar.RedEloBefore != 1300 || totalWar.BlueEloBefore != 1100 {
-		t.Fatalf("Total War inherited the Annihilation rating: %#v", totalWar)
+		t.Fatalf("Total War inherited the Infiltration rating: %#v", totalWar)
 	}
 	if totalWar.RedEloAfter != 1276 || totalWar.BlueEloAfter != 1124 {
 		t.Fatalf("unexpected Total War rating update: %#v", totalWar)
@@ -233,17 +233,17 @@ func TestModeRatingsRateIndependentlyFromTheSharedSeed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if redAccount.ModeElo(game.ModeAnnihilation) != 1308 ||
+	if redAccount.ModeElo(game.ModeInfiltration) != 1308 ||
 		redAccount.ModeElo(game.ModeTotalWar) != 1276 {
 		t.Fatalf("modes did not keep separate ratings: %#v", redAccount.ModeRatings)
 	}
-	if redAccount.ModeElo(game.ModeInfiltration) != 1300 {
+	if redAccount.ModeElo(game.ModeID("V7")) != 1300 {
 		t.Fatal("an unplayed mode must report the shared seed rating")
 	}
 	if redAccount.GamesPlayed != 2 || redAccount.Wins != 1 || redAccount.Losses != 1 {
 		t.Fatalf("lifetime totals must span every mode: %#v", redAccount)
 	}
-	if redAccount.ModeRatings[game.ModeAnnihilation].GamesPlayed != 1 ||
+	if redAccount.ModeRatings[game.ModeInfiltration].GamesPlayed != 1 ||
 		redAccount.ModeRatings[game.ModeTotalWar].GamesPlayed != 1 {
 		t.Fatalf("unexpected per-mode records: %#v", redAccount.ModeRatings)
 	}

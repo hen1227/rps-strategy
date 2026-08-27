@@ -13,5 +13,12 @@
 # Local environment and OS files
 .env
 .env.*
+# The Apple push key. A .p8 in a repository is a .p8 leaked, and the one place
+# it is likely to be dropped is beside the binary that reads it.
+*.p8
 .DS_Store
 .idea/
+
+# Python bytecode cache (internal/botclient)
+__pycache__/
+*.pyc

@@ -138,6 +138,11 @@ func (server *Server) readyForTournamentMatch(
 		return
 	}
 
+	// Resolved before the lock is taken: botIsReadyFor reads server state
+	// through an RLock, and sync.RWMutex is not reentrant, so asking inside
+	// the critical section below would deadlock this goroutine against itself.
+	opponentIsWaitingBot := server.botIsReadyFor(opponent.UserID)
+
 	server.mu.Lock()
 	server.clearReadinessLocked(client.profile.UserID, &key)
 	ready := server.tournamentReady[key]
@@ -147,6 +152,11 @@ func (server *Server) readyForTournamentMatch(
 	}
 	ready[client.profile.UserID] = struct{}{}
 	_, opponentReady := ready[opponent.UserID]
+	// A bot never sends tournament_ready — its client is a pipe with no
+	// tournament awareness — so an opponent that is an idle, connected engine
+	// counts as present. Without this a human-versus-bot match waits forever
+	// for a click nobody is going to make.
+	opponentReady = opponentReady || opponentIsWaitingBot
 	// Claiming the match's game slot under the same lock that reads readiness
 	// keeps two simultaneous ready-ups from starting two games for one match.
 	_, claimed := server.tournamentGames[key]
@@ -225,21 +235,25 @@ func (server *Server) startTournamentMatch(
 		matchID:      match.MatchID,
 	}
 	entryTime := time.Now()
-	timeControl := game.DefaultTimeControl()
+	// Casual: a tournament keeps its own standings, and has never moved the
+	// ladder ratings on top of them.
+	setup := game.GameSetup{
+		ModeID:      tournament.ModeID,
+		TimeControl: game.DefaultTimeControl(),
+		Casual:      true,
+	}
 	session := server.startConfiguredMatch(
 		QueueEntry{
-			Client:      player1Client,
-			ModeID:      tournament.ModeID,
-			TimeControl: timeControl,
-			Elo:         matchmakingElo(player1Client, tournament.ModeID),
-			JoinedAt:    entryTime,
+			Client:   player1Client,
+			Setup:    setup,
+			Elo:      matchmakingElo(player1Client, tournament.ModeID),
+			JoinedAt: entryTime,
 		},
 		QueueEntry{
-			Client:      player2Client,
-			ModeID:      tournament.ModeID,
-			TimeControl: timeControl,
-			Elo:         matchmakingElo(player2Client, tournament.ModeID),
-			JoinedAt:    entryTime,
+			Client:   player2Client,
+			Setup:    setup,
+			Elo:      matchmakingElo(player2Client, tournament.ModeID),
+			JoinedAt: entryTime,
 		},
 		matchSetup{
 			tournament: &tournamentMatchRef{
@@ -297,13 +311,16 @@ func (server *Server) recordTournamentMatchResult(
 	case game.Blue:
 		result = persistence.MatchPlayer2Win
 	}
-	if _, err := server.data.SetTournamentMatchResult(
+	tournament, err := server.data.SetTournamentMatchResult(
 		context.Background(),
 		reference.tournamentID,
 		reference.matchID,
 		result,
-	); err != nil {
+	)
+	if err != nil {
 		log.Printf("record tournament match %d result: %v", reference.matchID, err)
+	} else {
+		server.awardTournamentTitles(context.Background(), tournament)
 	}
 	server.broadcastTournaments()
 }
@@ -387,11 +404,14 @@ func (server *Server) clearTournamentReadiness(client *Client) bool {
 // dropped into a game: spectating another board and waiting in matchmaking.
 func (server *Server) releaseFromLobby(client *Client) {
 	server.stopSpectating(client, true)
-	if _, queued := server.matchmaking.Status(client); queued {
-		server.matchmaking.Remove(client)
-		client.Send(ServerMessage{Type: "queue_left"})
-		server.broadcastModePlayerCounts()
+	seek := server.seeks.RemoveClient(client)
+	if seek == nil {
+		return
 	}
+	// Withdrawn the same way the lobby withdraws one, so a posted game
+	// disappears from its author's screen as a cancelled challenge rather than
+	// as a search they never started.
+	server.announceWithdrawnSeek(seek, "Your challenge was withdrawn to start this match.")
 }
 
 // availableClientForUser finds a connection for an account that could start a

@@ -129,7 +129,7 @@ func TestTournamentSignupReservedIdentitiesRequireSpecialToken(t *testing.T) {
 	defer data.Close()
 	server := NewWithStoreAndAdminToken(data, nil, "special-secret")
 	tournament, err := data.CreateTournament(
-		t.Context(), "reserved-open", "Reserved Open", game.ModeAnnihilation, "Annihilation",
+		t.Context(), "reserved-open", "Reserved Open", game.ModeTotalWar, "Total War",
 	)
 	if err != nil {
 		t.Fatal(err)

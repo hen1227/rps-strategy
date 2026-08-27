@@ -386,6 +386,16 @@ func buildRecord(tags map[string]string, events []game.Event, result string) (ga
 	if err != nil {
 		return game.Record{}, err
 	}
+	startingGrid, startingTurn, err := DecodePosition(tags["FEN"])
+	if err != nil {
+		return game.Record{}, err
+	}
+	// Older hand-written records sometimes omit the side-to-move field. They
+	// historically replayed with Red first, so keep that compatibility while
+	// preserving an explicit Blue turn when the FEN supplies one.
+	if startingTurn == game.Neutral {
+		startingTurn = game.Red
+	}
 	grid, turn, err := DecodePosition(tags["FinalFEN"])
 	if err != nil {
 		return game.Record{}, err
@@ -450,6 +460,7 @@ func buildRecord(tags map[string]string, events []game.Event, result string) (ga
 		RedPlayer:       red,
 		BluePlayer:      blue,
 		StartedAtUnixMs: parseInt64(tags["StartTimeUnixMs"]),
+		InitialPosition: &game.InitialPosition{Grid: startingGrid, CurrentTurn: startingTurn},
 		Events:          events,
 		Final:           final,
 	}, nil

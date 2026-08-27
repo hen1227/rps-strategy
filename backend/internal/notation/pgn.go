@@ -40,6 +40,16 @@ type Metadata struct {
 	BlueEloBefore int
 	BlueEloAfter  int
 
+	// BookPlies counts opening moves that were dealt rather than chosen — the
+	// seeded random opening a bot series starts each pair from. Review tooling
+	// reads it and skips those plies: grading a move nobody picked as a
+	// blunder would slander both engines.
+	BookPlies int
+	// OpeningSeed and SeriesID identify the run a game belongs to, so a
+	// surprising result can be reproduced rather than argued about.
+	OpeningSeed string
+	SeriesID    string
+
 	FinishedAt time.Time
 }
 
@@ -80,8 +90,30 @@ func Encode(record game.Record, metadata Metadata) string {
 	return builder.String()
 }
 
+// formatBoardSize writes the shape of the board a game was played on: one
+// number for a square board, "WxH" otherwise.
+//
+// Nothing parses this tag — the FEN beside it already describes the shape, which
+// is what a replay reads — so it exists to be read by a person. Keeping the bare
+// side for a square board is what makes every nine-by-nine record ever archived
+// still spell it "9".
+func formatBoardSize(grid game.Grid) string {
+	width, height := grid.Width(), grid.Height()
+	if width == height {
+		return strconv.Itoa(width)
+	}
+	return strconv.Itoa(width) + "x" + strconv.Itoa(height)
+}
+
 func buildTags(record game.Record, metadata Metadata) []Tag {
 	final := record.Final
+	startingFEN := EncodeStartingPosition(record.StartingPosition())
+	if record.InitialPosition != nil {
+		startingFEN = EncodePosition(
+			record.InitialPosition.Grid,
+			record.InitialPosition.CurrentTurn,
+		)
+	}
 	startedAt := time.UnixMilli(record.StartedAtUnixMs).UTC()
 	finishedAt := metadata.FinishedAt.UTC()
 	if metadata.FinishedAt.IsZero() {
@@ -111,10 +143,10 @@ func buildTags(record game.Record, metadata Metadata) []Tag {
 		{"GameId", record.GameID},
 		{"Variant", record.Mode.Name},
 		{"ModeId", string(record.Mode.ID)},
-		{"BoardSize", strconv.Itoa(game.BoardSize)},
+		{"BoardSize", formatBoardSize(record.Final.Grid)},
 		{"TimeControl", FormatTimeControl(record.TimeControl)},
 		{"SetUp", "1"},
-		{"FEN", EncodeStartingPosition(record.StartingPosition())},
+		{"FEN", startingFEN},
 	}
 	tags = appendIfSet(tags, "RedId", record.RedPlayer.UserID)
 	tags = appendIfSet(tags, "BlueId", record.BluePlayer.UserID)
@@ -134,6 +166,11 @@ func buildTags(record game.Record, metadata Metadata) []Tag {
 	}
 	tags = append(tags, Tag{"Ranked", strconv.FormatBool(metadata.Ranked)})
 	tags = appendIfSet(tags, "TournamentId", metadata.TournamentID)
+	if metadata.BookPlies > 0 {
+		tags = append(tags, Tag{"BookPlies", strconv.Itoa(metadata.BookPlies)})
+	}
+	tags = appendIfSet(tags, "OpeningSeed", metadata.OpeningSeed)
+	tags = appendIfSet(tags, "SeriesId", metadata.SeriesID)
 	tags = append(tags,
 		Tag{"Termination", Termination(final)},
 		Tag{"EndReason", string(final.EndReason)},
@@ -399,7 +436,8 @@ func movetextTokens(record game.Record) []string {
 func adjudicatedByAMove(reason game.GameEndReason) bool {
 	switch reason {
 	case game.EndReasonGameRule, game.EndReasonAnnihilation, game.EndReasonTerritory,
-		game.EndReasonInfiltration, game.EndReasonRepetition, game.EndReasonStalemate:
+		game.EndReasonInfiltration, game.EndReasonRepetition, game.EndReasonStalemate,
+		game.EndReasonMoveLimit:
 		return true
 	default:
 		return false
@@ -435,4 +473,78 @@ func wrapTokens(tokens []string) string {
 		lines = append(lines, line.String())
 	}
 	return strings.Join(lines, "\n")
+}
+
+// RenameParticipant blanks one player's name and id inside a stored record,
+// replacing both with the same value.
+//
+// Anonymizing an account clears the name from the database rows, but a PGN
+// carries its own copy in the tag pairs, and PRIVACY.md promises "the bare
+// result with your name removed". This is what makes that true of the archive
+// itself rather than only of the columns beside it.
+//
+// Only the tag block is touched. The movetext is returned byte-identical, so a
+// renamed record still replays to the same game and still passes game.Verify —
+// which is the property that makes the archive worth keeping at all.
+func RenameParticipant(pgn string, userID string, replacement string) string {
+	// Anonymizing wants the id gone as thoroughly as the name, so both tags
+	// take the same value.
+	return ReseatParticipant(pgn, userID, replacement, replacement)
+}
+
+// ReseatParticipant rewrites one player's id and name independently.
+//
+// Merging a guest account into a real one needs the two to differ: the seat
+// must end up carrying the surviving account's id *and* that account's name,
+// where anonymizing only ever needed one value in both places.
+//
+// Only the tag block is touched. The movetext is returned byte-identical, so a
+// reseated record still replays to the same game and still passes game.Verify —
+// which is the property that makes the archive worth keeping at all.
+func ReseatParticipant(pgn string, userID string, newUserID string, newName string) string {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return pgn
+	}
+	lines := strings.Split(pgn, "\n")
+	// Which seat the account held. Read first, because the name tag comes
+	// before the id tag and has to be rewritten once the seat is known.
+	seats := map[string]bool{}
+	for _, line := range lines {
+		for _, seat := range []string{"Red", "Blue"} {
+			if strings.HasPrefix(line, "["+seat+"Id \"") &&
+				tagValue(line) == userID {
+				seats[seat] = true
+			}
+		}
+	}
+	if len(seats) == 0 {
+		return pgn
+	}
+	for index, line := range lines {
+		// The tag block ends at the first blank line; everything after it is
+		// movetext and must not be touched.
+		if strings.TrimSpace(line) == "" {
+			break
+		}
+		for seat := range seats {
+			if strings.HasPrefix(line, "["+seat+" \"") {
+				lines[index] = fmt.Sprintf("[%s %q]", seat, newName)
+			}
+			if strings.HasPrefix(line, "["+seat+"Id \"") {
+				lines[index] = fmt.Sprintf("[%sId %q]", seat, newUserID)
+			}
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// tagValue reads the quoted value out of a `[Name "value"]` line.
+func tagValue(line string) string {
+	open := strings.Index(line, `"`)
+	close := strings.LastIndex(line, `"`)
+	if open < 0 || close <= open {
+		return ""
+	}
+	return strings.ReplaceAll(line[open+1:close], `\"`, `"`)
 }

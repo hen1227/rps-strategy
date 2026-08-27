@@ -18,9 +18,10 @@ var ErrGamePGNNotFound = errors.New("game record not found")
 // game — moves, clocks, proposals, and ending — so the remaining columns exist
 // only to select games without parsing every record.
 //
-// This table deliberately has no foreign keys onto accounts. Every game that
-// finishes is archived, including unranked, private, and tournament games, and
-// including games whose rating transaction could not be committed.
+// This table deliberately has no foreign keys onto accounts. Every game
+// between distinct accounts is archived, including unranked, private, and
+// tournament games, and including games whose rating transaction could not be
+// committed. Self-play stays local rather than becoming server training data.
 type ArchivedGame struct {
 	GameID           string             `json:"gameId"`
 	ModeID           game.ModeID        `json:"modeId"`
@@ -41,6 +42,11 @@ type ArchivedGame struct {
 	FinishedAtUnixMs int64              `json:"finishedAtUnixMs"`
 	RecordedAtUnixMs int64              `json:"recordedAtUnixMs"`
 	PGN              string             `json:"pgn"`
+	// Reviews of this game, when anyone has run one. Kept in their own table
+	// because they are a later, optional annotation: the PGN column stays the
+	// whole game on its own, and a game with no review is not a game with a
+	// blank one.
+	Accuracy []GameAccuracy `json:"accuracy,omitempty"`
 }
 
 // ArchiveFilter selects a slice of the archive for export. Zero values mean
@@ -104,9 +110,9 @@ CREATE INDEX IF NOT EXISTS game_pgn_mode_idx
 	return nil
 }
 
-// ArchiveGame writes a game's PGN. Like the rating transaction it is keyed on
-// the game ID and ignores a repeat, so a game cannot be archived twice and a
-// retry is harmless.
+// ArchiveGame writes a game's PGN. Like the rating transaction it rejects
+// self-play, is keyed on the game ID, and ignores a repeat, so a game cannot be
+// archived twice and a retry is harmless.
 //
 // A game that has not finished is archived as it stands, with the "*" result
 // PGN uses for an unterminated game. Shutting the server down mid-game is the
@@ -119,6 +125,9 @@ func (store *Store) ArchiveGame(
 ) (ArchivedGame, error) {
 	if strings.TrimSpace(record.GameID) == "" {
 		return ArchivedGame{}, errors.New("archive game: game id is required")
+	}
+	if record.RedPlayer.UserID != "" && record.RedPlayer.UserID == record.BluePlayer.UserID {
+		return ArchivedGame{}, errors.New("archive game: players must have different accounts")
 	}
 	finishedAt := metadata.FinishedAt
 	if finishedAt.IsZero() {
@@ -199,7 +208,14 @@ func (store *Store) ArchivedGame(ctx context.Context, gameID string) (ArchivedGa
 	if errors.Is(err, sql.ErrNoRows) {
 		return ArchivedGame{}, fmt.Errorf("%w: %s", ErrGamePGNNotFound, gameID)
 	}
-	return archived, err
+	if err != nil {
+		return ArchivedGame{}, err
+	}
+	// A missing review is not an error: most games have never been reviewed.
+	if accuracy, err := store.GameAccuracies(ctx, gameID); err == nil {
+		archived.Accuracy = accuracy
+	}
+	return archived, nil
 }
 
 // AccountArchivedGames returns one player's games, newest first.
@@ -219,7 +235,31 @@ LIMIT ? OFFSET ?
 	if err != nil {
 		return nil, fmt.Errorf("query archived games: %w", err)
 	}
-	return collectArchivedGames(rows)
+	archived, err := collectArchivedGames(rows)
+	if err != nil {
+		return nil, err
+	}
+	return store.withAccuracy(ctx, archived)
+}
+
+// withAccuracy attaches stored reviews to a page of games in one query rather
+// than one per game.
+func (store *Store) withAccuracy(
+	ctx context.Context,
+	archived []ArchivedGame,
+) ([]ArchivedGame, error) {
+	gameIDs := make([]string, 0, len(archived))
+	for _, record := range archived {
+		gameIDs = append(gameIDs, record.GameID)
+	}
+	byGame, err := store.GameAccuraciesFor(ctx, gameIDs)
+	if err != nil {
+		return nil, err
+	}
+	for index := range archived {
+		archived[index].Accuracy = byGame[archived[index].GameID]
+	}
+	return archived, nil
 }
 
 // ExportArchivedGames pages through the archive oldest first, which is the

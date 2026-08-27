@@ -56,10 +56,20 @@ read it, and departs from it exactly where the game differs.
 
 ### Squares
 
-Files `a` to `i` run left to right (`x` = 0 to 8). Ranks `1` to `9` run from
-Blue's home boundary (`y` = 0) to Red's (`y` = 8). `a1` is therefore the corner
-of Blue's home rank and `i9` the opposite corner, matching engine coordinates
-with no transformation.
+Files are letters running left to right (`a` is `x` = 0) and ranks are numbers
+running from Blue's home boundary (`1` is `y` = 0) to Red's, matching engine
+coordinates with no transformation. On the nine-by-nine board the built-in modes
+use, that is `a1` at the corner of Blue's home rank and `i9` at the opposite one.
+
+A mode may be any rectangle up to 26 a side, so a file may be any letter up to
+`z` and a rank is a decimal number rather than one digit: `d10` is an ordinary
+square on a board with ten ranks. The `BoardSize` tag says what shape a game was
+played on — one number for a square board, `WxH` otherwise — but nothing reads
+it, because the `FEN` beside it already describes the shape. Its ranks are the
+board's ranks and each rank's runs add up to the board's files, which is what
+lets an archived game replay on the board it was actually played on with nothing
+else telling the parser so. A run of empty squares is a decimal number too, so a
+wide empty rank is `11` rather than `9` followed by `2`.
 
 ### Moves
 
@@ -72,8 +82,8 @@ future mode with different rules — spells the victim out between the `x` and
 the destination (`Rd7xPd6`) so the format cannot lose information.
 
 `#` marks a move that ended the game by a rule (annihilation, territory,
-infiltration, repetition, stalemate). Resigning, agreeing a draw, timing out,
-and walking away are not caused by a move and are never marked.
+infiltration, repetition, or stalemate). Resigning, agreeing a draw, timing
+out, and walking away are not caused by a move and are never marked.
 
 `12.` announces a Red move and `12...` a Blue move, so colors stay explicit
 even for a mode that does not strictly alternate.
@@ -108,6 +118,13 @@ can be owned by a player who has no piece on it, which decides Total War.
 
 `FEN` is the board the game was actually played from, so replaying an old
 record survives a later redesign of the mode's opening position.
+
+Custom starting positions use the standard PGN pairing `[SetUp "1"]` plus
+`[FEN "…"]`. The reader uses the complete FEN as the initial state: pieces,
+territory, and the side to move are all preserved. For example, a `b` in the
+second field makes the first move Blue's and should be followed by a `1...`
+move token. Encoding the parsed or replayed record writes the same custom FEN
+back out.
 
 ## Reconstructing a game
 
@@ -154,12 +171,22 @@ curl -H "Authorization: Bearer $RPS_ADMIN_TOKEN" \
 
 `notation.ParseMulti` reads a file of concatenated records back.
 
+## Reviews
+
+A record is also what the in-app review replays. When a player reviews a game
+they played, their accuracy is stored beside the record in `game_accuracy`
+rather than inside the PGN column, so a record stays a complete game on its own
+and a game nobody has reviewed has no row rather than a blank one. `?format=json`
+responses carry whatever reviews exist alongside the record. See
+[`../../docs/review.md`](../../docs/review.md).
+
 ## What is stored, and when
 
 A game is archived the moment it ends, in the same place the result is
 recorded, but never gated on it: a game whose rating transaction fails is still
-archived, and so are unranked, private-challenge, tournament, and self-play
-games. Games still in progress when the process stops are archived as they
+archived, and so are unranked, private-challenge, and tournament games. Local
+bot battles are kept in the browser and can be copied as PGN instead. Games
+still in progress when the process stops are archived as they
 stand with the `*` result, so a restart costs only the games that had no moves
 yet. Writes are keyed on the game ID and ignore a repeat, so no game can be
 archived twice.

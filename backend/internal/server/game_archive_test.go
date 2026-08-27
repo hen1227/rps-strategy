@@ -43,17 +43,17 @@ func archiveTestClients(t *testing.T, data *persistence.Store, userIDs ...string
 
 func startArchiveTestMatch(server *Server, red, blue *Client, modeID game.ModeID) {
 	entryTime := time.Now()
-	server.startMatch(
+	setup := game.GameSetup{ModeID: modeID}
+	server.startConfiguredMatch(
 		QueueEntry{
-			Client: red, ModeID: modeID,
-			TimeControl: game.DefaultTimeControl(),
-			Elo:         matchmakingElo(red, modeID), JoinedAt: entryTime,
+			Client: red, Setup: setup,
+			Elo: matchmakingElo(red, modeID), JoinedAt: entryTime,
 		},
 		QueueEntry{
-			Client: blue, ModeID: modeID,
-			TimeControl: game.DefaultTimeControl(),
-			Elo:         matchmakingElo(blue, modeID), JoinedAt: entryTime,
+			Client: blue, Setup: setup,
+			Elo: matchmakingElo(blue, modeID), JoinedAt: entryTime,
 		},
+		matchSetup{},
 	)
 }
 

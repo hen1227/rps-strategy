@@ -15,26 +15,20 @@ var (
 // Modes may use it, replace it, or combine it with entirely different movement.
 type standardRPSRules struct{}
 
+// initializeBoard allocates the board this layout describes and paints it. The
+// shape comes from the layout rather than from a constant, which is what lets a
+// mode be any rectangle.
 func (standardRPSRules) initializeBoard(
 	state *GameState,
 	startingPosition StartingPosition,
 ) {
-	for y := 0; y < BoardSize; y++ {
-		for x := 0; x < BoardSize; x++ {
-			state.Grid[y][x] = Tile{
-				X:             x,
-				Y:             y,
-				Occupant:      Empty,
-				OccupantOwner: Neutral,
-				OwnerColor:    Neutral,
-			}
-		}
-	}
+	state.Grid = NewGrid(startingPosition.Width(), startingPosition.Height())
 	startingPosition.apply(state)
 }
 
 func (rules standardRPSRules) validMoves(state GameState, player PlayerColor, from Position) []Position {
-	if state.Status != InProgress || state.CurrentTurn != player || !inBounds(from) {
+	if state.Status != InProgress || state.CurrentTurn != player ||
+		!state.Grid.Contains(from) {
 		return nil
 	}
 	if state.Grid[from.Y][from.X].OccupantOwner != player {
@@ -63,7 +57,7 @@ func (standardRPSRules) validateMove(state GameState, player PlayerColor, from, 
 	if player != state.CurrentTurn {
 		return ErrWrongTurn
 	}
-	if !inBounds(from) || !inBounds(to) {
+	if !state.Grid.Contains(from) || !state.Grid.Contains(to) {
 		return ErrOutOfBounds
 	}
 
@@ -123,11 +117,11 @@ func canCapture(attacker, defender Piece) bool {
 		(attacker == Paper && defender == Rock)
 }
 
-func countPieces(grid [BoardSize][BoardSize]Tile, color PlayerColor) int {
+func countPieces(grid Grid, color PlayerColor) int {
 	count := 0
-	for y := range grid {
-		for x := range grid[y] {
-			if grid[y][x].OccupantOwner == color {
+	for _, row := range grid {
+		for _, tile := range row {
+			if tile.OccupantOwner == color {
 				count++
 			}
 		}
@@ -135,10 +129,10 @@ func countPieces(grid [BoardSize][BoardSize]Tile, color PlayerColor) int {
 	return count
 }
 
-func countTerritory(grid [BoardSize][BoardSize]Tile) (red, blue, neutral int) {
-	for y := range grid {
-		for x := range grid[y] {
-			switch grid[y][x].OwnerColor {
+func countTerritory(grid Grid) (red, blue, neutral int) {
+	for _, row := range grid {
+		for _, tile := range row {
+			switch tile.OwnerColor {
 			case Red:
 				red++
 			case Blue:
@@ -149,10 +143,6 @@ func countTerritory(grid [BoardSize][BoardSize]Tile) (red, blue, neutral int) {
 		}
 	}
 	return
-}
-
-func inBounds(position Position) bool {
-	return position.X >= 0 && position.X < BoardSize && position.Y >= 0 && position.Y < BoardSize
 }
 
 func OtherColor(color PlayerColor) PlayerColor {

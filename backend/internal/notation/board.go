@@ -4,9 +4,11 @@
 // ending in a result token — with three deliberate differences that come from
 // the game rather than from taste:
 //
-//   - Squares are a1 to i9 on a 9x9 board. Files a to i run left to right
-//     (x = 0 to 8) and ranks 1 to 9 run from Blue's home boundary (y = 0) to
-//     Red's (y = 8), matching the engine's coordinates exactly.
+//   - Squares are a1 upwards. Files run left to right as letters (x = 0 is "a")
+//     and ranks from Blue's home boundary (y = 0 is rank 1) to Red's, matching
+//     the engine's coordinates exactly. The built-in modes are nine by nine, so
+//     their squares are a1 to i9; a spec-defined mode may be any rectangle up to
+//     26 a side, which is where "z26" and two-digit ranks come from.
 //   - A move names the piece that moved, the square it left, and the square it
 //     entered: Rd7-d6 quietly, Rd7xd6 for a capture. The captured piece is
 //     never written because it cannot be in doubt: rock takes only scissors,
@@ -23,6 +25,7 @@ package notation
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"rps-strategy/backend/internal/game"
@@ -30,28 +33,41 @@ import (
 
 var ErrInvalidPosition = errors.New("invalid position")
 
-const fileLetters = "abcdefghi"
+// fileLetters is game.FileLetters, named locally because this package spells
+// squares in both directions and the parse side needs an index lookup.
+const fileLetters = game.FileLetters
 
-// FormatSquare renders a board coordinate as "a1" through "i9".
+// FormatSquare renders a board coordinate as "a1" through "z26".
+//
+// The same spelling the opening book uses, and the same function: a record and
+// a book line that named squares differently would be two coordinate systems
+// with one name.
 func FormatSquare(position game.Position) string {
-	if position.X < 0 || position.X >= game.BoardSize ||
-		position.Y < 0 || position.Y >= game.BoardSize {
-		return "??"
-	}
-	return fmt.Sprintf("%c%d", fileLetters[position.X], position.Y+1)
+	return game.SquareName(position)
 }
 
-// ParseSquare reads "a1" through "i9".
+// ParseSquare reads "a1" through "z26".
+//
+// The rank is a decimal number rather than a single digit, so "d10" is a square
+// on a board that has one. Bounded by MaxBoardSide rather than by a particular
+// board: a move is parsed before its board is known — the FEN in the same file
+// is what settles the shape — so this rejects only what can be no square at all.
 func ParseSquare(text string) (game.Position, error) {
-	if len(text) != 2 {
+	invalid := func() (game.Position, error) {
 		return game.Position{}, fmt.Errorf("%w: %q is not a square", ErrInvalidPosition, text)
+	}
+	if len(text) < 2 {
+		return invalid()
 	}
 	x := strings.IndexByte(fileLetters, text[0])
-	y := int(text[1] - '1')
-	if x < 0 || y < 0 || y >= game.BoardSize {
-		return game.Position{}, fmt.Errorf("%w: %q is not a square", ErrInvalidPosition, text)
+	if x < 0 {
+		return invalid()
 	}
-	return game.Position{X: x, Y: y}, nil
+	rank, err := strconv.Atoi(text[1:])
+	if err != nil || rank < 1 || rank > game.MaxBoardSide {
+		return invalid()
+	}
+	return game.Position{X: x, Y: rank - 1}, nil
 }
 
 // pieceSymbols follows game.StartingPosition: uppercase is Blue, lowercase is
@@ -155,9 +171,12 @@ func colorFromCode(code string) (game.PlayerColor, error) {
 // field because a tile can be owned by a player who has no piece on it, which
 // decides Total War.
 //
-// Rows run from rank 1 to rank 9 separated by "/", digits count consecutive
-// unoccupied (or unowned) tiles, and territory uses "r" and "b".
-func EncodePosition(grid [game.BoardSize][game.BoardSize]game.Tile, turn game.PlayerColor) string {
+// Rows run from rank 1 upwards separated by "/", numbers count consecutive
+// unoccupied (or unowned) tiles, and territory uses "r" and "b". The board's
+// shape is derivable from the string — the rows are the ranks and each row's
+// runs add up to the files — so a position needs nothing beside it to be read
+// back on a board of any size.
+func EncodePosition(grid game.Grid, turn game.PlayerColor) string {
 	pieces := encodeRows(grid, func(tile game.Tile) (byte, bool) {
 		return pieceSymbol(tile.Occupant, tile.OccupantOwner)
 	})
@@ -168,15 +187,15 @@ func EncodePosition(grid [game.BoardSize][game.BoardSize]game.Tile, turn game.Pl
 }
 
 func encodeRows(
-	grid [game.BoardSize][game.BoardSize]game.Tile,
+	grid game.Grid,
 	symbolFor func(game.Tile) (byte, bool),
 ) string {
-	rows := make([]string, 0, game.BoardSize)
-	for y := 0; y < game.BoardSize; y++ {
+	rows := make([]string, 0, grid.Height())
+	for _, tiles := range grid {
 		row := strings.Builder{}
 		gap := 0
-		for x := 0; x < game.BoardSize; x++ {
-			symbol, occupied := symbolFor(grid[y][x])
+		for _, tile := range tiles {
+			symbol, occupied := symbolFor(tile)
 			if !occupied {
 				gap++
 				continue
@@ -198,23 +217,25 @@ func encodeRows(
 // DecodePosition reverses EncodePosition. The territory field may be omitted,
 // in which case ownership follows the pieces, which is how every mode's
 // opening board looks.
-func DecodePosition(text string) ([game.BoardSize][game.BoardSize]game.Tile, game.PlayerColor, error) {
-	var grid [game.BoardSize][game.BoardSize]game.Tile
-	for y := 0; y < game.BoardSize; y++ {
-		for x := 0; x < game.BoardSize; x++ {
-			grid[y][x] = game.Tile{
-				X: x, Y: y,
-				Occupant:      game.Empty,
-				OccupantOwner: game.Neutral,
-				OwnerColor:    game.Neutral,
-			}
-		}
-	}
+//
+// The board's shape comes from the text rather than from a constant: the ranks
+// are the rows and the files are what one rank's runs add up to. That is what
+// makes an archived position self-describing, so a record played on an eleven
+// by eleven board replays without anything telling the parser so.
+func DecodePosition(text string) (game.Grid, game.PlayerColor, error) {
 	fields := strings.Fields(strings.TrimSpace(text))
 	if len(fields) == 0 {
-		return grid, game.Neutral, fmt.Errorf("%w: empty position", ErrInvalidPosition)
+		return nil, game.Neutral, fmt.Errorf("%w: empty position", ErrInvalidPosition)
 	}
-	if err := decodeRows(fields[0], func(x, y int, symbol byte) error {
+	width, height, err := measureRows(fields[0])
+	if err != nil {
+		return nil, game.Neutral, err
+	}
+	if err := game.ValidateBoardSize(width, height); err != nil {
+		return nil, game.Neutral, fmt.Errorf("%w: %v", ErrInvalidPosition, err)
+	}
+	grid := game.NewGrid(width, height)
+	if err := decodeRows(fields[0], width, height, func(x, y int, symbol byte) error {
 		piece, owner, valid := startingPieceSymbol(symbol)
 		if !valid {
 			return fmt.Errorf("%w: unsupported piece %q", ErrInvalidPosition, string(symbol))
@@ -236,12 +257,12 @@ func DecodePosition(text string) ([game.BoardSize][game.BoardSize]game.Tile, gam
 		turn = parsed
 	}
 	if len(fields) > 2 {
-		for y := 0; y < game.BoardSize; y++ {
-			for x := 0; x < game.BoardSize; x++ {
-				grid[y][x].OwnerColor = game.Neutral
+		for _, row := range grid {
+			for x := range row {
+				row[x].OwnerColor = game.Neutral
 			}
 		}
-		if err := decodeRows(fields[2], func(x, y int, symbol byte) error {
+		if err := decodeRows(fields[2], width, height, func(x, y int, symbol byte) error {
 			owner, err := colorFromCode(string(symbol))
 			if err != nil || owner == game.Neutral {
 				return fmt.Errorf("%w: unsupported territory %q", ErrInvalidPosition, string(symbol))
@@ -255,37 +276,108 @@ func DecodePosition(text string) ([game.BoardSize][game.BoardSize]game.Tile, gam
 	return grid, turn, nil
 }
 
-func decodeRows(field string, place func(x, y int, symbol byte) error) error {
+// measureRows reads a board's shape off one field. Every rank must cover the
+// same number of files; a field whose ranks disagree is not a board.
+func measureRows(field string) (width, height int, err error) {
 	rows := strings.Split(field, "/")
-	if len(rows) != game.BoardSize {
+	for y, row := range rows {
+		covered, err := rowWidth(row)
+		if err != nil {
+			return 0, 0, fmt.Errorf("%w: rank %d: %v", ErrInvalidPosition, y+1, err)
+		}
+		if y == 0 {
+			width = covered
+			continue
+		}
+		if covered != width {
+			return 0, 0, fmt.Errorf(
+				"%w: rank %d covers %d tiles, rank 1 covers %d",
+				ErrInvalidPosition, y+1, covered, width,
+			)
+		}
+	}
+	return width, len(rows), nil
+}
+
+func rowWidth(row string) (int, error) {
+	covered := 0
+	for index := 0; index < len(row); {
+		symbol := row[index]
+		switch {
+		case symbol >= '1' && symbol <= '9':
+			gap, next, err := readGap(row, index)
+			if err != nil {
+				return 0, err
+			}
+			covered += gap
+			index = next
+		case symbol == '0':
+			return 0, fmt.Errorf("a gap cannot start with %q", "0")
+		case symbol == '.':
+			covered++
+			index++
+		default:
+			covered++
+			index++
+		}
+	}
+	return covered, nil
+}
+
+// readGap reads one run of empty tiles. Multi-digit on purpose — a board can be
+// wider than nine — and unambiguous because the encoder never writes two runs
+// side by side: "19" is nineteen empties, and one empty followed by nine of them
+// can only appear with a piece between, as "1R9".
+func readGap(row string, index int) (gap, next int, err error) {
+	end := index
+	for end < len(row) && row[end] >= '0' && row[end] <= '9' {
+		end++
+	}
+	gap, err = strconv.Atoi(row[index:end])
+	if err != nil {
+		return 0, 0, err
+	}
+	return gap, end, nil
+}
+
+func decodeRows(field string, width, height int, place func(x, y int, symbol byte) error) error {
+	rows := strings.Split(field, "/")
+	if len(rows) != height {
 		return fmt.Errorf(
 			"%w: expected %d rows, got %d",
-			ErrInvalidPosition, game.BoardSize, len(rows),
+			ErrInvalidPosition, height, len(rows),
 		)
 	}
 	for y, row := range rows {
 		x := 0
-		for index := 0; index < len(row); index++ {
+		for index := 0; index < len(row); {
 			symbol := row[index]
 			switch {
 			case symbol >= '1' && symbol <= '9':
-				x += int(symbol - '0')
+				gap, next, err := readGap(row, index)
+				if err != nil {
+					return fmt.Errorf("%w: rank %d: %v", ErrInvalidPosition, y+1, err)
+				}
+				x += gap
+				index = next
 			case symbol == '.':
 				x++
+				index++
 			default:
-				if x >= game.BoardSize {
+				if x >= width {
 					return fmt.Errorf("%w: rank %d overflows the board", ErrInvalidPosition, y+1)
 				}
 				if err := place(x, y, symbol); err != nil {
 					return err
 				}
 				x++
+				index++
 			}
 		}
-		if x != game.BoardSize {
+		if x != width {
 			return fmt.Errorf(
 				"%w: rank %d covers %d tiles, expected %d",
-				ErrInvalidPosition, y+1, x, game.BoardSize,
+				ErrInvalidPosition, y+1, x, width,
 			)
 		}
 	}
@@ -319,51 +411,22 @@ func StartingPositionFrom(text string) (game.StartingPosition, error) {
 	if err != nil {
 		return game.StartingPosition{}, err
 	}
-	rows := make([]string, 0, game.BoardSize)
-	for y := 0; y < game.BoardSize; y++ {
-		row := make([]byte, game.BoardSize)
-		for x := 0; x < game.BoardSize; x++ {
-			symbol, occupied := pieceSymbol(grid[y][x].Occupant, grid[y][x].OccupantOwner)
-			if !occupied {
-				symbol = '.'
-			}
-			row[x] = symbol
-		}
-		rows = append(rows, string(row))
-	}
-	return game.NewStartingPosition(rows...)
+	return game.NewStartingPosition(game.StartingPositionFrom(grid).Rows()...)
 }
 
 // EncodeStartingPosition writes a mode's opening board in the same form.
 func EncodeStartingPosition(position game.StartingPosition) string {
-	var state game.GameState
-	grid := blankGrid()
-	state.Grid = grid
-	for y, row := range position.Rows {
-		for x := 0; x < len(row) && x < game.BoardSize; x++ {
+	grid := game.NewGrid(position.Width(), position.Height())
+	for y, row := range position.Rows() {
+		for x := 0; x < len(row); x++ {
 			piece, owner, valid := startingPieceSymbol(row[x])
 			if !valid || piece == game.Empty {
 				continue
 			}
-			state.Grid[y][x].Occupant = piece
-			state.Grid[y][x].OccupantOwner = owner
-			state.Grid[y][x].OwnerColor = owner
+			grid[y][x].Occupant = piece
+			grid[y][x].OccupantOwner = owner
+			grid[y][x].OwnerColor = owner
 		}
 	}
-	return EncodePosition(state.Grid, game.Red)
-}
-
-func blankGrid() [game.BoardSize][game.BoardSize]game.Tile {
-	var grid [game.BoardSize][game.BoardSize]game.Tile
-	for y := 0; y < game.BoardSize; y++ {
-		for x := 0; x < game.BoardSize; x++ {
-			grid[y][x] = game.Tile{
-				X: x, Y: y,
-				Occupant:      game.Empty,
-				OccupantOwner: game.Neutral,
-				OwnerColor:    game.Neutral,
-			}
-		}
-	}
-	return grid
+	return EncodePosition(grid, game.Red)
 }

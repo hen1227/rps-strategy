@@ -179,7 +179,12 @@ func TestTournamentReadinessIsReleasedOnDisconnect(t *testing.T) {
 	}
 }
 
-func TestRetiredModeAcceptsNoNewMatches(t *testing.T) {
+// Every registered mode is playable, so the closed door is checked against a
+// mode ID the registry does not know: a retired or mistyped mode must be
+// refused everywhere a new match can start.
+func TestUnregisteredModeAcceptsNoNewMatches(t *testing.T) {
+	const retiredMode = game.ModeID("V1")
+
 	data, err := persistence.Open(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -187,17 +192,17 @@ func TestRetiredModeAcceptsNoNewMatches(t *testing.T) {
 	defer data.Close()
 	server := NewWithStoreAndAdminToken(data, nil, "tournament-admin-secret")
 
-	if game.DefaultModeRegistry.Playable(game.ModeAnnihilation) {
-		t.Fatal("Annihilation is expected to be retired from new matches")
+	if game.DefaultModeRegistry.Playable(retiredMode) {
+		t.Fatalf("%s is expected to be unavailable for new matches", retiredMode)
 	}
 
 	queued := tournamentTestClient("queue-player", "Queued")
 	server.handleMessage(queued, ClientMessage{
 		Type:   "join_queue",
-		ModeID: game.ModeAnnihilation,
+		ModeID: retiredMode,
 	})
-	if _, searching := server.matchmaking.Status(queued); searching {
-		t.Fatal("a retired mode must not accept matchmaking")
+	if server.seeks.ForClient(queued) != nil {
+		t.Fatal("an unregistered mode must not accept matchmaking")
 	}
 	var queueResponse ServerMessage
 	if err := json.Unmarshal(<-queued.send, &queueResponse); err != nil {
@@ -211,7 +216,7 @@ func TestRetiredModeAcceptsNoNewMatches(t *testing.T) {
 	server.handleMessage(challenger, ClientMessage{
 		Type:     "send_challenge",
 		Username: "Someone",
-		ModeID:   game.ModeAnnihilation,
+		ModeID:   retiredMode,
 	})
 	var challengeResponse ServerMessage
 	if err := json.Unmarshal(<-challenger.send, &challengeResponse); err != nil {
@@ -226,11 +231,11 @@ func TestRetiredModeAcceptsNoNewMatches(t *testing.T) {
 		server.Routes(),
 		http.MethodPost,
 		"/api/admin/tournaments",
-		map[string]any{"name": "Retired Cup", "modeId": game.ModeAnnihilation},
+		map[string]any{"name": "Retired Cup", "modeId": retiredMode},
 		"tournament-admin-secret",
 	)
 	if created.Code != http.StatusBadRequest {
-		t.Fatalf("expected a retired mode to be refused, got %d: %s", created.Code, created.Body)
+		t.Fatalf("expected an unregistered mode to be refused, got %d: %s", created.Code, created.Body)
 	}
 }
 

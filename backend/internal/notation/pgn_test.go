@@ -78,7 +78,7 @@ func requireRoundTrip(t *testing.T, record game.Record) ParsedGame {
 		}
 		t.Fatalf("event counts differ: %d vs %d", len(record.Events), len(parsed.Record.Events))
 	}
-	if record.Final.Grid != parsed.Record.Final.Grid {
+	if !record.Final.Grid.Equal(parsed.Record.Final.Grid) {
 		t.Fatal("final board did not survive the round trip")
 	}
 	if err := game.Verify(parsed.Record); err != nil {
@@ -263,8 +263,17 @@ func TestSquareNames(t *testing.T) {
 			t.Fatalf("%s parsed to %v (%v)", testCase.name, parsed, err)
 		}
 	}
-	if _, err := ParseSquare("j1"); err == nil {
-		t.Fatal("j1 is off the board")
+	// Files past i and ranks past 9 belong to boards bigger than the built-in
+	// modes, and are read rather than refused: a move is parsed before the FEN
+	// beside it has settled the shape.
+	if parsed, err := ParseSquare("j10"); err != nil ||
+		parsed != (game.Position{X: 9, Y: 9}) {
+		t.Fatalf("j10 parsed to %v (%v)", parsed, err)
+	}
+	for _, notASquare := range []string{"aa1", "z27", "a0", "a", "1a", "a-1"} {
+		if _, err := ParseSquare(notASquare); err == nil {
+			t.Fatalf("%q is not a square on any board", notASquare)
+		}
 	}
 }
 
@@ -278,11 +287,48 @@ func TestPositionRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if grid != state.Grid {
+	if !grid.Equal(state.Grid) {
 		t.Fatal("board did not survive encoding")
 	}
 	if turn != state.CurrentTurn {
 		t.Fatalf("side to move %s became %s", state.CurrentTurn, turn)
+	}
+}
+
+func TestPGNRoundTripsAFullCustomStartingPosition(t *testing.T) {
+	const startingFEN = "4S4/9/9/9/9/9/9/9/4r4 b 4r4/9/9/9/9/9/9/9/4b4"
+	const finalFEN = "9/4S4/9/9/9/9/9/9/4r4 r 4r4/9/9/9/9/9/9/9/4b4"
+	pgn := strings.Join([]string{
+		`[Event "Custom position"]`,
+		`[Red "Alice"]`,
+		`[Blue "Bob"]`,
+		`[Result "*"]`,
+		`[GameId "custom-fen"]`,
+		`[Variant "Infiltration"]`,
+		`[ModeId "V3"]`,
+		`[TimeControl "300+0"]`,
+		`[SetUp "1"]`,
+		`[FEN "` + startingFEN + `"]`,
+		`[FinalFEN "` + finalFEN + `"]`,
+		`[MoveNumber "1"]`,
+		"",
+		`1... Se1-e2 {[%emt 1] [%clk 0:05:00.000 0:04:59.000]} *`,
+	}, "\n")
+
+	parsed, err := Parse(pgn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := game.Verify(parsed.Record); err != nil {
+		t.Fatalf("custom starting position does not replay: %v", err)
+	}
+	replayed, err := game.Replay(parsed.Record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded := Encode(replayed.Record(), Metadata{})
+	if !strings.Contains(encoded, `[FEN "`+startingFEN+`"]`) {
+		t.Fatalf("custom starting position was not preserved:\n%s", encoded)
 	}
 }
 

@@ -106,8 +106,8 @@ func TestWebSocketCanJoinQueue(t *testing.T) {
 	if ready.Type != "connection_ready" {
 		t.Fatalf("expected connection_ready, got %q", ready.Type)
 	}
-	if len(ready.Modes) != 3 {
-		t.Fatalf("expected three registered base modes, got %d", len(ready.Modes))
+	if len(ready.Modes) != 2 {
+		t.Fatalf("expected two registered base modes, got %d", len(ready.Modes))
 	}
 	if ready.DefaultTimeControl == nil || *ready.DefaultTimeControl != game.DefaultTimeControl() {
 		t.Fatalf("expected connection default 5/+3, got %#v", ready.DefaultTimeControl)
@@ -115,7 +115,7 @@ func TestWebSocketCanJoinQueue(t *testing.T) {
 	if ready.Account == nil || ready.Account.Elo != persistence.DefaultElo {
 		t.Fatalf("expected a persisted default account, got %#v", ready.Account)
 	}
-	if len(ready.ModePlayerCounts) != 3 {
+	if len(ready.ModePlayerCounts) != 2 {
 		t.Fatalf("expected a player count for every mode, got %#v", ready.ModePlayerCounts)
 	}
 	for _, modeID := range game.DefaultModeRegistry.IDs() {
@@ -191,7 +191,7 @@ func TestPersistentAccountHistoryAndHeadToHeadRoutes(t *testing.T) {
 	defer data.Close()
 	red := game.PlayerProfile{UserID: "route-red", Username: "Route Red"}
 	blue := game.PlayerProfile{UserID: "route-blue", Username: "Route Blue"}
-	newGame, err := game.NewGame("route-game", game.ModeAnnihilation, red, blue)
+	newGame, err := game.NewGame("route-game", game.ModeTotalWar, red, blue)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,7 +218,7 @@ func TestPersistentAccountHistoryAndHeadToHeadRoutes(t *testing.T) {
 	if err := json.NewDecoder(accountRecorder.Body).Decode(&account); err != nil {
 		t.Fatal(err)
 	}
-	if account.Wins != 1 || account.ModeElo(game.ModeAnnihilation) != 1216 {
+	if account.Wins != 1 || account.ModeElo(game.ModeTotalWar) != 1216 {
 		t.Fatalf("unexpected account response: %#v", account)
 	}
 
@@ -270,9 +270,17 @@ func TestJoinQueueAcceptsCustomTimeControl(t *testing.T) {
 		TimeControl: &control,
 	})
 
-	entry, ok := server.matchmaking.Status(client)
-	if !ok || entry.TimeControl != control {
-		t.Fatalf("expected custom queue control %#v, got %#v", control, entry.TimeControl)
+	seek := server.seeks.ForClient(client)
+	if seek == nil || seek.Setup.TimeControl != control {
+		t.Fatalf("expected custom queue control %#v, got %#v", control, seek)
+	}
+	// Pressing play is a search whatever clock it names: it waits without
+	// expiring, and pairs with anybody else who asked for the same clock.
+	if !seek.Queued {
+		t.Fatal("joining the queue with a custom clock is still a search")
+	}
+	if !seek.ExpiresAt.IsZero() {
+		t.Fatal("a search must not expire out from under the person searching")
 	}
 	var response ServerMessage
 	if err := json.Unmarshal(<-client.send, &response); err != nil {
@@ -298,7 +306,7 @@ func TestJoinQueueRejectsInvalidTimeControl(t *testing.T) {
 		TimeControl: &control,
 	})
 
-	if _, ok := server.matchmaking.Status(client); ok {
+	if server.seeks.ForClient(client) != nil {
 		t.Fatal("invalid time control must not enter matchmaking")
 	}
 	var response ServerMessage
@@ -310,50 +318,82 @@ func TestJoinQueueRejectsInvalidTimeControl(t *testing.T) {
 	}
 }
 
+// postedSeek is a seek on the board with a live socket behind it, which is the
+// ordinary shape a count should include.
+func postedSeek(id string, modeID game.ModeID) *Seek {
+	client := &Client{}
+	seek := &Seek{
+		ID:    id,
+		Owner: seekOwnerKey(client),
+		Setup: game.GameSetup{ModeID: modeID},
+	}
+	seek.bind(client)
+	return seek
+}
+
 func TestModePlayerCountsIncludeActiveGamesAndMatchmaking(t *testing.T) {
 	server := New(nil)
-	server.matchmaking.Add(&Client{}, game.ModeAnnihilation)
-	server.matchmaking.Add(&Client{}, game.ModeInfiltration)
-	server.games["active-annihilation"] = &GameSession{modeID: game.ModeAnnihilation}
+	server.seeks.Post(postedSeek("total-war-seek", game.ModeTotalWar))
+	server.seeks.Post(postedSeek("infiltration-seek", game.ModeInfiltration))
+	server.games["active-total-war"] = &GameSession{
+		modeID: game.ModeTotalWar,
+		chat:   newChatRoom("active-total-war"),
+	}
 
 	counts := server.modePlayerCounts()
-	if counts[game.ModeAnnihilation] != 3 {
-		t.Fatalf("expected two active and one searching Annihilation players, got %#v", counts)
+	if counts[game.ModeTotalWar] != 3 {
+		t.Fatalf("expected two active and one searching Total War players, got %#v", counts)
 	}
 	if counts[game.ModeInfiltration] != 1 {
 		t.Fatalf("expected one searching Infiltration player, got %#v", counts)
 	}
-	if counts[game.ModeTotalWar] != 0 {
-		t.Fatalf("expected zero Total War players, got %#v", counts)
+	if counts[game.ModeID("V7")] != 0 {
+		t.Fatalf("a mode with nobody in it must report zero, got %#v", counts)
+	}
+}
+
+// awaitMessageOfType reads until the wanted message arrives. Several lobby
+// actions publish more than one thing — joining a queue changes both the public
+// board and the population counts — and a test that cares about one of them
+// should not depend on the order they go out in.
+func awaitMessageOfType(t *testing.T, client *Client, wanted string) ServerMessage {
+	t.Helper()
+	deadline := time.After(time.Second)
+	for {
+		select {
+		case encoded := <-client.send:
+			var message ServerMessage
+			if err := json.Unmarshal(encoded, &message); err != nil {
+				t.Fatal(err)
+			}
+			if message.Type == wanted {
+				return message
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for a %s message", wanted)
+			return ServerMessage{}
+		}
 	}
 }
 
 func TestQueueChangesBroadcastModePlayerCounts(t *testing.T) {
 	server := New(nil)
-	observer := &Client{send: make(chan []byte, 1), done: make(chan struct{})}
+	observer := &Client{send: make(chan []byte, 8), done: make(chan struct{})}
 	server.hub.Register(observer)
-	player := &Client{send: make(chan []byte, 2), done: make(chan struct{})}
+	player := &Client{send: make(chan []byte, 8), done: make(chan struct{})}
 
 	server.handleMessage(player, ClientMessage{
 		Type:   "join_queue",
 		ModeID: game.ModeTotalWar,
 	})
-	var joined ServerMessage
-	if err := json.Unmarshal(<-observer.send, &joined); err != nil {
-		t.Fatal(err)
-	}
-	if joined.Type != "mode_player_counts" ||
-		joined.ModePlayerCounts[game.ModeTotalWar] != 1 {
+	joined := awaitMessageOfType(t, observer, "mode_player_counts")
+	if joined.ModePlayerCounts[game.ModeTotalWar] != 1 {
 		t.Fatalf("expected the queued player to be broadcast, got %#v", joined)
 	}
 
 	server.handleMessage(player, ClientMessage{Type: "leave_queue"})
-	var left ServerMessage
-	if err := json.Unmarshal(<-observer.send, &left); err != nil {
-		t.Fatal(err)
-	}
-	if left.Type != "mode_player_counts" ||
-		left.ModePlayerCounts[game.ModeTotalWar] != 0 {
+	left := awaitMessageOfType(t, observer, "mode_player_counts")
+	if left.ModePlayerCounts[game.ModeTotalWar] != 0 {
 		t.Fatalf("expected the departed player to be removed, got %#v", left)
 	}
 }
@@ -364,7 +404,7 @@ func TestServerExpiresAndRemovesTimedOutSession(t *testing.T) {
 	blueClient := &Client{send: make(chan []byte, 1), done: make(chan struct{})}
 	newGame, err := game.NewGameWithTimeControl(
 		"server-timeout",
-		game.ModeAnnihilation,
+		game.ModeTotalWar,
 		game.PlayerProfile{UserID: "red"},
 		game.PlayerProfile{UserID: "blue"},
 		game.TimeControl{InitialTimeMs: 1_000, IncrementMs: 0},
@@ -377,6 +417,7 @@ func TestServerExpiresAndRemovesTimedOutSession(t *testing.T) {
 		game:       newGame,
 		redClient:  redClient,
 		blueClient: blueClient,
+		chat:       newChatRoom("server-timeout"),
 	}
 	server.games[session.gameID] = session
 	server.participants[redClient] = Participant{session: session, color: game.Red}
@@ -402,7 +443,7 @@ func TestPlayerCanRejoinReservedSeat(t *testing.T) {
 	server := New(nil)
 	redProfile := game.PlayerProfile{UserID: "red-user"}
 	blueProfile := game.PlayerProfile{UserID: "blue-user"}
-	newGame, err := game.NewGame("rejoin-session", game.ModeAnnihilation, redProfile, blueProfile)
+	newGame, err := game.NewGame("rejoin-session", game.ModeTotalWar, redProfile, blueProfile)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -416,6 +457,7 @@ func TestPlayerCanRejoinReservedSeat(t *testing.T) {
 		game:              newGame,
 		blueClient:        blueClient,
 		redDisconnectedAt: time.Now(),
+		chat:              newChatRoom("rejoin-session"),
 	}
 	server.games[session.gameID] = session
 	server.participants[blueClient] = Participant{session: session, color: game.Blue}
@@ -465,7 +507,7 @@ func TestDisconnectReservesSeatAndNotifiesOpponent(t *testing.T) {
 	}
 	newGame, err := game.NewGame(
 		"disconnect-session",
-		game.ModeAnnihilation,
+		game.ModeTotalWar,
 		redClient.profile,
 		blueClient.profile,
 	)
@@ -477,6 +519,7 @@ func TestDisconnectReservesSeatAndNotifiesOpponent(t *testing.T) {
 		game:       newGame,
 		redClient:  redClient,
 		blueClient: blueClient,
+		chat:       newChatRoom("disconnect-session"),
 	}
 	server.games[session.gameID] = session
 	server.participants[redClient] = Participant{session: session, color: game.Red}
@@ -508,7 +551,7 @@ func TestDisconnectedPlayerLosesByAbandonmentAfterThirtySeconds(t *testing.T) {
 	server := New(nil)
 	redProfile := game.PlayerProfile{UserID: "red-user"}
 	blueProfile := game.PlayerProfile{UserID: "blue-user"}
-	newGame, err := game.NewGame("abandon-session", game.ModeAnnihilation, redProfile, blueProfile)
+	newGame, err := game.NewGame("abandon-session", game.ModeTotalWar, redProfile, blueProfile)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -523,6 +566,7 @@ func TestDisconnectedPlayerLosesByAbandonmentAfterThirtySeconds(t *testing.T) {
 		game:              newGame,
 		blueClient:        blueClient,
 		redDisconnectedAt: baseTime,
+		chat:              newChatRoom("abandon-session"),
 	}
 	server.games[session.gameID] = session
 	server.participants[blueClient] = Participant{session: session, color: game.Blue}
@@ -546,14 +590,16 @@ func TestRejoinRejectsDifferentUser(t *testing.T) {
 	server := New(nil)
 	newGame, err := game.NewGame(
 		"private-session",
-		game.ModeAnnihilation,
+		game.ModeTotalWar,
 		game.PlayerProfile{UserID: "red-user"},
 		game.PlayerProfile{UserID: "blue-user"},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	server.games["private-session"] = &GameSession{gameID: "private-session", game: newGame}
+	server.games["private-session"] = &GameSession{
+		gameID: "private-session", game: newGame, chat: newChatRoom("private-session"),
+	}
 	intruder := &Client{
 		send:    make(chan []byte, 1),
 		done:    make(chan struct{}),
@@ -574,11 +620,13 @@ func TestRejoinReturnsRecentlyCompletedGameResult(t *testing.T) {
 	server := New(nil)
 	redProfile := game.PlayerProfile{UserID: "red-user"}
 	blueProfile := game.PlayerProfile{UserID: "blue-user"}
-	newGame, err := game.NewGame("completed-session", game.ModeAnnihilation, redProfile, blueProfile)
+	newGame, err := game.NewGame("completed-session", game.ModeTotalWar, redProfile, blueProfile)
 	if err != nil {
 		t.Fatal(err)
 	}
-	session := &GameSession{gameID: "completed-session", game: newGame}
+	session := &GameSession{
+		gameID: "completed-session", game: newGame, chat: newChatRoom("completed-session"),
+	}
 	server.games[session.gameID] = session
 	state, err := newGame.Resign(game.Red)
 	if err != nil {
@@ -618,9 +666,10 @@ func TestLiveGamesExposeNamesRatingsAndSpectatorCount(t *testing.T) {
 		profile: game.PlayerProfile{UserID: "live-blue", Username: "Bob"},
 		account: persistence.Account{UserID: "live-blue", Elo: 1278},
 	}
-	server.startMatch(
-		QueueEntry{Client: redClient, ModeID: game.ModeAnnihilation, Elo: 1315, TimeControl: game.DefaultTimeControl()},
-		QueueEntry{Client: blueClient, ModeID: game.ModeAnnihilation, Elo: 1278, TimeControl: game.DefaultTimeControl()},
+	server.startConfiguredMatch(
+		QueueEntry{Client: redClient, Setup: game.GameSetup{ModeID: game.ModeTotalWar}, Elo: 1315},
+		QueueEntry{Client: blueClient, Setup: game.GameSetup{ModeID: game.ModeTotalWar}, Elo: 1278},
+		matchSetup{},
 	)
 	_ = readClientMessage(t, redClient)
 	_ = readClientMessage(t, blueClient)
@@ -634,6 +683,11 @@ func TestLiveGamesExposeNamesRatingsAndSpectatorCount(t *testing.T) {
 		liveGame.RedElo != 1315 || liveGame.BlueElo != 1278 || liveGame.SpectatorCount != 0 {
 		t.Fatalf("live game omitted public player details: %#v", liveGame)
 	}
+	if liveGame.Position.Rows[0] != "...SSS..." ||
+		liveGame.Position.Owners[0] != "...bbb..." ||
+		liveGame.CurrentTurn != game.Red || liveGame.MoveNumber != 0 {
+		t.Fatalf("live game omitted its compact board position: %#v", liveGame)
+	}
 
 	spectator := &Client{
 		send:    make(chan []byte, 4),
@@ -641,8 +695,8 @@ func TestLiveGamesExposeNamesRatingsAndSpectatorCount(t *testing.T) {
 		profile: game.PlayerProfile{UserID: "live-watcher", Username: "Watcher"},
 	}
 	server.spectateGame(spectator, liveGame.GameID)
-	joined := readClientMessage(t, spectator)
-	if joined.Type != "spectator_joined" || joined.GameState == nil ||
+	joined := awaitMessageOfType(t, spectator, "spectator_joined")
+	if joined.GameState == nil ||
 		joined.GameState.GameID != liveGame.GameID || joined.Color != game.Neutral {
 		t.Fatalf("unexpected spectator join response: %#v", joined)
 	}
@@ -652,19 +706,55 @@ func TestLiveGamesExposeNamesRatingsAndSpectatorCount(t *testing.T) {
 
 	watchedSession := server.spectatorFor(spectator)
 	server.broadcastGameState(watchedSession, watchedSession.game.Snapshot())
-	updated := readClientMessage(t, spectator)
-	if updated.Type != "game_state" || updated.GameState == nil {
+	updated := awaitMessageOfType(t, spectator, "game_state")
+	if updated.GameState == nil {
 		t.Fatalf("spectator did not receive game state: %#v", updated)
 	}
 	server.handleMessage(spectator, ClientMessage{Type: "make_move"})
-	rejected := readClientMessage(t, spectator)
-	if rejected.Type != "move_rejected" {
-		t.Fatalf("spectator should remain read-only, got %#v", rejected)
-	}
+	awaitMessageOfType(t, spectator, "move_rejected")
 
 	server.disconnect(spectator)
 	if server.spectatorFor(spectator) != nil || server.liveGames()[0].SpectatorCount != 0 {
 		t.Fatal("disconnect should remove the spectator from the live game")
+	}
+}
+
+func TestLiveGameBoardBroadcastsAfterEveryMove(t *testing.T) {
+	server := New(nil)
+	observer := &Client{send: make(chan []byte, 8), done: make(chan struct{})}
+	server.hub.Register(observer)
+	redClient := &Client{
+		send:    make(chan []byte, 8),
+		done:    make(chan struct{}),
+		profile: game.PlayerProfile{UserID: "board-red", Username: "Alice"},
+	}
+	blueClient := &Client{
+		send:    make(chan []byte, 8),
+		done:    make(chan struct{}),
+		profile: game.PlayerProfile{UserID: "board-blue", Username: "Bob"},
+	}
+	server.startConfiguredMatch(
+		QueueEntry{Client: redClient, Setup: game.GameSetup{ModeID: game.ModeTotalWar}},
+		QueueEntry{Client: blueClient, Setup: game.GameSetup{ModeID: game.ModeTotalWar}},
+		matchSetup{},
+	)
+	started := awaitMessageOfType(t, observer, "live_games")
+	if len(started.LiveGames) != 1 || started.LiveGames[0].MoveNumber != 0 {
+		t.Fatalf("expected the opening board in the lobby, got %#v", started.LiveGames)
+	}
+
+	if !server.makeMove(redClient, game.Position{X: 3, Y: 6}, game.Position{X: 3, Y: 5}) {
+		t.Fatal("expected the opening move to be accepted")
+	}
+	updated := awaitMessageOfType(t, observer, "live_games")
+	if len(updated.LiveGames) != 1 {
+		t.Fatalf("expected one updated board, got %#v", updated.LiveGames)
+	}
+	live := updated.LiveGames[0]
+	if live.MoveNumber != 1 || live.CurrentTurn != game.Blue ||
+		live.Position.Rows[5][3] != 'r' || live.Position.Rows[6][3] != '.' ||
+		live.Position.Owners[5][3] != 'r' || live.Position.Owners[6][3] != 'r' {
+		t.Fatalf("lobby board did not follow the move: %#v", live)
 	}
 }
 
@@ -682,9 +772,10 @@ func TestPlayersAndSpectatorsShareAuthenticatedGameChat(t *testing.T) {
 		profile: game.PlayerProfile{UserID: "chat-blue", Username: "Bob"},
 		account: persistence.Account{UserID: "chat-blue", Elo: 1200},
 	}
-	server.startMatch(
-		QueueEntry{Client: redClient, ModeID: game.ModeInfiltration, Elo: 1200, TimeControl: game.DefaultTimeControl()},
-		QueueEntry{Client: blueClient, ModeID: game.ModeInfiltration, Elo: 1200, TimeControl: game.DefaultTimeControl()},
+	server.startConfiguredMatch(
+		QueueEntry{Client: redClient, Setup: game.GameSetup{ModeID: game.ModeInfiltration}, Elo: 1200},
+		QueueEntry{Client: blueClient, Setup: game.GameSetup{ModeID: game.ModeInfiltration}, Elo: 1200},
+		matchSetup{},
 	)
 	redMatch := readClientMessage(t, redClient)
 	_ = readClientMessage(t, blueClient)
@@ -699,8 +790,8 @@ func TestPlayersAndSpectatorsShareAuthenticatedGameChat(t *testing.T) {
 
 	server.handleMessage(spectator, ClientMessage{Type: "send_chat", Text: "Good luck!"})
 	for _, client := range []*Client{redClient, blueClient, spectator} {
-		message := readClientMessage(t, client)
-		if message.Type != "chat_message" || message.ChatMessage == nil ||
+		message := awaitMessageOfType(t, client, "chat_message")
+		if message.ChatMessage == nil ||
 			message.ChatMessage.SenderName != "Casey" ||
 			message.ChatMessage.SenderRole != "spectator" ||
 			message.ChatMessage.Text != "Good luck!" {
@@ -709,9 +800,9 @@ func TestPlayersAndSpectatorsShareAuthenticatedGameChat(t *testing.T) {
 	}
 
 	server.handleMessage(redClient, ClientMessage{Type: "send_chat", Text: "Thanks!"})
-	redChat := readClientMessage(t, redClient)
-	_ = readClientMessage(t, blueClient)
-	playerChat := readClientMessage(t, spectator)
+	redChat := awaitMessageOfType(t, redClient, "chat_message")
+	awaitMessageOfType(t, blueClient, "chat_message")
+	playerChat := awaitMessageOfType(t, spectator, "chat_message")
 	if redChat.ChatMessage == nil || playerChat.ChatMessage == nil ||
 		playerChat.ChatMessage.SenderName != "Alice" ||
 		playerChat.ChatMessage.SenderRole != "player" ||
@@ -720,12 +811,12 @@ func TestPlayersAndSpectatorsShareAuthenticatedGameChat(t *testing.T) {
 	}
 
 	lateSpectator := &Client{
-		send:    make(chan []byte, 2),
+		send:    make(chan []byte, 4),
 		done:    make(chan struct{}),
 		profile: game.PlayerProfile{UserID: "late-watcher", Username: "Late watcher"},
 	}
 	server.spectateGame(lateSpectator, redMatch.GameState.GameID)
-	joined := readClientMessage(t, lateSpectator)
+	joined := awaitMessageOfType(t, lateSpectator, "spectator_joined")
 	if len(joined.ChatMessages) != 2 || joined.ChatMessages[0].Text != "Good luck!" ||
 		joined.ChatMessages[1].Text != "Thanks!" {
 		t.Fatalf("spectator did not receive chat history: %#v", joined.ChatMessages)
@@ -771,27 +862,26 @@ func TestFinishedRankedGameMovesOnlyThePlayedModesRating(t *testing.T) {
 	redClient, blueClient := clients[0], clients[1]
 
 	entryTime := time.Now()
-	server.startMatch(
+	server.startConfiguredMatch(
 		QueueEntry{
-			Client:      redClient,
-			ModeID:      game.ModeTotalWar,
-			TimeControl: game.DefaultTimeControl(),
-			Elo:         matchmakingElo(redClient, game.ModeTotalWar),
-			JoinedAt:    entryTime,
+			Client:   redClient,
+			Setup:    game.GameSetup{ModeID: game.ModeTotalWar},
+			Elo:      matchmakingElo(redClient, game.ModeTotalWar),
+			JoinedAt: entryTime,
 		},
 		QueueEntry{
-			Client:      blueClient,
-			ModeID:      game.ModeTotalWar,
-			TimeControl: game.DefaultTimeControl(),
-			Elo:         matchmakingElo(blueClient, game.ModeTotalWar),
-			JoinedAt:    entryTime,
+			Client:   blueClient,
+			Setup:    game.GameSetup{ModeID: game.ModeTotalWar},
+			Elo:      matchmakingElo(blueClient, game.ModeTotalWar),
+			JoinedAt: entryTime,
 		},
+		matchSetup{},
 	)
 	_ = readClientMessage(t, redClient)
 	_ = readClientMessage(t, blueClient)
 
 	server.resign(blueClient)
-	final := readClientMessage(t, redClient)
+	final := awaitMessageOfType(t, redClient, "game_state")
 	if final.RatingUpdate == nil || final.RatingUpdate.ModeID != game.ModeTotalWar ||
 		final.RatingUpdate.RedEloAfter != 1216 || final.RatingUpdate.BlueEloAfter != 1184 {
 		t.Fatalf("unexpected rating update: %#v", final.RatingUpdate)
@@ -830,9 +920,10 @@ func TestChatOutlivesTheGameUntilEveryoneLeaves(t *testing.T) {
 		done:    make(chan struct{}),
 		profile: game.PlayerProfile{UserID: "post-blue", Username: "Bob"},
 	}
-	server.startMatch(
-		QueueEntry{Client: redClient, ModeID: game.ModeInfiltration, TimeControl: game.DefaultTimeControl()},
-		QueueEntry{Client: blueClient, ModeID: game.ModeInfiltration, TimeControl: game.DefaultTimeControl()},
+	server.startConfiguredMatch(
+		QueueEntry{Client: redClient, Setup: game.GameSetup{ModeID: game.ModeInfiltration, TimeControl: game.DefaultTimeControl()}},
+		QueueEntry{Client: blueClient, Setup: game.GameSetup{ModeID: game.ModeInfiltration, TimeControl: game.DefaultTimeControl()}},
+		matchSetup{},
 	)
 	redMatch := readClientMessage(t, redClient)
 	_ = readClientMessage(t, blueClient)
@@ -848,10 +939,18 @@ func TestChatOutlivesTheGameUntilEveryoneLeaves(t *testing.T) {
 
 	server.resign(redClient)
 	for _, client := range []*Client{redClient, blueClient, spectator} {
-		final := readClientMessage(t, client)
-		if final.Type != "game_state" || final.GameState == nil ||
-			final.GameState.Status != game.Finished {
+		final := awaitMessageOfType(t, client, "game_state")
+		if final.GameState == nil || final.GameState.Status != game.Finished {
 			t.Fatalf("expected a final game state, got %#v", final)
+		}
+	}
+	// The result is not the end of the room, so everyone still in it is told
+	// how many people that is. A client reading the count off the lobby's live
+	// table has nothing to read once the game leaves it.
+	for _, client := range []*Client{redClient, blueClient, spectator} {
+		presence := awaitMessageOfType(t, client, "chat_presence")
+		if presence.ChatOccupancy != 3 {
+			t.Fatalf("expected three people in the finished game's room, got %#v", presence)
 		}
 	}
 	if server.participantFor(redClient) != nil || server.spectatorFor(spectator) != nil {
@@ -860,8 +959,8 @@ func TestChatOutlivesTheGameUntilEveryoneLeaves(t *testing.T) {
 
 	server.handleMessage(blueClient, ClientMessage{Type: "send_chat", Text: "good game"})
 	for _, client := range []*Client{redClient, blueClient, spectator} {
-		message := readClientMessage(t, client)
-		if message.Type != "chat_message" || message.ChatMessage == nil ||
+		message := awaitMessageOfType(t, client, "chat_message")
+		if message.ChatMessage == nil ||
 			message.ChatMessage.SenderRole != "player" ||
 			message.ChatMessage.SenderColor != game.Blue ||
 			message.ChatMessage.Text != "good game" {
@@ -877,19 +976,24 @@ func TestChatOutlivesTheGameUntilEveryoneLeaves(t *testing.T) {
 		profile: blueClient.profile,
 	}
 	server.rejoinGame(returningBlue, gameID)
-	rejoined := readClientMessage(t, returningBlue)
-	if rejoined.Type != "game_rejoined" || rejoined.Color != game.Blue ||
+	rejoined := awaitMessageOfType(t, returningBlue, "game_rejoined")
+	if rejoined.Color != game.Blue || rejoined.ChatOccupancy != 3 ||
 		len(rejoined.ChatMessages) != 1 || rejoined.ChatMessages[0].Text != "good game" {
 		t.Fatalf("expected the returning player to rejoin the chat room: %#v", rejoined)
 	}
 
 	server.handleMessage(spectator, ClientMessage{Type: "leave_game"})
+	// Somebody leaving is the other half of the count: the room reports itself
+	// again rather than leaving a stale figure on the two people still in it.
+	if presence := awaitMessageOfType(t, redClient, "chat_presence"); presence.ChatOccupancy != 2 {
+		t.Fatalf("expected the room to lose the spectator, got %#v", presence)
+	}
 	server.handleMessage(returningBlue, ClientMessage{Type: "send_chat", Text: "you too"})
-	kept := readClientMessage(t, redClient)
-	if kept.Type != "chat_message" || kept.ChatMessage.Text != "you too" {
+	kept := awaitMessageOfType(t, redClient, "chat_message")
+	if kept.ChatMessage.Text != "you too" {
 		t.Fatalf("expected the room to survive the spectator leaving: %#v", kept)
 	}
-	_ = readClientMessage(t, returningBlue)
+	awaitMessageOfType(t, returningBlue, "chat_message")
 
 	server.handleMessage(returningBlue, ClientMessage{Type: "leave_game"})
 	server.handleMessage(redClient, ClientMessage{Type: "leave_game"})
@@ -902,7 +1006,7 @@ func TestChatOutlivesTheGameUntilEveryoneLeaves(t *testing.T) {
 	}
 
 	server.handleMessage(redClient, ClientMessage{Type: "send_chat", Text: "anyone still here?"})
-	closed := readClientMessage(t, redClient)
+	closed := awaitMessageOfType(t, redClient, "chat_rejected")
 	if closed.Type != "chat_rejected" {
 		t.Fatalf("expected a closed room to refuse chat, got %#v", closed)
 	}
@@ -921,30 +1025,29 @@ func TestAgreedTimeExtensionAddsThreeMinutesForBothPlayers(t *testing.T) {
 		profile: game.PlayerProfile{UserID: "extend-blue"},
 	}
 	timeControl := game.TimeControl{InitialTimeMs: 60_000, IncrementMs: 0}
-	server.startMatch(
-		QueueEntry{Client: redClient, ModeID: game.ModeInfiltration, TimeControl: timeControl},
-		QueueEntry{Client: blueClient, ModeID: game.ModeInfiltration, TimeControl: timeControl},
+	server.startConfiguredMatch(
+		QueueEntry{Client: redClient, Setup: game.GameSetup{ModeID: game.ModeInfiltration, TimeControl: timeControl}},
+		QueueEntry{Client: blueClient, Setup: game.GameSetup{ModeID: game.ModeInfiltration, TimeControl: timeControl}},
+		matchSetup{},
 	)
 	_ = readClientMessage(t, redClient)
 	_ = readClientMessage(t, blueClient)
 
 	server.handleMessage(blueClient, ClientMessage{Type: "accept_time"})
-	if refused := readClientMessage(t, blueClient); refused.Type != "action_rejected" {
-		t.Fatalf("expected an unrequested extension to be refused, got %#v", refused)
-	}
+	awaitMessageOfType(t, blueClient, "action_rejected")
 
 	// Red is to move, so Blue is asking while its own clock is stopped.
 	server.handleMessage(blueClient, ClientMessage{Type: "offer_time"})
-	offered := readClientMessage(t, redClient)
-	_ = readClientMessage(t, blueClient)
-	if offered.Type != "game_state" || offered.GameState.TimeOfferedBy != game.Blue {
+	offered := awaitMessageOfType(t, redClient, "game_state")
+	awaitMessageOfType(t, blueClient, "game_state")
+	if offered.GameState.TimeOfferedBy != game.Blue {
 		t.Fatalf("expected Blue's off-turn time request to be broadcast, got %#v", offered)
 	}
 
 	server.handleMessage(redClient, ClientMessage{Type: "accept_time"})
-	extended := readClientMessage(t, redClient)
-	_ = readClientMessage(t, blueClient)
-	if extended.Type != "game_state" || extended.GameState.Status != game.InProgress ||
+	extended := awaitMessageOfType(t, redClient, "game_state")
+	awaitMessageOfType(t, blueClient, "game_state")
+	if extended.GameState.Status != game.InProgress ||
 		extended.GameState.TimeOfferedBy != "" {
 		t.Fatalf("expected the game to continue with the offer consumed, got %#v", extended)
 	}

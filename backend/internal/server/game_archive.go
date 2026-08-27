@@ -41,6 +41,14 @@ func (server *Server) archiveGame(
 	if session.ranked {
 		metadata.Event = "Ranked"
 	}
+	if session.botMatch != nil {
+		metadata.Event = "Bot Match"
+		metadata.Round = "series-" + session.botMatch.seriesID +
+			" game-" + strconv.Itoa(session.botMatch.gameNumber)
+		metadata.SeriesID = session.botMatch.seriesID
+		metadata.BookPlies = session.bookPlies
+		metadata.OpeningSeed = session.openingSeed
+	}
 	tournamentID := ""
 	if session.tournament != nil {
 		metadata.Event = "Tournament"

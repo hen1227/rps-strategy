@@ -15,7 +15,7 @@ func useFakeGameTime(game *Game, now *time.Time) {
 }
 
 func TestNewGameUsesFivePlusThreeByDefault(t *testing.T) {
-	game := testGame(t, ModeAnnihilation)
+	game := testGame(t, ModeTotalWar)
 	now := time.Date(2026, time.August, 17, 12, 0, 0, 0, time.UTC)
 	useFakeGameTime(game, &now)
 
@@ -36,7 +36,7 @@ func TestCustomClockChargesElapsedTimeAndAddsIncrement(t *testing.T) {
 	control := TimeControl{InitialTimeMs: 10_000, IncrementMs: 2_000}
 	game, err := NewGameWithTimeControl(
 		"custom-clock",
-		ModeAnnihilation,
+		ModeTotalWar,
 		PlayerProfile{UserID: "red"},
 		PlayerProfile{UserID: "blue"},
 		control,
@@ -78,7 +78,7 @@ func TestInvalidMoveConsumesTimeWithoutAddingIncrement(t *testing.T) {
 	control := TimeControl{InitialTimeMs: 10_000, IncrementMs: 2_000}
 	game, err := NewGameWithTimeControl(
 		"invalid-move-clock",
-		ModeAnnihilation,
+		ModeTotalWar,
 		PlayerProfile{UserID: "red"},
 		PlayerProfile{UserID: "blue"},
 		control,
@@ -107,7 +107,7 @@ func TestClockTimeoutFinishesGame(t *testing.T) {
 	control := TimeControl{InitialTimeMs: 1_000, IncrementMs: 0}
 	game, err := NewGameWithTimeControl(
 		"timeout",
-		ModeAnnihilation,
+		ModeTotalWar,
 		PlayerProfile{UserID: "red"},
 		PlayerProfile{UserID: "blue"},
 		control,
@@ -134,7 +134,7 @@ func TestClockTimeoutMakesBlueLoseAfterRedMoves(t *testing.T) {
 	control := TimeControl{InitialTimeMs: 1_000, IncrementMs: 0}
 	game, err := NewGameWithTimeControl(
 		"blue-timeout",
-		ModeAnnihilation,
+		ModeTotalWar,
 		PlayerProfile{UserID: "red"},
 		PlayerProfile{UserID: "blue"},
 		control,
@@ -172,7 +172,7 @@ func TestTickReportsTimeoutObservedByValidMoveRequest(t *testing.T) {
 	control := TimeControl{InitialTimeMs: 1_000, IncrementMs: 0}
 	game, err := NewGameWithTimeControl(
 		"valid-moves-timeout",
-		ModeAnnihilation,
+		ModeTotalWar,
 		PlayerProfile{UserID: "red"},
 		PlayerProfile{UserID: "blue"},
 		control,
@@ -197,7 +197,7 @@ func TestTickContinuesReportingTimeoutUntilServerHandlesIt(t *testing.T) {
 	control := TimeControl{InitialTimeMs: 1_000, IncrementMs: 0}
 	game, err := NewGameWithTimeControl(
 		"repeated-timeout-report",
-		ModeAnnihilation,
+		ModeTotalWar,
 		PlayerProfile{UserID: "red"},
 		PlayerProfile{UserID: "blue"},
 		control,
@@ -226,7 +226,7 @@ func TestInvalidTimeControlsAreRejected(t *testing.T) {
 	for _, control := range controls {
 		_, err := NewGameWithTimeControl(
 			"invalid-control",
-			ModeAnnihilation,
+			ModeTotalWar,
 			profiles[0],
 			profiles[1],
 			control,

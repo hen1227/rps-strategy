@@ -67,6 +67,10 @@ func run() error {
 		allowedOrigins,
 		adminToken,
 	)
+	// Optional: the download links a bot author pastes into a terminal are
+	// built from the address a request arrived on when this is empty. Set it to
+	// publish a different address than callers happen to connect to.
+	gameServer.SetPublicBaseURL(os.Getenv("RPS_PUBLIC_URL"))
 	httpServer := &http.Server{
 		Addr:              listener.description,
 		Handler:           gameServer.Routes(),

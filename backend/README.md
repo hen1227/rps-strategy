@@ -11,7 +11,7 @@ backend/
 ├── docs/                # Backend-specific development documentation
 ├── internal/game/       # Game state, rules, modes, clocks, event records, and tests
 ├── internal/notation/   # PGN reader and writer for complete game records
-├── internal/persistence/ # SQLite schema, account stats, history, Elo, and the game archive
+├── internal/persistence/ # SQLite schema, account stats, history, Elo, the game archive, and reviews
 ├── internal/server/     # HTTP, WebSocket protocol, sessions, and matchmaking
 ├── go.mod
 └── go.sum
@@ -25,7 +25,9 @@ needs a database or a server.
 
 Every finished game is archived as PGN, in full, and can be replayed back into
 the position it ended in. See [`docs/pgn.md`](docs/pgn.md) for the format, the
-export endpoints, and the replay API.
+export endpoints, and the replay API, and
+[`../docs/review.md`](../docs/review.md) for the post-game review the archive
+feeds.
 
 ## Development
 
@@ -61,6 +63,100 @@ a **Host controls** field where the tournament organizer can paste it for the
 current browser. The token is sent as a Bearer credential, saved in local storage
 after entry, and removed automatically if verification fails. It is not included
 in the public web build.
+
+### Notifications
+
+Notifications are the one channel that reaches a player who has closed the tab,
+and therefore the only reason a matchmaking seek is allowed to outlive its
+socket. They come in two kinds — Web Push for a browser, APNs for the iOS app —
+and each is configured, and can be missing, on its own. `HasPushSubscription`
+counts both, so "can this person be called back" stays one question with one
+answer whichever devices they happen to own.
+
+#### Web Push
+
+Off until three variables are set:
+
+```sh
+go run ./cmd/vapidkeys   # prints all three, ready to paste
+```
+
+`RPS_VAPID_PUBLIC_KEY`, `RPS_VAPID_PRIVATE_KEY` and `RPS_VAPID_SUBJECT` (a
+`mailto:` or `https:` URL the push services can reach a human at). Setting some
+but not all of them is refused loudly rather than treated as "off": a silently
+half-configured push sender would leave the queue holding places for people it
+cannot reach.
+
+With none of them set the feature is cleanly absent — `GET /api/push/key`
+answers `{"enabled": false}`, `connection_ready.pushTransports.webPush` is
+false, the app hides the offer to wait with the tab closed, and every disconnect
+withdraws its seek exactly as it did before the persistent queue existed.
+
+Rotating the keys invalidates every stored subscription. Nothing needs cleaning
+up by hand: the first delivery attempt to a stale endpoint comes back `410`, and
+the row is deleted then, along with any wait that person had left on the board.
+
+**Checking a deployment.** Three things, in order, because each one can fail on
+its own and they fail identically from the outside — nothing arrives:
+
+```sh
+curl https://api-rps.example.com/api/push/key
+# {"enabled":true,"publicKey":"B…","transports":{"webPush":true,"apns":true}}
+```
+
+`transports` is the per-kind answer, and the one to read when only one half of
+this is working: `webPush` false is missing VAPID keys, `apns` false is a
+missing, unreadable or unparseable `.p8` — and the server logged which at
+startup.
+
+That is the server. The browser is next: open the site over **https**, go to
+**Account → Match alerts**, and turn them on — the permission prompt only ever
+appears from a real press, so nothing about this can be automated. The panel
+then offers **Send a test**, which is the third check and the only one that
+exercises the whole chain: `POST /api/push/test` encrypts a payload with the
+VAPID keys, hands it to the browser's own push service, and answers with how
+many browsers it went to. A subscription that stores cleanly and then silently
+delivers nothing looks exactly like one that works until that button says so.
+
+Two things outside this server can still swallow a notification: iOS delivers
+Web Push only to a site added to the Home Screen, and `/sw.js` must be served
+uncached from the site root (see
+[`frontend/README.md`](../frontend/README.md#deploy-the-dist-branch-on-the-orange-pi))
+or browsers go on running an old worker.
+
+#### APNs, for the iOS app
+
+A native app has no service worker to wake, so the same promise is kept with an
+Apple push key and a device token. Three variables, and the same all-or-nothing
+rule:
+
+```sh
+RPS_APNS_KEY_PATH=/etc/rps/AuthKey_ABCD123456.p8
+RPS_APNS_KEY_ID=ABCD123456        # the .p8 filename, minus AuthKey_
+RPS_APNS_TEAM_ID=XYZ9876543       # Apple Developer → Membership
+```
+
+The key is the **Apple Push Notification service** key from Apple Developer →
+Keys, downloaded once as a `.p8` and never again. Two more are optional:
+
+- `RPS_APNS_TOPIC` defaults to `com.henhen1227.rps-strategy`, the app's bundle
+  id, which is what APNs means by a topic.
+- `RPS_APNS_ENVIRONMENT=sandbox` points deliveries at
+  `api.sandbox.push.apple.com`. **A token from a debug build only exists in the
+  sandbox**, so a development machine wants this and a deployment serving the
+  App Store build does not. Getting it wrong is the one APNs mistake that looks
+  exactly like a working setup: Apple answers `BadDeviceToken`, the token is
+  pruned, and the log says so naming this variable.
+
+Everything downstream is shared. `POST /api/push/devices` stores a token where a
+Web Push endpoint goes, `summon` fans one payload out to every address an
+account has, and a `410 Unregistered` prunes a phone and drops the wait it left
+on the board exactly as a `410` from a push service does for a browser. **Send a
+test** on the account screen reports how many devices it reached, of both kinds.
+
+Rotating or revoking the Apple key does not invalidate stored tokens — they are
+addresses, not credentials — so a new key with the same team and bundle id keeps
+working without anybody re-registering.
 
 ## Orange Pi production deployment
 
@@ -165,10 +261,32 @@ Completed games and accounts are stored at `RPS_DATABASE_PATH` (default
 `data/rps-strategy.sqlite`). Every account rates each game mode separately in
 `account_mode_ratings`; a mode's row is created the first time that account
 finishes a game in it and copies the account's shared `elo` as its starting
-point. Accounts begin at 1200 Elo, ranked results use a K-factor of 32, and the
-shared value stays put as the seed for modes not played yet. Game insertion,
-lifetime win/loss/draw changes, and both mode-rating updates share one
+point. Accounts begin at 1200 Elo, ranked results between people use a K-factor
+of 32, and the shared value stays put as the seed for modes not played yet. Game
+insertion, lifetime win/loss/draw changes, and both mode-rating updates share one
 idempotent SQLite transaction.
+
+Bots are rated by a different system, in `internal/persistence/bot_rating.go`. A per-game
+transfer is wrong for engines because their author chooses their opponents, so beating a
+fresh account pays points that a throwaway can mint on demand. Instead the bot ladder is
+derived: the head-to-head record of every pair of bots is read back out of `game_history`,
+fitted with Bradley–Terry, and written over the mode's bot rows. Four things do the work.
+
+A pair counts for at most twenty games however long it is played, so grinding one opponent
+stops paying. A bot needs at least two distinct opponents to be ranked, applied by pruning
+until nothing is left below the bar, so a pile of throwaways collapses and takes whoever
+farmed it down too. Only the largest connected group of bots is published, so a private
+league of one author's engines is rated against nobody. And there is no prior anywhere —
+nothing assumes an unrated bot is probably average, because that assumption is precisely
+what a farm mints. An unknown opponent's strength is a free parameter, so beating it moves
+that parameter rather than the rating of the bot doing the beating.
+
+What is published is the fit shrunk towards DefaultElo by how much of the board's spread
+the record establishes, estimated from the ladder itself. A well-played board keeps almost
+all of its spread; one whose games cannot tell its engines apart collapses towards 1200
+rather than ranking anybody by accident. Because the whole thing is derived, deleting a bot
+game is exact rather than approximate, and `Open` refits every ladder at startup instead of
+migrating one.
 
 Read APIs:
 
@@ -178,20 +296,117 @@ GET /api/accounts/{userId}/games?limit=20&offset=0
 GET /api/accounts/{userId}/record/{opponentId}
 ```
 
-Account profiles also support:
+Registering claims a name for the anonymous account the browser is already
+using, keeping its user ID, ratings, and history:
+
+```text
+POST /api/auth/register    Authorization: Bearer <local-profile-key>
+                           {"userId":"…","username":"Player","password":"…"}
+POST /api/auth/login       {"username":"Player","password":"…"}
+POST /api/auth/logout      Authorization: Bearer <session-token>
+GET  /api/auth/me          Authorization: Bearer <session-token>
+POST /api/auth/password    Authorization: Bearer <session-token>
+GET  /api/identity/policy
+```
+
+Register and login return the account and a 90-day session token. Registering a
+reserved username needs the host token in a `reservationToken` field, because
+the `Authorization` header on that route is already carrying the profile key.
+
+Editing a profile then takes the session, not the local key:
 
 ```text
 PATCH /api/accounts/{userId}
-Authorization: Bearer <local-profile-key>
+Authorization: Bearer <session-token>
 
-{"displayName":"Player name","discord":"discord.username"}
+{"username":"Player","discord":"discord.username"}
 ```
 
+Only a registered account has a profile to edit: an unregistered one is called
+"Guest" until it claims a name, and the route answers 401 for a local key and
+403 for another account's session. A rename obeys the same username rule as
+registration and moves the uniqueness key with it, so the old name is released.
+Discord is optional. The saved username and Discord handle are copied into every
+newly created online game and returned in both player profiles.
+
 The browser creates a random local profile key and sends it with the account ID
-in the WebSocket's first `authenticate` message. The database stores only its
-SHA-256 hash. Existing accounts with no key are claimed by the first local key
-they authenticate with. The saved display name and Discord username are copied
-into every newly created online game and returned in both player profiles.
+in the WebSocket's first `authenticate` message; a signed-in client sends its
+`sessionToken` there instead, so the account follows the player to a second
+browser rather than leaving them playing as a stranger. The database stores only
+the key's SHA-256 hash. Existing accounts with no key are claimed by the first
+local key they authenticate with.
+
+A player's own review of a game they played is stored alongside it:
+
+```text
+GET /api/games/{gameId}/accuracy
+PUT /api/games/{gameId}/accuracy
+Authorization: Bearer <local-profile-key>
+
+{"color":"Red","accuracy":87.5,"averageLossPercent":4.2,
+ "averageLossCentipawns":31,"moveCount":12,
+ "grades":{"best":5,"excellent":3,"good":2,"inaccuracy":1,"mistake":1,"blunder":0},
+ "engine":{"preset":"standard","maxDepth":9,"maxNodes":700000,
+           "maxTimeMs":2000,"variations":3}}
+```
+
+The colour's identity is read out of the archived game rather than taken from
+the request, and the key must be that account's, so a client can only report
+its own side of a game it actually played. Accounts that have never claimed a
+key authorize nothing here — claiming happens when connecting, never as a side
+effect of saving a review. Rows live in
+`game_accuracy`, keyed by game and colour, and are attached to
+`?format=json` game responses; the PGN column stays a complete game on its own.
+Reviewing again replaces the stored number, and the engine budget is stored
+with it so a shallow review is never mistaken for a deep one. Nothing that
+decides a rating reads this table.
+
+Claiming the reserved owner handle also grants the admin flag. Every route that
+can claim it — registration and rename, the two that write `username_lower` —
+already refuses without the host token or an existing administrator, so holding
+the name is the check, and requiring the host to then grant themselves
+privileges through a second door was a step that could be forgotten. The grant only ever adds: renaming away from the handle leaves the
+flag alone, since a profile edit should not be a silent self-demotion.
+`persistence.OwnerUsername` is the name, a startup migration promotes an account
+that already holds it, and `SetAccountAdmin` remains the way to revoke.
+
+Account, bot, and game administration:
+
+```text
+GET    /api/admin/accounts?query=&limit=&offset=
+GET    /api/admin/accounts/{userId}          account, its bots, its recent games
+PATCH  /api/admin/accounts/{userId}          {"disabled":true,"isAdmin":false}
+DELETE /api/admin/accounts/{userId}          anonymize: keeps the games
+DELETE /api/admin/accounts/{userId}/purge    delete: removes the rows
+DELETE /api/admin/bots/{botId}               delete a bot, its games, its account
+GET    /api/admin/games?query=&limit=&offset=
+DELETE /api/admin/games/{gameId}?revertRatings=true
+```
+
+Two ways to remove somebody, and the difference is deliberate. *Anonymizing*
+strips the identity and keeps the games, including rewriting the name inside the
+stored PGN text; it is what [`PRIVACY.md`](../PRIVACY.md) promises and the right
+answer for a privacy request, because a game is a shared object and one player
+cannot decide the other's history. *Purging* deletes the rows — the account, its
+bots, its games, its reviews, and its tournament entries — and is for the
+account that should never have existed, where a placeholder name in every
+opponent's history preserves nothing anyone wanted. Both refuse to remove the
+last administrator.
+
+Deleting a game removes it from `game_history`, `game_pgn`, and `game_accuracy`,
+and leaves the tournament match or series game that referenced it in place with
+the link cleared. Unless `revertRatings=false`, both players get the Elo and the
+win counts that game moved handed back — exact for the last game somebody
+played, and an approximation for an older one, since the games since were rated
+against a number that has now changed. Between two bots it is exact whatever has
+happened since: there is no transfer to unwind, so the game goes and the ladder
+is fitted again from what remains. A purge always reverts, so an opponent is
+never left holding rating from a game that no longer exists.
+
+Retiring a bot (`DELETE /api/bots/{botId}`, which an owner may call for their
+own) is the soft version: the bot leaves play and frees its name while its games
+stay. `DELETE /api/admin/bots/{botId}` is the hard one, for a bot whose record
+is itself the problem.
 
 Tournament APIs:
 
@@ -246,3 +461,8 @@ must still match exactly.
 
 See [`docs/game-modes.md`](docs/game-modes.md) for the game mode extension
 contract.
+
+Opening-book analysis can be imported directly from RPSFish, browsed publicly,
+and named without tying human taxonomy to an engine refresh. See
+[`docs/opening-book.md`](docs/opening-book.md) for the export command, API, and
+naming rules.

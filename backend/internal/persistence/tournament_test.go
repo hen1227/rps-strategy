@@ -18,8 +18,8 @@ func TestTournamentSignupRoundRobinAndStandings(t *testing.T) {
 		t.Context(),
 		"summer-cup",
 		"Summer Cup",
-		game.ModeAnnihilation,
-		"Annihilation",
+		game.ModeTotalWar,
+		"Total War",
 	)
 	if err != nil {
 		t.Fatal(err)

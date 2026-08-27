@@ -54,19 +54,85 @@ type Event struct {
 	EndReason       GameEndReason `json:"endReason,omitempty"`
 }
 
+// InitialPosition is the complete state a record began from. Most live games
+// can derive this from Mode.StartingPosition, but an imported PGN may also
+// start with Blue to move or with territory that does not follow its pieces.
+type InitialPosition struct {
+	Grid        Grid        `json:"grid"`
+	CurrentTurn PlayerColor `json:"currentTurn"`
+}
+
+func (position InitialPosition) Validate() error {
+	if position.CurrentTurn != Red && position.CurrentTurn != Blue {
+		return fmt.Errorf(
+			"%w: initial current turn must be Red or Blue, got %q",
+			ErrInvalidStartingPosition,
+			position.CurrentTurn,
+		)
+	}
+	if err := ValidateBoardSize(position.Grid.Width(), position.Grid.Height()); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidStartingPosition, err)
+	}
+	for y, row := range position.Grid {
+		if len(row) != position.Grid.Width() {
+			return fmt.Errorf(
+				"%w: initial row %d holds %d tiles, expected %d",
+				ErrInvalidStartingPosition, y, len(row), position.Grid.Width(),
+			)
+		}
+		for x, tile := range row {
+			if tile.X != x || tile.Y != y {
+				return fmt.Errorf(
+					"%w: initial tile (%d, %d) carries coordinates (%d, %d)",
+					ErrInvalidStartingPosition, x, y, tile.X, tile.Y,
+				)
+			}
+			switch tile.Occupant {
+			case Empty:
+				if tile.OccupantOwner != Neutral {
+					return fmt.Errorf(
+						"%w: empty initial tile (%d, %d) has occupant owner %q",
+						ErrInvalidStartingPosition, x, y, tile.OccupantOwner,
+					)
+				}
+			case Rock, Paper, Scissors:
+				if tile.OccupantOwner != Red && tile.OccupantOwner != Blue {
+					return fmt.Errorf(
+						"%w: occupied initial tile (%d, %d) has owner %q",
+						ErrInvalidStartingPosition, x, y, tile.OccupantOwner,
+					)
+				}
+			default:
+				return fmt.Errorf(
+					"%w: initial tile (%d, %d) has piece %q",
+					ErrInvalidStartingPosition, x, y, tile.Occupant,
+				)
+			}
+			if tile.OwnerColor != Neutral && tile.OwnerColor != Red && tile.OwnerColor != Blue {
+				return fmt.Errorf(
+					"%w: initial tile (%d, %d) has territory owner %q",
+					ErrInvalidStartingPosition, x, y, tile.OwnerColor,
+				)
+			}
+		}
+	}
+	return nil
+}
+
 // Record is a complete, self-contained game. Everything needed to rebuild the
 // game is here: the mode and the exact board it started from, the time
 // control, the players, and the ordered event log. Final is what a replay of
 // Events must produce.
 type Record struct {
-	GameID          string         `json:"gameId"`
-	Mode            ModeDefinition `json:"mode"`
-	TimeControl     TimeControl    `json:"timeControl"`
-	RedPlayer       PlayerProfile  `json:"redPlayer"`
-	BluePlayer      PlayerProfile  `json:"bluePlayer"`
-	StartedAtUnixMs int64          `json:"startedAtUnixMs"`
-	Events          []Event        `json:"events"`
-	Final           GameState      `json:"final"`
+	GameID          string           `json:"gameId"`
+	Mode            ModeDefinition   `json:"mode"`
+	TimeControl     TimeControl      `json:"timeControl"`
+	RedPlayer       PlayerProfile    `json:"redPlayer"`
+	BluePlayer      PlayerProfile    `json:"bluePlayer"`
+	StartedAtUnixMs int64            `json:"startedAtUnixMs"`
+	InitialPosition *InitialPosition `json:"initialPosition,omitempty"`
+	Events          []Event          `json:"events"`
+	Final           GameState        `json:"final"`
 }
 
 // StartingPosition is the board the game was actually played from, which is
@@ -107,6 +173,11 @@ func (game *Game) Record() Record {
 	game.updateClockLocked(game.now())
 	events := make([]Event, len(game.events))
 	copy(events, game.events)
+	var initialPosition *InitialPosition
+	if game.initialPosition != nil {
+		copied := *game.initialPosition
+		initialPosition = &copied
+	}
 	return Record{
 		GameID:          game.state.GameID,
 		Mode:            game.state.Mode,
@@ -114,6 +185,7 @@ func (game *Game) Record() Record {
 		RedPlayer:       game.state.RedPlayer,
 		BluePlayer:      game.state.BluePlayer,
 		StartedAtUnixMs: game.startedAt.UnixMilli(),
+		InitialPosition: initialPosition,
 		Events:          events,
 		Final:           game.state,
 	}
@@ -137,6 +209,7 @@ func (game *Game) recordEventLocked(event Event) {
 
 func (game *Game) recordMoveLocked(player PlayerColor, from, to Position, moved, captured Piece) {
 	game.plyCount++
+	game.recordOpeningMoveLocked(from, to)
 	game.recordEventLocked(Event{
 		Kind:     EventMove,
 		Player:   player,
@@ -163,20 +236,10 @@ func (game *Game) recordEndLocked(actor PlayerColor) {
 	})
 }
 
-// resetBoard replaces the board a mode built with an explicit layout. Only
-// replay uses it, to play a record back on the position it was played from.
+// resetBoard replaces the board a mode built with an explicit layout. Replay
+// and custom challenges use it to preserve the exact board they began from.
 func resetBoard(state *GameState, position StartingPosition) {
-	for y := 0; y < BoardSize; y++ {
-		for x := 0; x < BoardSize; x++ {
-			state.Grid[y][x] = Tile{
-				X:             x,
-				Y:             y,
-				Occupant:      Empty,
-				OccupantOwner: Neutral,
-				OwnerColor:    Neutral,
-			}
-		}
-	}
+	state.Grid = NewGrid(position.Width(), position.Height())
 	position.apply(state)
 }
 
@@ -194,6 +257,11 @@ func ReplayWithRegistry(registry *ModeRegistry, record Record) (*Game, error) {
 	if err := startingPosition.Validate(); err != nil {
 		return nil, fmt.Errorf("replay game %s: %w", record.GameID, err)
 	}
+	if record.InitialPosition != nil {
+		if err := record.InitialPosition.Validate(); err != nil {
+			return nil, fmt.Errorf("replay game %s: %w", record.GameID, err)
+		}
+	}
 	clock := time.UnixMilli(record.StartedAtUnixMs).UTC()
 	replayed, err := newGame(
 		registry,
@@ -205,6 +273,7 @@ func ReplayWithRegistry(registry *ModeRegistry, record Record) (*Game, error) {
 		gameOptions{
 			now:              func() time.Time { return clock },
 			startingPosition: &startingPosition,
+			initialPosition:  record.InitialPosition,
 		},
 	)
 	if err != nil {
@@ -312,7 +381,7 @@ func compareFinalStates(gameID string, recorded, replayed GameState) error {
 		replayed any
 		equal    bool
 	}{
-		{"grid", "", "", recorded.Grid == replayed.Grid},
+		{"grid", "", "", recorded.Grid.Equal(replayed.Grid)},
 		{"currentTurn", recorded.CurrentTurn, replayed.CurrentTurn, recorded.CurrentTurn == replayed.CurrentTurn},
 		{"status", recorded.Status, replayed.Status, recorded.Status == replayed.Status},
 		{"winner", recorded.Winner, replayed.Winner, recorded.Winner == replayed.Winner},

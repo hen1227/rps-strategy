@@ -64,7 +64,7 @@ func clearTiles(game *Game, rows ...int) {
 }
 
 func TestMoveRequiresOneTile(t *testing.T) {
-	game := testGame(t, ModeAnnihilation)
+	game := testGame(t, ModeTotalWar)
 	from := firstPieceOf(t, game, Red, Rock)
 	_, err := game.Move(Red, from, Position{X: from.X - 2, Y: from.Y})
 	if !errors.Is(err, ErrInvalidMovement) {
@@ -83,7 +83,7 @@ func TestCombatHierarchy(t *testing.T) {
 		}
 	}
 
-	game := testGame(t, ModeAnnihilation)
+	game := testGame(t, ModeTotalWar)
 	from := firstPieceOf(t, game, Red, Rock)
 	target := Position{X: from.X - 1, Y: from.Y + 1}
 	place(game, target, Scissors)
@@ -91,7 +91,7 @@ func TestCombatHierarchy(t *testing.T) {
 		t.Fatalf("rock should capture scissors: %v", err)
 	}
 
-	game = testGame(t, ModeAnnihilation)
+	game = testGame(t, ModeTotalWar)
 	place(game, target, Paper)
 	if _, err := game.Move(Red, from, target); !errors.Is(err, ErrInvalidCapture) {
 		t.Fatalf("rock should not capture paper, got %v", err)
@@ -103,13 +103,13 @@ func TestCombatHierarchy(t *testing.T) {
 // contract tested here is that each mode's board matches the layout it
 // declares, not that every layout is unique.
 func TestStandardModesUseTheirConfiguredStartingPositions(t *testing.T) {
-	for _, modeID := range []ModeID{ModeAnnihilation, ModeTotalWar, ModeInfiltration} {
+	for _, modeID := range []ModeID{ModeTotalWar, ModeInfiltration} {
 		game := testGame(t, modeID)
 		state := game.Snapshot()
 		startingPosition := state.Mode.StartingPosition
 
-		for y, row := range startingPosition.Rows {
-			for x := 0; x < BoardSize; x++ {
+		for y, row := range startingPosition.Rows() {
+			for x := 0; x < len(row); x++ {
 				expectedPiece, expectedOwner, _ := startingPiece(row[x])
 				tile := state.Grid[y][x]
 				if tile.Occupant != expectedPiece || tile.OccupantOwner != expectedOwner {
@@ -211,8 +211,8 @@ func TestInfiltrationWipeoutIsAStalemateDrawNotAWin(t *testing.T) {
 func TestStalemateEndsTheGameInADraw(t *testing.T) {
 	// A Red Rock ringed by Blue Papers can neither move nor capture, because
 	// Paper beats Rock. Every mode inherits this rule from the engine.
-	game := testGame(t, ModeAnnihilation)
-	clearTiles(game, 3, 4, 5)
+	game := testGame(t, ModeTotalWar)
+	clearTiles(game, 0, 1, 2, 3, 4, 5, 6, 7, 8)
 	game.state.Grid[4][4] = Tile{X: 4, Y: 4, Occupant: Rock, OccupantOwner: Red, OwnerColor: Neutral}
 	for y := 3; y <= 5; y++ {
 		for x := 3; x <= 5; x++ {
@@ -241,7 +241,7 @@ func TestStalemateEndsTheGameInADraw(t *testing.T) {
 }
 
 func TestDrawOfferCanOnlyBeMadeOncePerTurn(t *testing.T) {
-	game := testGame(t, ModeAnnihilation)
+	game := testGame(t, ModeTotalWar)
 	state, err := game.OfferDraw(Red)
 	if err != nil {
 		t.Fatal(err)
@@ -270,7 +270,7 @@ func TestDrawOfferCanOnlyBeMadeOncePerTurn(t *testing.T) {
 }
 
 func TestDrawOfferPersistsForOpponentAndMoveDeclinesIt(t *testing.T) {
-	game := testGame(t, ModeAnnihilation)
+	game := testGame(t, ModeTotalWar)
 	if _, err := game.OfferDraw(Red); err != nil {
 		t.Fatal(err)
 	}
@@ -293,7 +293,7 @@ func TestDrawOfferPersistsForOpponentAndMoveDeclinesIt(t *testing.T) {
 }
 
 func TestAcceptDrawAndResignRecordExactEndReasons(t *testing.T) {
-	game := testGame(t, ModeAnnihilation)
+	game := testGame(t, ModeTotalWar)
 	if _, err := game.OfferDraw(Red); err != nil {
 		t.Fatal(err)
 	}
@@ -306,7 +306,7 @@ func TestAcceptDrawAndResignRecordExactEndReasons(t *testing.T) {
 		t.Fatalf("expected a draw by agreement, got %#v", state)
 	}
 
-	game = testGame(t, ModeAnnihilation)
+	game = testGame(t, ModeTotalWar)
 	state, err = game.Resign(Red)
 	if err != nil {
 		t.Fatal(err)
@@ -329,16 +329,6 @@ func TestThirdPositionOccurrenceIsDrawInEveryMode(t *testing.T) {
 		setup []repetitionMove
 		cycle []repetitionMove
 	}{
-		{
-			name: "annihilation",
-			mode: ModeAnnihilation,
-			cycle: []repetitionMove{
-				{Red, Position{X: 7, Y: 3}, Position{X: 6, Y: 3}},
-				{Blue, Position{X: 1, Y: 3}, Position{X: 2, Y: 3}},
-				{Red, Position{X: 6, Y: 3}, Position{X: 7, Y: 3}},
-				{Blue, Position{X: 2, Y: 3}, Position{X: 1, Y: 3}},
-			},
-		},
 		{
 			name: "total war",
 			mode: ModeTotalWar,
@@ -412,7 +402,7 @@ func TestThirdPositionOccurrenceIsDrawInEveryMode(t *testing.T) {
 }
 
 func TestAcceptedTimeExtensionAddsThreeMinutesToBothClocks(t *testing.T) {
-	game := testGame(t, ModeAnnihilation)
+	game := testGame(t, ModeTotalWar)
 	before := game.Snapshot().Clock
 	if _, err := game.OfferTimeExtension(Red); err != nil {
 		t.Fatal(err)
@@ -439,7 +429,7 @@ func TestAcceptedTimeExtensionAddsThreeMinutesToBothClocks(t *testing.T) {
 }
 
 func TestTimeExtensionCanBeAskedForOffTurnAndSurvivesAMove(t *testing.T) {
-	game := testGame(t, ModeAnnihilation)
+	game := testGame(t, ModeTotalWar)
 	// Red is to move, so Blue is asking while its own clock is stopped.
 	state, err := game.OfferTimeExtension(Blue)
 	if err != nil {
@@ -483,7 +473,7 @@ func TestTimeExtensionCanBeAskedForOffTurnAndSurvivesAMove(t *testing.T) {
 }
 
 func TestTimeExtensionIsLimitedToOnePerPlayerPerMove(t *testing.T) {
-	game := testGame(t, ModeAnnihilation)
+	game := testGame(t, ModeTotalWar)
 	if _, err := game.OfferTimeExtension(Red); err != nil {
 		t.Fatal(err)
 	}
@@ -520,7 +510,7 @@ func TestTimeExtensionIsLimitedToOnePerPlayerPerMove(t *testing.T) {
 }
 
 func TestTimeExtensionIsUnavailableAfterTheGameEnds(t *testing.T) {
-	game := testGame(t, ModeAnnihilation)
+	game := testGame(t, ModeTotalWar)
 	if _, err := game.Resign(Red); err != nil {
 		t.Fatal(err)
 	}

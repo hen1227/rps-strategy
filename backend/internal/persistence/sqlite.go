@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log"
 	"math"
 	"strings"
 	"sync/atomic"
@@ -17,7 +18,14 @@ import (
 
 const (
 	DefaultElo = 1200
-	EloKFactor = 32
+
+	// AccountKindHuman and AccountKindBot are the two values of accounts.kind.
+	// A bot is a full account so that ratings, history, the archive, and
+	// spectating all work through the paths they already work through; this
+	// column is the only thing that tells the two apart.
+	AccountKindHuman = "human"
+	AccountKindBot   = "bot"
+	EloKFactor       = 32
 )
 
 var (
@@ -34,10 +42,34 @@ type Store struct {
 // Account holds one player's identity and lifetime totals across every mode.
 // Ranked play moves ModeRatings; Elo is only the shared seed a mode inherits
 // the first time this account finishes a game in it.
+// Account is serialized straight to JSON on GET /api/accounts/{userID} and
+// inside connection_ready, so no credential may ever become a field here.
+// Password material and bot keys live in their own unexported structs, read by
+// their own queries.
 type Account struct {
-	UserID          string                     `json:"userId"`
-	Username        string                     `json:"username"`
-	Discord         string                     `json:"discord"`
+	UserID string `json:"userId"`
+	// Kind is "human" or "bot". A bot has an ordinary account so that ratings,
+	// history, spectating, and the archive all work without a parallel code
+	// path; this is the only thing that distinguishes it.
+	Kind     string `json:"kind"`
+	Username string `json:"username"`
+	// Registered reports whether this account has claimed a username and set a
+	// password. An unregistered account is the anonymous browser identity the
+	// game has always had, and remains fully playable.
+	Registered bool   `json:"registered"`
+	IsAdmin    bool   `json:"isAdmin"`
+	Disabled   bool   `json:"disabled"`
+	Discord    string `json:"discord"`
+	// DiscordVerified reports whether Discord vouched for the handle above,
+	// rather than the player having typed it. Only a verified handle is proof
+	// of anything, and only a verified one is read-only in the profile editor.
+	DiscordVerified bool `json:"discordVerified"`
+	// Title is the tag worn in front of the name — "GM", "DEV" — and empty for
+	// the great majority of accounts, which wear none. Titles is everything
+	// this account has collected, in catalogue order, which is what the picker
+	// on the account page chooses from. See titles.go.
+	Title           TitleID                    `json:"title,omitempty"`
+	Titles          []TitleAward               `json:"titles,omitempty"`
 	Elo             int                        `json:"elo"`
 	Wins            int                        `json:"wins"`
 	Losses          int                        `json:"losses"`
@@ -87,6 +119,22 @@ func (account *Account) RecordRatedGame(modeID game.ModeID, elo int) {
 	rating.ModeID = modeID
 	rating.Elo = elo
 	rating.GamesPlayed++
+	account.ModeRatings[modeID] = rating
+}
+
+// SetModeElo restates one mode's rating on an in-memory account copy, leaving
+// the record beside it alone.
+//
+// The bot ladder's counterpart to RecordRatedGame above. A refit moves the
+// rating of engines that did not play, so their games and their record are
+// exactly what they were and only the number in front of them is new.
+func (account *Account) SetModeElo(modeID game.ModeID, elo int) {
+	if account.ModeRatings == nil {
+		account.ModeRatings = make(map[game.ModeID]ModeRating)
+	}
+	rating := account.ModeRatings[modeID]
+	rating.ModeID = modeID
+	rating.Elo = elo
 	account.ModeRatings[modeID] = rating
 }
 
@@ -157,6 +205,14 @@ func Open(path string) (*Store, error) {
 
 	store := &Store{db: database}
 	if err := store.initialize(context.Background()); err != nil {
+		_ = database.Close()
+		return nil, err
+	}
+	// The bot ladder is derived, so it is rebuilt here rather than migrated. A
+	// database written by the old per-game system holds bot Elos that are a
+	// different function of the same games; one pass replaces them with the fit,
+	// and the same pass is the repair for any drift.
+	if err := store.RefitBotLadders(context.Background()); err != nil {
 		_ = database.Close()
 		return nil, err
 	}
@@ -297,13 +353,82 @@ CREATE INDEX IF NOT EXISTS tournament_matches_tournament_idx
 	if err := store.ensureAccountProfileColumns(ctx); err != nil {
 		return err
 	}
+	// Must follow ensureAccountProfileColumns: both migrate `accounts`, and
+	// the auth step's partial unique index depends on a column it adds.
+	if err := store.ensureAccountAuthColumns(ctx); err != nil {
+		return err
+	}
+	// After ensureAccountProfileColumns, which adds the `title` column this
+	// table's rows are chosen into.
+	if err := store.ensureTitleSchema(ctx); err != nil {
+		return err
+	}
 	if err := store.ensureTournamentMatchColumns(ctx); err != nil {
 		return err
 	}
 	if err := store.ensureArchiveSchema(ctx); err != nil {
 		return err
 	}
+	if err := store.ensureAccuracySchema(ctx); err != nil {
+		return err
+	}
+	if err := store.ensureOpeningBookSchema(ctx); err != nil {
+		return err
+	}
+	if err := store.ensureOpeningGraphSchema(ctx); err != nil {
+		return err
+	}
+	if err := store.ensurePushSchema(ctx); err != nil {
+		return err
+	}
+	// Last, because bots reference accounts and the auth migration is what
+	// gives accounts the columns a bot account needs.
+	if err := store.ensureBotSchema(ctx); err != nil {
+		return err
+	}
+	if err := store.ensureBotSeriesSchema(ctx); err != nil {
+		return err
+	}
+	// The mode library. Independent of everything above — it references accounts
+	// only by id, for the reason lab.go states — so its place in the order is
+	// arbitrary, and last keeps it out of the way of the sequence that is not.
+	if err := store.ensureLabSchema(ctx); err != nil {
+		return err
+	}
+	// The pictures a mode carries, which reference the modes above only by id.
+	if err := store.ensureLabArtSchema(ctx); err != nil {
+		return err
+	}
+	// After the auth migration, which is what creates `is_admin`.
+	if err := store.ensureOwnerIsAdmin(ctx); err != nil {
+		return err
+	}
+	store.reportPasswordAccountsRemaining(ctx)
 	return nil
+}
+
+// reportPasswordAccountsRemaining logs how much of the password era is left.
+//
+// Everything that still exists to serve password sign-in — the login route,
+// AuthenticateAccount, the whole of password.go, and half of registeredSQL —
+// can go when this reaches zero. Printing it at boot makes that moment
+// something somebody notices, rather than a date guessed at in advance and
+// then either missed or acted on too early.
+func (store *Store) reportPasswordAccountsRemaining(ctx context.Context) {
+	var remaining int
+	if err := store.db.QueryRowContext(ctx, `
+SELECT COUNT(*) FROM accounts WHERE password_hash <> '' AND discord_user_id = ''
+`).Scan(&remaining); err != nil {
+		// Not worth failing a boot over a status line.
+		return
+	}
+	if remaining > 0 {
+		log.Printf(
+			"%d account(s) still sign in with a password and have not linked Discord; "+
+				"password sign-in can be removed once this reaches zero",
+			remaining,
+		)
+	}
 }
 
 func (store *Store) EnsureAccount(
@@ -335,16 +460,21 @@ ON CONFLICT(user_id) DO UPDATE SET
 
 func (store *Store) Account(ctx context.Context, userID string) (Account, error) {
 	userID = strings.TrimSpace(userID)
-	account, err := scanAccount(store.db.QueryRowContext(ctx, `
-SELECT user_id, username, discord, elo, wins, losses, draws, games_played,
-       created_at_unix_ms, updated_at_unix_ms
-FROM accounts
+	account, err := scanAccount(store.db.QueryRowContext(ctx, accountSelect+`
 WHERE user_id = ?
 `, userID))
 	if err != nil {
 		return Account{}, err
 	}
 	account.ModeRatings, err = store.modeRatings(ctx, userID)
+	if err != nil {
+		return Account{}, err
+	}
+	// Loaded with the account rather than fetched separately, because every
+	// place that shows a title already has an Account in hand: the lobby
+	// handshake, the profile page, the admin browser. A player with no titles
+	// gets a nil slice, which is omitted from the wire entirely.
+	account.Titles, err = store.AccountTitles(ctx, userID)
 	if err != nil {
 		return Account{}, err
 	}
@@ -455,9 +585,37 @@ func (store *Store) RecordCompletedGame(
 		return RatingUpdate{}, err
 	}
 
+	// Two rating systems, and who played decides which one applies. A game
+	// between two engines moves the bot ladder, which is a fit over every pair's
+	// head-to-head record rather than a transfer between these two — see
+	// bot_rating.go for why an engine cannot be rated the way a person is.
+	// Anything else is per-game Elo.
+	//
+	// The fit runs before the history row is inserted, with this game folded
+	// into the record by hand, so that the after-ratings written onto the row
+	// are the ones it produced. Inserting first and going back to fill them in
+	// would be the same work in three statements instead of one.
 	redAfter, blueAfter := redElo, blueElo
+	var botLadder map[string]int
 	if ranked {
-		redAfter, blueAfter = calculateElo(redElo, blueElo, redScore)
+		bothBots, err := bothBotsTx(ctx, transaction, redID, blueID)
+		if err != nil {
+			return RatingUpdate{}, err
+		}
+		if bothBots {
+			pairs, err := botHeadToHeadTx(ctx, transaction, state.Mode.ID)
+			if err != nil {
+				return RatingUpdate{}, err
+			}
+			addBotResult(pairs, redID, blueID, redScore)
+			botLadder = fitBotRatings(pairs)
+			// Not botLadder[redID] directly: the fit leaves out bots whose
+			// record cannot place them, and a missing key would read as a
+			// rating of zero rather than as an unrated bot.
+			redAfter, blueAfter = botRatingOr(botLadder, redID), botRatingOr(botLadder, blueID)
+		} else {
+			redAfter, blueAfter = calculateElo(redElo, blueElo, redScore)
+		}
 	}
 	rankedInteger := 0
 	if ranked {
@@ -504,6 +662,17 @@ INSERT INTO game_history (
 		if err := updateModeRating(
 			ctx, transaction, result.userID, state.Mode.ID, result.elo,
 			result.wins, result.losses, result.draws, finishedAt.UnixMilli(),
+		); err != nil {
+			return RatingUpdate{}, err
+		}
+	}
+	// The fit moved every bot in the mode, not only the two that just played, so
+	// the rest of the ladder is written here. These two are written a second
+	// time with the number the loop above already gave them, which is cheaper
+	// than excluding them and impossible to get out of step.
+	if botLadder != nil {
+		if err := storeBotRatingsTx(
+			ctx, transaction, state.Mode.ID, botLadder, finishedAt.UnixMilli(),
 		); err != nil {
 			return RatingUpdate{}, err
 		}
@@ -616,12 +785,30 @@ func normalizeIdentity(userID string, username string) (string, string, error) {
 	return userID, username, nil
 }
 
+// accountSelect is the one column list every account read uses, so a new
+// column cannot be added to some reads and forgotten in others. `registered`
+// is derived here rather than stored, because a second column saying so could
+// disagree with the first — and what it means lives in registeredSQL rather
+// than being spelled out here, because the same rule is asked in four other
+// places and they have already drifted apart once.
+var accountSelect = `
+SELECT user_id, kind, username, ` + registeredSQL("") + `, is_admin, disabled,
+       discord, discord_user_id <> '', title, elo, wins, losses, draws,
+       games_played, created_at_unix_ms, updated_at_unix_ms
+FROM accounts`
+
 func scanAccount(scanner interface{ Scan(...any) error }) (Account, error) {
 	var account Account
 	err := scanner.Scan(
 		&account.UserID,
+		&account.Kind,
 		&account.Username,
+		&account.Registered,
+		&account.IsAdmin,
+		&account.Disabled,
 		&account.Discord,
+		&account.DiscordVerified,
+		&account.Title,
 		&account.Elo,
 		&account.Wins,
 		&account.Losses,
@@ -757,6 +944,13 @@ func gameOutcome(
 	}
 }
 
+// calculateElo is the human rating system: a fixed-K transfer between the two
+// players of one game, applied in the order games finish.
+//
+// Bots do not use it. Their opponents are chosen rather than dealt by a queue,
+// which turns "beating a new account pays points" from a curiosity into an
+// exploit; bot_rating.go has the rating that answers it, and the reasoning for
+// leaving people on this one.
 func calculateElo(redElo int, blueElo int, redScore float64) (int, int) {
 	expectedRed := 1 / (1 + math.Pow(10, float64(blueElo-redElo)/400))
 	delta := int(math.Round(EloKFactor * (redScore - expectedRed)))
@@ -820,13 +1014,21 @@ WHERE user_id = ? AND mode_id = ?
 	return nil
 }
 
-const gameRecordSelect = `
-SELECT game_id, mode_id, mode_name,
+// gameRecordColumns is the column list scanGameRecord expects, in its order.
+//
+// Named separately from the query below because one other caller needs these
+// same columns out of a *joined* select — BotMatches, which filters on both
+// players being bots — and reading them in a different order would misfile
+// every field without failing. Sharing the list is what stops that.
+const gameRecordColumns = `game_id, mode_id, mode_name,
        red_player_id, red_username, blue_player_id, blue_username,
        winner_player_id, winner_color, outcome, end_reason, ranked,
        red_elo_before, red_elo_after, blue_elo_before, blue_elo_after,
        move_number, initial_time_ms, increment_ms,
-       started_at_unix_ms, finished_at_unix_ms
+       started_at_unix_ms, finished_at_unix_ms`
+
+const gameRecordSelect = `
+SELECT ` + gameRecordColumns + `
 FROM game_history
 `
 

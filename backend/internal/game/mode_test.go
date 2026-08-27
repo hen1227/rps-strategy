@@ -97,10 +97,10 @@ func TestGameDelegatesAllRulesToRegisteredMode(t *testing.T) {
 
 func TestDefaultRegistryContainsOnlyBaseModes(t *testing.T) {
 	definitions := DefaultModeRegistry.Definitions()
-	if len(definitions) != 3 {
-		t.Fatalf("expected only three base modes, got %d", len(definitions))
+	if len(definitions) != 2 {
+		t.Fatalf("expected only two base modes, got %d", len(definitions))
 	}
-	expected := []ModeID{ModeAnnihilation, ModeTotalWar, ModeInfiltration}
+	expected := []ModeID{ModeTotalWar, ModeInfiltration}
 	for index, modeID := range expected {
 		if definitions[index].ID != modeID {
 			t.Fatalf("mode %d: expected %s, got %s", index, modeID, definitions[index].ID)

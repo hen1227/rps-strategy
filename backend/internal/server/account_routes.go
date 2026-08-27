@@ -11,7 +11,7 @@ import (
 )
 
 type updateAccountRequest struct {
-	DisplayName      string `json:"displayName"`
+	Username         string `json:"username"`
 	Discord          string `json:"discord"`
 	ReservationToken string `json:"reservationToken"`
 }
@@ -25,11 +25,21 @@ func (server *Server) getAccount(writer http.ResponseWriter, request *http.Reque
 	writeJSON(writer, http.StatusOK, account)
 }
 
+// updateAccount renames the signed-in account and sets its Discord handle.
+//
+// Editing a profile takes a session rather than the browser's local key: a
+// name is part of the account system now, so there is no anonymous profile to
+// edit and no way to wear a name without having claimed it.
 func (server *Server) updateAccount(writer http.ResponseWriter, request *http.Request) {
-	profileKey := bearerToken(request)
-	if profileKey == "" {
-		writer.Header().Set("WWW-Authenticate", `Bearer realm="account-profile"`)
-		writeAPIError(writer, http.StatusUnauthorized, "local account key is required")
+	account, ok := server.requireSession(writer, request)
+	if !ok {
+		return
+	}
+	// The path says whose account this is, and a client that has drifted out of
+	// step with its own session should hear about it rather than quietly edit
+	// the wrong row.
+	if request.PathValue("userID") != account.UserID {
+		writeAPIError(writer, http.StatusForbidden, "you can only edit your own account")
 		return
 	}
 	var input updateAccountRequest
@@ -37,36 +47,31 @@ func (server *Server) updateAccount(writer http.ResponseWriter, request *http.Re
 		writeAPIError(writer, http.StatusBadRequest, err.Error())
 		return
 	}
-	if usesReservedIdentity(input.DisplayName, input.Discord) &&
-		!server.hasValidAdminTokenValue(input.ReservationToken) {
-		writeAPIError(writer, http.StatusForbidden, "this username or Discord handle is reserved; paste the special token")
+	// The username only. The Discord handle used to be checked here too, back
+	// when it was free text somebody could type — the rule existed to stop
+	// people claiming a handle they did not own. Discord answers that now, so
+	// the check would prevent no impersonation while permanently locking out
+	// any real Discord user whose handle happened to match a reserved name.
+	if persistence.IsReservedUsername(input.Username) &&
+		!account.IsAdmin && !server.hasValidAdminTokenValue(input.ReservationToken) {
+		writeAPIError(
+			writer,
+			http.StatusForbidden,
+			"this username is reserved; paste the special token",
+		)
 		return
 	}
-	account, err := server.data.UpdateAccountProfile(
+	updated, err := server.data.UpdateAccountProfile(
 		request.Context(),
-		request.PathValue("userID"),
-		profileKey,
-		input.DisplayName,
+		account.UserID,
+		input.Username,
 		input.Discord,
 	)
 	if err != nil {
-		switch {
-		case errors.Is(err, persistence.ErrInvalidProfileKey):
-			writeAPIError(writer, http.StatusUnauthorized, "local account key is invalid")
-		case errors.Is(err, persistence.ErrAccountNotFound):
-			writeAPIError(writer, http.StatusNotFound, err.Error())
-		case errors.Is(err, persistence.ErrInvalidAccountProfile):
-			message := strings.TrimPrefix(
-				err.Error(),
-				persistence.ErrInvalidAccountProfile.Error()+": ",
-			)
-			writeAPIError(writer, http.StatusBadRequest, message)
-		default:
-			writeAPIError(writer, http.StatusInternalServerError, "account profile is unavailable")
-		}
+		writeAuthError(writer, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, account)
+	writeJSON(writer, http.StatusOK, updated)
 }
 
 func bearerToken(request *http.Request) string {
