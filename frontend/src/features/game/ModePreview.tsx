@@ -49,11 +49,9 @@ export default function ModePreview({ mode, position, size = PREVIEW_SIZE }: Mod
 
   return (
     <View style={[styles.frame, { width: size }]} accessibilityElementsHidden>
-      <View style={styles.previewHeader}>
-        <View style={styles.previewDot} />
-        <View style={styles.previewLine} />
-        <Text style={styles.previewLabel}>START</Text>
-      </View>
+      {/*<View style={styles.previewHeader}>*/}
+      {/*    <Text style={styles.previewLabel}>{mode?.name || 'Default'}</Text>*/}
+      {/*</View>*/}
       <MiniBoard
         grid={grid}
         modeId={mode?.id}

@@ -7,7 +7,12 @@ import type { EngineWorker } from './protocol';
 // this in step with engine/worker releases so browsers cannot combine builds.
 // `review2` adds `analyzeFrom` to the review request: a cached `review1` worker
 // would ignore it and regrade a live game from move one on every instalment.
-const RPSFISH_ASSET_VERSION = 'abi4-rules2-review2';
+// `v6` is the first build whose mode table accepts Intransitive; without a new
+// key, a returning browser can keep the older worker and reject every V6 board
+// before the freshly deployed engine ever sees it.
+// `tournament-lock` replaces that release with the public build that keeps V6
+// unavailable until the official tournament has finished.
+const RPSFISH_ASSET_VERSION = 'abi4-rules2-review2-v6-tournament-lock';
 
 /**
  * Whether this platform can run RPSFish at all.

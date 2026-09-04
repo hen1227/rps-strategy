@@ -12,6 +12,8 @@ import {
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import MoveAnalysisList from '@/features/analysis/MoveAnalysisList';
+import ReplayControls from '@/features/analysis/ReplayControls';
 import TerritoryMeter from '@/features/analysis/TerritoryMeter';
 import { NameThisOpening, OpeningBadge } from '@/features/openings/OpeningBadge';
 import ReachPanel from '@/features/reach/ReachPanel';
@@ -24,11 +26,16 @@ import GameChat from './GameChat';
 import GameTransition from './GameTransition';
 import PlayerBar from './PlayerBar';
 import SpectateRail from './SpectateRail';
+import SpectateResultModal from './SpectateResultModal';
+import ServerBanner from '@/features/shell/ServerBanner';
 import type { GameOpening } from '@/engine/openingBook';
 import { useBoardLayout } from '@/hooks/useBoardLayout';
+import { useGameHistory } from '@/hooks/useGameHistory';
+import { useReplayCursor } from '@/hooks/useReplayCursor';
 import { useSettled } from '@/hooks/useSettled';
 import { useSpectateContext } from '@/hooks/useSpectateContext';
 import { useTournamentCall } from '@/hooks/useTournamentCall';
+import { useWatchGame } from '@/hooks/useWatchGame';
 import { links } from '@/navigation/links';
 import { roomSpansSeries } from '@/store/chatSelectors';
 import { useGameStore } from '@/store/gameStore';
@@ -39,6 +46,7 @@ import { playerName } from '@/store/spectateSelectors';
 import type { ActiveGame } from '@/store/types';
 import { colors, overlay, radius, shadows, type } from '@/theme';
 import {
+  FIRST_TO_MOVE,
   opposingColor,
   type GameEndReason,
   type ModeDefinition,
@@ -106,7 +114,11 @@ const localOutcomeFor = (gameState: ActiveGame): GameOutcome => {
         repetition: {method: 'REPETITION', detail: 'The same position occurred three times.'},
         stalemate: {
             method: 'STALEMATE',
-            detail: 'A player had no legal move, which is a draw.',
+            // A draw in most modes and a loss in a race, so the card reads the
+            // result off the game rather than restating the rule.
+            detail: isDraw
+                ? 'A player had no legal move, which is a draw.'
+                : `${loser} had no legal move, which loses in this mode.`,
         },
         move_limit: {
             method: 'MOVE LIMIT',
@@ -115,6 +127,10 @@ const localOutcomeFor = (gameState: ActiveGame): GameOutcome => {
         infiltration: {
             method: 'INFILTRATION',
             detail: `${winner} reached ${loser}'s home boundary.`,
+        },
+        corner: {
+            method: 'CORNER',
+            detail: `${winner} reached ${loser}'s home corner.`,
         },
         resignation: {method: 'RESIGNATION', detail: `${loser} resigned.`},
         territory: {
@@ -167,7 +183,11 @@ const outcomeFor = (gameState: ActiveGame, playerColor: PlayerColor | null): Gam
         },
         stalemate: {
             method: 'STALEMATE',
-            detail: 'A player had no legal move, which is a draw.',
+            detail: isDraw
+                ? 'A player had no legal move, which is a draw.'
+                : didWin
+                  ? 'Your opponent had no legal move, which loses in this mode.'
+                  : 'You had no legal move, which loses in this mode.',
         },
         move_limit: {
             method: 'MOVE LIMIT',
@@ -178,6 +198,12 @@ const outcomeFor = (gameState: ActiveGame, playerColor: PlayerColor | null): Gam
             detail: didWin
                 ? "You reached your opponent's home boundary."
                 : 'Your opponent reached your home boundary.',
+        },
+        corner: {
+            method: 'CORNER',
+            detail: didWin
+                ? "You reached your opponent's home corner."
+                : 'Your opponent reached your home corner.',
         },
         resignation: {
             method: 'RESIGNATION',
@@ -885,6 +911,15 @@ interface StatusContentProps {
     gameState: ActiveGame;
     isMyTurn: boolean;
     isSpectating: boolean;
+    /**
+     * Whether the board is showing an earlier position rather than the game.
+     *
+     * First, because it is the only thing worth saying when it is true. This
+     * card is otherwise about whose turn it is, and "Your move · tap a piece"
+     * over a board that has been stepped back is a instruction that does not
+     * apply to what is on the screen.
+     */
+    lookingBack: boolean;
     playerColor: PlayerColor | null;
     selectedTile: Position | null;
 }
@@ -894,9 +929,21 @@ function StatusContent({
                            gameState,
                            isMyTurn,
                            isSpectating,
+                           lookingBack,
                            playerColor,
                            selectedTile,
                        }: StatusContentProps): StatusMessage {
+    if (lookingBack) {
+        return {
+            title: 'Looking back',
+            detail:
+                gameState.status === 'InProgress'
+                    ? 'The game has moved on. Press → or tap the board to catch up.'
+                    : 'Stepping through the finished game.',
+            tone: 'neutral',
+        };
+    }
+
     if (isSpectating) {
         if (gameState.status === 'Finished') {
             return gameState.winner === 'Neutral'
@@ -990,6 +1037,7 @@ function StatusCard({
                         gameState,
                         isMyTurn,
                         isSpectating,
+                        lookingBack,
                         opening,
                         onRematch,
                         onReturn,
@@ -998,7 +1046,7 @@ function StatusCard({
                         selectedTile,
                         wide,
                     }: StatusCardProps) {
-    if (gameState.status === 'Finished' && !isSpectating) {
+    if (gameState.status === 'Finished' && !isSpectating && !lookingBack) {
         return (
             <FinishedGameCard
                 canReview={canReview}
@@ -1018,6 +1066,7 @@ function StatusCard({
         gameState,
         isMyTurn,
         isSpectating,
+        lookingBack,
         playerColor,
         selectedTile,
     });
@@ -1078,6 +1127,10 @@ export default function GameScreen() {
     const handReview = useReviewHandoff((state) => state.hand);
     const reviewOpeningRef = useRef(false);
     const [showResignConfirmation, setShowResignConfirmation] = useState(false);
+    // Which game's result has been read and put away. Keyed by game rather
+    // than a plain boolean, so the next board of a series brings its own
+    // result up instead of inheriting the last one's dismissal.
+    const [dismissedResultFor, setDismissedResultFor] = useState<string | null>(null);
     const gameState = useGameStore((state) => state.gameState);
     // The game this browser was in, remembered across a refresh. It is what
     // tells an empty screen whether a board is on its way back.
@@ -1112,7 +1165,7 @@ export default function GameScreen() {
     const chatOccupancy = useGameStore((state) => state.chatOccupancy);
     const liveGames = useGameStore((state) => state.liveGames);
     const spectatedGameId = useGameStore((state) => state.spectatedGameId);
-    const spectateGame = useGameStore((state) => state.spectateGame);
+    const watchGame = useWatchGame();
     const chatVisible = useGameStore((state) => state.chatVisible);
     const showSpectatorMessages = useGameStore((state) => state.showSpectatorMessages);
     const sendChat = useGameStore((state) => state.sendChat);
@@ -1195,16 +1248,38 @@ export default function GameScreen() {
     // rated, and handing one side a solved picture of the race is not a helper
     // tool, it is an engine. A mode with no goal row switches itself off.
     const reachTool = useReach(gameState?.bot ? gameState : null, {
-        viewerSide: playerColor === 'Blue' ? 'Blue' : 'Red',
+        viewerSide: playerColor === 'Red' ? 'Red' : FIRST_TO_MOVE,
     });
     // What the game on the board is called. Read once and handed to both the
     // badge and the card at the end, from the line the game itself carries —
     // see `GameState.openingLine`, which is why a refresh and a spectator who
     // arrived late get the name too.
     const opening = useGameOpening(gameState);
+    // The moves behind the position, and where along them the viewer is
+    // standing. Both hooks run for every kind of game and before the empty
+    // state below, because a hook only some renders reach is the crash React
+    // reports as rendering more hooks than during the previous render.
+    //
+    // `follow` is what makes this a live board rather than a replay of one:
+    // somebody sitting at the latest move is carried along by the next one,
+    // and somebody who has stepped back stays where they put themselves.
+    const history = useGameHistory(gameState);
+    const replay = useReplayCursor({
+        length: history.positions.length,
+        follow: true,
+        // Which game this is, so that arriving at one — or being carried from
+        // one board of a series to the next — starts at the live position
+        // rather than wherever the last board left the cursor.
+        lineId: gameState?.gameId ?? null,
+    });
 
     const settled = useSettled();
-    const lookingForGame = !settled || Boolean(gameSessionId);
+    // Two reasons a board might be on its way: a game of our own is being
+    // rejoined, or a game somebody else is playing has been asked for. The
+    // watch screen sets the second one from the id in the address, and without
+    // it a shared link read "No active match" for as long as the request took.
+    const lookingForGame = !settled || Boolean(gameSessionId) || Boolean(spectatedGameId);
+    const lookingToWatch = !gameSessionId && Boolean(spectatedGameId);
 
     if (!gameState) {
         return (
@@ -1218,12 +1293,18 @@ export default function GameScreen() {
                         />
                     ) : null}
                     <Text style={styles.emptyTitle}>
-                        {lookingForGame ? 'Looking for your game…' : 'No active match'}
+                        {lookingToWatch
+                            ? 'Opening the board…'
+                            : lookingForGame
+                                ? 'Looking for your game…'
+                                : 'No active match'}
                     </Text>
                     <Text style={styles.emptyBody}>
-                        {lookingForGame
-                            ? 'A refresh has to ask the server for the board again.'
-                            : 'Return to the mode screen to find an opponent.'}
+                        {lookingToWatch
+                            ? 'Asking the server to put you on the game you followed.'
+                            : lookingForGame
+                                ? 'A refresh has to ask the server for the board again.'
+                                : 'Return to the mode screen to find an opponent.'}
                     </Text>
                     {/* An escape hatch either way: a rejoin that never answers
                         should not be a screen with nothing on it. */}
@@ -1247,18 +1328,22 @@ export default function GameScreen() {
     // draw the board, whose turn this is, who just won — is answered from the
     // game instead.
     const local = gameState.local ?? null;
-    // A spectator watches from Red's side. A player watches from their own,
-    // and `Neutral` is not a side anybody sits on. A local board is drawn from
-    // whichever side its players last turned it to.
-    const ownColor: SideColor = playerColor === 'Blue' ? 'Blue' : 'Red';
+    // A spectator watches from the opening side, which is the end of the board
+    // rank 1 is drawn at. A player watches from their own, and `Neutral` is not
+    // a side anybody sits on. A local board is drawn from whichever side its
+    // players last turned it to.
+    const ownColor: SideColor = playerColor === 'Red' ? 'Red' : FIRST_TO_MOVE;
     const seatColor: SideColor = local ? local.viewColor : ownColor;
     // Whoever is to move is the only side a resignation can come from: there is
     // nobody else at this keyboard to give up. `Neutral` is not a side, so it
-    // reads as Red, which is the side that opens.
-    const turnSide: SideColor = gameState.currentTurn === 'Blue' ? 'Blue' : 'Red';
-    const viewColor: SideColor = isSpectating ? 'Red' : seatColor;
-    const topColor: SideColor = isSpectating ? 'Blue' : opposingColor(seatColor);
-    const bottomColor: SideColor = isSpectating ? 'Red' : seatColor;
+    // reads as the side that opens.
+    const turnSide: SideColor =
+        gameState.currentTurn === 'Red' ? 'Red' : FIRST_TO_MOVE;
+    const viewColor: SideColor = isSpectating ? FIRST_TO_MOVE : seatColor;
+    const topColor: SideColor = isSpectating
+        ? opposingColor(FIRST_TO_MOVE)
+        : opposingColor(seatColor);
+    const bottomColor: SideColor = isSpectating ? FIRST_TO_MOVE : seatColor;
     const captured = capturedPieces(gameState);
     const topProfile = topColor === 'Red' ? gameState.redPlayer : gameState.bluePlayer;
     const bottomProfile = bottomColor === 'Red' ? gameState.redPlayer : gameState.bluePlayer;
@@ -1291,6 +1376,26 @@ export default function GameScreen() {
     // set the moment the request goes out, while `gameState` still holds the
     // board being left, so the two disagreeing is exactly the hand-off.
     const switchingBoards = isSpectating && Boolean(spectatedGameId) && spectatedGameId !== gameState.gameId;
+    // Whether the board is showing the game as it stands, or a position from
+    // earlier in it.
+    //
+    // A game with no history to step through is always at its live edge, which
+    // is what keeps every board that has no record — an older server, a mode
+    // this client cannot replay — behaving exactly as it did before there was
+    // a move list.
+    const atLiveEdge = !history.available || replay.atLiveEdge;
+    const replayPosition = atLiveEdge ? null : (history.positions[replay.cursor] ?? null);
+    // The live grid comes off the game itself and never off the replay, even
+    // though the two should agree: the replay is this client running the rules
+    // over a record, and the board the server sent is the game. Only a viewer
+    // who has deliberately stepped back is shown the reconstruction.
+    const visibleGrid = replayPosition?.grid ?? gameState.grid;
+    // Which move to mark on the board. Stepped back, that is the move that
+    // produced the position being looked at rather than the one just played in
+    // a game that has moved on without the viewer.
+    const visibleLastMove = replayPosition
+        ? (history.moves[replay.cursor - 1] ?? null)
+        : lastMove;
     // Modes with a real player waiting in matchmaking right now. Someone busy
     // with a bot should still get the chance to take that game.
     // Counted from the people who are *at the keyboard*, not from everybody
@@ -1498,15 +1603,25 @@ export default function GameScreen() {
               than the viewer's own colour, which is nobody's here.
             */}
             <Board
-                analysisArrows={hint ? [hint] : []}
+                analysisArrows={hint && atLiveEdge ? [hint] : []}
                 boardSize={boardSize}
-                canMove={isMyTurn}
-                grid={gameState.grid}
-                lastMove={lastMove}
+                // Nothing can be played from a position the game has already
+                // left. The tap handler below brings the viewer back rather
+                // than refusing, so a player who stepped back to look at
+                // something is one tap from their own move again.
+                canMove={isMyTurn && atLiveEdge}
+                grid={visibleGrid}
+                lastMove={visibleLastMove}
                 modeId={gameState.mode.id}
-                movableColor={local ? gameState.currentTurn : undefined}
+                movableColor={local && atLiveEdge ? gameState.currentTurn : undefined}
                 onPieceDrop={movePiece}
                 onTilePress={(square) => {
+                    // Stepped back, the board is a picture of an earlier move
+                    // and every square on it is the way back to the game.
+                    if (!atLiveEdge) {
+                        replay.goToLast();
+                        return;
+                    }
                     // The tool only ever swallows a tap while it is waiting for
                     // somewhere to put a ghost piece. Everything else falls
                     // through, so selecting and moving behave the same whether
@@ -1514,10 +1629,15 @@ export default function GameScreen() {
                     if (reachTool.handleTilePress(square)) return;
                     selectTile(square);
                 }}
-                overlay={reachTool.overlay}
+                overlay={atLiveEdge ? reachTool.overlay : null}
                 playerColor={viewColor}
-                selectedTile={selectedTile}
-                validMoves={validMoves}
+                // Handed the whole line, so a jump of several moves off the
+                // list animates through the positions in between instead of
+                // cutting to the destination.
+                replayIndex={history.available ? replay.cursor : null}
+                replayPositions={history.available ? history.positions : null}
+                selectedTile={atLiveEdge ? selectedTile : null}
+                validMoves={atLiveEdge ? validMoves : []}
             />
             <PlayerBar
                 badge={bot && bottomColor === bot.color ? 'BOT' : null}
@@ -1534,6 +1654,62 @@ export default function GameScreen() {
             />
         </>
     );
+
+    // The score sheet, and the controls that walk it.
+    //
+    // Every board here has one now — a match, a game against a bot, a shared
+    // device, and a game being watched. It is the same list the review screen
+    // draws, off the same replay, with nothing graded: a live game has no
+    // analysis behind it, so each move gets a plain pip where a review would
+    // put a symbol.
+    //
+    // Not drawn at all when there is no record to read. That is the honest
+    // answer for a game whose history never arrived, and it is what keeps this
+    // out of the way on a board that cannot have one.
+    const moveHistory = history.available ? (
+        <View style={styles.historyCard}>
+            <MoveAnalysisList
+                emptyText="No moves yet."
+                moves={history.moves}
+                onSelect={replay.goTo}
+                selectedIndex={replay.cursor}
+                title={atLiveEdge ? 'MOVES' : 'MOVES · LOOKING BACK'}
+            />
+            <ReplayControls
+                current={replay.cursor}
+                // The badge is the one place that says whether the board is the
+                // game or a picture of it. `LIVE` while the game is still being
+                // played and the viewer is at the end of it; the move number
+                // otherwise, including for every position of a finished game,
+                // where nothing is live any more.
+                label={atLiveEdge && gameState.status === 'InProgress' ? 'LIVE' : 'MOVE'}
+                onFirst={replay.goToFirst}
+                onLast={replay.goToLast}
+                onNext={replay.stepForward}
+                onPrevious={replay.stepBack}
+                total={replay.lastIndex}
+            />
+            {/*
+              Only while the game is going, and only when the viewer is not at
+              the end of it: there is no live edge to return to in a game that
+              has finished, and a button offering one would be a lie about the
+              board underneath.
+            */}
+            {!atLiveEdge && gameState.status === 'InProgress' ? (
+                <Pressable
+                    accessibilityLabel="Return to the live position"
+                    accessibilityRole="button"
+                    onPress={replay.goToLast}
+                    style={({pressed}) => [styles.returnToLive, pressed && styles.buttonPressed]}
+                >
+                    <Text style={styles.returnToLiveText}>◉ RETURN TO LIVE</Text>
+                </Pressable>
+            ) : null}
+            <Text style={styles.historyHint}>
+                Use the left and right arrow keys to step through the game.
+            </Text>
+        </View>
+    ) : null;
 
     // Nobody is listening on the other side of a bot game, and at a local board
     // the other player is close enough to talk to. Neither has a chat.
@@ -1555,6 +1731,32 @@ export default function GameScreen() {
             wide={isWide}
         />
     );
+    // What to watch next, for the card at the end of a watched game.
+    //
+    // The run is asked first and the event second, which is the order they
+    // answer in: the next game of a series is the same two engines carrying on,
+    // and a tournament's other boards are a different match entirely. Null when
+    // neither has anything up, which takes the button off the card rather than
+    // offering a dead one — and that is the ordinary case for a single game
+    // between two people.
+    const nextSeriesBoard = spectateContext.nextSeriesGame;
+    const nextTournamentBoard = spectateContext.boards.find(
+        (board) => board.gameId !== gameState.gameId,
+    );
+    const nextToWatch = nextSeriesBoard
+        ? {
+            label: nextSeriesBoard.series?.gameNumber
+                ? `Watch game ${nextSeriesBoard.series.gameNumber}`
+                : 'Watch the next game',
+            onWatch: () => watchGame(nextSeriesBoard.gameId),
+        }
+        : nextTournamentBoard
+            ? {
+                label: `Watch ${nextTournamentBoard.redName} vs ${nextTournamentBoard.blueName}`,
+                onWatch: () => watchGame(nextTournamentBoard.gameId),
+            }
+            : null;
+
     const rematch = bot ? restartBotGame : local ? restartLocalGame : null;
     const statusCard = (wide = false) => (
         <StatusCard
@@ -1563,6 +1765,7 @@ export default function GameScreen() {
             gameState={gameState}
             isMyTurn={isMyTurn}
             isSpectating={isSpectating}
+            lookingBack={!atLiveEdge}
             opening={opening}
             onRematch={rematch}
             onReturn={returnToModes}
@@ -1578,6 +1781,15 @@ export default function GameScreen() {
             style={styles.safeArea}
             edges={isWide ? ['top', 'right', 'bottom', 'left'] : ['top', 'right', 'left']}
         >
+            {/*
+              Above the header rather than in the lobby only, because the board is
+              where the message matters most: somebody mid-game is the one person
+              a graceful restart is being run for, and they should be able to see
+              that their game is the thing it is waiting on. Renders nothing when
+              there is nothing to say, and is deliberately outside the measured
+              header — its height is not part of the board's layout arithmetic.
+            */}
+            <ServerBanner />
             <View onLayout={measureHeader} style={styles.header}>
                 <View style={styles.headerInner}>
                     <View style={styles.topBar}>
@@ -1633,9 +1845,12 @@ export default function GameScreen() {
                             context={spectateContext}
                             currentGameId={gameState.gameId}
                             disabled={!isConnected}
-                            onWatch={spectateGame}
+                            endReason={gameState.endReason ?? null}
+                            gameStatus={gameState.status}
+                            onWatch={watchGame}
                             pendingGameId={spectatedGameId}
                             redName={playerName(gameState.redPlayer, 'Red player')}
+                            winner={gameState.winner}
                         />
                     )}
                 </View>
@@ -1683,7 +1898,9 @@ export default function GameScreen() {
                                     {matchNotices}
                                     {gameActions}
 
-                                    {hasTerritory && <TerritoryMeter grid={gameState.grid}/>}
+                                    {moveHistory}
+
+                                    {hasTerritory && <TerritoryMeter grid={visibleGrid}/>}
                                     <ReachPanel tool={reachTool}/>
 
                                     {/*
@@ -1762,10 +1979,11 @@ export default function GameScreen() {
                         >
                             {gameState.status === 'Finished' && !isSpectating ? statusCard() : null}
                             {playerBars}
-                            {hasTerritory && <TerritoryMeter grid={gameState.grid}/>}
+                            {hasTerritory && <TerritoryMeter grid={visibleGrid}/>}
                             <ReachPanel tool={reachTool}/>
                             {matchNotices}
                             {gameActions}
+                            {moveHistory}
                             {gameChat}
                             {gameState.status !== 'Finished' || isSpectating ? statusCard() : null}
                         </ScrollView>
@@ -1782,6 +2000,27 @@ export default function GameScreen() {
                         <Text style={styles.errorText}>{error}</Text>
                         <Text style={styles.errorDismiss}>×</Text>
                     </Pressable>
+                )}
+
+                {/*
+                  The result of a game being watched, said once and in the way.
+                  See SpectateResultModal for why a spectator gets an
+                  interruption where a player does not.
+                */}
+                {isSpectating && (
+                    <SpectateResultModal
+                        blueName={playerName(gameState.bluePlayer, 'Blue')}
+                        endReason={gameState.endReason ?? null}
+                        next={nextToWatch}
+                        onDismiss={() => setDismissedResultFor(gameState.gameId)}
+                        onReturnToLobby={returnToModes}
+                        redName={playerName(gameState.redPlayer, 'Red')}
+                        visible={
+                            gameState.status === 'Finished' &&
+                            dismissedResultFor !== gameState.gameId
+                        }
+                        winner={gameState.winner}
+                    />
                 )}
 
                 {!isSpectating && (
@@ -2161,6 +2400,28 @@ const styles = StyleSheet.create({
     },
     errorText: {flex: 1, color: colors.dangerText, fontSize: 11, fontWeight: '700'},
     errorDismiss: {color: colors.dangerText, fontSize: 19, paddingHorizontal: 4},
+    // The score sheet's own frame. The list and the controls inside it come
+    // from the analysis screen, so this only has to hold them together and
+    // stand off the cards above and below.
+    historyCard: {gap: 4},
+    historyHint: {
+        ...type.meta,
+        color: colors.textFaint,
+        marginTop: 2,
+        textAlign: 'center',
+    },
+    returnToLive: {
+        minHeight: 30,
+        marginTop: 4,
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderRadius: radius.medium,
+        borderWidth: 1,
+        borderColor: colors.liveBorder,
+        backgroundColor: colors.surfaceRaised,
+    },
+    returnToLiveText: {...type.label, color: colors.live},
+
     modalBackdrop: {
         flex: 1,
         alignItems: 'center',

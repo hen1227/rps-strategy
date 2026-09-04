@@ -7,6 +7,7 @@ import BottomTabBar from './BottomTabBar';
 import MobileTopBar from './MobileTopBar';
 import SidebarNav from './SidebarNav';
 import { useBottomInset } from './bottomInset';
+import ServerBanner from './ServerBanner';
 import LiveRail from '@/features/live/LiveRail';
 import { useWideScreen } from '@/hooks/useBoardLayout';
 import { colors } from '@/theme';
@@ -46,11 +47,26 @@ export default function ShellLayout() {
     if (isWide) setBottomInset(0);
   }, [isWide, setBottomInset]);
 
-  const banner = error ? (
-    <View style={styles.banner}>
-      <Banner message={error} onDismiss={clearError} tone="error" />
-    </View>
-  ) : null;
+  // Two strips, and they can both be up: an error is about something this
+  // browser just tried to do, and the server banner is about the server. The
+  // server's goes first, because it is very often the reason for the error
+  // underneath it — a play button that refused because a deploy is in progress
+  // reads as a mystery until the line above it explains itself.
+  const banner = (
+    <>
+      {/*
+        Bare rather than wrapped: it renders nothing at all most of the time, and
+        a padded wrapper around nothing is a blank strip at the top of every page
+        for a feature that fires once a week. It carries its own margins.
+      */}
+      <ServerBanner />
+      {error ? (
+        <View style={styles.banner}>
+          <Banner message={error} onDismiss={clearError} tone="error" />
+        </View>
+      ) : null}
+    </>
+  );
 
   // One tree, not two.
   //

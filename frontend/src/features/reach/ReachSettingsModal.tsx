@@ -41,8 +41,8 @@ const SAFETY_OPTIONS: { value: SafetyRule; label: string }[] = (
 
 const TEMPO_OPTIONS: { value: 'position' | SideColor; label: string }[] = [
   { value: 'position', label: 'FOLLOW GAME' },
-  { value: 'Red', label: 'RED FIRST' },
   { value: 'Blue', label: 'BLUE FIRST' },
+  { value: 'Red', label: 'RED FIRST' },
 ];
 
 const SIDE_OPTIONS = SIDE_COLORS.map((color) => ({ value: color, label: color.toUpperCase() }));

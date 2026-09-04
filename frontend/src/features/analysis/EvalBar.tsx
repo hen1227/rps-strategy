@@ -30,7 +30,21 @@ const badgeScore = (score: number) => {
 };
 
 /**
- * The vertical evaluation bar beside a board: Red fills from the bottom.
+ * The bar's width, in points, for a caller sizing the row it stands in.
+ *
+ * Exported because the openings hero sized its board against a hand-copied
+ * guess at this number, and the two drifted. `box-sizing` is border-box on both
+ * platforms, so this is the whole footprint, borders included.
+ */
+export const EVAL_BAR_WIDTH = 31;
+
+/**
+ * The vertical evaluation bar beside a board: Blue fills from the bottom, the
+ * end of the board Blue is drawn at.
+ *
+ * The score is still Red's, because that is the frame every evaluation in this
+ * app is quoted in; only the geometry follows the board. A bar that filled the
+ * other way would say the winning side is the one at the far end of the screen.
  *
  * `tanh` rather than a linear scale because the bar has to stay readable in
  * both a level position and a decided one, and a linear bar spends its whole
@@ -53,15 +67,15 @@ export default function EvalBar({ height, redScore }: EvalBarProps) {
       accessibilityLabel={`Evaluation ${formatScore(score)} for Red`}
       style={[styles.evalBar, { height }]}
     >
-      <View style={[styles.blueEval, { height: `${blueShare}%` }]}>
-        <Text style={styles.blueEvalSide}>B</Text>
-      </View>
       <View style={[styles.redEval, { height: `${redShare}%` }]}>
         <Text style={styles.redEvalSide}>R</Text>
       </View>
-      <View style={[styles.evalDivider, { top: `${blueShare}%` }]} />
-      <View style={[styles.evalBadge, score < 0 && styles.evalBadgeOnBlue]}>
-        <Text numberOfLines={1} style={[styles.evalValue, score < 0 && styles.evalValueOnBlue]}>
+      <View style={[styles.blueEval, { height: `${blueShare}%` }]}>
+        <Text style={styles.blueEvalSide}>B</Text>
+      </View>
+      <View style={[styles.evalDivider, { top: `${redShare}%` }]} />
+      <View style={[styles.evalBadge, score > 0 && styles.evalBadgeOnRed]}>
+        <Text numberOfLines={1} style={[styles.evalValue, score > 0 && styles.evalValueOnRed]}>
           {badgeScore(score)}
         </Text>
       </View>
@@ -72,25 +86,25 @@ export default function EvalBar({ height, redScore }: EvalBarProps) {
 const styles = StyleSheet.create({
   evalBar: {
     position: 'relative',
-    width: 31,
+    width: EVAL_BAR_WIDTH,
     overflow: 'hidden',
     borderRadius: radius.small,
     borderWidth: 2,
     borderColor: board.frame,
     backgroundColor: board.frame,
   },
-  blueEval: {
+  redEval: {
     width: '100%',
     alignItems: 'center',
     paddingTop: 5,
-    backgroundColor: players.Blue.strong,
+    backgroundColor: players.Red.strong,
   },
-  redEval: {
+  blueEval: {
     width: '100%',
     alignItems: 'center',
     justifyContent: 'flex-end',
     paddingBottom: 5,
-    backgroundColor: players.Red.strong,
+    backgroundColor: players.Blue.strong,
   },
   blueEvalSide: { color: players.Blue.contrast, fontSize: 8, fontWeight: '900' },
   redEvalSide: { color: players.Red.contrast, fontSize: 8, fontWeight: '900' },
@@ -101,6 +115,8 @@ const styles = StyleSheet.create({
     height: 2,
     backgroundColor: evalBar.divider,
   },
+  // The badge sits in whichever half is bigger, which is the bottom half —
+  // Blue's — unless Red is ahead.
   evalBadge: {
     position: 'absolute',
     right: 0,
@@ -109,14 +125,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: 3,
     borderRadius: 4,
-    backgroundColor: evalBar.badgeOnRed,
+    backgroundColor: evalBar.badgeOnBlue,
   },
-  evalBadgeOnBlue: { top: 19, bottom: 'auto', backgroundColor: evalBar.badgeOnBlue },
+  evalBadgeOnRed: { top: 19, bottom: 'auto', backgroundColor: evalBar.badgeOnRed },
   evalValue: {
-    color: evalBar.badgeOnRedText,
+    color: evalBar.badgeOnBlueText,
     fontSize: 7,
     fontWeight: '900',
     fontVariant: ['tabular-nums'],
   },
-  evalValueOnBlue: { color: evalBar.badgeOnBlueText },
+  evalValueOnRed: { color: evalBar.badgeOnRedText },
 });

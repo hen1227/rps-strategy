@@ -9,6 +9,47 @@
 import type { EnginePosition } from '../analysisGame';
 import type { Move, Position } from '@/types/game';
 
+// The modes RPSFish searches, and the reason this list is not open. The engine
+// is nine by nine to its foundations — its boards are `u128` bitmaps over
+// eighty-one squares (`RPSFish/src/position.rs`) and its search prunes on proofs
+// that hold only for the rock-paper-scissors three-cycle — so a mode of another
+// shape or another piece set is not a mode it can be asked about. A mode that is
+// not here is refused by `encodeEnginePosition`, loudly, rather than encoded
+// onto the wrong board.
+//
+// The numbers are the engine's own wire codes, hand-copied from the `Mode`
+// discriminants in `RPSFish/src/model.rs`. They are not indices: 0 belonged to
+// the retired Annihilation mode and stays unused, so a new mode appends rather
+// than repacking.
+export const ENGINE_MODE_CODES: Readonly<Record<string, number>> = {
+  V5: 1,
+  V3: 2,
+  V6: 3,
+};
+
+/** The public explanation for the temporary V6 engine embargo. */
+export const RPSFISH_TOURNAMENT_NOTICE =
+  'RPSFish is disabled for Intransitive until after the official tournament.';
+
+const ENGINE_TOURNAMENT_DISABLED_MODES = new Set(['V6']);
+
+/** Why a known mode cannot be handed to the public engine right now. */
+export const engineUnavailableMessage = (modeId: string | undefined): string | null =>
+  modeId !== undefined && ENGINE_TOURNAMENT_DISABLED_MODES.has(modeId)
+    ? RPSFISH_TOURNAMENT_NOTICE
+    : null;
+
+/**
+ * Whether the public RPSFish build may be used for this mode right now.
+ *
+ * Separate from `isEngineAvailable`, which asks whether the engine can run on
+ * this platform at all. A screen offering analysis, a bot, or a review needs
+ * both, and needs to ask rather than assume: a bot handed a mode the engine
+ * refuses does not fail loudly, it quietly falls back to random legal moves.
+ */
+export const engineSupportsMode = (modeId: string | undefined): boolean =>
+  modeId !== undefined && modeId in ENGINE_MODE_CODES && !engineUnavailableMessage(modeId);
+
 /** Why a search stopped. Anything the engine reports outside this set reads as `unknown`. */
 export type StopReason =
   | 'depth'

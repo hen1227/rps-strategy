@@ -27,6 +27,7 @@ export const endReasonPhrase = (
   ({
     abandonment: 'abandonment',
     annihilation: 'annihilation',
+    corner: 'reaching the corner',
     draw_agreement: 'agreement',
     infiltration: 'infiltration',
     move_limit: 'move limit',

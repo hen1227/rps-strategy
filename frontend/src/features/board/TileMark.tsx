@@ -88,11 +88,13 @@ interface OwnedMarkProps {
   owner: PlayerColor | undefined;
 }
 
+// Each side's mark hugs the edge of the tile nearer its own end of the board,
+// and rank 1 -- Blue's home -- is drawn at the bottom.
 function TerritoryMark({ compact, markColor, owner }: OwnedMarkProps) {
   return (
     <OutlineCorners
       compact={compact}
-      corners={owner === 'Red' ? TOP_CORNERS : BOTTOM_CORNERS}
+      corners={owner === 'Blue' ? BOTTOM_CORNERS : TOP_CORNERS}
       inset={2}
       markColor={markColor}
       quiet
@@ -101,7 +103,7 @@ function TerritoryMark({ compact, markColor, owner }: OwnedMarkProps) {
 }
 
 function GoalMark({ compact, markColor, owner }: OwnedMarkProps) {
-  const edge: VerticalEdge = owner === 'Red' ? 'top' : 'bottom';
+  const edge: VerticalEdge = owner === 'Blue' ? 'bottom' : 'top';
   const firstOffset = compact ? 1 : 3;
   const secondOffset = compact ? 3 : 6;
   const rail = (offset: number): ViewStyle =>

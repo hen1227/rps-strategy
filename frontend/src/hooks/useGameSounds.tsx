@@ -1,5 +1,6 @@
 import { useAudioPlayer } from 'expo-audio';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Platform } from 'react-native';
 
 import { useGameStore } from '@/store/gameStore';
 import type { ActiveGame } from '@/store/types';
@@ -81,8 +82,10 @@ export const getGameSoundForTransition = (
   }
 
   if (next.status === 'Finished') {
-    const reachedBackRank = next.mode?.id === 'V3' && next.endReason === 'infiltration';
-    return reachedBackRank ? 'promote' : 'moveCheck';
+    // Both goal modes end the same way — a piece arriving somewhere — and both
+    // deserve the arrival sound rather than the ordinary one.
+    const reachedGoal = next.endReason === 'infiltration' || next.endReason === 'corner';
+    return reachedGoal ? 'promote' : 'moveCheck';
   }
 
   const captureSound = captureSoundForTransition(previous, next);
@@ -97,8 +100,38 @@ export const getGameSoundForTransition = (
 
 type AudioPlayer = ReturnType<typeof useAudioPlayer>;
 
+const IS_WEB = Platform.OS === 'web';
+
+/**
+ * The `<audio>` element a web player speaks through, where there is one.
+ *
+ * A browser refuses a sound it did not expect — anything before the page has
+ * been touched, and on iOS anything from a clip the player has never started by
+ * hand — by rejecting the promise `play()` hands back. expo-audio's web player
+ * drops that promise, so the refusal lands on nothing and is reported as an
+ * uncaught error: in development, a red screen over the board on the first
+ * `notify` of a game rejoined at page load. Going through the element is the
+ * only way to be there to catch it. Should a later version of expo-audio keep
+ * its element somewhere else, playback falls back to the player's own `play`,
+ * which is where we started.
+ */
+const mediaElementOf = (player: AudioPlayer): HTMLAudioElement | null => {
+  if (!IS_WEB || typeof HTMLAudioElement === 'undefined') return null;
+  const media = (player as unknown as { media?: unknown }).media;
+  return media instanceof HTMLAudioElement ? media : null;
+};
+
 const replay = (player: AudioPlayer) => {
+  const media = mediaElementOf(player);
   try {
+    if (media) {
+      // Unmuted before playing, which is also how a priming pass still in
+      // flight is told that this element now has a sound to make.
+      media.muted = false;
+      media.currentTime = 0;
+      void media.play().catch(() => {});
+      return;
+    }
     if (player.currentTime > 0 || player.playing) {
       Promise.resolve(player.seekTo(0)).catch(() => {});
     }
@@ -106,6 +139,56 @@ const replay = (player: AudioPlayer) => {
   } catch {
     // Audio should never interrupt gameplay if a platform rejects playback.
   }
+};
+
+// The events WebKit counts as the player acting, and so as permission to make
+// a sound. `click` covers a mouse and every pressable in the app, `touchend` a
+// tap, `keydown` a keyboard.
+const GESTURE_EVENTS = ['click', 'touchend', 'keydown'] as const;
+
+/**
+ * Spend the first thing the player does on letting the browser hear the clips.
+ *
+ * iOS grants permission per element rather than per page: a clip never started
+ * inside a gesture stays silent for the whole visit, however much is tapped
+ * afterwards. Starting each of them muted during that first gesture and
+ * rewinding spends the permission without making a sound, and leaves every clip
+ * free to play when the game asks for it.
+ */
+const usePrimedForBrowser = (players: Record<GameSound, AudioPlayer>) => {
+  useEffect(() => {
+    if (!IS_WEB || typeof window === 'undefined') return undefined;
+
+    const prime = () => {
+      for (const type of GESTURE_EVENTS) window.removeEventListener(type, prime, true);
+      for (const player of Object.values(players)) {
+        const media = mediaElementOf(player);
+        if (!media) continue;
+        media.muted = true;
+        void media.play().then(
+          () => {
+            // Stopping only what is still the priming pass: pausing a `play()`
+            // that has yet to begin is itself reported as a failure, and a real
+            // sound may have taken the element over in the meantime.
+            if (!media.muted) return;
+            media.pause();
+            media.currentTime = 0;
+            media.muted = false;
+          },
+          () => {
+            media.muted = false;
+          },
+        );
+      }
+    };
+
+    // Listening as the event travels down, so that a component stopping it on
+    // the way cannot cost the page its one chance to prime.
+    for (const type of GESTURE_EVENTS) window.addEventListener(type, prime, true);
+    return () => {
+      for (const type of GESTURE_EVENTS) window.removeEventListener(type, prime, true);
+    };
+  }, [players]);
 };
 
 const useGameSounds = () => {
@@ -122,15 +205,8 @@ const useGameSounds = () => {
   const notifyPlayer = useAudioPlayer(SOUND_SOURCES.notify);
   const promotePlayer = useAudioPlayer(SOUND_SOURCES.promote);
 
-  useEffect(() => {
-    const sound = getGameSoundForTransition(
-      previousGameState.current,
-      gameState,
-      playerColor,
-    );
-    previousGameState.current = gameState;
-
-    const players: Record<GameSound, AudioPlayer> = {
+  const players = useMemo<Record<GameSound, AudioPlayer>>(
+    () => ({
       capturePaper: capturePaperPlayer,
       captureRock: captureRockPlayer,
       captureScissors: captureScissorsPlayer,
@@ -139,21 +215,31 @@ const useGameSounds = () => {
       moveSelf: moveSelfPlayer,
       notify: notifyPlayer,
       promote: promotePlayer,
-    };
+    }),
+    [
+      capturePaperPlayer,
+      captureRockPlayer,
+      captureScissorsPlayer,
+      moveCheckPlayer,
+      moveOpponentPlayer,
+      moveSelfPlayer,
+      notifyPlayer,
+      promotePlayer,
+    ],
+  );
+
+  usePrimedForBrowser(players);
+
+  useEffect(() => {
+    const sound = getGameSoundForTransition(
+      previousGameState.current,
+      gameState,
+      playerColor,
+    );
+    previousGameState.current = gameState;
 
     if (sound) replay(players[sound]);
-  }, [
-    capturePaperPlayer,
-    captureRockPlayer,
-    captureScissorsPlayer,
-    gameState,
-    moveCheckPlayer,
-    moveOpponentPlayer,
-    moveSelfPlayer,
-    notifyPlayer,
-    playerColor,
-    promotePlayer,
-  ]);
+  }, [gameState, playerColor, players]);
 };
 
 const GameSoundPlayers = () => {

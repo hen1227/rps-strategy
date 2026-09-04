@@ -43,13 +43,17 @@ import {
 } from '@/types/game';
 import type {
   Account,
+  BotBench,
   BotDrain,
   BotPresence,
   Challenge,
   ChatMessage,
   LiveGameSummary,
   ModeCounts,
+  Restriction,
   ServerMessage,
+  ServerNotice,
+  ServerUpdate,
   Tournament,
   TournamentMatchResult,
 } from '@/types/protocol';
@@ -57,6 +61,29 @@ import type {
 // This fallback is visible only before the server catalog arrives. The backend
 // registry remains authoritative and replaces it on connection.
 const BASE_MODES: ModeDefinition[] = [
+  {
+    id: 'V6',
+    shortCode: 'V6',
+    name: 'Intransitive',
+    description: 'Reach their corner.',
+    objective: "Move any piece onto the corner the opponent's army started in.",
+    displayOrder: 1,
+    playable: true,
+    features: ['no_repetition_draw', 'stalemate_loses'],
+    startingPosition: {
+      rows: [
+        '.........',
+        '...RP....',
+        '..RPS....',
+        '.RPS.....',
+        '.PS...sp.',
+        '.....spr.',
+        '....spr..',
+        '....pr...',
+        '.........',
+      ],
+    },
+  },
   {
     id: 'V5',
     shortCode: 'V5',
@@ -246,7 +273,27 @@ export interface LobbyState {
   error: string | null;
   modes: ModeDefinition[];
   engineBots: BotPresence[];
+  /**
+   * The scheduled window in which no engine takes a game, running or coming.
+   *
+   * Held from the server rather than worked out here, even though this client
+   * also knows when the tournament is: the server is what actually refuses the
+   * games, and a page that decided for itself would eventually be the page that
+   * says the ladder is open while every challenge to it bounces.
+   */
+  botBench: BotBench | null;
   botFault: { message?: string; botName?: string } | null;
+  /**
+   * What this account may not do right now, and empty for almost everybody.
+   *
+   * Held so a screen can explain a refusal *before* one happens — a muted
+   * player should see a chat box that says why rather than one that swallows
+   * their message. The server sends it on connect and again the moment a
+   * moderator acts, so nothing here has to poll or expire it: an entry that has
+   * lapsed is replaced by the next message, and `activeRestriction` below is
+   * what checks the deadline in the meantime.
+   */
+  restrictions: Restriction[];
   /**
    * The last graceful shutdown one of this account's own bots reported.
    *
@@ -256,6 +303,45 @@ export interface LobbyState {
    * fact two homes that can disagree.
    */
   lastBotDrain: { botId?: string; botName?: string; drain?: BotDrain } | null;
+  /**
+   * The graceful restart this server is under, or null when it is not under one.
+   *
+   * Held in full rather than as a signal — unlike `lastBotDrain` above, there is
+   * no HTTP resource to go and fetch, and the banner needs the whole of it: the
+   * sentence, the count, and whether the last game has finished.
+   */
+  serverUpdate: ServerUpdate | null;
+  /** The standing announcement, if one is up and this browser has not closed it. */
+  serverNotice: ServerNotice | null;
+  /**
+   * The standing announcement as the *server* holds it, whether or not this
+   * browser has closed the banner.
+   *
+   * Two fields for one notice, which needs justifying. `serverNotice` answers
+   * "should the banner be up", and dismissing empties it — that is its whole
+   * job. This one answers "is there a notice up on the server", and nothing
+   * this browser does to its own banner may change the answer.
+   *
+   * The distinction exists because the host reads their own announcement with
+   * both hats on. An administrator posts a notice, reads it, closes the banner
+   * like anybody else — and at that point the only copy of the fact was gone,
+   * so the admin screen could not tell them a notice was still standing and
+   * they would leave it up until it expired. Which is precisely the failure
+   * mode announcements.go calls out: "a stale banner nobody remembers posting".
+   *
+   * Not expiry-aware: the server stops broadcasting an expired notice but
+   * nothing arrives to say it lapsed, so a reader has to check
+   * `expiresAtUnixMs` against the clock. `standingNotice` in
+   * `noticeSelectors.ts` is that check.
+   */
+  standingNotice: ServerNotice | null;
+  /**
+   * The id of the notice this browser dismissed. Kept so a reconnection — which
+   * re-sends the standing notice on `connection_ready` — does not put a banner
+   * back that somebody has already read and closed. A *new* notice has a new id
+   * and comes back as it should.
+   */
+  dismissedNoticeId: string | null;
   modePlayerCounts: ModeCounts;
   modeQueueCounts: ModeCounts;
   botPlayerCount: number;
@@ -300,6 +386,21 @@ export interface LobbyState {
   isSpectating: boolean;
   spectatedGameId: string | null;
   gameState: ActiveGame | null;
+  /**
+   * The game on the board so far, as PGN, for the move list and the replay
+   * controls beside it.
+   *
+   * A board snapshot is a position and nothing else, so until the server began
+   * sending this there was no history on the wire at all: a spectator who
+   * arrived at move twenty, and a player who refreshed, had no moves to list
+   * and nothing to step back through. It is replayed by the same
+   * `reviewSourceFromPGN` a finished game's review uses — see `useGameHistory`.
+   *
+   * Null for a game the server never sent one for. A bot game and a local game
+   * are two of those, and they write their own from the moves this browser
+   * kept: `botGamePGN` and `localGamePGN`.
+   */
+  livePGN: string | null;
   lastMove: Move | null;
   /**
    * The bonus both clocks just gained, for the player bars to celebrate.
@@ -366,6 +467,7 @@ export interface LobbyActions {
    */
   challengeBot: (botId: string, modeId: ModeID, seat?: SeatChoice) => void;
   dismissBotFault: () => void;
+  dismissServerNotice: () => void;
   spectateGame: (gameId: string) => void;
   loadTournaments: () => Promise<void>;
   applyTournamentUpdate: (tournament: Tournament) => void;
@@ -403,8 +505,14 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
   // botPlayerCount below, which counts people practising against a browser
   // bot and means very nearly the opposite thing.
   engineBots: [],
+  botBench: null,
   botFault: null,
+  restrictions: [],
   lastBotDrain: null,
+  serverUpdate: null,
+  serverNotice: null,
+  standingNotice: null,
+  dismissedNoticeId: null,
   modePlayerCounts: {},
   // Players waiting in matchmaking right now, per mode. The bot board watches
   // this so someone practising against a bot still hears the door knock.
@@ -429,6 +537,7 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
   isSpectating: false,
   spectatedGameId: null,
   gameState: null,
+  livePGN: null,
   lastMove: null,
   timeExtension: null,
   selectedTile: null,
@@ -573,6 +682,21 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
               message.pushEnabled ?? false,
             ),
             modeReadyCounts: message.modeReadyCounts ?? state.modeReadyCounts,
+            // Both re-established on every reconnection rather than remembered,
+            // because the interesting case is the one where they changed while
+            // this browser was away: a deploy that started, or one that finished
+            // and left the banner asserting something no longer true. An older
+            // server sends neither field, and the fallbacks leave both alone.
+            serverUpdate: message.update
+              ? (message.update.updating ? message.update : null)
+              : state.serverUpdate,
+            serverNotice:
+              message.notice && message.notice.id !== state.dismissedNoticeId
+                ? message.notice
+                : null,
+            // Regardless of dismissal: this is what the server is holding, not
+            // what this browser is showing.
+            standingNotice: message.notice?.text ? message.notice : null,
             challengeNotice: lostQueue
               ? 'Your search ended while you were offline. Press play to start again.'
               : state.challengeNotice,
@@ -582,6 +706,8 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
             // signed in, that is their account rather than this browser's.
             accountId: message.account?.userId ?? state.accountId,
             engineBots: message.engineBots ?? [],
+            botBench: message.botBench ?? null,
+            restrictions: message.restrictions ?? [],
             gameSessionId,
             spectatedGameId,
             modes,
@@ -662,6 +788,18 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
         // already current and a reconnect would only drop the game in progress.
         if (message.account) set({ account: message.account });
         break;
+      case 'restrictions':
+        // Only ever about the receiver. Replaced wholesale rather than merged:
+        // the server sends the complete set in force, so an absent kind means
+        // lifted, and merging would leave a lifted mute on screen for ever.
+        set({ restrictions: message.restrictions ?? [] });
+        break;
+      case 'moderator_notice':
+        // Its own message type rather than an error, because it is not this
+        // client's mistake — but it goes in the same banner, which is the one
+        // place on every screen that says what just happened to you.
+        set({ error: message.message ?? 'A moderator acted on this game.' });
+        break;
       case 'live_games':
         set({ liveGames: message.liveGames ?? [] });
         break;
@@ -674,7 +812,15 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
         set({ tournaments: message.tournaments ?? [] });
         break;
       case 'engine_bots':
-        set({ engineBots: message.engineBots ?? [] });
+        // The bench travels with the roster it explains, so the two cannot be
+        // briefly out of step — a bot marked `benched` with no bench to point
+        // at would be an engine that is unavailable for no stated reason.
+        // Kept when absent, because an older server sends no such field and
+        // dropping it would be inventing an answer on its behalf.
+        set((state) => ({
+          engineBots: message.engineBots ?? [],
+          botBench: message.botBench ?? state.botBench,
+        }));
         break;
       case 'bot_unavailable':
         set({ error: message.message ?? 'That bot is not available right now.' });
@@ -689,6 +835,23 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
             botName: message.botName,
             drain: message.drain,
           },
+        });
+        break;
+      case 'server_update':
+        // Sent when a drain starts, when it is called off, and again when the
+        // last game ends. `updating: false` is the cancellation, and takes the
+        // banner down rather than leaving it to time out.
+        set({ serverUpdate: message.update?.updating ? message.update : null });
+        break;
+      case 'server_notice':
+        set((state) => {
+          const notice = message.notice;
+          // Empty text is how a cleared notice arrives — one message shape for
+          // posting and for taking down.
+          if (!notice?.text) return { serverNotice: null, standingNotice: null };
+          // A notice this browser has already closed still counts as standing.
+          if (notice.id === state.dismissedNoticeId) return { standingNotice: notice };
+          return { serverNotice: notice, standingNotice: notice };
         });
         break;
       case 'bot_fault':
@@ -735,6 +898,7 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
           isSpectating: false,
           spectatedGameId: null,
           gameState: null,
+          livePGN: null,
           lastMove: null,
           gameSessionId: clearPersistedGame(),
           firstMoveDeadline: null,
@@ -836,6 +1000,7 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
           isSpectating: false,
           spectatedGameId: null,
           gameState: message.gameState,
+          livePGN: message.pgn ?? null,
           lastMove: null,
           gameSessionId,
           firstMoveDeadline: message.firstMoveDeadlineUnixMs || null,
@@ -863,6 +1028,7 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
           isSpectating: false,
           spectatedGameId: null,
           gameState: message.gameState,
+          livePGN: message.pgn ?? null,
           lastMove: null,
           gameSessionId,
           firstMoveDeadline: message.firstMoveDeadlineUnixMs || null,
@@ -886,6 +1052,7 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
           isSpectating: true,
           spectatedGameId: message.gameState?.gameId ?? null,
           gameState: message.gameState,
+          livePGN: message.pgn ?? null,
           lastMove: null,
           gameSessionId: null,
           connectionStatus: 'connected',
@@ -906,6 +1073,7 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
           isSpectating: false,
           spectatedGameId: null,
           gameState: null,
+          livePGN: null,
           lastMove: null,
           gameSessionId: clearPersistedGame(),
           connectionStatus: 'connected',
@@ -924,6 +1092,7 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
           isSpectating: false,
           spectatedGameId: null,
           gameState: null,
+          livePGN: null,
           lastMove: null,
           selectedTile: null,
           validMoves: [],
@@ -954,6 +1123,11 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
         const bonusMs = grantedTimeExtension(current.gameState, message.gameState);
         set((state) => ({
           gameState: message.gameState,
+          // Kept rather than cleared when a message arrives without one. A
+          // server that no longer holds the record — a game whose session has
+          // been retired — sends no history, and dropping the one we have would
+          // empty the move list at the moment somebody wants to read it.
+          livePGN: message.pgn ?? state.livePGN,
           timeExtension: bonusMs === null ? state.timeExtension : { at: Date.now(), bonusMs },
           firstMoveDeadline: awaitingFirstMove ? state.firstMoveDeadline : null,
           // The result does not end the session: the chat room stays open
@@ -996,6 +1170,7 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
             isSpectating: false,
             spectatedGameId: null,
             gameState: null,
+            livePGN: null,
             lastMove: null,
             selectedTile: null,
             validMoves: [],
@@ -1174,6 +1349,18 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
   },
 
   dismissBotFault: () => set({ botFault: null }),
+
+  // Remembered by id, so the banner stays down across the reconnection that
+  // follows it rather than reappearing the moment the socket comes back.
+  //
+  // `standingNotice` is deliberately untouched: closing the banner is a
+  // statement about this browser, not about the server, and the admin screen
+  // reads the latter. See the field's own note.
+  dismissServerNotice: () =>
+    set((state) => ({
+      serverNotice: null,
+      dismissedNoticeId: state.serverNotice?.id ?? state.dismissedNoticeId,
+    })),
 
   spectateGame: (gameId) => {
     if (!gameId || !send(get().socket, { type: 'spectate_game', gameId })) {
@@ -1381,6 +1568,7 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
       isSpectating: false,
       spectatedGameId: null,
       gameState: null,
+      livePGN: null,
       lastMove: null,
       gameSessionId: null,
       selectedTile: null,

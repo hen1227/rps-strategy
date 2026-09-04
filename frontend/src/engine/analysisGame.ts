@@ -6,9 +6,12 @@
 // `backend/internal/game`, and the comments mark the places where matching the
 // server exactly is the whole point.
 
+import { goalEndReason, goalOwnerAt } from './goals';
+import { repetitionDraws, stalemateLoses } from './modeRules';
 import { positionKey } from './positionKey';
 import {
   BOARD_SIZE,
+  FIRST_TO_MOVE,
   boardHeight,
   boardWidth,
   isOnBoard,
@@ -164,7 +167,7 @@ export const createAnalysisGame = (
   mode: ModeDefinition,
   startingPosition: StartingPosition | undefined = mode.startingPosition,
 ): AnalysisGame =>
-  newGame(mode, gridFromRows(startingPosition?.rows, alphabetOf(mode)), 'Red');
+  newGame(mode, gridFromRows(startingPosition?.rows, alphabetOf(mode)), FIRST_TO_MOVE);
 
 /**
  * The letters this mode's layouts are written with.
@@ -208,12 +211,12 @@ export const startingPositionFromGrid = (
 export const createAnalysisGameFrom = (
   mode: ModeDefinition,
   grid: Grid,
-  currentTurn: PlayerColor = 'Red',
+  currentTurn: PlayerColor = FIRST_TO_MOVE,
 ): AnalysisGame =>
   newGame(
     mode,
     grid.map((row) => row.map((tile) => ({ ...tile }))),
-    currentTurn === 'Blue' ? 'Blue' : 'Red',
+    currentTurn === 'Neutral' ? FIRST_TO_MOVE : currentTurn,
   );
 
 /**
@@ -349,11 +352,14 @@ export const applyAnalysisMove = (
   ) {
     decide(mover, 'annihilation');
   } else if (
-    game.mode.id === 'V3' &&
-    ((mover === 'Red' && to.y === 0) ||
-      (mover === 'Blue' && to.y === boardHeight(grid) - 1))
+    goalOwnerAt(game.mode.id, to.x, to.y, {
+      columns: boardWidth(grid),
+      rows: boardHeight(grid),
+    }) === mover
   ) {
-    decide(mover, 'infiltration');
+    // Non-null whenever `goalOwnerAt` named a side: both come from the same
+    // pair of modes in `./goals`.
+    decide(mover, goalEndReason(game.mode.id) ?? 'game_rule');
   } else if (game.mode.id === 'V5') {
     const territory = territoryCounts(grid);
     if (territory.neutral === 0) {
@@ -368,12 +374,13 @@ export const applyAnalysisMove = (
     }
   }
 
-  // Stalemate is a draw in every mode. The server and RPSFish both score a
-  // player with no legal move as a shared result, so a mode needs no
-  // annihilation rule to handle a wiped-out army.
+  // Being unable to move ends the game in every mode; who it belongs to is the
+  // mode's to say. A shared result is what lets a mode with no annihilation
+  // rule handle a wiped-out army; a loss is what stops a race being sat out.
+  // See `./modeRules`, and `adjudicateStalemateLocked` in the backend.
   if (next.status === 'InProgress' && !hasAnyMove(next)) {
     next.status = 'Finished';
-    next.winner = 'Neutral';
+    next.winner = stalemateLoses(game.mode.id) ? mover : 'Neutral';
     next.endReason = 'stalemate';
   }
 
@@ -381,6 +388,7 @@ export const applyAnalysisMove = (
   next.repetitionHistory = [...(game.repetitionHistory ?? [repetitionKey(game)]), key];
   if (
     next.status === 'InProgress' &&
+    repetitionDraws(game.mode.id) &&
     next.repetitionHistory.filter((candidate) => candidate === key).length >= 3
   ) {
     next.status = 'Finished';

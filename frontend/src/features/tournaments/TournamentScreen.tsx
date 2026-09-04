@@ -18,17 +18,16 @@ import {
   Banner,
   EmptyState,
   GhostButton,
+  GhostLink,
   LabeledInput,
   Panel,
   PrimaryButton,
   SectionHeading,
 } from '@/ui/primitives';
+import { useWatchGame } from '@/hooks/useWatchGame';
 import { useGameStore } from '@/store/gameStore';
-import {
-  createTournament,
-  setMatchResult,
-  startTournament,
-} from '@/store/api/tournaments';
+import { links } from '@/navigation/links';
+import { setMatchResult, startTournament } from '@/store/api/tournaments';
 import { useAdminToken } from '@/hooks/useAdminToken';
 import { enrollBotsInTournament } from '@/store/api/bots';
 import {
@@ -41,7 +40,6 @@ import {
   signupFor,
   statusOf,
 } from '@/store/tournamentSelectors';
-import type { ModeID } from '@/types/game';
 import type {
   Tournament,
   TournamentMatch,
@@ -51,13 +49,12 @@ import { colors, contentWidth, radius } from '@/theme';
 
 export default function TournamentScreen() {
   const accountId = useGameStore((state) => state.accountId);
-  const modes = useGameStore((state) => state.modes);
   const tournaments = useGameStore((state) => state.tournaments);
   const connectionStatus = useGameStore((state) => state.connectionStatus);
   const spectatedGameId = useGameStore((state) => state.spectatedGameId);
   const loadTournaments = useGameStore((state) => state.loadTournaments);
   const applyTournamentUpdate = useGameStore((state) => state.applyTournamentUpdate);
-  const spectateGame = useGameStore((state) => state.spectateGame);
+  const watchGame = useWatchGame();
   const readyForTournamentMatch = useGameStore((state) => state.readyForTournamentMatch);
   const withdrawFromTournamentMatch = useGameStore(
     (state) => state.withdrawFromTournamentMatch,
@@ -79,14 +76,9 @@ export default function TournamentScreen() {
   const [adminPanelOpen, setAdminPanelOpen] = useState(false);
   const admin = useAdminToken();
   const [adminTokenDraft, setAdminTokenDraft] = useState('');
-  const [tournamentName, setTournamentName] = useState('');
-  const [tournamentModeId, setTournamentModeId] = useState<ModeID | null>(null);
+  // The name and mode drafts that used to be here went with the create form —
+  // see the host panel below, which now points at the admin screen's builder.
 
-  const playableModes = useMemo(
-    () => modes.filter((mode) => mode.playable !== false),
-    [modes],
-  );
-  const selectedModeId = tournamentModeId ?? playableModes[0]?.id ?? null;
   // Two lists, because they answer different questions: what is happening, and
   // what happened. Mixing them made a finished event look like something to
   // sign up for.
@@ -154,15 +146,6 @@ export default function TournamentScreen() {
       setError(admin.error);
     }
     setAdminTokenDraft('');
-  };
-
-  const createNewTournament = async () => {
-    const created = await runAction(
-      'create',
-      () => createTournament(adminToken, tournamentName.trim(), selectedModeId),
-      'Tournament created. Registration is open.',
-    );
-    if (created) setTournamentName('');
   };
 
   const beginTournament = () =>
@@ -256,47 +239,20 @@ export default function TournamentScreen() {
                     <View style={styles.unlockedDot} />
                     <Text style={styles.unlockedText}>Admin commands unlocked</Text>
                   </View>
-                  <LabeledInput
-                    label="TOURNAMENT NAME"
-                    maxLength={80}
-                    onChangeText={setTournamentName}
-                    placeholder="Friday Night Open"
-                    value={tournamentName}
-                  />
-                  <Text style={styles.inputLabel}>GAME MODE</Text>
-                  <View style={styles.modeChips}>
-                    {playableModes.map((mode) => {
-                      const isSelected = selectedModeId === mode.id;
-                      return (
-                        <Pressable
-                          accessibilityRole="radio"
-                          accessibilityState={{ checked: isSelected }}
-                          key={mode.id}
-                          onPress={() => setTournamentModeId(mode.id)}
-                          style={({ pressed }) => [
-                            styles.modeChip,
-                            isSelected && styles.modeChipSelected,
-                            pressed && styles.pressed,
-                          ]}
-                        >
-                          <Text
-                            style={[
-                              styles.modeChipText,
-                              isSelected && styles.modeChipTextSelected,
-                            ]}
-                          >
-                            {mode.name}
-                          </Text>
-                        </Pressable>
-                      );
-                    })}
-                  </View>
+                  <Text style={styles.helpText}>
+                    Creating an event, and everything about how it is run — the format,
+                    who may enter, the clock, the field cap — lives on the admin screen
+                    now. An event is written down as a draft there and only appears here
+                    once it is published, so a half-finished one is never in front of
+                    anybody. What is left on this page is the match-day half: starting a
+                    published event, enrolling the engines, and recording results while
+                    you watch.
+                  </Text>
                   <View style={styles.adminSubmit}>
-                    <PrimaryButton
-                      disabled={isBusy || !tournamentName.trim() || !selectedModeId}
-                      label="CREATE TOURNAMENT"
-                      loading={busyAction === 'create'}
-                      onPress={createNewTournament}
+                    <GhostLink
+                      href={links.admin()}
+                      label="OPEN THE TOURNAMENT BUILDER"
+                      tone="accent"
                     />
                   </View>
                 </>
@@ -398,7 +354,10 @@ export default function TournamentScreen() {
                 {selected.status === 'registration' && !signup && (
                   <View style={styles.signupSection}>
                     <SectionHeading eyebrow="ENTER THE EVENT" title="Player signup" />
-                    <TournamentSignupForm tournamentId={selected.tournamentId} />
+                    <TournamentSignupForm
+                      requireDiscord={selected.requireDiscord}
+                      tournamentId={selected.tournamentId}
+                    />
                   </View>
                 )}
 
@@ -471,7 +430,7 @@ export default function TournamentScreen() {
                               onPlay={() =>
                                 readyForTournamentMatch(selected.tournamentId, match.matchId)
                               }
-                              onWatch={(gameId) => spectateGame(gameId)}
+                              onWatch={watchGame}
                               onWithdraw={() =>
                                 withdrawFromTournamentMatch(
                                   selected.tournamentId,

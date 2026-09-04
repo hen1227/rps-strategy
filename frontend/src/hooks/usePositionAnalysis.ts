@@ -2,7 +2,11 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { positionSignature } from '@/engine/gameAnalysis';
 import { enginePosition, type PositionLike } from '@/engine/analysisGame';
-import { analyzePosition, type RequestOptions } from '@/engine/rpsfish/client';
+import {
+  analyzePosition,
+  engineUnavailableMessage,
+  type RequestOptions,
+} from '@/engine/rpsfish/client';
 import type { Analysis, SearchLimits } from '@/engine/rpsfish/protocol';
 
 // What the engine thinks of the position on screen *right now*.
@@ -54,6 +58,7 @@ export const usePositionAnalysis = ({
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
   const [status, setStatus] = useState<SearchStatus>('idle');
   const [error, setError] = useState<string | null>(null);
+  const unavailable = engineUnavailableMessage(position?.mode.id);
 
   // Callers rebuild `history` every render, so the effect keys off what the
   // engine would actually be asked rather than off array identity. Position
@@ -73,6 +78,12 @@ export const usePositionAnalysis = ({
   latest.current = { position, history, limits };
 
   useEffect(() => {
+    if (unavailable) {
+      setAnalysis(null);
+      setStatus('error');
+      setError(unavailable);
+      return undefined;
+    }
     if (!enabled || !lineKey) {
       setAnalysis(null);
       setStatus('idle');
@@ -107,7 +118,7 @@ export const usePositionAnalysis = ({
       });
 
     return () => controller.abort();
-  }, [enabled, limitsKey, lineKey]);
+  }, [enabled, limitsKey, lineKey, unavailable]);
 
   return { analysis, status, error };
 };

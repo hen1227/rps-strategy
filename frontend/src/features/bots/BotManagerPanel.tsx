@@ -315,18 +315,10 @@ export default function BotManagerPanel() {
         ) : null}
       </View>
       <Text style={styles.help}>
-        These switches take effect immediately, but rpsbot.conf on your machine re-applies
-        its own values the next time the bot restarts. Edit the file for a lasting change.
-        The picture comes from the same file: point its icon line at a square PNG of at
-        most 128×128 and restart the bot.
+        These are overridden by the bot's configuration file!
       </Text>
       <Text style={styles.help}>
-        FINISH AND STOP takes a bot out of play without ending the game it is in:
-        it is offered nothing new, finishes the game on the board, the current pair of any
-        series, and every match of a tournament that has started, and then stops. PAUSE is
-        the same but leaves it connected and idle. Both last until the bot restarts, so
-        starting it again is all it takes to put it back in play. Ctrl-C on your own machine
-        does the same thing — press it twice to stop immediately.
+        FINISH AND STOP waits until the bot has finished all games it has already accepted, then stops it. PAUSE stops accepting any new games.
       </Text>
     </Panel>
   );

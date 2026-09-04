@@ -10,12 +10,75 @@
 /** A line of play, as move notation, from the opening position. */
 export type OpeningLine = string[];
 
-/** A named line, as published by a curator. */
+/** Who named a line. See `OpeningNameCurator` in the backend. */
+export type OpeningNameSource = 'curator' | 'player';
+
+/** A named line. */
 export interface OpeningName {
   modeId: string;
   line: OpeningLine;
   name: string;
   updatedAtUnixMs?: number;
+  /**
+   * Absent on a payload from an older server, which is why nothing here
+   * branches on it without a default: an unlabelled name is the book's own.
+   */
+  source?: OpeningNameSource;
+  authorUserId?: string;
+  authorUsername?: string;
+}
+
+/**
+ * How many plies of a line a player may name.
+ *
+ * Mirrors `persistence.PlayerOpeningNameLimit`. Duplicated rather than fetched
+ * because the form has to disable itself before it can ask anything, and the
+ * server refuses the same length regardless -- so this being wrong costs a
+ * misleading hint, not a bad write.
+ */
+export const PLAYER_NAME_PLY_LIMIT = 6;
+
+/** Why a certified opening stops where it does. */
+export type OpeningCertaintyStop =
+  | 'plies'
+  | 'indifferent'
+  | 'shallow'
+  | 'frontier'
+  | 'decisive'
+  | 'repetition';
+
+/** One opening RPSFish will stand behind, and how far. */
+export interface CertifiedOpening {
+  line: OpeningLine;
+  /** Rank among the book's distinct first moves; 1 is its best. */
+  rank: number;
+  value: number;
+  stop: OpeningCertaintyStop;
+  /** How many replies tied at the stopping position; 0 unless indifferent. */
+  alternatives: number;
+  /** The shallowest search along the line. */
+  depth: number;
+}
+
+/** The bar the certified openings were measured against. */
+export interface OpeningCertainty {
+  depth: number;
+  plies: number;
+  minimumPlies: number;
+  openings: number;
+}
+
+/** One page of the browse index, with the counts behind it. */
+export interface OpeningNamePage {
+  names: OpeningName[];
+  /** How many names match the filter. */
+  total: number;
+  /**
+   * The whole mode's counts by source, regardless of the filter, so a screen
+   * can say "42 book names, 380 named by players" while showing one of them.
+   */
+  curator: number;
+  player: number;
 }
 
 /** A name somebody has proposed but nobody has published yet. */
@@ -343,7 +406,15 @@ export const openingOfGame = (
   // first that is not. The line itself is the answer to neither, and is here
   // only so this cannot return something that is not a line.
   const subject = named ?? wants ?? line;
-  return { line: subject, name, title: naming.titleFor(subject), wants };
+  return {
+    line: subject,
+    name,
+    title: naming.titleFor(subject),
+    // A prompt is only worth showing for a line somebody can actually name.
+    // Past PLAYER_NAME_PLY_LIMIT the server refuses, so offering it here would
+    // walk a player to a form that cannot be submitted.
+    wants: wants && wants.length <= PLAYER_NAME_PLY_LIMIT ? wants : null,
+  };
 };
 
 export type OpeningKind = 'Book' | 'Opening' | 'Defense' | 'Variation';
@@ -404,6 +475,16 @@ export interface OpeningBookMeta {
   mainLine: OpeningLine;
   /** The openings good enough to be worth having before the first tap. */
   featured: OpeningLine[];
+  /**
+   * The openings the engine will stand behind, each already cut at the ply
+   * where that stops being true.
+   *
+   * An empty list is a real answer and the page says so rather than falling
+   * back to the old behaviour of showing the best few lines regardless: it
+   * means this scan has not separated the mode's openings from each other.
+   */
+  certified?: CertifiedOpening[];
+  certainty?: OpeningCertainty;
   updatedAtUnixMs?: number;
 }
 
@@ -447,7 +528,14 @@ export const seedOpeningCache = (
   for (const position of bootstrap.featuredPositions ?? []) byKey.set(position.key, position);
 
   cache.set(lineKey([]), bootstrap.root);
-  for (const featured of bootstrap.featured ?? []) {
+  // The certified openings first, because they are what the screen leads with
+  // and so the ones that must be instant. The server prefetches their
+  // positions for exactly this walk.
+  const lines = [
+    ...(bootstrap.certified ?? []).map((opening) => opening.line),
+    ...(bootstrap.featured ?? []),
+  ];
+  for (const featured of lines) {
     let node: OpeningNodeView | undefined = bootstrap.root;
     const walked: string[] = [];
     for (const notation of featured) {

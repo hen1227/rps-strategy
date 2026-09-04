@@ -22,6 +22,18 @@ import type { Move } from '@/types/game';
  */
 export { isEngineAvailable };
 
+/**
+ * Whether RPSFish knows a mode's rules. See `protocol.ts`.
+ *
+ * Re-exported here for the same reason as `isEngineAvailable`: a screen asks
+ * the engine's own module, not a list of its own.
+ */
+export {
+  RPSFISH_TOURNAMENT_NOTICE,
+  engineSupportsMode,
+  engineUnavailableMessage,
+} from './protocol';
+
 export const ANALYSIS_PRESETS = {
   standard: {
     maxDepth: 8,

@@ -140,6 +140,11 @@ export default function MyBotsScreen() {
             href={links.botProtocol()}
             title="The engine protocol"
           />
+          <LinkRow
+            detail="How a stored game is written down: the PGN record, and the FEN inside it."
+            href={links.botNotation()}
+            title="Records and notation"
+          />
         </View>
       </Panel>
     </ScreenShell>

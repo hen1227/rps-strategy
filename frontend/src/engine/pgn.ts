@@ -11,9 +11,11 @@
 // browser's own move list. That is what lets one review screen serve both.
 
 import {
+  FIRST_TO_MOVE,
   MAX_BOARD_SIDE,
   MAX_BOARD_TILES,
   MIN_BOARD_SIDE,
+  opposingColor,
   type GameEndReason,
   type GameStatus,
   type Grid,
@@ -40,7 +42,44 @@ export type GameResult =
   | typeof RESULT_DRAW
   | typeof RESULT_UNFINISHED;
 
-export const GENERATOR = 'rps-strategy-pgn/1';
+/**
+ * The numbered dialects this reads, which differ in one thing: what `12.`
+ * means.
+ *
+ * Dialect 1 numbered move pairs by colour, so `12.` was always Red — the same
+ * thing as numbering them by who opened, right up until Blue became the side
+ * that opens. Dialect 2 numbers them by the opener, so `1.` is the first move
+ * of the game in every file, the way it is in chess. Only a game the
+ * non-opening side began reads differently under the two, which is exactly the
+ * archived game this has to keep replaying.
+ *
+ * Mirrors `dialectOf` in `backend/internal/notation/pgn.go`.
+ */
+const DIALECT_BY_COLOR = 1;
+const DIALECT_BY_OPENER = 2;
+
+export const GENERATOR = `rps-strategy-pgn/${DIALECT_BY_OPENER}`;
+
+/**
+ * The dialect a file declares, or the current one when it declares none: every
+ * file this project has ever written carries a Generator tag, so one without it
+ * was written by hand and means what a reader would mean today.
+ */
+const dialectOf = (generator: string | undefined) => {
+  const version = Number.parseInt(String(generator ?? '').split('/')[1] ?? '', 10);
+  return Number.isFinite(version) ? version : DIALECT_BY_OPENER;
+};
+
+/**
+ * The side that had the move on the board a file starts from, which is what
+ * `1.` names. Read off the file's own FEN, and the standard opener when there
+ * is no FEN to read.
+ */
+const openingSide = (fen: string | undefined): SideColor => {
+  if (!fen) return FIRST_TO_MOVE;
+  const turn = TURN_CODES[fen.trim().split(/\s+/)[1] ?? ''];
+  return turn === 'Red' || turn === 'Blue' ? turn : FIRST_TO_MOVE;
+};
 
 const TAG_PATTERN = /^\[([A-Za-z0-9_]+)\s+"((?:[^"\\]|\\.)*)"\]$/;
 const MOVE_PATTERN = /^([RPS])([a-i][1-9])([-x])([RPS]?)([a-i][1-9])(#?)$/;
@@ -518,7 +557,14 @@ export const parsePGN = (text: string | null | undefined): ParsedPGN => {
   const events: PGNEvent[] = [];
   let result: GameResult = RESULT_UNFINISHED;
   let pendingMove: PGNMoveEvent | null = null;
-  let color: SideColor = 'Red';
+  // What a bare `12.` names in this file, which the dialect decides. The
+  // starting colour is the same answer for a file whose first token is a move
+  // number, which every file this project writes is.
+  const numbered =
+    dialectOf(lookup.get('Generator')) <= DIALECT_BY_COLOR
+      ? 'Red'
+      : openingSide(lookup.get('FEN'));
+  let color: SideColor = numbered;
 
   const flush = () => {
     if (pendingMove) events.push(pendingMove);
@@ -545,10 +591,10 @@ export const parsePGN = (text: string | null | undefined): ParsedPGN => {
       result = token as GameResult;
       continue;
     }
-    const numbered = NUMBER_PATTERN.exec(token);
-    if (numbered) {
+    const marker = NUMBER_PATTERN.exec(token);
+    if (marker) {
       flush();
-      color = numbered[2] ? 'Blue' : 'Red';
+      color = marker[2] ? opposingColor(numbered) : numbered;
       continue;
     }
     flush();
@@ -607,6 +653,7 @@ const ADJUDICATED_BY_A_MOVE = new Set<string>([
   'annihilation',
   'territory',
   'infiltration',
+  'corner',
   'repetition',
   'stalemate',
   'move_limit',
@@ -647,9 +694,14 @@ export const encodePGN = ({
     .join('\n');
 
   const tokens: string[] = [];
+  // A move pair is the opener's move and the reply, so the opener takes the
+  // `12.` and the other side the `12...` that closes the pair.
+  const opener = openingSide(
+    tags.find((tag) => tag.name === 'FEN')?.value as string | undefined,
+  );
   let moveNumber = 1;
   moves.forEach((move, index) => {
-    tokens.push(move.player === 'Blue' ? `${moveNumber++}...` : `${moveNumber}.`);
+    tokens.push(move.player === opener ? `${moveNumber}.` : `${moveNumber++}...`);
     const endsGame =
       index === moves.length - 1 && Boolean(endReason) && ADJUDICATED_BY_A_MOVE.has(endReason ?? '');
     tokens.push(formatMove(move, endsGame));

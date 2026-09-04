@@ -3,10 +3,13 @@ import type {
   OpeningBookBootstrap,
   OpeningLine,
   OpeningName,
+  OpeningNamePage,
+  OpeningNameSource,
   OpeningNameSuggestion,
   OpeningNamingInput,
   OpeningNodeResponse,
 } from '@/engine/openingBook';
+import type { OpeningCohort, OpeningStatsNode } from '@/engine/openingStats';
 import type { ModeID } from '@/types/game';
 
 const request = apiClient('opening-book server');
@@ -115,3 +118,63 @@ export const rejectOpeningNameSuggestion = (
     )}`,
     { method: 'DELETE', token: adminToken, what: 'Turning down the name' },
   );
+
+/**
+ * Name a line, published immediately.
+ *
+ * Not a suggestion: the line is checked against the *rules* rather than
+ * against the book, so an opening RPSFish never analyzed can be named -- which
+ * is most of the interesting ones. A 409 means somebody named it first, and
+ * the caller's move then is to suggest an alternative.
+ */
+export const nameOpeningLine = (modeId: ModeID, line: OpeningLine, name: string) =>
+  request<OpeningName>(`/api/openings/${modePath(modeId)}/names`, {
+    method: 'POST',
+    body: { line, name },
+    what: 'Naming the opening',
+  });
+
+/**
+ * The searchable index of every named opening.
+ *
+ * The book page leads with the engine's certified lines and does not list
+ * player names beside them, so this is how they stay findable rather than
+ * merely stored.
+ */
+export const browseOpeningNames = (
+  modeId: ModeID,
+  options: { source?: OpeningNameSource; query?: string; limit?: number; offset?: number } = {},
+) => {
+  const parameters = new URLSearchParams();
+  if (options.source) parameters.set('source', options.source);
+  if (options.query) parameters.set('q', options.query);
+  if (options.limit) parameters.set('limit', String(options.limit));
+  if (options.offset) parameters.set('offset', String(options.offset));
+  const query = parameters.toString();
+  return request<OpeningNamePage>(
+    `/api/openings/${modePath(modeId)}/names/browse${query ? `?${query}` : ''}`,
+    { what: 'Loading named openings' },
+  );
+};
+
+/**
+ * What people play, compiled from the archive daily.
+ *
+ * With no line this is the whole condensed dataset for a mode -- totals, the
+ * first-move breakdown with a share on each, and the most played lines -- in
+ * one request. A 404 means no compile has run yet, which reads differently
+ * from a compile that found no games and is why the caller is told apart.
+ */
+export const getOpeningStats = (
+  modeId: ModeID,
+  options: { cohort?: OpeningCohort; line?: OpeningLine } = {},
+) => {
+  const parameters = new URLSearchParams();
+  if (options.cohort) parameters.set('cohort', options.cohort);
+  if (options.line?.length) parameters.set('line', options.line.join(','));
+  const query = parameters.toString();
+  return request<OpeningStatsNode>(
+    `/api/openings/${modePath(modeId)}/stats${query ? `?${query}` : ''}`,
+    { what: 'Loading what people play' },
+  );
+};

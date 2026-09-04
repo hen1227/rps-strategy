@@ -47,7 +47,13 @@ function SessionBridge() {
   const pathname = usePathname();
   const connect = useGameStore((state) => state.connect);
   const loadTournaments = useGameStore((state) => state.loadTournaments);
-  const gameId = useGameStore((state) => state.gameState?.gameId ?? null);
+  // A game of *our own*, which is the only kind that takes over the screen.
+  // A spectated game is also a `gameState`, and reading this as "any board in
+  // the store" is what sent every watcher of a live game to `/play`: the one
+  // page the watch screen is not.
+  const gameId = useGameStore((state) =>
+    state.isSpectating ? null : (state.gameState?.gameId ?? null),
+  );
   const gameFinished = useGameStore((state) => state.gameState?.status === 'Finished');
   const sessionToken = useGameStore((state) => state.sessionToken);
   const detectPush = usePushStore((state) => state.detect);

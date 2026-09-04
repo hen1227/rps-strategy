@@ -1,6 +1,12 @@
 import type { ReactNode } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import type { ModeDefinition, PlayablePiece, SideColor } from '@/types/game';
+import {
+  FIRST_TO_MOVE,
+  isBoardRows,
+  type ModeDefinition,
+  type PlayablePiece,
+  type SideColor,
+} from '@/types/game';
 
 import ModePreview from './ModePreview';
 import PieceIcon from '@/features/board/PieceIcon';
@@ -32,13 +38,15 @@ const PIECES_BY_SYMBOL: Record<string, { owner: SideColor; piece: PlayablePiece 
 
 const OWNERS_BY_SYMBOL: Record<string, SideColor> = { '#': 'Red', '+': 'Blue' };
 
-const MOVEMENT_ROWS = ['***', '*r*', '***'];
+const MOVEMENT_ROWS = ['***', '*R*', '***'];
 
 /** The diagram and caption that explain how one mode is won. */
 interface WinCondition {
   rows: string[];
   territory?: boolean;
   goalRow?: number;
+  /** A goal that is one square rather than a whole rank. */
+  goalTile?: { x: number; y: number };
   topLabel?: string;
   caption: string;
 }
@@ -48,35 +56,74 @@ const WIN_CONDITIONS: Record<string, WinCondition> = {
   // Total War: the trail behind each piece is the point, so the diagram shows
   // both sides having painted their way toward the middle.
   V5: {
-    rows: ['.+...', '.S...', '...r.', '..##.'],
+    rows: ['.#...', '.s...', '...R.', '..++.'],
     territory: true,
     caption:
       'Every square you land on turns your colour for good. Take all of their pieces to win — or own more of the board once no neutral squares are left.',
   },
-  // Infiltration: the tinted rank is the finish line, one step above the runner.
+  // Infiltration: the tinted rank is the finish line, one step above the
+  // runner. Drawn from the point of view of the side that opens, which is the
+  // side the real board is drawn from too, so their runner heads up the page.
   V3: {
-    rows: ['..*..', '..r..', '.....'],
+    rows: ['..*..', '..R..', '.....'],
     goalRow: 0,
     topLabel: 'THEIR BOUNDARY',
     caption:
       'Land any piece on their far row and you win on the spot. They are racing for yours too, so every attacker you send is one less defender.',
   },
+  // Intransitive: the same finish line shrunk to the one corner, with the
+  // runner on the diagonal it is reached along.
+  V6: {
+    rows: ['....*', '...R.', '.....'],
+    goalTile: { x: 4, y: 0 },
+    topLabel: 'THEIR CORNER',
+    caption:
+      'Land any piece on the corner their army started in and you win on the spot. One square, not a whole row — and they are running at yours down the same diagonal.',
+  },
 };
 
 const fallbackWinCondition = (mode: ModeDefinition | null | undefined): WinCondition => ({
-  rows: ['.....', '..r..', '.....'],
+  rows: ['.....', '..R..', '.....'],
   caption: mode?.objective ?? 'Follow the objective shown on the mode card.',
 });
 
+/**
+ * "A 9×9 board, ten pieces each" — counted off the mode's own opening.
+ *
+ * Read rather than written down, because the modes no longer agree on it:
+ * Intransitive fields ten pieces a side to Total War's and Infiltration's nine,
+ * and a mode may be any rectangle. An unbalanced opening is named as one rather
+ * than halved into a number that is true of neither side.
+ */
+const setupSentence = (mode: ModeDefinition): string => {
+  const rows = mode.startingPosition?.rows;
+  if (!isBoardRows(rows)) {
+    return `Nothing is hidden. You take one turn at a time and ${FIRST_TO_MOVE} starts.`;
+  }
+  const layout = rows.join('');
+  const red = layout.replace(/[^rps]/g, '').length;
+  const blue = layout.replace(/[^RPS]/g, '').length;
+  const armies = red === blue ? `${red} pieces each` : `${red} red pieces against ${blue} blue`;
+  return `A ${rows[0].length}×${rows.length} board, ${armies}, nothing hidden. You take one turn at a time and ${FIRST_TO_MOVE} starts.`;
+};
+
 interface MiniBoardProps {
-  /** The rank to mark as a goal, when the mode has one. */
+  /** The rank to mark as a goal, when the mode's goal is a whole rank. */
   goalRow?: number | null;
+  /** The single square to mark, when it is a corner instead. */
+  goalTile?: { x: number; y: number } | null;
   rows: string[];
   territory?: boolean;
   tileSize?: number;
 }
 
-function MiniBoard({ goalRow = null, rows, territory = false, tileSize = 26 }: MiniBoardProps) {
+function MiniBoard({
+  goalRow = null,
+  goalTile = null,
+  rows,
+  territory = false,
+  tileSize = 26,
+}: MiniBoardProps) {
   return (
     <View style={styles.miniBoard} accessibilityElementsHidden>
       {rows.map((row, y) => (
@@ -96,10 +143,10 @@ function MiniBoard({ goalRow = null, rows, territory = false, tileSize = 26 }: M
                   owner === 'Blue' && styles.tileBlueOwned,
                 ]}
               >
-                {goalRow === y && (
+                {(goalRow === y || (goalTile?.x === x && goalTile.y === y)) && (
                   <>
                     <View style={styles.goalTint} />
-                    <TileMark compact owner="Red" variant="goal" />
+                    <TileMark compact owner={FIRST_TO_MOVE} variant="goal" />
                   </>
                 )}
                 {owner && <TileMark compact owner={owner} variant="territory" />}
@@ -174,10 +221,7 @@ export default function HowToPlayModal({ mode, onClose, visible }: HowToPlayModa
               <ModePreview mode={mode} />
               <View style={styles.setupCopy}>
                 <Text style={styles.setupLabel}>THE SETUP</Text>
-                <Text style={styles.body}>
-                  A 9×9 board, nine pieces each, nothing hidden. You take one turn at a
-                  time and Red starts.
-                </Text>
+                <Text style={styles.body}>{setupSentence(mode)}</Text>
               </View>
             </View>
 
@@ -185,9 +229,9 @@ export default function HowToPlayModal({ mode, onClose, visible }: HowToPlayModa
               <View style={styles.matchups}>
                 {MATCHUPS.map((matchup) => (
                   <View key={matchup.winner} style={styles.matchupRow}>
-                    <PieceChip color="Red" piece={matchup.winner} />
+                    <PieceChip color="Blue" piece={matchup.winner} />
                     <Text style={styles.beats}>beats</Text>
-                    <PieceChip color="Blue" piece={matchup.loser} />
+                    <PieceChip color="Red" piece={matchup.loser} />
                   </View>
                 ))}
               </View>
@@ -209,6 +253,7 @@ export default function HowToPlayModal({ mode, onClose, visible }: HowToPlayModa
                   {Boolean(win.topLabel) && <Text style={styles.diagramLabel}>{win.topLabel}</Text>}
                   <MiniBoard
                     goalRow={win.goalRow ?? null}
+                    goalTile={win.goalTile ?? null}
                     rows={win.rows}
                     territory={Boolean(win.territory)}
                   />

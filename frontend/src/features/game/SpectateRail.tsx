@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 
 import SeriesScoreTable from '@/features/bots/SeriesScoreTable';
+import { watchedOutcome, withLiveGame, withWatchedResult } from '@/features/bots/seriesSummary';
 import { useBotSeries } from '@/hooks/useBotSeries';
 import { useWideScreen } from '@/hooks/useBoardLayout';
 import { useGameStore } from '@/store/gameStore';
@@ -23,6 +24,7 @@ import {
   type TournamentBoard,
 } from '@/store/spectateSelectors';
 import { colors, radius, space } from '@/theme';
+import type { GameEndReason, GameStatus, PlayerColor } from '@/types/game';
 import type { LiveGameSummary } from '@/types/protocol';
 
 // The bar above a spectated board: everything else there is to watch from
@@ -34,6 +36,17 @@ export interface SpectateRailProps {
   context: SpectateContext;
   /** The board on screen. */
   currentGameId: string;
+  /**
+   * How the board on screen stands, and how it ended if it has.
+   *
+   * The score strip needs all three the moment a game finishes: the run files
+   * its result a beat after the last position reaches the screen, so this is
+   * what lets the column of the game just watched score itself immediately
+   * rather than sitting on a dot until the next fetch. See `withWatchedResult`.
+   */
+  gameStatus: GameStatus;
+  winner: PlayerColor;
+  endReason?: GameEndReason | string | null;
   disabled: boolean;
   /** The board asked for, until it lands. */
   pendingGameId: string | null;
@@ -46,9 +59,12 @@ export default function SpectateRail({
   context,
   currentGameId,
   disabled,
+  endReason = null,
+  gameStatus,
   pendingGameId,
   onWatch,
   redName,
+  winner,
 }: SpectateRailProps) {
   const { boards, nextSeriesGame, series, tournament } = context;
   const isPending = Boolean(pendingGameId) && pendingGameId !== currentGameId;
@@ -60,11 +76,14 @@ export default function SpectateRail({
           blueName={blueName}
           currentGameId={currentGameId}
           disabled={disabled}
+          endReason={endReason}
+          gameStatus={gameStatus}
           isPending={isPending}
           nextGame={nextSeriesGame}
           onWatch={onWatch}
           redName={redName}
           series={series}
+          winner={winner}
         />
       </RailFrame>
     );
@@ -128,32 +147,76 @@ interface SeriesRailProps {
   /** The board on screen, drawn as the current chip. */
   currentGameId: string;
   disabled: boolean;
+  endReason: GameEndReason | string | null;
+  gameStatus: GameStatus;
   isPending: boolean;
   nextGame: LiveGameSummary | null;
   onWatch: (gameId: string) => void;
   redName: string;
   series: NonNullable<SpectateContext['series']>;
+  winner: PlayerColor;
 }
 
 function SeriesRail({
   blueName,
   currentGameId,
   disabled,
+  endReason,
+  gameStatus,
   isPending,
   nextGame,
   onWatch,
   redName,
   series,
+  winner,
 }: SeriesRailProps) {
   const isWide = useWideScreen();
   const router = useRouter();
   const liveGames = useGameStore((state) => state.liveGames);
   const liveGameIds = useMemo(() => liveGames.map((live) => live.gameId), [liveGames]);
-  // Refetched when the run moves on to its next game, which is the only thing
-  // that changes what the strip should say. Only the run itself is wanted here:
-  // a rail with no table is still a rail, so there is nothing for this screen to
-  // do with the difference between "still loading" and "no such run".
-  const full = useBotSeries(series.seriesId, series.gameNumber).series;
+  // Refetched on all three things that change what the strip should say: the
+  // run moving on, the game on screen ending, and the next board coming up.
+  //
+  // The game number alone was not enough, which is the bug this fixes. It is
+  // read off the *watched* game's row, and that row is frozen once the game
+  // finishes — so watching game four end and game five start moved nothing:
+  // the finished column kept its dot and the live mark had nowhere to go.
+  //
+  // Only the run itself is wanted here: a rail with no table is still a rail,
+  // so there is nothing for this screen to do with the difference between
+  // "still loading" and "no such run".
+  const revision = `${series.gameNumber}:${gameStatus}:${nextGame?.gameId ?? ''}`;
+  const fetched = useBotSeries(series.seriesId, revision).series;
+
+  // What the watcher can see, over what the archive has filed. Both of these
+  // cover the same gap from opposite ends — the server files a result after it
+  // shows it, and records a new game after it starts it — so between a fetch
+  // and the write it is racing, this is what keeps the strip agreeing with the
+  // board. Both are no-ops once the fetch catches up.
+  const watched = useMemo(
+    () =>
+      gameStatus === 'Finished'
+        ? {
+            gameId: currentGameId,
+            outcome: watchedOutcome(winner, series.firstIsRed),
+            endReason: endReason ?? undefined,
+          }
+        : null,
+    [currentGameId, endReason, gameStatus, series.firstIsRed, winner],
+  );
+  const liveNow = useMemo(() => {
+    const board = liveGames.find((live) => live.series?.seriesId === series.seriesId);
+    if (!board?.series) return null;
+    return {
+      gameId: board.gameId,
+      gameNumber: board.series.gameNumber,
+      firstIsRed: board.series.firstIsRed,
+    };
+  }, [liveGames, series.seriesId]);
+  const full = useMemo(
+    () => (fetched ? withLiveGame(withWatchedResult(fetched, watched), liveNow) : null),
+    [fetched, liveNow, watched],
+  );
 
   // Picking a game off the table. A game still in play is another board to
   // watch, and swapping to it is what the NEXT GAME button beside this already

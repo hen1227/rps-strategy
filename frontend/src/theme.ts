@@ -115,6 +115,57 @@ const palette = {
     clockFaceLow: '#f3ded9',
 };
 
+// --------------------------------------------------------------------------
+// The title tags, which are the one place in this app where the colour is the
+// information. Their own band rather than entries in `palette` above, because
+// nothing else may use them: a hue that also means something on the board would
+// make a tag look like a state.
+//
+// All but one sit in the same narrow lightness range: dark enough to carry
+// white letters at eight pixels — every one of them clears 4.5:1, which is the
+// bar for text this small — and far enough apart to be told from each other at
+// that size. The exception is the gold at the top of the ladder, which is light
+// and takes dark letters, because the highest title in the game is the one worth
+// spending the app's only bright tag on.
+// --------------------------------------------------------------------------
+const titleHues = {
+    stone: '#5c646f',
+    teal: '#26806f',
+    indigo: '#3f5aa6',
+    // The top of the ladder, and the one hue here that was not chosen: red is
+    // what a chess player has read as Grandmaster for as long as there have
+    // been title tags, so GM wears it and the ramp below it leads up to it.
+    // Deeper and purer than TC's crimson, which is the nearest thing to it, and
+    // far from the muted bricks the app uses for danger.
+    scarlet: '#a02525',
+
+    crimson: '#a62f4a',
+    cyan: '#1a708c',
+    periwinkle: '#544bb0',
+    fire: '#c25211',
+    sienna: '#96422c',
+
+    // The one hue in here borrowed from outside the app, because the title it
+    // marks is about somewhere else: Discord's blurple, darkened out of the
+    // brand's own value so that white letters clear 4.5:1 on it like every
+    // other tag. Bluer than BM's periwinkle, which is the nearest thing to it.
+    blurple: '#4550cf',
+
+    ochre: '#7a6a2a',
+    steel: '#3a6a87',
+    navy: '#44567d',
+    sage: '#4f6b5c',
+    oxblood: '#7b3b3f',
+
+    // The one tag that is not the house being modest about itself. WGG belongs
+    // to the person who invented these games and to nobody else, so it gets a
+    // hue of its own rather than a place in the muted band above — and a
+    // deliberately warm one, since it is the only granted title that is a thank
+    // you rather than a role. Dark enough for white letters at eight pixels,
+    // like every hue here except the ladder's gold.
+    goat: '#8a5a1f',
+};
+
 export const colors = {
     background: palette.ink700,
     surface: palette.ink800,
@@ -150,8 +201,20 @@ export const colors = {
     textFaint: palette.ink350,
     textInverse: palette.ink850,
 
-    titleBackground: palette.red400,
-    titleText: palette.white,
+    // Discord brand blue/purple
+    discordBorder: palette.blue400,
+    discordSurface: palette.blue700,
+
+    // The tag worn by a title this client has never heard of. Deliberately a
+    // neutral rather than a spare hue: a title added to the server's catalogue
+    // tomorrow should read as one nothing is known about, not as a borrowed
+    // identity. See `titleTones`.
+    titleBackground: palette.ink550,
+    titleText: palette.ink100,
+    // The rim shared by every tag: white at low alpha, which lifts a pill off a
+    // dark row without needing a second colour per title. It disappears into the
+    // one light tag, which does not need lifting.
+    titleBorder: withAlpha(palette.white, 0.22),
 
     live: palette.live,
     liveSoft: palette.liveSoft,
@@ -177,6 +240,71 @@ export const colors = {
     noticeSurface: '#30462c',
     noticeText: '#d5efca',
 };
+
+/** What one title tag is drawn with. The border is derived; see `TitleTag`. */
+export interface TitleTone {
+    /** The letters. */
+    text: string;
+    /** The pill behind them. */
+    background: string;
+}
+
+// Which colour each title wears, by id.
+//
+// Three families, and the family is meant to be readable before the letters
+// are:
+//
+//   - The rating ladder is a ramp — stone, teal, indigo — climbing to the red
+//     that chess has meant by Grandmaster for a century, so that the tag says
+//     roughly where on it somebody stands without being read.
+//   - Achievements each take a hue of their own, because they are unrelated
+//     things and a shared family colour would imply an order they do not have.
+//   - Granted titles are the muted ones. The house does not shout.
+//
+// No green: everywhere else in this app the accent green means "your turn" or
+// "this is live", and neither is a thing a title says.
+//
+// Keyed by id rather than by kind, and read through `titleTone` so that a title
+// the server knows and this build does not still renders — in the neutral above
+// rather than not at all.
+const titleTones: Record<string, TitleTone> = {
+    // The ladder.
+    CM: {text: palette.white, background: titleHues.stone},
+    FM: {text: palette.white, background: titleHues.teal},
+    IM: {text: palette.white, background: titleHues.indigo},
+    GM: {text: palette.white, background: titleHues.scarlet},
+
+    // Earned at the board.
+    TC: {text: palette.white, background: titleHues.crimson},
+    ARC: {text: palette.white, background: titleHues.cyan},
+    BM: {text: palette.white, background: titleHues.periwinkle},
+    STK: {text: palette.white, background: titleHues.fire},
+    BSL: {text: palette.white, background: titleHues.sienna},
+
+    // Not earned at the board at all, and the commonest tag there is. See
+    // `titleHues.blurple`.
+    D: {text: palette.white, background: titleHues.blurple},
+
+    // Handed out by the host.
+    VET: {text: palette.white, background: titleHues.ochre},
+    DEV: {text: palette.white, background: titleHues.steel},
+    MOD: {text: palette.white, background: titleHues.navy},
+    CON: {text: palette.white, background: titleHues.sage},
+    FND: {text: palette.white, background: titleHues.oxblood},
+
+    // Exactly one person wears this one. See `titleHues.goat`.
+    WGG: {text: palette.white, background: titleHues.goat},
+};
+
+/** The neutral worn by a title with no colour of its own. */
+export const defaultTitleTone: TitleTone = {
+    text: colors.titleText,
+    background: colors.titleBackground,
+};
+
+/** How a title is drawn. Anything unrecognised gets the neutral. */
+export const titleTone = (id?: string | null): TitleTone =>
+    titleTones[(id ?? '').trim()] ?? defaultTitleTone;
 
 /** Everything one side is drawn with. */
 export interface PlayerPalette {
@@ -254,9 +382,9 @@ export const players: Record<SideColor, PlayerPalette> = {
 // Board surface. The lobby thumbnail, the how-to-play diagram, and the live
 // board all read from here, so they cannot drift apart.
 // const boardLight = palette.sand;
-// const boardDark = palette.green700;
+// const boardDark = palette.green600;
 const boardLight = palette.sand;
-const boardDark = '#187018';
+const boardDark = '#337533';
 
 export const board = {
     frame: palette.ink950,

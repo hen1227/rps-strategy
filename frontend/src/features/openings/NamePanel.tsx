@@ -1,15 +1,17 @@
 // What this line is called, and how it gets called something else.
 //
-// One panel, three audiences. A visitor sees the published name, or every name
-// people have put forward for a line that has none -- which is the difference
-// between "nobody has named this" and "nobody has *published* a name for
-// this", and the two used to look identical. A curator sees the same list with
-// a button on each row, and an input that publishes rather than proposes.
+// One panel, three audiences. A curator publishes and renames. A visitor
+// *names* an unnamed line outright -- no queue, because a proposal that sits
+// invisible until somebody happens to look is a question the site asked and
+// then ignored. And where naming is not on offer, a visitor suggests: the two
+// cases are a line somebody has already named, where the answer to disagreeing
+// is to propose an alternative rather than to overwrite, and a line longer
+// than a name should describe.
 
 import { useEffect, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
-import type { OpeningLine, OpeningNaming } from '@/engine/openingBook';
+import { PLAYER_NAME_PLY_LIMIT, type OpeningLine, type OpeningNaming } from '@/engine/openingBook';
 import { colors, radius, space } from '@/theme';
 import { Badge, GhostButton, Panel, PrimaryButton } from '@/ui/primitives';
 
@@ -22,6 +24,11 @@ export interface NamePanelProps {
   naming: OpeningNaming;
   /** Walk to another line, for the "name its parent first" nudge. */
   onOpenLine: (line: OpeningLine) => void;
+  /**
+   * Name the line outright. Resolves false when it was refused -- somebody
+   * naming it first, most likely -- so the draft stays put.
+   */
+  onName: (name: string) => Promise<boolean>;
   /** Resolves false when the proposal was not accepted, so the draft stays. */
   onSuggest: (name: string) => Promise<boolean>;
   suggesting: boolean;
@@ -32,6 +39,7 @@ export default function NamePanel({
   line,
   naming,
   onOpenLine,
+  onName,
   onSuggest,
   suggesting,
 }: NamePanelProps) {
@@ -51,13 +59,20 @@ export default function NamePanel({
 
   const trimmed = draft.trim();
   const lineIsBusy = curator.busy === `publish:${line.join(' ')}`;
+  // Naming is on offer for an unnamed line short enough to be an opening.
+  // Where "book" ends is genuinely unclear, so this does not try to find that
+  // ply -- it picks a length at which a name still describes an idea rather
+  // than a game. Past it, the honest answer is that the position has no name.
+  const tooLong = line.length > PLAYER_NAME_PLY_LIMIT;
+  const canName = !curator.active && !published && !tooLong;
   const submit = () => {
     if (!trimmed) return;
     if (curator.active) {
       curator.publish(line, trimmed);
       return;
     }
-    onSuggest(trimmed).then((sent) => sent && setDraft(''));
+    const send = canName ? onName : onSuggest;
+    send(trimmed).then((sent) => sent && setDraft(''));
   };
 
   return (
@@ -83,13 +98,23 @@ export default function NamePanel({
         </>
       ) : (
         <>
-          <Text style={styles.prompt}>This line needs a name.</Text>
-          <Text style={ui.hint}>
-            {title.namedAncestor
-              ? `It currently lives under ${title.namedAncestor.name}. Suggest a defense, gambit, variation—or something stranger.`
-              : 'Chess has openings, defenses, gambits, and systems. We can borrow the structure without borrowing the seriousness.'}
-            {mirror ? ` Naming it names its mirror, ${mirror.join('  ')}, too.` : ''}
+          <Text style={styles.prompt}>
+            {tooLong ? 'This line is past naming.' : 'This line needs a name.'}
           </Text>
+          <Text style={ui.hint}>
+            {tooLong
+              ? `Names cover the first ${PLAYER_NAME_PLY_LIMIT} moves. Past that a line is a game rather than an opening, so there is no name to give it — walk back up and name the opening it came from.`
+              : title.namedAncestor
+                ? `It currently lives under ${title.namedAncestor.name}. Name a defense, gambit, variation—or something stranger.`
+                : 'Chess has openings, defenses, gambits, and systems. We can borrow the structure without borrowing the seriousness.'}
+            {!tooLong && mirror ? ` Naming it names its mirror, ${mirror.join('  ')}, too.` : ''}
+          </Text>
+          {canName ? (
+            <Text style={ui.hint}>
+              Your name goes up straight away, whether or not RPSFish has analyzed this line. It
+              is listed under every named opening rather than beside the engine’s certified ones.
+            </Text>
+          ) : null}
         </>
       )}
 
@@ -116,7 +141,14 @@ export default function NamePanel({
 
       <View style={[ui.formRow, styles.form]}>
         <NameInput
-          accessibilityLabel={curator.active ? 'Published opening name' : 'Suggested opening name'}
+          accessibilityLabel={
+            curator.active
+              ? 'Published opening name'
+              : canName
+                ? 'Opening name'
+                : 'Suggested opening name'
+          }
+          editable={!tooLong || curator.active}
           onChangeText={setDraft}
           onSubmitEditing={submit}
           placeholder={published ? published.name : 'e.g. The Skipping Stone'}
@@ -125,8 +157,14 @@ export default function NamePanel({
         />
         <PrimaryButton
           compact
-          disabled={!trimmed || (curator.active && trimmed === published?.name)}
-          label={curator.active ? (published ? 'RENAME' : 'PUBLISH') : 'SUGGEST'}
+          disabled={
+            !trimmed ||
+            (curator.active && trimmed === published?.name) ||
+            (tooLong && !curator.active)
+          }
+          label={
+            curator.active ? (published ? 'RENAME' : 'PUBLISH') : canName ? 'NAME IT' : 'SUGGEST'
+          }
           loading={curator.active ? lineIsBusy : suggesting}
           onPress={submit}
         />

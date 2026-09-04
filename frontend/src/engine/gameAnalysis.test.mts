@@ -25,7 +25,7 @@ import type { ReviewFn } from './rpsfish/client';
 import type { SearchLimits } from './rpsfish/protocol';
 import { startEngineWorker, type NodeEngineWorker } from '../../scripts/engineWorker.mts';
 import { testMode } from '@/testing/modes';
-import type { Move, SideColor } from '@/types/game';
+import { FIRST_TO_MOVE, opposingColor, type Move, type SideColor } from '@/types/game';
 
 const MODE = testMode('V5');
 
@@ -92,7 +92,7 @@ describe('positionSignature', () => {
 
   it('distinguishes whose turn it is from the pieces alone', () => {
     const start = createAnalysisGame(MODE);
-    const swapped = { ...start, currentTurn: 'Blue' as const };
+    const swapped = { ...start, currentTurn: opposingColor(FIRST_TO_MOVE) };
     assert.notEqual(positionSignature(start), positionSignature(swapped));
   });
 });

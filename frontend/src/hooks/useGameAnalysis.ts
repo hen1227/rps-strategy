@@ -12,6 +12,7 @@ import {
   type ReviewReport,
 } from '@/engine/gameReview';
 import type { PositionLike } from '@/engine/analysisGame';
+import { engineUnavailableMessage } from '@/engine/rpsfish/client';
 import type { ReviewEntry } from '@/engine/rpsfish/protocol';
 import type { ModeDefinition } from '@/types/game';
 
@@ -72,12 +73,17 @@ export function useGameAnalysis<TMove extends GradableMove = RecordedMove>({
   // is handed the game rather than waiting for the next move to arrive.
   const lineRef = useRef<GameLine | null>(null);
 
-  const active = enabled && Boolean(mode);
+  const unavailable = engineUnavailableMessage(mode?.id);
+  const active = enabled && Boolean(mode) && !unavailable;
 
   useEffect(() => {
     if (!active) {
       sessionRef.current = null;
-      setState(EMPTY);
+      setState(
+        unavailable
+          ? { entries: [], error: unavailable, status: 'error' }
+          : EMPTY,
+      );
       return undefined;
     }
     // A preset change regrades from the start: a report whose moves were
@@ -90,7 +96,7 @@ export function useGameAnalysis<TMove extends GradableMove = RecordedMove>({
       session.stop();
       if (sessionRef.current === session) sessionRef.current = null;
     };
-  }, [active, mode?.id, preset]);
+  }, [active, mode?.id, preset, unavailable]);
 
   useEffect(() => {
     lineRef.current = { moves, positions, streaming };

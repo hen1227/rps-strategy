@@ -52,6 +52,7 @@ const flag = (name: string) => process.argv.includes(`--${name}`);
 const MODES: Record<string, ModeDefinition> = {
   V5: testMode('V5'),
   V3: testMode('V3'),
+  V6: testMode('V6'),
 };
 
 const modeOf = (modeId: string): ModeDefinition => {
@@ -97,7 +98,7 @@ const main = async () => {
   const seed = Number(argument('seed', '1'));
   const openingPlies = Number(argument('opening', '6'));
   const modeArgument = argument('mode', 'all');
-  const modeIds = modeArgument === 'all' ? ['V5', 'V3'] : modeArgument.split(',');
+  const modeIds = modeArgument === 'all' ? ['V5', 'V3', 'V6'] : modeArgument.split(',');
 
   if (flag('spread')) {
     await reportSpread({ analyze, modeIds, seed });

@@ -15,6 +15,7 @@ import type {
   BotDrain,
   BotPresence,
   GameRecord,
+  Restriction,
   TitleID,
   Tournament,
 } from '@/types/protocol';
@@ -273,6 +274,13 @@ export interface BotSeries {
    */
   firstBotUserId?: string;
   secondBotUserId?: string;
+  /**
+   * A run between two engines one person registered, which does not move the
+   * ladder — the games are seated casual, and the ladder drops the pair however
+   * they were flagged. Derived by the server from the two owners on every read,
+   * so it is right about runs played before the rule existed.
+   */
+  casual: boolean;
   /** Who asked for the run. Absent on one started with the host token. */
   requestedByUserId?: string;
   requestedByName?: string;
@@ -415,8 +423,25 @@ export const botMatches = ({ botUserIds, modeId, limit, offset }: BotMatchQuery 
   return request<BotMatch[]>(`/api/bot-matches${suffix}`, { what: 'Loading bot games' });
 };
 
+/**
+ * What the enrol sweep did.
+ *
+ * The route has always answered with this rather than with the tournament,
+ * and the reason is the second half: an engine that was *not* enrolled is the
+ * interesting outcome. It is skipped for a reason — it does not play the mode,
+ * its owner turned events off, it is draining, it is barred — and a host who
+ * pressed the button needs to be told which, because every one of those has a
+ * different fix.
+ */
+export interface BotEnrolment {
+  /** The engines now in the field, by name. */
+  enrolled: string[];
+  /** Engine name to the reason it was left out. */
+  skipped: Record<string, string>;
+}
+
 export const enrollBotsInTournament = (adminToken: string, tournamentId: string) =>
-  request<Tournament>(`/api/admin/tournaments/${tournamentId}/enroll-bots`, {
+  request<BotEnrolment>(`/api/admin/tournaments/${tournamentId}/enroll-bots`, {
     method: 'POST',
     token: adminToken,
     what: 'Enrolling bots',
@@ -436,6 +461,8 @@ export interface BotGuide {
   guide: string;
   /** The engine protocol, as Markdown. The same text as `docs/rpsi.md`. */
   protocol: string;
+  /** How a stored game is written down. The same text as `docs/notation.md`. */
+  notation: string;
 }
 
 export const botGuide = () => request<BotGuide>('/api/bot/guide', { what: 'Loading the guide' });
@@ -484,6 +511,64 @@ export interface AccountSummary {
   /** How many bot slots this account owns. */
   botCount: number;
   createdAtUnixMs: number;
+  /**
+   * Whether Discord vouched for this account — narrower than `registered`,
+   * which also admits the password accounts still on the books.
+   */
+  discordVerified: boolean;
+  /**
+   * When they last finished a game, absent for an account that never has —
+   * which is the great majority. The honest version of "last seen" here, and
+   * what makes the activity filters readable rather than mysterious.
+   */
+  lastPlayedAtUnixMs?: number;
+  /** Sanctions in force, so a muted player is marked without expanding them. */
+  restrictions?: Restriction[];
+}
+
+/**
+ * How the account browser is narrowed.
+ *
+ * It needs narrowing because of a fact about identity here: every browser that
+ * has ever loaded the site owns an account called Guest, created the moment it
+ * arrived. They outnumber everybody else by orders of magnitude and are
+ * indistinguishable from one another, so an unfiltered list ordered
+ * newest-first is fifty Guests and nothing a host was looking for.
+ *
+ * Every field is optional and omitting it widens: an absent `registered` means
+ * "either", which is genuinely different from `false` ("only the Guests"). The
+ * screen opens with `registered: true` applied — that is the one that hides
+ * them — while the route itself stays neutral, so "show me everything" is still
+ * expressible for a host hunting one particular anonymous browser.
+ */
+export interface AccountQuery {
+  query?: string;
+  /** True hides the Guests. False shows only them. Omitted shows both. */
+  registered?: boolean;
+  discordVerified?: boolean;
+  disabled?: boolean;
+  isAdmin?: boolean;
+  kind?: 'human' | 'bot';
+  /** Finished a game within this many hours. Omitted or zero for any. */
+  activeWithinHours?: number;
+  minGames?: number;
+  sort?: AccountSort;
+  limit?: number;
+  offset?: number;
+}
+
+/** The order the browser lists accounts in. */
+export type AccountSort = 'newest' | 'active' | 'rating' | 'games' | 'name';
+
+/** A page of the browser, plus how many rows the filter matched. */
+export interface AccountPage {
+  accounts: AccountSummary[];
+  /**
+   * How many accounts matched, which is what makes a filter honest: "24" is a
+   * different thing to read than "24 of 8,431", and a host who has just hidden
+   * the Guests wants to see how much was hidden.
+   */
+  total: number;
 }
 
 export interface AccountFlags {
@@ -493,11 +578,31 @@ export interface AccountFlags {
   discord?: string;
 }
 
-export const listAccounts = (adminToken: string, query = '') =>
-  request<AccountSummary[]>(`/api/admin/accounts?query=${encodeURIComponent(query)}`, {
+export const listAccounts = (adminToken: string, filter: AccountQuery = {}) => {
+  const params = new URLSearchParams();
+  if (filter.query?.trim()) params.set('query', filter.query.trim());
+  // Written only when set, because the server reads an absent parameter as
+  // "either" and the string "false" as false. Sending `registered=` for an
+  // unset filter would be a third spelling of nothing.
+  if (filter.registered !== undefined) params.set('registered', String(filter.registered));
+  if (filter.discordVerified !== undefined) {
+    params.set('discord', String(filter.discordVerified));
+  }
+  if (filter.disabled !== undefined) params.set('disabled', String(filter.disabled));
+  if (filter.isAdmin !== undefined) params.set('admin', String(filter.isAdmin));
+  if (filter.kind) params.set('kind', filter.kind);
+  if (filter.activeWithinHours) {
+    params.set('activeWithinHours', String(filter.activeWithinHours));
+  }
+  if (filter.minGames) params.set('minGames', String(filter.minGames));
+  if (filter.sort) params.set('sort', filter.sort);
+  if (filter.limit) params.set('limit', String(filter.limit));
+  if (filter.offset) params.set('offset', String(filter.offset));
+  return request<AccountPage>(`/api/admin/accounts?${params.toString()}`, {
     token: adminToken,
     what: 'Loading accounts',
   });
+};
 
 export const updateAccountFlags = (adminToken: string, userId: string, flags: AccountFlags) =>
   request<AccountSummary>(`/api/admin/accounts/${userId}`, {

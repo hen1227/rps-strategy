@@ -22,6 +22,26 @@ export const links = {
   /** The live board: a real match, or a local game against a bot. */
   play: (): Href => '/play',
 
+  /**
+   * A live game somebody else is playing, watched.
+   *
+   * Spectating used to be `/play` with a different board swapped in
+   * underneath it, which made it the one thing here with no address: a refresh
+   * dropped the viewer into their own empty lobby, and there was no link to
+   * hand anybody. The game id travels in the query string for the reason at the
+   * top of this file — game ids are not knowable at build time.
+   *
+   * Deliberately separate from `play` rather than a flag on it. They are not
+   * the same page to be on: one is your game and the other is somebody else's,
+   * and the address is the difference a person can see.
+   *
+   * A game that has already finished has no live board left to join, so this
+   * address forwards to that game's review instead of failing. That is what
+   * makes a watch link worth pasting: it keeps working after the game it names
+   * is over.
+   */
+  watch: (gameId: string): Href => ({ pathname: '/watch', params: { gameId } }),
+
   /** The analysis board, optionally opened on a particular mode. */
   analysis: (modeId?: ModeID): Href =>
     modeId ? { pathname: '/analysis', params: { mode: modeId } } : '/analysis',
@@ -99,6 +119,26 @@ export const links = {
         }
       : '/openings',
   leaderboard: (): Href => '/leaderboard',
+
+  /**
+   * One player's public page: their games, their rating, their titles.
+   *
+   * Takes a username, because that is what makes the address worth having —
+   * `/player?user=yuki` is a link somebody can type or read out. A user id
+   * also resolves, which is what lets a badge built from a game record link
+   * here without looking a name up first.
+   *
+   * A query parameter rather than a path segment, for the reason at the top of
+   * this file: a dynamic segment would have to be pre-generated for every name
+   * that will ever exist.
+   *
+   * Not every name has a page. Player pages exist for accounts Discord has
+   * vouched for, and for engines; an anonymous guest has none, and the page
+   * says so rather than failing. So this may be built for any name without
+   * checking first.
+   */
+  player: (handle: string): Href => ({ pathname: '/player', params: { user: handle } }),
+
   account: (): Href => '/account',
 
   /**
@@ -123,8 +163,40 @@ export const links = {
   myBots: (): Href => '/account/bots',
   botGuide: (): Href => '/account/bots/connect',
   botProtocol: (): Href => '/account/bots/protocol',
-  admin: (): Href => '/admin',
+  botNotation: (): Href => '/account/bots/notation',
+  /**
+   * The host's screen, optionally opened on one of its tabs.
+   *
+   * The tab travels in the query string so it can be bookmarked and linked —
+   * `/admin?tab=bots` is the engines — and for the reason at the top of this
+   * file, which rules out a path segment for anything not knowable at build
+   * time. Omitted opens the overview.
+   */
+  admin: (tab?: string): Href =>
+    tab ? { pathname: '/admin', params: { tab } } : '/admin',
   policy: (): Href => '/policy',
+
+  /**
+   * Where this game came from, and the people it came from.
+   *
+   * A page rather than the bare YouTube link the sidebar used to carry: there
+   * are two videos now, an official site to play the same games on, and a
+   * Discord where the people who invented them are. One link out of four is not
+   * a credit.
+   */
+  credits: (): Href => '/credits',
+
+  /**
+   * The official tournament, which is not run here and is not on the
+   * `/tournaments` board.
+   *
+   * Deliberately its own address rather than an entry on that board: everything
+   * there is an event of this site, with signups this server owns and matches
+   * played on these boards. This is somebody else's event, on somebody else's
+   * site, and the only thing this page can honestly do is say when it is and
+   * point at it.
+   */
+  tournamentInfo: (): Href => '/tournament-info',
 } as const;
 
 /**
@@ -163,6 +235,23 @@ export const shareURL = (href: Href): string => {
 export const gameReviewURL = (gameId: string) => shareURL(links.review(gameId));
 
 /**
+ * One live game, for somebody who should come and watch it now.
+ *
+ * The same link after the game ends is that game's review — see `links.watch` —
+ * so this is safe to post about a game in progress without it rotting into a
+ * dead end by the time anybody clicks it.
+ */
+export const watchGameURL = (gameId: string) => shareURL(links.watch(gameId));
+
+/**
+ * One player's page, for a link handed to somebody who is not here.
+ *
+ * By name rather than by id, always: the id is an implementation detail and the
+ * name is the thing the link is for.
+ */
+export const playerURL = (handle: string) => shareURL(links.player(handle));
+
+/**
  * One run's page, for the same reason.
  *
  * A series is the occasion rather than the game: six games between two engines
@@ -172,9 +261,31 @@ export const gameReviewURL = (gameId: string) => shareURL(links.review(gameId));
 export const seriesURL = (seriesId: string) => shareURL(links.series(seriesId));
 
 /**
- * The game this is all based on.
+ * The game this is all based on, and where its author is.
  *
- * Not a `links` entry because it is not a page of this site, and `Href` is a
- * promise that Expo Router can resolve it.
+ * Not `links` entries because none of these are pages of this site, and `Href`
+ * is a promise that Expo Router can resolve one. They are gathered here for the
+ * same reason the routes above are: an address written inline is an address
+ * that goes stale where nobody is looking.
+ *
+ * This site is a fan build. WebGoatGuy invented these games and published them
+ * in the two videos below; `PLAY_URL` is his own site, which is the official
+ * place to play them and where the tournaments are held. The credits page is
+ * the long version of that sentence.
  */
-export const YOUTUBE_URL = 'https://www.youtube.com/watch?v=qC3SO1s5L6Q';
+export const webGoatGuy = {
+  /** The video the first modes came out of — v3 and v5 among them. */
+  originalVideoURL: 'https://www.youtube.com/watch?v=qC3SO1s5L6Q',
+  /** The later video, which introduced Intransitive — v6. */
+  intransitiveVideoURL: 'https://www.youtube.com/watch?v=LO_zcGNJriA',
+  /** The official site: his implementation, and where the tournaments are. */
+  playURL: 'https://meaf.us/rps2/',
+  /** The Intransitive Discord. */
+  discordURL: 'https://discord.gg/QBXJte4YVm',
+} as const;
+
+/**
+ * The original video, kept under its old name because several places link to
+ * it directly.
+ */
+export const YOUTUBE_URL = webGoatGuy.originalVideoURL;

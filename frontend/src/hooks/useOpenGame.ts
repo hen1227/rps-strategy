@@ -1,6 +1,7 @@
 import { useRouter } from 'expo-router';
 import { useCallback } from 'react';
 
+import { useWatchGame } from './useWatchGame';
 import { links } from '@/navigation/links';
 import { useGameStore } from '@/store/gameStore';
 import { isGameLive } from '@/store/spectateSelectors';
@@ -26,19 +27,18 @@ import { isGameLive } from '@/store/spectateSelectors';
  */
 export const useOpenGame = () => {
   const router = useRouter();
+  const watchGame = useWatchGame();
   const liveGames = useGameStore((state) => state.liveGames);
-  const spectateGame = useGameStore((state) => state.spectateGame);
 
   return useCallback(
     (gameId: string) => {
       if (!gameId) return;
       if (isGameLive(liveGames, gameId)) {
-        spectateGame(gameId);
-        router.push(links.play());
+        watchGame(gameId);
         return;
       }
       router.push(links.review(gameId));
     },
-    [liveGames, router, spectateGame],
+    [liveGames, router, watchGame],
   );
 };

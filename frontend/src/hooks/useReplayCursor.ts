@@ -39,6 +39,18 @@ export interface ReplayCursorOptions {
   follow?: boolean;
   /** Bind the arrow keys, Home and End. */
   keyboard?: boolean;
+  /**
+   * Which line this is — a game id, a record id, anything comparable.
+   *
+   * Changing it puts a following viewer back at the end, because a different
+   * game is not a position they chose to be standing in. Without it, stepping
+   * from a game that had three moves to one already at move thirty left the
+   * cursor on move three of a board it did not describe.
+   *
+   * Only read when `follow` is set; a review opens at the first move of
+   * whatever it is given.
+   */
+  lineId?: unknown;
   /** Called after every move of the cursor, to drop a stale selection. */
   onChange?: () => void;
 }
@@ -47,6 +59,7 @@ export const useReplayCursor = ({
   length,
   follow = false,
   keyboard = true,
+  lineId,
   onChange,
 }: ReplayCursorOptions): ReplayCursor => {
   const [cursor, setCursor] = useState(0);
@@ -72,20 +85,40 @@ export const useReplayCursor = ({
 
   const atLiveEdge = cursor >= lastIndex;
 
-  // Two different jobs, both about the line changing length. A watched game
-  // pulls a viewer who is already at the end along with it; any line that
-  // shrinks past the cursor pulls the cursor back into it.
-  const previousLength = useRef(length);
+  // Three jobs, all about the line underneath the cursor changing.
+  //
+  // Counted from zero rather than from the length this mounted with, so that
+  // "the line has only just arrived" is true on the first run whether the game
+  // was already in the store or turned up a render later.
+  const previousLength = useRef(0);
+  const previousLine = useRef(lineId);
   useEffect(() => {
-    const grew = length > previousLength.current;
+    const previous = previousLength.current;
+    const sameLine = previousLine.current === lineId;
     previousLength.current = length;
+    previousLine.current = lineId;
     if (length === 0) return;
-    if (grew && follow && cursorRef.current >= length - 2) {
+    // A line the viewer has never stood in: it has only just arrived, or it is
+    // a different game than the one they were looking at. Either way, where the
+    // cursor happens to be is not a place anybody chose.
+    //
+    // This is what somebody who presses WATCH on a game at move thirteen needs.
+    // Without it the cursor stayed at zero and they were shown the opening
+    // position of a game they had asked to see live, under a card telling them
+    // the game had moved on. Only for a follower: a review opens at the first
+    // move on purpose.
+    if (follow && (previous === 0 || !sameLine)) {
       goTo(length - 1);
       return;
     }
+    // A watched game pulls along a viewer who is already at the end of it.
+    if (length > previous && follow && cursorRef.current >= length - 2) {
+      goTo(length - 1);
+      return;
+    }
+    // And any line that has shrunk past the cursor pulls it back inside.
     if (cursorRef.current > length - 1) goTo(length - 1);
-  }, [follow, goTo, length]);
+  }, [follow, goTo, length, lineId]);
 
   useReplayKeyboard({
     enabled: keyboard,

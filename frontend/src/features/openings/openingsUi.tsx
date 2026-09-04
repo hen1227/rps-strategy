@@ -11,7 +11,12 @@ import { winPercent } from '@/engine/gameReview';
 import type { OpeningNameSuggestion } from '@/engine/openingBook';
 import { colors, players, radius, space } from '@/theme';
 import { GhostButton, PrimaryButton } from '@/ui/primitives';
-import { opposingColor, type ModeID, type SideColor } from '@/types/game';
+import {
+  FIRST_TO_MOVE,
+  opposingColor,
+  type ModeID,
+  type SideColor,
+} from '@/types/game';
 
 import type { OpeningCurator } from './useOpeningCurator';
 
@@ -27,7 +32,11 @@ export const forcedLabel = (score: number) =>
   score >= FORCED_RESULT ? 'FORCED WIN' : score <= -FORCED_RESULT ? 'FORCED LOSS' : null;
 
 export const sideOf = (turn: string | undefined, ply: number): SideColor =>
-  turn === 'Blue' || turn === 'Red' ? turn : ply % 2 === 0 ? 'Red' : 'Blue';
+  turn === 'Blue' || turn === 'Red'
+    ? turn
+    : ply % 2 === 0
+      ? FIRST_TO_MOVE
+      : opposingColor(FIRST_TO_MOVE);
 
 /**
  * The book scores every position for whoever is to move, so a bar that always

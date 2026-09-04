@@ -100,7 +100,11 @@ export function OpeningBadge({linked, modeId, opening}: LiveOpeningBadgeProps) {
  * Asked here rather than anywhere else because this is the one moment two
  * people have just played the thing: they know what it felt like, which is the
  * only qualification naming an opening has ever had. The button hands them to
- * the book, on the line itself, where the name is typed.
+ * the book, on the line itself, where the name is typed -- and where it is
+ * published on the spot rather than queued.
+ *
+ * `opening.wants` is already bounded by the length a player may name, so this
+ * never offers a line the book will refuse. See `openingOfGame`.
  */
 export function NameThisOpening({modeId, opening}: OpeningBadgeProps) {
     const router = useRouter();
@@ -117,12 +121,12 @@ export function NameThisOpening({modeId, opening}: OpeningBadgeProps) {
                 <Text style={styles.promptTitle}>{spellLine(wants)}</Text>
                 <Text style={styles.promptDetail}>
                     {under
-                        ? `You played an unnamed variation of the ${under.name}. Give it an official name.`
-                        : `Nobody has named this ${kind} yet. Suggest a name!`}
+                        ? `You played an unnamed variation of the ${under.name}. Name it — it goes up straight away.`
+                        : `Nobody has named this ${kind} yet. Name it — it goes up straight away.`}
                 </Text>
             </View>
             <Pressable
-                accessibilityHint="Opens this line in the opening book, where names are suggested."
+                accessibilityHint="Opens this line in the opening book, where it is named."
                 accessibilityLabel={`Name the opening ${spellLine(wants)}`}
                 accessibilityRole="link"
                 onPress={() => router.push(links.openings({mode: modeId, line: wants}))}

@@ -73,9 +73,11 @@ const MODE_INFILTRATION: ModeID = 'V3';
 /**
  * The row this side wins by reaching, or `null` in a mode with no such row.
  *
- * The one place a mode-specific rule enters this module. It is the same rule
- * `applyAnalysisMove` decides infiltration with and `tintForTile` draws the goal
- * rank from; a mode that later wins some other way is an edit here.
+ * The one place a mode-specific rule enters this module, and deliberately
+ * narrower than `./goals`: that module answers for goals of any shape, and this
+ * one only for the goals that are a whole rank, because a rank is what every
+ * walk below races to. Intransitive's goal is a single corner, so it answers
+ * null here and the race tool stays shut for it — see `supportsReachRace`.
  */
 export const goalRowFor = (modeId: ModeID | undefined, color: SideColor): number | null =>
   modeId === MODE_INFILTRATION ? (color === 'Red' ? 0 : BOARD_SIZE - 1) : null;
@@ -84,7 +86,10 @@ export const goalRowFor = (modeId: ModeID | undefined, color: SideColor): number
  * Whether the race analysis means anything in this mode.
  *
  * Also the board-shape gate for the whole module — see the note at the top.
- * Infiltration is nine by nine and everything here assumes it.
+ * Infiltration is nine by nine and everything here assumes it. Intransitive is
+ * a race too, but to a corner rather than a rank, and generalising six walks
+ * from a row to an arbitrary goal set is a bigger change than drawing no
+ * picture at all until the mode has an engine behind it.
  */
 export const supportsReachRace = (modeId: ModeID | undefined) =>
   goalRowFor(modeId, 'Red') !== null;

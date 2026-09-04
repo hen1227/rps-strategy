@@ -48,11 +48,15 @@ const openGame = () => {
   return get;
 };
 
-/** The board that `testMode` opens from: Blue on ranks 0–2, Red on 6–8. */
-const RED_PAWN: Position = { x: 3, y: 6 };
-const RED_TARGET: Position = { x: 3, y: 5 };
+/**
+ * The board that `testMode` opens from: Blue on ranks 0–2, Red on 6–8. Each
+ * side's rock rank steps toward the middle, so both openers are legal from the
+ * start whichever order they are played in.
+ */
 const BLUE_PAWN: Position = { x: 3, y: 2 };
 const BLUE_TARGET: Position = { x: 3, y: 3 };
+const RED_PAWN: Position = { x: 3, y: 6 };
+const RED_TARGET: Position = { x: 3, y: 5 };
 
 /** Tap the piece, then tap where it goes — the way the board drives it. */
 const play = (store: Store, from: Position, to: Position) => {
@@ -65,78 +69,80 @@ test('a local game opens with two named seats, no clock, and nobody on the serve
   const game = get().gameState;
 
   assert.ok(game);
-  assert.equal(game.local?.viewColor, 'Red');
+  assert.equal(game.local?.viewColor, 'Blue');
   assert.equal(game.bot ?? null, null);
   assert.equal(game.clock, null);
   assert.equal(game.timeControl, null);
   assert.equal(game.redPlayer.username, 'Red');
   assert.equal(game.bluePlayer.username, 'Blue');
-  assert.equal(game.currentTurn, 'Red');
+  assert.equal(game.currentTurn, 'Blue');
   assert.equal(game.status, 'InProgress');
 });
 
 test('one keyboard plays both sides', () => {
   const get = openGame();
 
-  play(get(), RED_PAWN, RED_TARGET);
-  assert.equal(get().gameState?.currentTurn, 'Blue');
-  assert.deepEqual(get().lastMove, { from: RED_PAWN, to: RED_TARGET });
-
-  // The move that a bot board would refuse: Blue's, made by the same person.
   play(get(), BLUE_PAWN, BLUE_TARGET);
   assert.equal(get().gameState?.currentTurn, 'Red');
+  assert.deepEqual(get().lastMove, { from: BLUE_PAWN, to: BLUE_TARGET });
+
+  // The move that a bot board would refuse: the opponent's, made by the same
+  // person.
+  play(get(), RED_PAWN, RED_TARGET);
+  assert.equal(get().gameState?.currentTurn, 'Blue');
   assert.equal(get().localMoves.length, 2);
   assert.deepEqual(
     get().localMoves.map((move) => move.player),
-    ['Red', 'Blue'],
+    ['Blue', 'Red'],
   );
 });
 
 test('undo takes back one move, not a move and a reply', () => {
   const get = openGame();
-  play(get(), RED_PAWN, RED_TARGET);
   play(get(), BLUE_PAWN, BLUE_TARGET);
+  play(get(), RED_PAWN, RED_TARGET);
 
   get().undoLocalMove();
 
-  // Blue's move is gone and Red's is not: the bot board undoes two because it
-  // has to get back to the player's own turn, and here every turn is theirs.
-  assert.equal(get().gameState?.currentTurn, 'Blue');
+  // The reply is gone and the opening move is not: the bot board undoes two
+  // because it has to get back to the player's own turn, and here every turn
+  // is theirs.
+  assert.equal(get().gameState?.currentTurn, 'Red');
   assert.equal(get().localMoves.length, 1);
-  assert.deepEqual(get().lastMove, { from: RED_PAWN, to: RED_TARGET });
-  assert.equal(get().gameState?.grid[BLUE_TARGET.y]?.[BLUE_TARGET.x]?.occupant, 'Empty');
+  assert.deepEqual(get().lastMove, { from: BLUE_PAWN, to: BLUE_TARGET });
+  assert.equal(get().gameState?.grid[RED_TARGET.y]?.[RED_TARGET.x]?.occupant, 'Empty');
 });
 
 test('flipping the board turns it round without touching the position', () => {
   const get = openGame();
-  play(get(), RED_PAWN, RED_TARGET);
+  play(get(), BLUE_PAWN, BLUE_TARGET);
   const before = get().gameState?.grid;
 
   get().flipLocalBoard();
 
-  assert.equal(get().gameState?.local?.viewColor, 'Blue');
+  assert.equal(get().gameState?.local?.viewColor, 'Red');
   assert.deepEqual(get().gameState?.grid, before);
-  assert.equal(get().gameState?.currentTurn, 'Blue');
+  assert.equal(get().gameState?.currentTurn, 'Red');
 
   get().flipLocalBoard();
-  assert.equal(get().gameState?.local?.viewColor, 'Red');
+  assert.equal(get().gameState?.local?.viewColor, 'Blue');
 });
 
 test('the side to move is the side that resigns', () => {
   const get = openGame();
-  play(get(), RED_PAWN, RED_TARGET);
+  play(get(), BLUE_PAWN, BLUE_TARGET);
 
   get().resignLocalGame();
 
   const game = get().gameState;
   assert.equal(game?.status, 'Finished');
-  assert.equal(game?.winner, 'Red');
+  assert.equal(game?.winner, 'Blue');
   assert.equal(game?.endReason, 'resignation');
 });
 
 test('a draw is agreed in one press, because both players are in the room', () => {
   const get = openGame();
-  play(get(), RED_PAWN, RED_TARGET);
+  play(get(), BLUE_PAWN, BLUE_TARGET);
 
   get().drawLocalGame();
 
@@ -146,7 +152,7 @@ test('a draw is agreed in one press, because both players are in the room', () =
 
 test('the record names both seats and says it was unrated', () => {
   const get = openGame();
-  play(get(), RED_PAWN, RED_TARGET);
+  play(get(), BLUE_PAWN, BLUE_TARGET);
   get().drawLocalGame();
 
   const pgn = get().localGamePGN();

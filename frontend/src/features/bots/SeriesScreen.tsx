@@ -208,9 +208,9 @@ function SeriesShell({ children }: { children: ReactNode }) {
  * nobody can reproduce is an anecdote.
  */
 function Provenance({ series }: { series: BotSeries }) {
-  // Written out rather than rounded to minutes: the public form only offers
-  // whole minutes, but the host's does not, and "2 min" for a 90-second clock
-  // would misreport the one number that decides what a run's result is worth.
+  // Written out rather than rounded to minutes: a run can be played at 0.1+1,
+  // and "2 min" for a 90-second clock — or "0 min" for a six-second one — would
+  // misreport the one number that decides what a run's result is worth.
   const seconds = Math.round(series.initialTimeMs / 1000);
   const clock =
     seconds < 60

@@ -657,7 +657,7 @@ export const createBotSlice: StateCreator<GameStore, [], [], BotSlice> = (set, g
           { name: 'ModeId', value: botGame.mode.id },
           { name: 'BoardSize', value: '9' },
           { name: 'SetUp', value: '1' },
-          { name: 'FEN', value: encodePosition(start.grid, 'Red') },
+          { name: 'FEN', value: encodePosition(start.grid, start.currentTurn) },
           { name: 'RedId', value: ids.Red },
           { name: 'BlueId', value: ids.Blue },
           { name: 'Ranked', value: 'false' },

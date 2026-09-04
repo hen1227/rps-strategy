@@ -181,7 +181,24 @@ export type AccountKind = 'human' | 'bot';
  * client compiled today must not break when a title is added tomorrow — the
  * literals are the ones that exist now, spelled out so fixtures can be checked.
  */
-export type TitleID = 'GM' | 'IM' | 'FM' | 'CM' | (string & {});
+export type TitleID =
+  | 'GM'
+  | 'IM'
+  | 'FM'
+  | 'CM'
+  | 'TC'
+  | 'ARC'
+  | 'BM'
+  | 'STK'
+  | 'BSL'
+  | 'D'
+  | 'VET'
+  | 'DEV'
+  | 'MOD'
+  | 'CON'
+  | 'FND'
+  | 'WGG'
+  | (string & {});
 
 /** Where a title comes from, which is all a screen needs to explain one. */
 export type TitleKind = 'rating' | 'achievement' | 'granted';
@@ -248,7 +265,18 @@ export interface BotPresence {
   botId: string;
   userId: string;
   name: string;
-  ownerUsername?: string;
+  /**
+   * The account this engine is registered to.
+   *
+   * Here for one question: whether two engines belong to the same person. A
+   * series between two of one owner's bots is casual and does not move the
+   * ladder, and the form that starts one says so before it is pressed.
+   *
+   * Absent rather than empty when the server does not know, so compare it only
+   * after checking it is set — two engines with no owner on record are not a
+   * pair.
+   */
+  ownerUserId?: string;
   description?: string;
   engineName?: string;
   engineAuthor?: string;
@@ -257,8 +285,29 @@ export interface BotPresence {
   modeRatings?: Partial<Record<ModeID, number>>;
   /** The digest of this bot's icon, or absent when it has none. Feed it to `botIconUrl`. */
   iconSha256?: string;
+  /**
+   * No room for another game: every slot this engine has is taken.
+   *
+   * Not the same as "playing", which is why `activeGames` is beside it. A bot
+   * whose owner allowed it three games at once is playing and free at the same
+   * time, and the button and the badge need different halves of that.
+   */
   busy: boolean;
+  /** Games it is in right now, across all of its slots. */
+  activeGames?: number;
+  /** Games it will take at once — 1 for almost every bot, at most 5. */
+  slots?: number;
   allowPublicPlay: boolean;
+  /**
+   * The tournament holding this engine, absent for the great majority of them.
+   *
+   * An engine entered in a running event is kept for its own scheduled matches
+   * and is not available for a challenge or a series, even while idle — see
+   * backend/internal/server/bot_reserve.go. Published rather than only
+   * enforced so the lobby can say "in reserve" instead of describing a
+   * perfectly healthy engine as busy.
+   */
+  reservedFor?: string;
   clientVersion?: string;
   /**
    * An engine on its way out: playing what it already owes and taking nothing
@@ -266,6 +315,37 @@ export interface BotPresence {
    * of offering a button that refuses.
    */
   draining?: boolean;
+  /**
+   * The same unavailability for a completely different reason: a scheduled
+   * window in which no engine takes a game — see `BotBench`.
+   *
+   * A separate field from `draining` because the two need different words. An
+   * engine that is draining is going away, and its owner asked for that; a
+   * benched one is coming back this evening and nobody touched it. Every offer
+   * path treats them alike; only the lobby tells them apart.
+   */
+  benched?: boolean;
+}
+
+/**
+ * A scheduled stretch of time in which every engine is off the board.
+ *
+ * Not a shutdown and not a fault: the bots stay connected and idle, take no new
+ * games, and are back in the pool when it ends. The occasion is an event
+ * elsewhere that a practice ladder would spoil — see the official tournament.
+ *
+ * Sent whether or not one is running. When none is, it describes the *next*
+ * one, which is what lets a page warn people that the ladder closes at half
+ * past rather than only explain it once it has. So `active` is the field to
+ * branch on; the times mean something either way, and are both absent when
+ * nothing at all is scheduled.
+ */
+export interface BotBench {
+  active: boolean;
+  /** Why, in words that finish "the engines are off because of…". */
+  reason?: string;
+  fromUnixMs?: number;
+  untilUnixMs?: number;
 }
 
 /**
@@ -289,6 +369,60 @@ export interface BotDrain {
    */
   waitingOn: string[];
   requestedAtUnixMs?: number;
+}
+
+/**
+ * A graceful restart in progress: the server is playing out the games already on
+ * the board, refusing new ones, and will stop as soon as the last one ends.
+ *
+ * The same idea as {@link BotDrain} one scale up, and told to everybody rather
+ * than to one owner — which is the point. Without it, a deploy looks from the
+ * outside like the site quietly refusing to start games, and then dropping every
+ * socket at once.
+ */
+export interface ServerUpdate {
+  /**
+   * False is the ordinary state of the world, and is sent as readily as true:
+   * a client that receives `updating: false` takes the banner down rather than
+   * waiting to be told separately.
+   */
+  updating: boolean;
+  /** The sentence the administrator wrote, shown as-is. */
+  note?: string;
+  /** Every game still being played, already phrased for a person. */
+  waitingOn: string[];
+  /** `waitingOn.length`, so a count can be shown without holding the list. */
+  gamesRemaining: number;
+  /**
+   * The list emptied and the process is on its way out. Distinct from an empty
+   * `waitingOn`, which is also true for the instant between the last game
+   * ending and the server noticing.
+   */
+  settled: boolean;
+  startedAtUnixMs?: number;
+  /** When the server stops waiting and restarts regardless. */
+  deadlineUnixMs?: number;
+}
+
+/**
+ * Something an administrator wants everybody to read.
+ *
+ * Held on the server with a lifetime rather than only broadcast, so the person
+ * who reloads ten seconds after it went out — the person a "sorry, restarting
+ * now" was written for — is still told. A notice with no `text` means take the
+ * banner down.
+ */
+export interface ServerNotice {
+  /**
+   * Changes with every posting, so a banner somebody dismissed does not come
+   * back on the next reconnection.
+   */
+  id: string;
+  text: string;
+  /** 'notice' reads as information; 'warning' as something to act on. */
+  tone?: 'notice' | 'warning';
+  postedAtUnixMs: number;
+  expiresAtUnixMs: number;
 }
 
 export type ModeCounts = Partial<Record<ModeID, number>>;
@@ -364,7 +498,45 @@ export interface LeaderboardEntry {
 
 /* ------------------------------------------------------------ tournaments -- */
 
-export type TournamentStatus = 'registration' | 'in_progress' | 'completed';
+/**
+ * Where an event is in its life.
+ *
+ * `draft` and `cancelled` are derived on the server rather than stored — see
+ * the note at the top of backend/internal/persistence/tournament_admin.go —
+ * but from a client's side they are simply two more statuses.
+ *
+ * A draft only ever reaches an administrator: the public list and the socket
+ * broadcast both filter them out, so a client that is not the host will never
+ * see this value.
+ */
+export type TournamentStatus =
+  | 'draft'
+  | 'registration'
+  | 'in_progress'
+  | 'completed'
+  | 'cancelled';
+
+/** How a tournament decides who plays whom. */
+export type TournamentFormat =
+  | 'round_robin'
+  | 'double_round_robin'
+  | 'single_elimination'
+  | 'swiss';
+
+/** Who may enter. `bots` is what makes an event a bot tournament. */
+export type TournamentField = 'open' | 'humans' | 'bots';
+
+/** The order the pairing engine reads the field in. */
+export type TournamentSeeding = 'signup' | 'rating';
+
+/** A round somebody sat out, which is not a match and has no board. */
+export interface TournamentBye {
+  roundNumber: number;
+  playerId: number;
+  player: TournamentPlayer;
+  /** Why they sat out, in the words the bracket shows. */
+  reason?: string;
+}
 
 export type TournamentMatchResult = 'pending' | 'player1_win' | 'player2_win' | 'draw';
 
@@ -375,6 +547,8 @@ export interface TournamentPlayer {
   discord: string;
   agreedToUnfilteredChat: boolean;
   signupOrder: number;
+  /** Their seeding position, set when the event starts and absent before. */
+  seed?: number;
   joinedAtUnixMs: number;
 }
 
@@ -387,7 +561,19 @@ export interface TournamentStanding {
   wins: number;
   losses: number;
   draws: number;
+  /**
+   * Rounds sat out. Each is scored as a win, so this is what explains a win
+   * count larger than the games played.
+   */
+  byes?: number;
   points: number;
+  /**
+   * The round a knockout entrant went out in, absent for somebody still in it.
+   * Only ever set in an elimination bracket, where the ranking is built on it
+   * rather than on points.
+   */
+  eliminatedInRound?: number;
+  seed?: number;
   signupOrder: number;
 }
 
@@ -414,17 +600,75 @@ export interface TournamentMatchState {
 export interface Tournament {
   tournamentId: string;
   name: string;
+  description?: string;
   modeId: ModeID;
   modeName: string;
   status: TournamentStatus;
+  format: TournamentFormat;
+  field: TournamentField;
+  seeding: TournamentSeeding;
+  /** The cap on the field; zero is uncapped. */
+  maxPlayers: number;
+  /** What the host asked for. `rounds` below is the answer to use. */
+  swissRounds?: number;
+  /**
+   * Whether entrants must have verified their account with Discord.
+   *
+   * A second door beside `field`, not a part of it: `field` is what kind of
+   * entrant may play, and this is how sure the host is that the entrant is who
+   * the signup form says. Asked of people only — an engine has no Discord
+   * account, so a bots-only event with this set still admits its engines.
+   */
+  requireDiscord?: boolean;
+  /**
+   * How many rounds the event will play in total, which an elimination bracket
+   * or a Swiss needs published because its later rounds do not exist yet.
+   */
+  rounds: number;
+  initialTimeMs?: number;
+  incrementMs?: number;
+  /** When the host intends to begin. Advisory: nothing starts on it. */
+  startsAtUnixMs?: number;
   players: TournamentPlayer[];
   standings: TournamentStanding[];
   matches: TournamentMatch[];
+  byes?: TournamentBye[];
   createdAtUnixMs: number;
+  publishedAtUnixMs?: number;
   startedAtUnixMs?: number;
   completedAtUnixMs?: number;
+  cancelledAtUnixMs?: number;
+  /**
+   * When it was taken off the public board, absent for an event that is on it.
+   *
+   * Hiding is a listing decision only: a hidden event is still readable at its
+   * own address, still on its entrants' profile pages, and still counted in the
+   * totals. Only an administrator ever sees this set, because the public list
+   * and the socket broadcast both omit hidden events entirely.
+   */
+  hiddenAtUnixMs?: number;
   /** Present on the socket snapshot; absent from a bare REST payload. */
   matchStates?: TournamentMatchState[];
+}
+
+/* --------------------------------------------------------- moderation -- */
+
+/** What a sanction stops. See backend/internal/persistence/moderation.go. */
+export type RestrictionKind = 'mute' | 'ranked' | 'tournament';
+
+/**
+ * A sanction, as the person under it is told about it.
+ *
+ * Deliberately not the whole record: who issued it is an internal note. What
+ * is here is what a screen needs to explain a refusal before the player runs
+ * into one — a disabled chat box that says why beats one that silently
+ * swallows a message.
+ */
+export interface Restriction {
+  kind: RestrictionKind;
+  reason?: string;
+  /** When it lapses, absent for one that stands until it is lifted. */
+  expiresAtUnixMs?: number;
 }
 
 /* -------------------------------------------------------- client messages -- */
@@ -500,6 +744,8 @@ export interface ConnectionReadyMessage {
   modes?: ModeDefinition[];
   defaultTimeControl?: TimeControl;
   engineBots?: BotPresence[];
+  /** The scheduled bot bench, running or coming. See `BotBench`. */
+  botBench?: BotBench;
   modePlayerCounts?: ModeCounts;
   modeQueueCounts?: ModeCounts;
   botPlayerCount?: number;
@@ -507,6 +753,11 @@ export interface ConnectionReadyMessage {
   onlineCount?: number;
   liveGames?: LiveGameSummary[];
   tournaments?: Tournament[];
+  /**
+   * What this account may not do, absent when nothing is in force — which is
+   * the case for almost everybody. See `Restriction`.
+   */
+  restrictions?: Restriction[];
   /** This player's own invitations. */
   challenges?: Challenge[];
   /** The public board of challenges nobody has claimed yet. */
@@ -541,8 +792,31 @@ export interface ConnectionReadyMessage {
    * iOS.
    */
   pushTransports?: PushTransportSupport;
+  /**
+   * Whether this server is on its way out for a new build. Always present, and
+   * `updating: false` most of the time — a client that reloads mid-deploy has to
+   * be told, and one that reloads afterwards has to be told that too.
+   */
+  update?: ServerUpdate;
+  /** The standing announcement, if one is up. Absent means there is none. */
+  notice?: ServerNotice;
 }
 
+/**
+ * The game so far, written as PGN, on every message that hands over a live
+ * board.
+ *
+ * `gameState` is a position and nothing else — the wire has never carried the
+ * moves that made it — so this is the only history a client gets. It matters
+ * most to the two people who saw none of the game: somebody who started
+ * watching at move twenty, and a player who refreshed. Replayed through
+ * `reviewSourceFromPGN`, the same path a finished game's review takes, so a
+ * live move list and that game's review cannot disagree.
+ *
+ * `Result` is `*` while the game is still going. Absent on a message about a
+ * game the server no longer holds the record for, which is why every reader of
+ * it keeps what it already had rather than clearing on a missing field.
+ */
 export type ServerMessage =
   | ConnectionReadyMessage
   | { type: 'authentication_failed'; message?: string }
@@ -560,10 +834,21 @@ export type ServerMessage =
    * host granted. Only ever about the receiver.
    */
   | { type: 'account_updated'; account?: Account }
+  /**
+   * This account's sanctions changed. Only ever about the receiver, and sent
+   * the moment a moderator acts rather than left to be discovered by trying
+   * something and being refused.
+   */
+  | { type: 'restrictions'; restrictions?: Restriction[] }
+  /**
+   * A moderator did something to the game this client is in. Carried on its
+   * own type rather than as an error, because it is not this client's mistake.
+   */
+  | { type: 'moderator_notice'; message?: string }
   | { type: 'live_games'; liveGames?: LiveGameSummary[] }
   | { type: 'open_challenges'; openChallenges?: Challenge[] }
   | { type: 'tournaments'; tournaments?: Tournament[] }
-  | { type: 'engine_bots'; engineBots?: BotPresence[] }
+  | { type: 'engine_bots'; engineBots?: BotPresence[]; botBench?: BotBench }
   | { type: 'bot_unavailable'; message?: string }
   | { type: 'bot_fault'; message?: string; botName?: string }
   | {
@@ -572,6 +857,14 @@ export type ServerMessage =
       botName?: string;
       drain?: BotDrain;
     }
+  /**
+   * The server is being replaced. Sent when a drain starts, when it is called
+   * off, and again when the last game ends — that last one being the moment the
+   * banner should say "restarting now" rather than "an update is coming".
+   */
+  | { type: 'server_update'; update?: ServerUpdate }
+  /** An administrator said something to everybody. Empty text takes it down. */
+  | { type: 'server_notice'; notice?: ServerNotice }
   | { type: 'tournament_rejected'; message?: string }
   | {
       type: 'queue_update';
@@ -594,6 +887,7 @@ export type ServerMessage =
       type: 'match_found';
       color?: PlayerColor;
       gameState?: GameState;
+      pgn?: string;
       chatMessages?: ChatMessage[];
       chatRoomId?: string;
       chatOccupancy?: number;
@@ -609,6 +903,7 @@ export type ServerMessage =
       type: 'game_rejoined';
       color?: PlayerColor;
       gameState?: GameState;
+      pgn?: string;
       reconnectDeadlineUnixMs?: number;
       chatMessages?: ChatMessage[];
       chatRoomId?: string;
@@ -618,13 +913,14 @@ export type ServerMessage =
   | {
       type: 'spectator_joined';
       gameState?: GameState;
+      pgn?: string;
       chatMessages?: ChatMessage[];
       chatRoomId?: string;
       chatOccupancy?: number;
     }
   | { type: 'spectator_left' }
   | { type: 'spectate_unavailable'; message?: string }
-  | { type: 'game_state'; gameState?: GameState; ratingUpdate?: RatingUpdate }
+  | { type: 'game_state'; gameState?: GameState; pgn?: string; ratingUpdate?: RatingUpdate }
   | { type: 'game_unavailable'; message?: string; gameId?: string }
   | { type: 'valid_moves'; from?: Position; validMoves?: Position[] }
   | { type: 'move_rejected'; message?: string }

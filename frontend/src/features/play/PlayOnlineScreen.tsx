@@ -11,8 +11,10 @@ import ModePreview from '@/features/game/ModePreview';
 import SetupPreview from '@/features/game/SetupPreview';
 import PGNImportModal from '@/features/pgn/PGNImportModal';
 import PositionSetupModal from '@/features/pgn/PositionSetupModal';
+import OfficialTournamentBanner from '@/features/tournaments/OfficialTournamentBanner';
 import TournamentSpotlight from '@/features/tournaments/TournamentSpotlight';
 import { reviewSourceFromPGN } from '@/engine/gameReview';
+import { engineUnavailableMessage } from '@/engine/rpsfish/client';
 import { CALLOUT_RESERVE } from '@/features/shell/CalloutLayer';
 import { useWideScreen } from '@/hooks/useBoardLayout';
 import { useLobbyGate, useQueueCall } from '@/hooks/useQueueCall';
@@ -144,6 +146,13 @@ export default function PlayOnlineScreen() {
 
   return (
     <ScreenShell bottomInset={queueCall ? CALLOUT_RESERVE : 0} width={contentWidth.page}>
+      {/*
+        Above the site's own tournaments, and above everything else, for the two
+        days it is on screen at all: it is about an event that is not here and
+        that people would otherwise miss by being here. It takes itself down —
+        see OfficialTournamentBanner.
+      */}
+      <OfficialTournamentBanner />
       <TournamentSpotlight onOpenBoard={() => router.push(links.tournaments())} />
 
       {incomingChallenges.length > 0 || outgoingChallenge || challengeNotice ? (
@@ -268,6 +277,7 @@ export default function PlayOnlineScreen() {
             // Ratings are per mode, so the card shows the one this queue uses.
             const modeElo = account?.modeRatings?.[mode.id]?.elo ?? account?.elo ?? null;
             const searchingHere = queue.isSearching && queue.modeId === mode.id;
+            const engineUnavailable = engineUnavailableMessage(mode.id);
 
             return (
               <View
@@ -298,6 +308,9 @@ export default function PlayOnlineScreen() {
                   >
                     <Text style={styles.howToText}>? How to play</Text>
                   </Pressable>
+                  {engineUnavailable ? (
+                    <Text style={styles.engineNotice}>{engineUnavailable}</Text>
+                  ) : null}
                   {/*
                     The spinner and the ticking timer have moved to the floating
                     bar, which is on every screen rather than only this one. All
@@ -314,7 +327,8 @@ export default function PlayOnlineScreen() {
                       <GhostButton
                         accessibilityLabel={`Analyse ${mode.name} with RPSFish`}
                         compact
-                        label="ANALYZE"
+                        disabled={Boolean(engineUnavailable)}
+                        label={engineUnavailable ? 'ANALYSIS LOCKED' : 'ANALYZE'}
                         onPress={() => router.push(links.analysis(mode.id))}
                       />
                       {searchingHere ? (
@@ -641,6 +655,7 @@ const styles = StyleSheet.create({
   modeObjective: { ...type.body, color: colors.textMuted, marginTop: space.tight },
   howTo: { alignSelf: 'flex-start', marginTop: space.snug, paddingVertical: space.hair },
   howToText: { ...type.label, color: colors.accentSoft, letterSpacing: 0.4 },
+  engineNotice: { ...type.meta, color: colors.accentSoft, marginTop: space.snug },
   modeFooter: {
     flexDirection: 'row',
     alignItems: 'center',

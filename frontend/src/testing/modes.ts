@@ -7,20 +7,33 @@
 
 import type { ModeDefinition, ModeFeature, ModeID } from '@/types/game';
 
-/** The board every current mode opens from. */
+/** The board the two rank-goal modes open from. */
 export const STANDARD_OPENING_ROWS = [
   '...SSS...', '...PPP...', '...RRR...',
   '.........', '.........', '.........',
   '...rrr...', '...ppp...', '...sss...',
 ];
 
+/** Intransitive's diagonal opening, which is the only one that differs. */
+export const INTRANSITIVE_OPENING_ROWS = [
+  '.........', '...RP....', '..RPS....',
+  '.RPS.....', '.PS...sp.', '.....spr.',
+  '....spr..', '....pr...', '.........',
+];
+
 const MODE_NAMES: Record<string, string> = {
   V5: 'Total War',
   V3: 'Infiltration',
+  V6: 'Intransitive',
 };
 
 const MODE_FEATURES: Record<string, ModeFeature[]> = {
   V5: ['territory'],
+  V6: ['no_repetition_draw', 'stalemate_loses'],
+};
+
+const MODE_OPENINGS: Record<string, string[]> = {
+  V6: INTRANSITIVE_OPENING_ROWS,
 };
 
 /** A complete `ModeDefinition` for one mode id. */
@@ -36,9 +49,11 @@ export const testMode = (
   displayOrder: 0,
   playable: true,
   features: MODE_FEATURES[id] ?? [],
-  startingPosition: { rows: [...STANDARD_OPENING_ROWS] },
+  startingPosition: { rows: [...(MODE_OPENINGS[id] ?? STANDARD_OPENING_ROWS)] },
   ...overrides,
 });
 
 /** Every shipped mode, for a script that sweeps all of them. */
-export const ALL_TEST_MODES: readonly ModeDefinition[] = ['V5', 'V3'].map((id) => testMode(id));
+export const ALL_TEST_MODES: readonly ModeDefinition[] = ['V5', 'V3', 'V6'].map((id) =>
+  testMode(id),
+);

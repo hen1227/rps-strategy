@@ -244,7 +244,7 @@ test('a busy engine is joined to the board it is sitting at', () => {
   // rail can only print a number, which is what it used to do.
   assert.equal(seat?.game?.gameId, 'g1');
   assert.equal(seat?.color, 'Blue');
-  assert.equal(seat?.opponent, 'someone');
+  assert.equal(seat?.opponentName, 'someone');
   assert.equal(seat?.mode?.name, 'Total War');
   assert.equal(seat?.status.label, 'PLAYING');
   // A person is in this one, so the board keeps the featured slot at the top of
@@ -271,7 +271,7 @@ test('both engines of a series are listed, and the board is drawn once', () => {
   );
   // Two rows, one game: both point at the same board rather than at two.
   assert.equal(snapshot.engines[1]?.game?.gameId, 'g1');
-  assert.equal(snapshot.engines[0]?.opponent, 'b1-user');
+  assert.equal(snapshot.engines[0]?.opponentName, 'b1-user');
 });
 
 test('engines at work come first, and a private one sorts last', () => {
@@ -359,7 +359,7 @@ test('an engine playing a person leaves that board at the top of the rail', () =
     ['mixed'],
   );
   assert.equal(snapshot.engines[0]?.showsBoard, false);
-  assert.equal(snapshot.engines[0]?.opponent, 'ada');
+  assert.equal(snapshot.engines[0]?.opponentName, 'ada');
 });
 
 test('a series whose engines are not on the roster is still watchable', () => {
@@ -385,6 +385,24 @@ test('an engine shutting down says so ahead of anything else it is doing', () =>
   assert.equal(engineStatus(draining).label, 'SHUTTING DOWN');
   assert.equal(engineStatus(draining).activity, 'draining');
   assert.equal(engineIsAvailable(draining), false);
+});
+
+// A bench is not a shutdown, and the whole reason the server publishes them
+// apart is that saying SHUTTING DOWN against every engine on the ladder for an
+// afternoon reads as a broken server rather than as a scheduled break.
+test('a benched engine is described as benched rather than as shutting down', () => {
+  const benched = engineBot('one', 'Waiting', { benched: true });
+  assert.equal(engineStatus(benched).activity, 'benched');
+  assert.equal(engineStatus(benched).label, 'OFFLINE FOR THE TOURNAMENT');
+  assert.equal(engineIsAvailable(benched), false);
+});
+
+// And it wins over every other reason, including a game the engine is still
+// finishing: PLAYING would invite somebody to wait for the board to clear and
+// then challenge it, which is the one thing that cannot work during a bench.
+test('a bench outranks the game a benched engine is still finishing', () => {
+  const benched = engineBot('one', 'Waiting', { benched: true, busy: true, draining: true });
+  assert.equal(engineStatus(benched).activity, 'benched');
 });
 
 test('an idle engine carries a rating in every mode it plays, not one number', () => {

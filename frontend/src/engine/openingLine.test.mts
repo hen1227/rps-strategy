@@ -53,12 +53,13 @@ test('anything that is not a move reads as no move', () => {
 });
 
 test('a line replays into the position it names', () => {
-  const walk = walkOpeningLine(infiltration, ['d9-c8', 'd2-c3']);
+  // Blue opens, so a line's first move is Blue's.
+  const walk = walkOpeningLine(infiltration, ['d2-c3', 'd9-c8']);
   assert.ok(walk);
   assert.equal(walk.truncated, false);
   assert.equal(walk.steps.length, 2);
-  assert.equal(walk.steps[0]?.mover, 'Red');
-  assert.equal(walk.steps[1]?.mover, 'Blue');
+  assert.equal(walk.steps[0]?.mover, 'Blue');
+  assert.equal(walk.steps[1]?.mover, 'Red');
 
   const rows = startingPositionFromGrid(gameAfterWalk(walk)?.grid);
   assert.deepEqual(rows.rows, [
@@ -79,15 +80,16 @@ test('the empty line is the opening position, with no move to draw', () => {
   assert.ok(walk);
   assert.equal(lastStepOfWalk(walk), null);
   assert.equal(gameAfterWalk(walk), walk.start);
-  assert.equal(walk.start.currentTurn, 'Red');
+  assert.equal(walk.start.currentTurn, 'Blue');
 });
 
 test('a line that stops being legal keeps the boards it did reach', () => {
-  const walk = walkOpeningLine(infiltration, ['d9-c8', 'a1-a2']);
+  // a1 is empty in this opening, so nothing can be moved off it.
+  const walk = walkOpeningLine(infiltration, ['d2-c3', 'a1-a2']);
   assert.ok(walk);
   assert.equal(walk.truncated, true);
   assert.equal(walk.steps.length, 1);
-  assert.equal(lastStepOfWalk(walk)?.notation, 'd9-c8');
+  assert.equal(lastStepOfWalk(walk)?.notation, 'd2-c3');
 });
 
 test('a mode with no starting position has no board to replay onto', () => {
@@ -96,9 +98,10 @@ test('a mode with no starting position has no board to replay onto', () => {
 });
 
 test('a capture is reported so the diagram can ring the square', () => {
-  // Red walks a rock up the b file and Blue's paper takes it on b4.
+  // Blue walks a paper down the b file, Red walks a rock up it, and the paper
+  // takes the rock on b5.
   const walk = walkOpeningLine(infiltration, [
-    'd7-c6', 'd1-c1', 'c6-b5', 'd2-c3', 'b5-b4', 'c3-b4',
+    'd2-c3', 'd7-c6', 'c3-b4', 'c6-b5', 'b4-b5',
   ]);
   assert.ok(walk);
   assert.equal(walk.truncated, false);
@@ -106,7 +109,7 @@ test('a capture is reported so the diagram can ring the square', () => {
   assert.equal(lastStepOfWalk(walk)?.mover, 'Blue');
   assert.deepEqual(
     walk.steps.slice(0, -1).map((step) => step.captured),
-    [false, false, false, false, false],
+    [false, false, false, false],
   );
 });
 

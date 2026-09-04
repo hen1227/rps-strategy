@@ -9,6 +9,7 @@ import { inferMoveBetweenGrids } from '@/engine/moveDiff';
 import { openingLineOf } from '@/engine/openingLine';
 import { encodePGN, encodePosition, resultFor, type WritableMove } from '@/engine/pgn';
 import {
+  FIRST_TO_MOVE,
   opposingColor,
   samePosition,
   type GameEndReason,
@@ -209,7 +210,7 @@ export const createLocalSlice: StateCreator<GameStore, [], [], LocalSlice> = (se
      * Open a game both players share. Nothing is sent anywhere, which is what
      * lets this start — and finish — with no connection at all.
      */
-    startLocalGame: ({ mode, viewColor = 'Red' }) => {
+    startLocalGame: ({ mode, viewColor = FIRST_TO_MOVE }) => {
       if (!mode) {
         set({ error: 'Choose a game mode before starting a local game.' });
         return;
@@ -228,10 +229,10 @@ export const createLocalSlice: StateCreator<GameStore, [], [], LocalSlice> = (se
         gameId: `local-${mode.id}-${Date.now()}`,
         modeId: mode.id,
         startedAtUnixMs: Date.now(),
-        // Red opens, and Red is the side this board is drawn from by default,
-        // so the first player to move is the one facing the right way up. A
-        // rematch passes back whichever way round the players had turned it,
-        // because they have not moved.
+        // The board is drawn from the side that opens by default, so the first
+        // player to move is the one facing the right way up. A rematch passes
+        // back whichever way round the players had turned it, because they have
+        // not moved.
         viewColor,
       };
 
@@ -383,7 +384,7 @@ export const createLocalSlice: StateCreator<GameStore, [], [], LocalSlice> = (se
           { name: 'ModeId', value: localGame.mode.id },
           { name: 'BoardSize', value: '9' },
           { name: 'SetUp', value: '1' },
-          { name: 'FEN', value: encodePosition(start.grid, 'Red') },
+          { name: 'FEN', value: encodePosition(start.grid, start.currentTurn) },
           { name: 'RedId', value: 'local:red' },
           { name: 'BlueId', value: 'local:blue' },
           { name: 'Ranked', value: 'false' },

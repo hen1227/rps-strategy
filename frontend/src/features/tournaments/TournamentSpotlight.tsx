@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { colors } from '@/theme';
+import { useWatchGame } from '@/hooks/useWatchGame';
 import { useGameStore } from '@/store/gameStore';
 import {
   hiddenHomeTournamentCount,
@@ -35,7 +36,7 @@ export default function TournamentSpotlight({ onOpenBoard }: TournamentSpotlight
   const tournaments = useGameStore((state) => state.tournaments);
   const connectionStatus = useGameStore((state) => state.connectionStatus);
   const spectatedGameId = useGameStore((state) => state.spectatedGameId);
-  const spectateGame = useGameStore((state) => state.spectateGame);
+  const watchGame = useWatchGame();
   const readyForTournamentMatch = useGameStore((state) => state.readyForTournamentMatch);
   const withdrawFromTournamentMatch = useGameStore(
     (state) => state.withdrawFromTournamentMatch,
@@ -64,7 +65,7 @@ export default function TournamentSpotlight({ onOpenBoard }: TournamentSpotlight
           key={tournament.tournamentId}
           onOpenBoard={onOpenBoard}
           onPlay={(match) => readyForTournamentMatch(tournament.tournamentId, match.matchId)}
-          onWatch={(gameId) => spectateGame(gameId)}
+          onWatch={watchGame}
           onWithdraw={(match) =>
             withdrawFromTournamentMatch(tournament.tournamentId, match.matchId)
           }
@@ -144,6 +145,7 @@ function TournamentCard({
           <TournamentSignupForm
             compact
             onSignedUp={() => setSignupOpen(false)}
+            requireDiscord={tournament.requireDiscord}
             tournamentId={tournament.tournamentId}
           />
         ) : (

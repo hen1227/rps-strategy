@@ -94,6 +94,26 @@ export const MODE_SCORE_SCALE: Partial<Record<ModeID, ModeScoreScale>> = Object.
   // alone.
   V5: Object.freeze({ army: 9, choice: 15, material: 70 }),
   V3: Object.freeze({ army: 9, choice: 50, material: 35 }),
+  // Intransitive is the one mode whose `army` is not 9: its two diagonal
+  // wedges are ten pieces a side, so a resignation threshold stated as a
+  // share of an army has to read it from here rather than assume.
+  //
+  // `material` is hand-copied from `intransitive_material` and moved with it
+  // when the mode's weights were re-tuned jointly (RPSFish EVAL_RESULTS.md
+  // H5): 35 to 49.
+  //
+  // `choice` was measured at 26 by `--spread` (p90 of best minus third best,
+  // 120 openings, depth 6) under the weights that re-tune replaced, and every
+  // score in the mode moved with it, so **this number is stale and wants
+  // re-measuring** before the mode's engine is public again. It is left rather
+  // than guessed at: the reasoning behind 26 still holds in direction -- the
+  // mode's race weights are a fraction of Infiltration's, so its root scores
+  // sit in a narrower band than Infiltration's without being as flat as Total
+  // War's -- and a fitted constant replaced by a guess reads as though it had
+  // been measured. Nothing consumes it today, because the public engine is
+  // held out of this mode until after the tournament; see
+  // `engineUnavailableMessage`.
+  V6: Object.freeze({ army: 10, choice: 26, material: 49 }),
 });
 
 // Total War's scale is the fallback: it is the narrower of the two shipped

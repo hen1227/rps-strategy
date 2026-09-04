@@ -30,6 +30,7 @@ import type { ReviewEntry } from './rpsfish/protocol';
 import type {
   GameEndReason,
   ModeDefinition,
+  ModeFeature,
   ModeID,
   Move,
   Piece,
@@ -265,6 +266,17 @@ const MODE_FALLBACK_ROWS = [
   '...rrr...', '...ppp...', '...sss...',
 ];
 
+/**
+ * The rules a stand-in definition has to carry, because they are what the
+ * replay below adjudicates on. The same answers the server's mode registry
+ * gives; only the ones that change the outcome of a position are listed, so a
+ * mode not named here replays under the standard rules.
+ */
+const MODE_FALLBACK_FEATURES: Record<string, ModeFeature[]> = {
+  V5: ['territory'],
+  V6: ['no_repetition_draw', 'stalemate_loses'],
+};
+
 export class ReviewError extends Error {
   constructor(message: string) {
     super(message);
@@ -289,7 +301,7 @@ const modeFor = (
     objective: '',
     displayOrder: 0,
     playable: false,
-    features: modeId === 'V5' ? ['territory'] : [],
+    features: MODE_FALLBACK_FEATURES[modeId] ?? [],
     startingPosition: { rows: MODE_FALLBACK_ROWS },
   };
 };
@@ -363,9 +375,9 @@ export const reviewSourceFromPGN = (
   const start = setUp
     ? (() => {
         const { grid, currentTurn } = decodePosition(setUp);
-        return createAnalysisGameFrom(mode, grid, currentTurn === 'Blue' ? 'Blue' : 'Red');
+        return createAnalysisGameFrom(mode, grid, currentTurn);
       })()
-    : createAnalysisGameFrom(mode, decodePosition(MODE_FALLBACK_ROWS.join('/')).grid, 'Red');
+    : createAnalysisGameFrom(mode, decodePosition(MODE_FALLBACK_ROWS.join('/')).grid);
 
   const positions: AnalysisGame[] = [start];
   const moves: RecordedMove[] = [];
@@ -402,9 +414,9 @@ export const reviewSourceFromPGN = (
     moves,
     gameId: parsed.tag('GameId'),
     event: parsed.tag('Event'),
-    // Opening moves that were dealt rather than chosen. A bot series starts
-    // each pair from a seeded random opening, and grading those as though
-    // somebody picked them would misreport both engines' accuracy.
+    // Opening moves that were dealt rather than chosen. A bot series deals
+    // each pair an opening out of the published book, and grading those as
+    // though somebody picked them would misreport both engines' accuracy.
     bookPlies: Number.parseInt(parsed.tag('BookPlies'), 10) || 0,
     seriesId: parsed.tag('SeriesId') || null,
     ranked: parsed.tag('Ranked') === 'true',
@@ -539,8 +551,8 @@ export interface SummarySource<TMove extends GradableMove = RecordedMove> {
  * not that player's accuracy and should not be labelled as one.
  *
  * `bookPlies` is how many opening moves were dealt rather than chosen — a bot
- * series starts each pair from a seeded random opening, recorded in the PGN's
- * BookPlies tag. Those moves are still graded, because the evaluation curve
+ * series deals each pair an opening out of the published book, recorded in the
+ * PGN's BookPlies tag. Those moves are still graded, because the evaluation curve
  * would have a hole in it otherwise, but they are marked and left out of the
  * accuracy average: blaming an engine for a move nobody made is a lie about
  * how well it played.

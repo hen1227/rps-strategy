@@ -1,4 +1,4 @@
-import { memo, useId, useState } from 'react';
+import { memo, useId, useMemo, useState } from 'react';
 import { Image, StyleSheet, View } from 'react-native';
 import Svg, { Defs, Line, Marker, Polygon } from 'react-native-svg';
 
@@ -110,7 +110,11 @@ export default memo(function MiniBoard({
     ? Math.hypot(move.to.x - move.from.x, move.to.y - move.from.y) || 1
     : 1;
   const stepX = move ? (move.to.x - move.from.x) / span : 0;
-  const stepY = move ? (move.to.y - move.from.y) / span : 0;
+  // Rank 1 is drawn at the bottom, the way Board draws it, so a rank is
+  // mirrored on the way to the screen and so is anything measured up the page.
+  const stepY = move ? (move.from.y - move.to.y) / span : 0;
+  const displayY = (y: number) => rows - 1 - y;
+  const drawnRows = useMemo(() => [...grid].reverse(), [grid]);
 
   return (
     <View
@@ -132,10 +136,11 @@ export default memo(function MiniBoard({
           />
         </View>
       ) : null}
-      {grid.map((row, y) => (
-        <View key={`row-${y}`} style={styles.row}>
-          {row.map((tile, x) => {
-            const tint = tintForTile(modeId, tile, rows);
+      {drawnRows.map((row) => (
+        <View key={`row-${row[0]?.y ?? 0}`} style={styles.row}>
+          {row.map((tile) => {
+            const { x, y } = tile;
+            const tint = tintForTile(modeId, tile, { columns, rows });
             const overlayCell = overlayCellAt(overlay, x, y);
             const isFrom = move?.from.x === x && move.from.y === y;
             const isTo = move?.to.x === x && move.to.y === y;
@@ -227,8 +232,8 @@ export default memo(function MiniBoard({
             strokeWidth={0.13}
             x1={move.from.x + 0.5 + stepX * ARROW_TAIL_CLEARANCE}
             x2={move.to.x + 0.5 - stepX * ARROW_HEAD_CLEARANCE}
-            y1={move.from.y + 0.5 + stepY * ARROW_TAIL_CLEARANCE}
-            y2={move.to.y + 0.5 - stepY * ARROW_HEAD_CLEARANCE}
+            y1={displayY(move.from.y) + 0.5 + stepY * ARROW_TAIL_CLEARANCE}
+            y2={displayY(move.to.y) + 0.5 - stepY * ARROW_HEAD_CLEARANCE}
           />
         </Svg>
       )}

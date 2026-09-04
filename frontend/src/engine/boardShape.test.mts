@@ -70,11 +70,12 @@ test('movement stops at the real edges', () => {
 
 test('a game plays on a five by seven board', () => {
   const game = createAnalysisGame(rectangleMode());
-  const moves = validMovesFor(game, { x: 0, y: 6 });
+  // Blue opens, and Blue's corner rock stands on a1.
+  const moves = validMovesFor(game, { x: 0, y: 0 });
   assert.equal(moves.length, 2, 'the corner rock has two moves');
-  const played = applyAnalysisMove(game, { x: 0, y: 6 }, { x: 0, y: 5 });
+  const played = applyAnalysisMove(game, { x: 0, y: 0 }, { x: 0, y: 1 });
   assert.ok(played, 'a legal move on a rectangle is legal');
-  assert.equal(played.game.currentTurn, 'Blue');
+  assert.equal(played.game.currentTurn, 'Red');
   assert.equal(boardWidth(played.game.grid), 5);
 });
 
@@ -84,9 +85,11 @@ test("Infiltration's goal rank is the board's last, not rank nine", () => {
   const game = createAnalysisGame(rectangleMode('V3'), {
     rows: ['.....', '.....', '.....', '.....', '.....', '....S', 'r....'],
   });
-  const blueToMove = applyAnalysisMove(game, { x: 0, y: 6 }, { x: 0, y: 5 });
-  assert.ok(blueToMove);
-  const infiltrated = applyAnalysisMove(blueToMove.game, { x: 4, y: 5 }, { x: 4, y: 6 });
+  const redToMove = applyAnalysisMove(game, { x: 4, y: 5 }, { x: 3, y: 5 });
+  assert.ok(redToMove);
+  const backToBlue = applyAnalysisMove(redToMove.game, { x: 0, y: 6 }, { x: 0, y: 5 });
+  assert.ok(backToBlue);
+  const infiltrated = applyAnalysisMove(backToBlue.game, { x: 3, y: 5 }, { x: 3, y: 6 });
   assert.ok(infiltrated);
   assert.equal(infiltrated.game.status, 'Finished');
   assert.equal(infiltrated.game.winner, 'Blue');

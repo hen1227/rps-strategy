@@ -17,9 +17,15 @@ export interface StatusBadge {
 }
 
 export const TOURNAMENT_STATUS: Record<TournamentStatus, StatusBadge> = {
+  // A draft only ever reaches an administrator — the public board and the
+  // socket broadcast both filter them out — so this label is only ever read on
+  // the admin screen. It is here rather than there so that every status is
+  // described in one place.
+  draft: { label: 'DRAFT', tone: 'neutral' },
   registration: { label: 'REGISTRATION OPEN', tone: 'accent' },
   in_progress: { label: 'IN PROGRESS', tone: 'warm' },
   completed: { label: 'COMPLETE', tone: 'cool' },
+  cancelled: { label: 'CANCELLED', tone: 'live' },
 };
 
 export const statusOf = (tournament: Tournament | null | undefined): StatusBadge =>

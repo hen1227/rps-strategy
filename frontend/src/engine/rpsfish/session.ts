@@ -13,7 +13,9 @@
 // calls to make, and in what order, is in this file.
 
 import {
+  ENGINE_MODE_CODES,
   STOP_REASONS,
+  engineUnavailableMessage,
   squareFromIndex,
   type Analysis,
   type AnalyzePositionRequest,
@@ -101,14 +103,6 @@ export type EngineLock = <Result>(unit: () => Promise<Result>) => Promise<Result
 
 const withoutLock: EngineLock = (unit) => unit();
 
-// The modes RPSFish searches, and the reason this list is not open. The engine
-// is nine by nine to its foundations — its boards are `u128` bitmaps over
-// eighty-one squares (`RPSFish/src/position.rs`) and its search prunes on proofs
-// that hold only for the rock-paper-scissors three-cycle — so a mode of another
-// shape or another piece set is not a mode it can be asked about. A mode that is
-// not here is refused by `encodeEnginePosition` below, loudly, rather than
-// encoded onto the wrong board.
-const MODE_CODES: Record<string, number> = { V5: 1, V3: 2 };
 const COLOR_CODES: Record<string, number> = { Red: 0, Blue: 1 };
 const PIECE_OFFSETS: Record<string, number> = {
   'Red:Rock': 0,
@@ -170,7 +164,9 @@ const encodePosition = (position: EnginePosition): bigint[] => {
 };
 
 export const encodeEnginePosition = (position: EnginePosition): EncodedPosition => {
-  const mode = MODE_CODES[position.modeId];
+  const unavailable = engineUnavailableMessage(position.modeId);
+  if (unavailable) throw new Error(unavailable);
+  const mode = ENGINE_MODE_CODES[position.modeId];
   const side = COLOR_CODES[position.currentTurn];
   if (mode === undefined || side === undefined) {
     throw new Error('RPSFish does not support this game mode or side.');

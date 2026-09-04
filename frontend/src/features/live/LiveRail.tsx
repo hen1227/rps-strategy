@@ -8,10 +8,12 @@ import { useLiveSnapshot } from './useLiveSnapshot';
 import BotIcon from '@/features/bots/BotIcon';
 import { links } from '@/navigation/links';
 import { botIconUrl } from '@/store/api/bots';
+import { useWatchGame } from '@/hooks/useWatchGame';
 import { useGameStore } from '@/store/gameStore';
-import { titledName } from '@/store/spectateSelectors';
+import { playerName, titledName } from '@/store/spectateSelectors';
 import { colors, radius, space, type } from '@/theme';
 import { Badge, GhostButton, PrimaryButton } from '@/ui/primitives';
+import TitleTag from '@/ui/TitleTag';
 
 // What is happening right now.
 //
@@ -55,9 +57,6 @@ interface EngineLineProps {
  */
 function EngineLine({ busy, onWatch, seat }: EngineLineProps) {
   const { bot, game, ratings, status } = seat;
-  // The modes it plays are no longer worth spelling out here: the ratings line
-  // below names every one of them, and with a number against each.
-  const meta = game ? `vs ${seat.opponent} · ${game.modeName}` : bot.engineName || 'engine';
 
   return (
     <View style={styles.engine}>
@@ -67,9 +66,25 @@ function EngineLine({ busy, onWatch, seat }: EngineLineProps) {
           <Text numberOfLines={1} style={styles.rowTitle}>
             {bot.name}
           </Text>
-          <Text numberOfLines={1} style={styles.rowMeta}>
-            {meta}
-          </Text>
+          {game ? (
+            <View style={styles.engineMeta}>
+              <Text style={styles.engineMetaText}>vs</Text>
+              <TitleTag title={seat.opponentTitle} />
+              <Text numberOfLines={1} style={styles.engineOpponent}>
+                {seat.opponentName}
+              </Text>
+              <Text numberOfLines={1} style={styles.engineMetaText}>
+                · {game.modeName}
+              </Text>
+            </View>
+          ) : (
+            // The modes it plays are no longer worth spelling out here: the
+            // ratings line below names every one of them, and with a number
+            // against each.
+            <Text numberOfLines={1} style={styles.rowMeta}>
+              {bot.engineName || 'engine'}
+            </Text>
+          )}
           {ratings.length > 0 ? (
             <Text numberOfLines={1} style={styles.ratings}>
               {ratings.map((rating, index) => (
@@ -93,7 +108,7 @@ function EngineLine({ busy, onWatch, seat }: EngineLineProps) {
 export default function LiveRail() {
   const router = useRouter();
   const snapshot = useLiveSnapshot();
-  const spectateGame = useGameStore((state) => state.spectateGame);
+  const watchGame = useWatchGame();
   const spectatedGameId = useGameStore((state) => state.spectatedGameId);
   const acceptChallenge = useGameStore((state) => state.acceptChallenge);
   const cancelChallenge = useGameStore((state) => state.cancelChallenge);
@@ -164,20 +179,30 @@ export default function LiveRail() {
               busy={busy}
               game={featuredGame}
               mode={snapshot.modes.find((mode) => mode.id === featuredGame.modeId) ?? null}
-              onWatch={spectateGame}
+              onWatch={watchGame}
             />
             {otherLiveGames.length > 0 ? (
               <View style={styles.moreLive}>
                 <Text style={styles.moreLiveTitle}>MORE LIVE BOARDS</Text>
                 {otherLiveGames.map((game) => {
+                  const redName = playerName(game.redPlayer, 'Red');
+                  const blueName = playerName(game.bluePlayer, 'Blue');
                   const red = titledName(game.redPlayer, 'Red');
                   const blue = titledName(game.bluePlayer, 'Blue');
                   return (
                     <View key={game.gameId} style={styles.row}>
                       <View style={styles.rowCopy}>
-                        <Text numberOfLines={1} style={styles.rowTitle}>
-                          {red} <Text style={styles.dim}>vs</Text> {blue}
-                        </Text>
+                        <View style={styles.rowNames}>
+                          <TitleTag title={game.redPlayer?.title} />
+                          <Text numberOfLines={1} style={styles.rowName}>
+                            {redName}
+                          </Text>
+                          <Text style={styles.dim}>vs</Text>
+                          <TitleTag title={game.bluePlayer?.title} />
+                          <Text numberOfLines={1} style={styles.rowName}>
+                            {blueName}
+                          </Text>
+                        </View>
                         <Text numberOfLines={1} style={styles.rowMeta}>
                           {liveGameMeta(game, red, blue)}
                         </Text>
@@ -187,7 +212,7 @@ export default function LiveRail() {
                         compact
                         disabled={busy}
                         label="WATCH"
-                        onPress={() => spectateGame(game.gameId)}
+                        onPress={() => watchGame(game.gameId)}
                       />
                     </View>
                   );
@@ -269,18 +294,10 @@ export default function LiveRail() {
               <View style={styles.divider} />
             ) : null}
             <Block
-              action={
-                <GhostButton
-                  accessibilityLabel="Browse every engine"
-                  compact
-                  label="BROWSE"
-                  onPress={() => router.push(links.bots())}
-                />
-              }
               title="Engines"
             >
               {snapshot.engines.map((seat) => (
-                <EngineLine busy={busy} key={seat.key} onWatch={spectateGame} seat={seat} />
+                <EngineLine busy={busy} key={seat.key} onWatch={watchGame} seat={seat} />
               ))}
             </Block>
           </View>
@@ -352,7 +369,18 @@ const styles = StyleSheet.create({
   // the badge and the button off the end of it.
   rowCopy: { flex: 1, minWidth: 0, gap: space.tight, alignItems: 'flex-start' },
   rowTitle: { ...type.rowTitle, color: colors.text },
+  rowNames: { flexDirection: 'row', alignItems: 'center', gap: space.tight, minWidth: 0 },
+  rowName: { ...type.rowTitle, color: colors.text, flexShrink: 1 },
   rowMeta: { ...type.meta, color: colors.textFaint, marginTop: space.hair },
+  engineMeta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.tight,
+    minWidth: 0,
+    marginTop: space.hair,
+  },
+  engineMetaText: { ...type.meta, color: colors.textFaint },
+  engineOpponent: { ...type.meta, color: colors.textFaint, flexShrink: 1 },
   // The mode code stays faint and the number does not: the rating is what is
   // being read here, and the code is only what it belongs to.
   ratings: { ...type.meta, color: colors.textFaint },

@@ -1,12 +1,13 @@
 import { StyleSheet, Text, View } from 'react-native';
 
 import BotIcon from '@/features/bots/BotIcon';
+import { links } from '@/navigation/links';
 import { botIconUrl } from '@/store/api/bots';
 import { useGameStore } from '@/store/gameStore';
 import { colors, radius, space, type } from '@/theme';
 import ListRow from '@/ui/ListRow';
 import TitleTag from '@/ui/TitleTag';
-import { Badge } from '@/ui/primitives';
+import { Badge, GhostLink } from '@/ui/primitives';
 import type { ModeID } from '@/types/game';
 import type { LeaderboardEntry } from '@/types/protocol';
 
@@ -84,7 +85,24 @@ export default function LadderRows({
               {entry.userId === highlightUserId ? <Badge label="YOU" tone="accent" /> : null}
             </View>
           }
-          trailing={<Text style={styles.elo}>{entry.elo}</Text>}
+          trailing={
+            <View style={styles.trailing}>
+              <Text style={styles.elo}>{entry.elo}</Text>
+              {/*
+                The ladder was the site's one big list of names and every one of
+                them was a dead end. A page exists for anybody who has signed in
+                with Discord and for every engine, which between them is every
+                row that can reach a board like this — an anonymous guest cannot
+                be rated, so cannot be here.
+              */}
+              <GhostLink
+                accessibilityLabel={`Open ${entry.username}'s page`}
+                compact
+                href={links.player(entry.username)}
+                label="PROFILE"
+              />
+            </View>
+          }
         />
       ))}
     </View>
@@ -104,5 +122,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.accentSurfaceQuiet,
     paddingHorizontal: space.snug,
   },
+  trailing: { flexDirection: 'row', alignItems: 'center', gap: space.small },
   elo: { ...type.cardTitle, color: colors.textStrong, minWidth: 46, textAlign: 'right' },
 });

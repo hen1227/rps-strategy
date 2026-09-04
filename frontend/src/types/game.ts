@@ -66,14 +66,30 @@ export const opposingColor = (color: SideColor): SideColor =>
   color === 'Red' ? 'Blue' : 'Red';
 
 /**
+ * The side that opens a game, and so the side written like White.
+ *
+ * It takes the `1.` in a PGN, it is the seat matchmaking hands to whoever asked
+ * for the game, and it is drawn at the bottom of the board for a spectator.
+ * Named rather than spelled out at each of those places because they are all
+ * the same fact — and because it mirrors `game.FirstToMove` in the backend,
+ * which is where the rule actually lives.
+ */
+export const FIRST_TO_MOVE: SideColor = 'Blue';
+
+/**
  * Deliberately opaque. The backend registry decides which modes exist, and a
  * newly registered mode may use any stable id, so nothing here may assume the
  * set is closed. The three literals are the ones that exist today and are
  * spelled out only so that fixtures and mode-keyed tables can be checked.
  */
-export type ModeID = 'V5' | 'V3' | (string & {});
+export type ModeID = 'V5' | 'V3' | 'V6' | (string & {});
 
-export type ModeFeature = 'territory';
+/**
+ * A rule or a display fact a mode declares, from the backend's own
+ * `ModeFeature`. `territory` is drawn; the other two are rules the engine here
+ * has to follow, because this module replays games the server adjudicated.
+ */
+export type ModeFeature = 'territory' | 'no_repetition_draw' | 'stalemate_loses';
 
 export type GameStatus = 'InProgress' | 'Finished';
 
@@ -82,6 +98,7 @@ export type GameEndReason =
   | 'annihilation'
   | 'territory'
   | 'infiltration'
+  | 'corner'
   | 'timeout'
   | 'resignation'
   | 'draw_agreement'
@@ -170,6 +187,13 @@ export interface ModeDefinition {
   playable: boolean;
   features: ModeFeature[];
   startingPosition: StartingPosition;
+  /**
+   * The day this mode's rules last changed, `YYYY-MM-DD`.
+   *
+   * Optional because a mode fabricated in the Lab has no publication date, and
+   * because a server that predates the field sends none.
+   */
+  rulesPublished?: string;
 }
 
 export const modeHasFeature = (mode: ModeDefinition | null | undefined, feature: ModeFeature) =>

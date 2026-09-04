@@ -143,11 +143,32 @@ const FAST_REPLAY_MAX_DURATION = 220;
 const FAST_REPLAY_MIN_DURATION = 72;
 const FAST_REPLAY_MOVE_DURATION = 12;
 
-const displayCenter = (value: number, isFlipped: boolean, extent: number) =>
-  (isFlipped ? extent - 1 - value : value) + 0.5;
+// The board is drawn the way a chessboard is: file a on the left, rank 1 at the
+// bottom. Rank 1 is Blue's home boundary, so an unturned board is already
+// Blue's own view, and turning it round for Red is the half turn a chessboard
+// makes for Black -- which mirrors the files and un-mirrors the ranks.
+//
+// Two helpers rather than one because the two axes no longer answer the same
+// way, and each is its own inverse, so the same call converts a square to the
+// screen and a screen square back.
+const displayFile = (x: number, isFlipped: boolean, columns: number) =>
+  isFlipped ? columns - 1 - x : x;
 
-const displayCoordinate = (value: number, isFlipped: boolean, extent: number) =>
-  isFlipped ? extent - 1 - value : value;
+const displayRank = (y: number, isFlipped: boolean, rows: number) =>
+  isFlipped ? y : rows - 1 - y;
+
+const displayCoordinate = (
+  value: number,
+  isFlipped: boolean,
+  extent: number,
+  axis: 'x' | 'y',
+) => (axis === 'x' ? displayFile(value, isFlipped, extent) : displayRank(value, isFlipped, extent));
+
+const fileCenter = (x: number, isFlipped: boolean, columns: number) =>
+  displayFile(x, isFlipped, columns) + 0.5;
+
+const rankCenter = (y: number, isFlipped: boolean, rows: number) =>
+  displayRank(y, isFlipped, rows) + 0.5;
 
 const pieceSizeForBoard = (boardSize: number) => Math.max(20, Math.min(46, boardSize / 12));
 const moveBadgeSizeForBoard = (boardSize: number, shape: BoardShape) =>
@@ -164,10 +185,11 @@ const positionFromDrag = (
   const squareSize = squareSizeFor(boardSize, shape);
   const displayXOffset = Math.round(dx / squareSize);
   const displayYOffset = Math.round(dy / squareSize);
-  const direction = isFlipped ? -1 : 1;
+  // Down the screen is down the ranks only on a turned board, which is the one
+  // axis the two views disagree about.
   const to = {
-    x: from.x + displayXOffset * direction,
-    y: from.y + displayYOffset * direction,
+    x: from.x + displayXOffset * (isFlipped ? -1 : 1),
+    y: from.y + displayYOffset * (isFlipped ? 1 : -1),
   };
 
   if (to.x < 0 || to.x >= shape.columns || to.y < 0 || to.y >= shape.rows) {
@@ -204,9 +226,10 @@ const positionFromClientPoint = (
     return null;
   }
 
-  return isFlipped
-    ? { x: shape.columns - 1 - displayX, y: shape.rows - 1 - displayY }
-    : { x: displayX, y: displayY };
+  return {
+    x: displayFile(displayX, isFlipped, shape.columns),
+    y: displayRank(displayY, isFlipped, shape.rows),
+  };
 };
 
 interface DraggablePieceProps {
@@ -437,8 +460,8 @@ const ReplayPiece = memo(function ReplayPiece({
   const offsetFor = (position: Position, axis: 'x' | 'y') => {
     const extent = axis === 'x' ? shape.columns : shape.rows;
     return (
-      (displayCoordinate(position[axis], isFlipped, extent) -
-        displayCoordinate(first ? first[axis] : 0, isFlipped, extent)) *
+      (displayCoordinate(position[axis], isFlipped, extent, axis) -
+        displayCoordinate(first ? first[axis] : 0, isFlipped, extent, axis)) *
       squareSize
     );
   };
@@ -461,9 +484,9 @@ const ReplayPiece = memo(function ReplayPiece({
         styles.movingPieceLayout,
         {
           height: `${rowPercent(shape)}%`,
-          left: `${displayCoordinate(first.x, isFlipped, shape.columns) * columnPercent(shape)}%`,
+          left: `${displayFile(first.x, isFlipped, shape.columns) * columnPercent(shape)}%`,
           opacity: replayPieceOpacity(progress, track, steps),
-          top: `${displayCoordinate(first.y, isFlipped, shape.rows) * rowPercent(shape)}%`,
+          top: `${displayRank(first.y, isFlipped, shape.rows) * rowPercent(shape)}%`,
           width: `${columnPercent(shape)}%`,
           transform: [
             { translateX: translate('x') },
@@ -590,7 +613,13 @@ export interface BoardProps {
    * context rather than a control. See `./overlay.ts`.
    */
   overlay?: BoardOverlay | null;
-  /** The side the board is drawn from. Blue sees it flipped. */
+  /**
+   * The side the board is drawn from. Red sees it flipped.
+   *
+   * Rank 1 is Blue's home boundary and is drawn at the bottom, the way rank 1
+   * is drawn at the bottom of a chessboard, so an unflipped board is already
+   * the view of the side that opens.
+   */
   playerColor: PlayerColor | null;
   /**
    * Where along `replayPositions` the board is standing. Together they let a
@@ -630,7 +659,7 @@ export default function Board({
   const [backgroundFailed, setBackgroundFailed] = useState<string | null>(null);
   const overArt = Boolean(boardBackground) && boardBackground !== backgroundFailed;
 
-  const isFlipped = playerColor === 'Blue';
+  const isFlipped = playerColor === 'Red';
   // The board's shape comes from the grid it was handed. Nothing here may
   // assume nine: a spec-defined mode is any rectangle, and the frame below
   // sizes itself to fit inside the square the layout set aside.
@@ -643,10 +672,15 @@ export default function Board({
   const overlayLabelSize = Math.max(8, Math.round(boardSize / 62));
   const activeMoveColor = movableColor ?? playerColor;
   const validMoveKeys = new Set(validMoves.map(({ x, y }) => `${x}:${y}`));
-  const displayedGrid = useMemo(() => {
-    if (!isFlipped) return grid;
-    return [...grid].reverse().map((row) => [...row].reverse());
-  }, [grid, isFlipped]);
+  // Rank 1 is drawn at the bottom, so the rows are always reversed on the way
+  // to the screen; a turned board mirrors the files instead.
+  const displayedGrid = useMemo(
+    () =>
+      isFlipped
+        ? grid.map((row) => [...row].reverse())
+        : [...grid].reverse(),
+    [grid, isFlipped],
+  );
 
   const handleDragStart = useCallback(
     (position: Position) => {
@@ -953,7 +987,7 @@ export default function Board({
               const isHighlighted = highlightKeys.has(`${tile.x}:${tile.y}`);
               const isLastMoveFrom = samePosition(displayedLastMove?.from, position);
               const isLastMoveTo = samePosition(displayedLastMove?.to, position);
-              const tint = tintForTile(modeId, tile, shape.rows);
+              const tint = tintForTile(modeId, tile, shape);
               const overlayCell = overlayCellAt(overlay, tile.x, tile.y);
               const overlayLabel = overlayCell?.describe ? `, ${overlayCell.describe}` : '';
               const tintLabel = tint
@@ -1125,10 +1159,10 @@ export default function Board({
               </Defs>
               {analysisArrows.slice(0, 3).map((arrow, index) => {
                 const color = board.analysisArrows[index];
-                const fromX = displayCenter(arrow.from.x, isFlipped, shape.columns);
-                const fromY = displayCenter(arrow.from.y, isFlipped, shape.rows);
-                const toX = displayCenter(arrow.to.x, isFlipped, shape.columns);
-                const toY = displayCenter(arrow.to.y, isFlipped, shape.rows);
+                const fromX = fileCenter(arrow.from.x, isFlipped, shape.columns);
+                const fromY = rankCenter(arrow.from.y, isFlipped, shape.rows);
+                const toX = fileCenter(arrow.to.x, isFlipped, shape.columns);
+                const toY = rankCenter(arrow.to.y, isFlipped, shape.rows);
                 return (
                   <Line
                     key={`${arrow.from.x}:${arrow.from.y}-${arrow.to.x}:${arrow.to.y}`}
@@ -1177,10 +1211,10 @@ export default function Board({
                   stroke={ANNOTATION_COLOR}
                   strokeLinecap="round"
                   strokeWidth={0.12}
-                  x1={displayCenter(arrow.from.x, isFlipped, shape.columns)}
-                  x2={displayCenter(arrow.to.x, isFlipped, shape.columns)}
-                  y1={displayCenter(arrow.from.y, isFlipped, shape.rows)}
-                  y2={displayCenter(arrow.to.y, isFlipped, shape.rows)}
+                  x1={fileCenter(arrow.from.x, isFlipped, shape.columns)}
+                  x2={fileCenter(arrow.to.x, isFlipped, shape.columns)}
+                  y1={rankCenter(arrow.from.y, isFlipped, shape.rows)}
+                  y2={rankCenter(arrow.to.y, isFlipped, shape.rows)}
                 />
               ))}
             </Svg>
@@ -1237,8 +1271,8 @@ export default function Board({
               styles.moveQualityBadgeLayout,
               {
                 height: `${rowPercent(shape)}%`,
-                left: `${displayCoordinate(displayedLastMove.to.x, isFlipped, shape.columns) * columnPercent(shape)}%`,
-                top: `${displayCoordinate(displayedLastMove.to.y, isFlipped, shape.rows) * rowPercent(shape)}%`,
+                left: `${displayFile(displayedLastMove.to.x, isFlipped, shape.columns) * columnPercent(shape)}%`,
+                top: `${displayRank(displayedLastMove.to.y, isFlipped, shape.rows) * rowPercent(shape)}%`,
                 width: `${columnPercent(shape)}%`,
               },
             ]}

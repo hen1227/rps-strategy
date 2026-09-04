@@ -444,14 +444,14 @@ function BotBattle({ blueProfile, mode, redProfile }: BotBattleProps) {
     <View style={[styles.playerStack, { width: boardSize + 38 }]}>
       <PlayerBar
         badge="BOT"
-        captured={captures.Blue}
-        color="Blue"
-        fallbackLabel={blueProfile.name}
+        captured={captures.Red}
+        color="Red"
+        fallbackLabel={redProfile.name}
         gameStatus={running ? 'InProgress' : 'Finished'}
-        metaOverride={`Level ${blueProfile.rating} · ${
-          running && latestGame.currentTurn === 'Blue' ? 'searching' : running ? 'waiting' : 'final'
+        metaOverride={`Level ${redProfile.rating} · ${
+          running && latestGame.currentTurn === 'Red' ? 'searching' : running ? 'waiting' : 'final'
         }`}
-        profile={{ username: blueProfile.name }}
+        profile={{ username: redProfile.name }}
         turnColor={latestGame.currentTurn}
       />
       <View style={styles.boardWithEval}>
@@ -466,7 +466,7 @@ function BotBattle({ blueProfile, mode, redProfile }: BotBattleProps) {
           modeId={mode.id}
           onPieceDrop={() => {}}
           onTilePress={() => {}}
-          playerColor="Red"
+          playerColor="Blue"
           replayIndex={cursor}
           replayPositions={positions}
           selectedTile={null}
@@ -475,14 +475,14 @@ function BotBattle({ blueProfile, mode, redProfile }: BotBattleProps) {
       </View>
       <PlayerBar
         badge="BOT"
-        captured={captures.Red}
-        color="Red"
-        fallbackLabel={redProfile.name}
+        captured={captures.Blue}
+        color="Blue"
+        fallbackLabel={blueProfile.name}
         gameStatus={running ? 'InProgress' : 'Finished'}
-        metaOverride={`Level ${redProfile.rating} · ${
-          running && latestGame.currentTurn === 'Red' ? 'searching' : running ? 'waiting' : 'final'
+        metaOverride={`Level ${blueProfile.rating} · ${
+          running && latestGame.currentTurn === 'Blue' ? 'searching' : running ? 'waiting' : 'final'
         }`}
-        profile={{ username: redProfile.name }}
+        profile={{ username: blueProfile.name }}
         turnColor={latestGame.currentTurn}
       />
       <ReplayControls

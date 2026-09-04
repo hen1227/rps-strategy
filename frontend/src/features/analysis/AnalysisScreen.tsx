@@ -15,7 +15,11 @@ import {
   type AnalysisGame,
 } from '@/engine/analysisGame';
 import { reviewSourceFromPGN, type GradedMove, type ReviewMove } from '@/engine/gameReview';
-import { ANALYSIS_PRESETS, type AnalysisPresetName } from '@/engine/rpsfish/client';
+import {
+  ANALYSIS_PRESETS,
+  engineUnavailableMessage,
+  type AnalysisPresetName,
+} from '@/engine/rpsfish/client';
 import type { Analysis } from '@/engine/rpsfish/protocol';
 import Board from '@/features/board/Board';
 import { usePieceDrag } from '@/features/board/pieceDrag';
@@ -307,6 +311,7 @@ interface RedoStep {
  * mode, and a static page learns its query string one render after it mounts.
  */
 export default function AnalysisScreen() {
+  const router = useRouter();
   const modes = useGameStore((state) => state.modes);
   // The mode travels in the URL, so `/analysis?mode=V5` is a page somebody can
   // link to. An unknown or absent id falls back to the first playable mode.
@@ -322,6 +327,29 @@ export default function AnalysisScreen() {
         <View style={styles.screen}>
           <Text style={styles.cardEyebrow}>ANALYSIS BOARD</Text>
           <Text style={styles.cardTitle}>Setting up the board…</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  const unavailable = engineUnavailableMessage(mode.id);
+  if (unavailable) {
+    return (
+      <SafeAreaView style={styles.safeArea} edges={['top', 'right', 'bottom', 'left']}>
+        <View style={styles.screen}>
+          <View style={styles.disabledCard}>
+            <Text style={styles.cardEyebrow}>RPSFISH TOURNAMENT LOCK</Text>
+            <Text style={styles.cardTitle}>Intransitive analysis is temporarily disabled</Text>
+            <Text style={styles.cardBody}>{unavailable}</Text>
+            <Pressable
+              accessibilityLabel="Return to the game modes"
+              accessibilityRole="button"
+              onPress={() => router.back()}
+              style={({ pressed }) => [styles.disabledBackButton, pressed && styles.buttonPressed]}
+            >
+              <Text style={styles.disabledBackText}>← Back</Text>
+            </Pressable>
+          </View>
         </View>
       </SafeAreaView>
     );
@@ -499,7 +527,7 @@ function AnalysisBoard({ mode }: { mode: ModeDefinition }) {
           selection.selectTile(square);
         }}
         overlay={reachTool.overlay}
-        playerColor="Red"
+        playerColor="Blue"
         selectedTile={selectedTile}
         validMoves={validMoves}
       />
@@ -725,6 +753,26 @@ const styles = StyleSheet.create({
   widePanelContent: { paddingBottom: 18, gap: 10 },
   mobileContent: { alignItems: 'center', paddingBottom: 24, gap: 14 },
   panelStack: { width: '100%', gap: 10 },
+  disabledCard: {
+    maxWidth: 560,
+    width: '100%',
+    alignSelf: 'center',
+    marginTop: 40,
+    padding: 20,
+    borderRadius: radius.large,
+    borderWidth: 1,
+    borderColor: colors.accentBorder,
+    backgroundColor: colors.accentSurface,
+  },
+  disabledBackButton: {
+    alignSelf: 'flex-start',
+    marginTop: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    borderRadius: radius.medium,
+    backgroundColor: colors.surfaceRaised,
+  },
+  disabledBackText: { color: colors.textStrong, fontSize: 10, fontWeight: '900' },
   coachCard: {
     padding: 14,
     borderRadius: radius.large,

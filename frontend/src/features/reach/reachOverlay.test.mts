@@ -37,6 +37,9 @@ const position = (
 const settings = (overrides: Partial<ReachSettings> = {}): ReachSettings => ({
   ...DEFAULT_REACH_SETTINGS,
   enabled: true,
+  // The fixtures below are Red's pieces, so the maps are asked for Red rather
+  // than for whichever side the tool opens on by default.
+  side: 'Red',
   // A lone rock has no run to draw over the bands unless a test asks for one.
   showPath: false,
   showDanger: false,

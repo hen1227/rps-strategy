@@ -3,7 +3,6 @@ import { failureMessage } from '@/errors';
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 
-import LinkRow from '@/ui/LinkRow';
 import ScreenShell from '@/ui/ScreenShell';
 import {
   Badge,
@@ -255,8 +254,7 @@ export default function AccountScreen() {
                   />
                   <Text style={styles.helper}>
                     Your username is what opponents see, what challenges are addressed to,
-                    and what you sign in with. Discord is optional, and how the host reaches
-                    you about tournaments.
+                    and what you sign in with.
                   </Text>
 
                   <LabeledInput
@@ -280,10 +278,6 @@ export default function AccountScreen() {
                         <Text style={styles.verifiedHandle}>{discord}</Text>
                         <Badge label="VERIFIED" tone="accent" />
                       </View>
-                      <Text style={styles.helper}>
-                        Confirmed by Discord when you signed in, so nobody can enter it as
-                        theirs.
-                      </Text>
                     </View>
                   ) : (
                     <>
@@ -349,20 +343,6 @@ export default function AccountScreen() {
                 cannot answer that by rendering nothing.
               */}
               <MatchAlertsPanel variant="settings" />
-
-              {/*
-                A bot belongs to an account, so this is where its registry
-                hangs off. It used to be the fourth tab of the Bots page, which
-                put a token minter behind a page about playing.
-              */}
-              <Panel>
-                <LinkRow
-                  detail="Register an engine, take its token, and run it from your own machine."
-                  divided={false}
-                  href={links.myBots()}
-                  title="Your bots"
-                />
-              </Panel>
 
               <Panel>
                 <SectionHeading eyebrow="RANKED" title="Mode ratings" />
@@ -540,8 +520,6 @@ const styles = StyleSheet.create({
   },
   keyIconText: { color: colors.accentBright, fontSize: 13 },
   keyCopy: { flex: 1 },
-  keyTitle: { color: colors.text, fontSize: 12, fontWeight: '900' },
-  keyBody: { color: colors.textMuted, fontSize: 10, lineHeight: 16, marginTop: 4 },
   accountId: { color: colors.textFaint, fontSize: 9, marginTop: 8 },
 
   policyLink: { alignItems: 'center', paddingVertical: 10 },

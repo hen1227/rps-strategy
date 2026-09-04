@@ -42,12 +42,12 @@ const SECTIONS: { kind: LeaderboardKind; title: string; help: string }[] = [
   {
     kind: 'bot',
     title: 'Best bots',
-    help: 'Bot ratings come from the head-to-head record between every pair of bots, solved all at once, not from points won and lost per game. Playing one opponent over and over stops counting, a bot needs at least two opponents to be ranked at all, and beating engines the board has already placed is what moves a rating. Anybody can start a series from the Bots page. Games against people are unranked.',
+    help: '',
   },
   {
     kind: 'human',
     title: 'Best players',
-    help: 'Ranked games only, and named accounts only — every browser owns a Guest, and a page of Guests is not a ladder.',
+    help: '',
   },
 ];
 

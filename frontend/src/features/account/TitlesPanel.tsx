@@ -13,23 +13,37 @@ import type { Account, Title, TitleAward, TitleID } from '@/types/protocol';
 // The collection, and the one you are wearing.
 //
 // Two lists, and the second is the point of the first: everything this account
-// holds, then everything it does not, with the requirement spelled out. A
-// catalogue that only showed what you already had would be a trophy cabinet;
-// showing the rest is what makes a title something to go and get.
+// holds, then everything still to go and get. Both spell out the rule, held ones
+// included — three letters and a name do not say what somebody did to get there,
+// and a collection you cannot read back is a worse prize than one you can.
+// A catalogue that only showed what you already had would be a trophy cabinet;
+// showing the rest is what makes a title something to chase. The rest is only
+// what a player can actually chase — see `unearned`.
 //
 // Choosing saves immediately rather than behind a button. There is nothing to
 // validate — every option came from the server as something already owned — and
 // a picker that needs confirming reads as though the choice might be refused.
 //
 // The second list starts folded. On a new account it is the whole catalogue, and
-// a page whose first screenful is ten things you do not have reads as a list of
+// a page whose first screenful is every title you do not have reads as a list of
 // failures rather than as a cabinet with room in it.
 
 const NONE = '' as const;
 
-/** How a held title explains itself: the rule, or the fact of the grant. */
+/**
+ * How a held title explains itself: the rule it was earned by, or the fact of
+ * the grant. The same sentence the list below shows for one still to earn, so
+ * that earning a title changes where it sits rather than what it says it is.
+ *
+ * Source rather than kind decides, because an administrator can hand out a
+ * rating title, and "Reach 2000 in any mode." under a tag nobody reached 2000
+ * for would be the one description here that is not true. The granted-kind
+ * titles keep their own wording — it already says who gave it and what for.
+ */
 const awardDetail = (award: TitleAward) =>
-  award.source === 'granted' ? `${award.name} · granted by the host` : award.name;
+  award.source === 'earned' || award.kind === 'granted'
+    ? award.requirement
+    : 'Granted by the host.';
 
 export interface TitlesPanelProps {
   account: Account | null | undefined;
@@ -62,7 +76,13 @@ export default function TitlesPanel({ account, sessionToken }: TitlesPanelProps)
   const held = account?.titles ?? [];
   const worn = account?.title ?? NONE;
   const heldIds = new Set(held.map((award) => award.id));
-  const unearned = catalogue.filter((title) => !heldIds.has(title.id));
+  // Granted titles are left out of the second list. Nothing a player does
+  // earns one, so a row promising "granted by the host" under a heading that
+  // says STILL TO EARN sets a goal that does not exist. They are in the list
+  // above the moment somebody is given one, which is the only way to get one.
+  const unearned = catalogue.filter(
+    (title) => !heldIds.has(title.id) && title.kind !== 'granted',
+  );
   const canChoose = isSignedIn(sessionToken, account);
 
   const choose = async (title: TitleID | typeof NONE) => {
@@ -86,9 +106,7 @@ export default function TitlesPanel({ account, sessionToken }: TitlesPanelProps)
     <Panel>
       <SectionHeading eyebrow="TITLES" title="Your titles" />
       <Text style={styles.helper}>
-        {held.length === 0
-          ? 'Titles are earned by playing, and sit in front of your name in games and chat. You have none yet.'
-          : 'The one you choose sits in front of your name in every game and every message. Titles are yours for good once earned.'}
+        {held.length === 0 && 'Titles are earned by playing! You have none yet.'}
       </Text>
 
       {error ? <Banner message={error} onDismiss={() => setError(null)} tone="error" /> : null}
@@ -109,10 +127,10 @@ export default function TitlesPanel({ account, sessionToken }: TitlesPanelProps)
               detail={awardDetail(award)}
               disabled={!canChoose || saving !== null}
               key={award.id}
-              label={award.id}
+              label={award.name}
               onPress={() => choose(award.id)}
               selected={worn === award.id}
-              tag
+              tagId={award.id}
             />
           ))}
         </View>
@@ -140,7 +158,16 @@ export default function TitlesPanel({ account, sessionToken }: TitlesPanelProps)
             <View style={styles.unearnedList}>
               {unearned.map((title) => (
                 <View key={title.id} style={styles.unearnedRow}>
-                  <Text style={styles.unearnedTag}>{title.id}</Text>
+                  {/*
+                    The real tag, dimmed, rather than the letters in grey. Each
+                    title has a colour of its own and that colour is part of
+                    what there is to want — a list that hid it until the moment
+                    you earned it would be describing a different prize. The
+                    dimming is what keeps it clearly not yours yet.
+                  */}
+                  <View style={styles.unearnedTag}>
+                    <TitleTag size="medium" title={title.id} />
+                  </View>
                   <View style={styles.unearnedCopy}>
                     <Text style={styles.unearnedName}>{title.name}</Text>
                     <Text style={styles.unearnedRule}>{title.requirement}</Text>
@@ -155,7 +182,7 @@ export default function TitlesPanel({ account, sessionToken }: TitlesPanelProps)
   );
 }
 
-/** One row of the picker: a tag, what it is, and whether it is the one worn. */
+/** One row of the picker: a tag, what it is, how it was come by, and whether it is the one worn. */
 function Choice({
   busy,
   detail,
@@ -163,7 +190,7 @@ function Choice({
   label,
   onPress,
   selected,
-  tag,
+  tagId,
 }: {
   busy: boolean;
   detail: string;
@@ -171,8 +198,8 @@ function Choice({
   label: string;
   onPress: () => void;
   selected: boolean;
-  /** Draw the label as the gold tag rather than as words. */
-  tag?: boolean;
+  /** The title this row is for, drawn as its own tag. Absent on the "no title" row. */
+  tagId?: TitleID;
 }) {
   return (
     <Pressable
@@ -187,10 +214,10 @@ function Choice({
         pressed && styles.pressed,
       ]}
     >
-      {tag ? <TitleTag size="large" title={label} /> : <Text style={styles.noneTag}>—</Text>}
+      {tagId ? <TitleTag size="large" title={tagId} /> : <Text style={styles.noneTag}>—</Text>}
       <View style={styles.choiceCopy}>
-        <Text style={styles.choiceLabel}>{tag ? detail : label}</Text>
-        {tag ? null : <Text style={styles.choiceDetail}>{detail}</Text>}
+        <Text style={styles.choiceLabel}>{label}</Text>
+        <Text style={styles.choiceDetail}>{detail}</Text>
       </View>
       <Text style={[styles.mark, selected && styles.markSelected]}>
         {busy ? '…' : selected ? '●' : '○'}
@@ -242,11 +269,12 @@ const styles = StyleSheet.create({
   unearnedList: { gap: space.snug, marginTop: space.tight },
   unearnedRow: { flexDirection: 'row', alignItems: 'flex-start', gap: space.small },
   unearnedTag: {
-    minWidth: 30,
-    ...type.label,
-    color: colors.textFaint,
+    // Fixed rather than minimum, so a three-letter tag does not push its own
+    // row's copy further right than the two-letter rows beside it.
+    width: 38,
+    alignItems: 'center',
     paddingTop: space.hair,
-    textAlign: 'center',
+    opacity: 0.55,
   },
   unearnedCopy: { flex: 1, minWidth: 0 },
   unearnedName: { ...type.body, color: colors.textMuted, fontWeight: '800' },

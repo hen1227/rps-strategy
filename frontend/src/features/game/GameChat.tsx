@@ -1,10 +1,22 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
+import { useNow } from '@/hooks/useNow';
+import { useGameStore } from '@/store/gameStore';
+import { activeRestriction, restrictionNotice } from '@/store/moderationSelectors';
 import { colors, players, radius } from '@/theme';
 import TitleTag from '@/ui/TitleTag';
 import type { GameStatus } from '@/types/game';
 import type { ChatMessage } from '@/types/protocol';
+
+/**
+ * How often the composer re-checks whether a mute has lapsed.
+ *
+ * Half a minute rather than `useNow`'s default of one, because the wording it
+ * drives is rounded up to whole minutes: on a sixty-second tick a mute with
+ * fifty seconds left can read "under a minute" for most of the following one.
+ */
+const MUTE_TICK_MS = 30_000;
 
 const senderLabel = (message: ChatMessage, accountId: string) => {
   const name = message.senderName?.trim() || 'Guest';
@@ -60,6 +72,11 @@ export default function GameChat({
   wide,
 }: GameChatProps) {
   const [draft, setDraft] = useState('');
+  const restrictions = useGameStore((state) => state.restrictions);
+  // A mute expires while somebody is sitting on this page, so the composer has
+  // to re-evaluate on a clock rather than only when a message arrives. The same
+  // ticker every countdown in the app uses.
+  const now = useNow(MUTE_TICK_MS);
   const scrollRef = useRef<ScrollView | null>(null);
   const visibleMessages = useMemo(
     () =>
@@ -76,7 +93,16 @@ export default function GameChat({
   // A finished board in a series is not a finished conversation: the run is
   // still going and this room is where it is being talked about.
   const finishedLabel = series ? 'Between games' : 'Game over';
-  const canSend = connected && draft.trim().length > 0;
+  // A mute is enforced on the server, which refuses the message and says why.
+  // This is the same fact said *before* the attempt: a chat box that swallows
+  // what you typed and answers with a banner reads as the site being broken,
+  // and the server sends the restriction precisely so it does not have to.
+  // Null on the first client render of a pre-rendered page — see `useNow` —
+  // and treated as no mute, so the composer paints in its ordinary state and
+  // closes a render later if it has to. The reverse would flash a mute notice
+  // at everybody.
+  const mute = now === null ? null : activeRestriction(restrictions, 'mute', now);
+  const canSend = connected && !mute && draft.trim().length > 0;
   const spectatorLabel =
     spectatorCount === 1 ? '1 spectator' : `${spectatorCount} spectators`;
   // The spectator figure comes off the lobby's live row, which a finished game
@@ -227,14 +253,18 @@ export default function GameChat({
         <TextInput
           accessibilityLabel="Game chat message"
           blurOnSubmit
-          editable={connected}
+          editable={connected && !mute}
           enterKeyHint="send"
           maxLength={300}
           multiline
           onChangeText={setDraft}
           onSubmitEditing={send}
           placeholder={
-            isFinished ? 'Message everyone still here…' : 'Message players and spectators…'
+            mute
+              ? restrictionNotice(mute, 'chat', now ?? undefined)
+              : isFinished
+                ? 'Message everyone still here…'
+                : 'Message players and spectators…'
           }
           placeholderTextColor={colors.textFaint}
           selectionColor={colors.accent}

@@ -48,8 +48,8 @@ interface SetupTool {
 
 const ERASER: SetupTool = { symbol: '.', color: null, piece: 'Empty', name: 'Empty' };
 
-/** The order the built-in three are reached for, Red's forms first. */
-const BUILTIN_SYMBOLS = 'rpsRPS';
+/** The order the built-in three are reached for, Blue's forms first. */
+const BUILTIN_SYMBOLS = 'RPSrps';
 
 interface Palette {
   /** The brushes, in the order they are offered. */
@@ -71,9 +71,9 @@ interface Palette {
  * a spec-defined mode and a built-in meet. The standard six letters and no looks
  * at all is the built-in answer, and now the only one.
  *
- * Red's forms first and then Blue's, kinds in the order the mode declares them,
- * matching the Lab's palette: Red moves first, and a layout is written from
- * rank 1 up, which is the bottom of the picture.
+ * Blue's forms first and then Red's, kinds in the order the mode declares them,
+ * matching the Lab's palette: Blue moves first, and a layout is written from
+ * rank 1 up, which is the bottom of the picture and Blue's own end of it.
  */
 const paletteFor = (mode: ModeDefinition | null | undefined): Palette => {
   const alphabet = alphabetOf(mode);

@@ -1,8 +1,9 @@
 import { Link, usePathname } from 'expo-router';
-import { Linking, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import type { Section } from './sections';
-import { links, YOUTUBE_URL } from '@/navigation/links';
+import TournamentPromoLink from './TournamentPromoLink';
+import { links } from '@/navigation/links';
 import { colors, overlayQuiet, radius, space, type } from '@/theme';
 
 // The sections that do not fit across a phone, listed where they were asked for.
@@ -93,19 +94,25 @@ export default function MoreMenu({ anchor, onClose, sections, visible }: MoreMen
           })}
 
           <View style={styles.foot}>
-            {/* An outward link rather than a route, so it opens where links open. */}
-            <Pressable
-              accessibilityLabel="Watch the video this game is based on"
-              accessibilityRole="link"
-              onPress={() => {
-                onClose();
-                Linking.openURL(YOUTUBE_URL);
-              }}
-              style={({ pressed }) => [styles.video, pressed && styles.pressed]}
-            >
-              <Text style={styles.videoMark}>▶</Text>
-              <Text style={styles.videoText}>The video behind this game</Text>
-            </Pressable>
+            {/* Only in the days around the event, and it decides that itself. */}
+            <TournamentPromoLink onPress={onClose} />
+
+            {/*
+              Where this game came from: two videos, the official site, and the
+              Discord. A route rather than the single outward link this used to
+              be — see the note in SidebarNav.
+            */}
+            <Link asChild href={links.credits()} onPress={onClose} replace>
+              <Pressable
+                accessibilityLabel="Where this game came from"
+                accessibilityRole="link"
+                // One resolved style object: see the note in SidebarNav.
+                style={styles.video}
+              >
+                <Text style={styles.videoMark}>▶</Text>
+                <Text style={styles.videoText}>The videos behind this game</Text>
+              </Pressable>
+            </Link>
 
             <Link href={links.policy()} onPress={onClose} replace style={styles.policy}>
               Privacy & play agreement
@@ -204,6 +211,4 @@ const styles = StyleSheet.create({
   videoMark: { color: colors.dangerSoft, fontSize: 10 },
   videoText: { ...type.label, color: colors.textSubtle, letterSpacing: 0.4 },
   policy: { ...type.meta, color: colors.textFaint, padding: space.small },
-
-  pressed: { opacity: 0.7 },
 });

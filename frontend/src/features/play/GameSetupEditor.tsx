@@ -8,7 +8,13 @@ import {
 } from '@/store/setupSelectors';
 import { colors, radius, space, type } from '@/theme';
 import { Checkbox, GhostButton, OptionChips } from '@/ui/primitives';
-import type { GameSetup, ModeDefinition, TimeControl } from '@/types/game';
+import {
+  FIRST_TO_MOVE,
+  opposingColor,
+  type GameSetup,
+  type ModeDefinition,
+  type TimeControl,
+} from '@/types/game';
 
 // Every knob on a game, in one panel.
 //
@@ -149,7 +155,9 @@ export default function GameSetupEditor({
           <Text style={styles.positionDetail}>
             {positionIsCustom ? 'Custom position' : `${mode?.name ?? 'Mode'} opening`}
             {' · '}
-            {setup.preferredColor === 'Blue' ? 'they move first' : 'Red moves first'}
+            {setup.preferredColor === opposingColor(FIRST_TO_MOVE)
+              ? 'they move first'
+              : `${FIRST_TO_MOVE} moves first`}
           </Text>
         </View>
         {positionIsCustom ? (

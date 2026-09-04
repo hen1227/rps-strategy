@@ -6,7 +6,11 @@ import BotLevelPicker from './BotLevelPicker';
 import BotSeriesPanel from './BotSeriesPanel';
 import EngineBotRow from './EngineBotRow';
 import {BOT_PROFILES, DEFAULT_BOT_PROFILE_ID} from '@/engine/bots/profiles';
-import {isEngineAvailable} from '@/engine/rpsfish/client';
+import {
+    RPSFISH_TOURNAMENT_NOTICE,
+    engineSupportsMode,
+    isEngineAvailable,
+} from '@/engine/rpsfish/client';
 import {links} from '@/navigation/links';
 import {useGameStore} from '@/store/gameStore';
 import {SEAT_CHOICES, type SeatChoice} from '@/store/setupSelectors';
@@ -60,6 +64,15 @@ export default function BotsScreen() {
     const [practiceSeat, setPracticeSeat] = useState<SeatChoice>('random');
 
     const playableModes = useMemo(() => modes.filter((mode) => mode.playable !== false), [modes]);
+    // The two panels below are RPSFish playing, so they offer only the modes
+    // RPSFish knows. Handed one it does not, its search throws and the bot
+    // silently falls back to random legal moves — a rung labelled 1100 playing
+    // like nothing at all, which is worse than not offering the game. The
+    // engine panels above are other people's programs and keep the full list.
+    const engineModes = useMemo(
+        () => playableModes.filter((mode) => engineSupportsMode(mode.id)),
+        [playableModes],
+    );
     const profileOptions = useMemo(
         () => BOT_PROFILES.map((profile) => ({label: profile.name, value: profile.id})),
         [],
@@ -165,6 +178,7 @@ export default function BotsScreen() {
                         ? 'RPSFish plays the other side on this device. No clock, no rating, and the hint and undo buttons stay switched on.'
                         : 'This build does not include the RPSFish engine, so the practice board is unavailable here.'}
                 </Text>
+                <Text style={styles.tournamentNotice}>{RPSFISH_TOURNAMENT_NOTICE}</Text>
 
                 <BotLevelPicker compact onSelect={setProfileId} selectedProfileId={profile.id}/>
                 <Text style={styles.blurb}>
@@ -186,7 +200,7 @@ export default function BotsScreen() {
                 </View>
 
                 <View style={styles.buttonRow}>
-                    {playableModes.map((mode) => (
+                    {engineModes.map((mode) => (
                         <View key={mode.id} style={styles.buttonCell}>
                             <PrimaryButton
                                 accessibilityLabel={`Play ${mode.name} against ${profile.name} as ${seatDescription(practiceSeat)}`}
@@ -214,7 +228,7 @@ export default function BotsScreen() {
                         value={opponent.id}
                     />
                     <View style={styles.buttonRow}>
-                        {playableModes.map((mode) => (
+                        {engineModes.map((mode) => (
                             <View key={mode.id} style={styles.buttonCell}>
                                 <PrimaryButton
                                     accessibilityLabel={`Watch ${profile.name} fight ${opponent.name} in ${mode.name}`}
@@ -243,6 +257,12 @@ export default function BotsScreen() {
 
 const styles = StyleSheet.create({
     help: {...type.body, color: colors.textMuted, marginTop: space.small},
+    tournamentNotice: {
+        ...type.body,
+        color: colors.accentSoft,
+        marginTop: space.small,
+        fontWeight: '700',
+    },
     seat: {marginTop: space.small},
     blurb: {...type.body, color: colors.textDim, marginTop: space.small},
     blurbName: {color: colors.textSubtle, fontWeight: '900'},

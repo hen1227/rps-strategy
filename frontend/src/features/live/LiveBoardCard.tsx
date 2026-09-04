@@ -3,11 +3,12 @@ import { StyleSheet, Text, View, type LayoutChangeEvent } from 'react-native';
 
 import { liveGameGrid, liveMoveLabel } from './liveSelectors';
 import MiniBoard from '@/features/board/MiniBoard';
-import { titledName } from '@/store/spectateSelectors';
+import { playerName, titledName } from '@/store/spectateSelectors';
 import { colors, players, radius, space, type } from '@/theme';
-import type { ModeDefinition, SideColor } from '@/types/game';
-import type { LiveGameSummary } from '@/types/protocol';
+import { FIRST_TO_MOVE, type ModeDefinition, type SideColor } from '@/types/game';
+import type { LiveGameSummary, TitleID } from '@/types/protocol';
 import { Badge, PrimaryButton } from '@/ui/primitives';
+import TitleTag from '@/ui/TitleTag';
 
 // One live game, drawn: two names, the position between them, and the way in.
 //
@@ -54,15 +55,19 @@ interface PlayerLineProps {
   compact?: boolean;
   elo: number;
   name: string;
+  title?: TitleID | null;
 }
 
-function PlayerLine({ active, color, compact, elo, name }: PlayerLineProps) {
+function PlayerLine({ active, color, compact, elo, name, title }: PlayerLineProps) {
   return (
     <View style={[styles.playerLine, compact && styles.playerLineCompact]}>
       <View style={[styles.playerDot, { backgroundColor: players[color].strong }]} />
-      <Text numberOfLines={1} style={styles.playerName}>
-        {name} <PlayerElo value={elo} />
-      </Text>
+      <View style={styles.playerNameRow}>
+        <TitleTag title={title} />
+        <Text numberOfLines={1} style={styles.playerName}>
+          {name} <PlayerElo value={elo} />
+        </Text>
+      </View>
       {active ? <Text style={styles.turn}>TO MOVE</Text> : null}
     </View>
   );
@@ -108,7 +113,9 @@ export default function LiveBoardCard({
 
   const openingRows = mode?.startingPosition?.rows;
   const grid = useMemo(() => liveGameGrid(game, openingRows), [game.position, openingRows]);
-  const currentTurn = game.currentTurn === 'Blue' ? 'Blue' : 'Red';
+  const currentTurn = game.currentTurn === 'Red' ? 'Red' : FIRST_TO_MOVE;
+  const redName = playerName(game.redPlayer, 'Red');
+  const blueName = playerName(game.bluePlayer, 'Blue');
   const red = titledName(game.redPlayer, 'Red');
   const blue = titledName(game.bluePlayer, 'Blue');
   const audience = game.spectatorCount
@@ -130,7 +137,8 @@ export default function LiveBoardCard({
       color="Blue"
       compact={!page}
       elo={game.blueElo}
-      name={blue}
+      name={blueName}
+      title={game.bluePlayer?.title}
     />
   );
   const redLine = (
@@ -139,7 +147,8 @@ export default function LiveBoardCard({
       color="Red"
       compact={!page}
       elo={game.redElo}
-      name={red}
+      name={redName}
+      title={game.redPlayer?.title}
     />
   );
   const board = (
@@ -174,8 +183,8 @@ export default function LiveBoardCard({
         <View style={styles.beside}>
           {head}
           <View style={styles.besideMiddle}>
-            {blueLine}
             {redLine}
+            {blueLine}
             {facts}
           </View>
           {watch}
@@ -185,16 +194,17 @@ export default function LiveBoardCard({
   }
 
   // Stacked, which is also the order of the board: the player at the top of it
-  // is named above, the player at the bottom below.
+  // is named above, the player at the bottom below. Rank 1 is Blue's home and
+  // is drawn at the bottom, so Blue is the one underneath.
   return (
     <View
       onLayout={page ? measure : undefined}
       style={[styles.card, page && styles.cardPage, size === 'inset' && styles.cardInset]}
     >
       {head}
-      {blueLine}
-      {board}
       {redLine}
+      {board}
+      {blueLine}
       {facts}
       {watch}
     </View>
@@ -231,6 +241,7 @@ const styles = StyleSheet.create({
   },
   playerLineCompact: { minHeight: 24 },
   playerDot: { width: 8, height: 8, borderRadius: 4 },
+  playerNameRow: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: space.tight },
   playerName: { ...type.rowTitle, color: colors.text, flex: 1, minWidth: 0 },
   elo: { ...type.meta, color: colors.textFaint, fontWeight: '500' },
   turn: { ...type.eyebrow, color: colors.accentSoft },

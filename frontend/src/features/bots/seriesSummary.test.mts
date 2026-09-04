@@ -7,6 +7,9 @@ import {
   seriesMetaLine,
   seriesStatusTone,
   seriesView,
+  watchedOutcome,
+  withLiveGame,
+  withWatchedResult,
 } from './seriesSummary.ts';
 import type { BotSeries, BotSeriesGame } from '../../store/api/bots.ts';
 
@@ -27,6 +30,7 @@ const run = (over: Partial<BotSeries> = {}): BotSeries =>
     firstBotName: 'Alpha',
     secondBotName: 'Beta',
     status: 'completed',
+    casual: false,
     pairs: 3,
     openingPlies: 3,
     seed: '99',
@@ -140,11 +144,27 @@ test('falls back to a name for an engine whose account is gone', () => {
 test('describes a running run by what it set out to play', () => {
   assert.equal(
     seriesMetaLine(run({ status: 'running', requestedByName: 'ada' })),
-    '3 pairs · 3 opening plies · 1 min · started by ada',
+    '3 pairs · 3 opening plies · 1+1 · started by ada',
   );
   // A run nobody is attributed to — started with the host token, which is a
   // secret rather than a person — simply says less.
-  assert.equal(seriesMetaLine(run({ status: 'running', openingPlies: 0 })), '3 pairs · 1 min');
+  assert.equal(seriesMetaLine(run({ status: 'running', openingPlies: 0 })), '3 pairs · 1+1');
+});
+
+// The shortest clock the form offers is six seconds each, which a run reported
+// in whole minutes would round to nothing — and the clock is what says whether
+// a 6-0 was two engines thinking or two engines flagging.
+test('states a bullet clock rather than rounding it away', () => {
+  assert.equal(
+    seriesMetaLine(run({ initialTimeMs: 6_000, incrementMs: 1000, openingPlies: 0 })),
+    '0 games · 6s+1',
+  );
+  // An archived row from before the clock was recorded has nothing to say about
+  // it, and says nothing rather than "0s+0".
+  assert.equal(
+    seriesMetaLine(run({ initialTimeMs: 0, incrementMs: 0, openingPlies: 0 })),
+    '0 games',
+  );
 });
 
 test('describes a finished run by what it actually played', () => {
@@ -155,7 +175,7 @@ test('describes a finished run by what it actually played', () => {
     pairs: 4,
     games: [game({ gameNumber: 1, result: 'second_win', endReason: 'abandonment' })],
   });
-  assert.equal(seriesMetaLine(stopped), '1 game · 3 opening plies · 1 min');
+  assert.equal(seriesMetaLine(stopped), '1 game · 3 opening plies · 1+1');
   assert.equal(
     seriesMetaLine(
       run({
@@ -165,8 +185,21 @@ test('describes a finished run by what it actually played', () => {
         ],
       }),
     ),
-    '2 games · 3 opening plies · 1 min',
+    '2 games · 3 opening plies · 1+1',
   );
+});
+
+// A run between two of one person's engines does not move the ladder, and the
+// scoreline is exactly where somebody would otherwise wonder why a 6–0 changed
+// nothing.
+test('says when a run did not count', () => {
+  assert.equal(
+    seriesMetaLine(run({ casual: true, openingPlies: 0 })),
+    '0 games · casual · 1+1',
+  );
+  // And stays quiet about it on a run that did count, rather than labelling
+  // every line with which of the two it is.
+  assert.equal(seriesMetaLine(run({ openingPlies: 0 })), '0 games · 1+1');
 });
 
 test('knows which games belong to a run', () => {
@@ -233,4 +266,107 @@ test('a run badges its own state', () => {
   assert.equal(seriesStatusTone(run({ status: 'aborted' })), 'neutral');
   // Anything the server invents later reads as neutral rather than as nothing.
   assert.equal(seriesStatusTone(run({ status: 'paused' })), 'neutral');
+});
+
+// --- what a watcher can fill in ------------------------------------------
+//
+// Both of these exist because the server shows a run's news before it files
+// it: the result of a game reaches the screen ahead of the row that records it,
+// and the next game starts ahead of the row that records *that*. The tests
+// below are about the seats, which is where getting this wrong would be
+// invisible — a run swaps them every game, so a point awarded backwards looks
+// right half the time.
+
+test('reads a colour result as a point for the right engine, either way round', () => {
+  // Game one: the first bot is Red.
+  assert.equal(watchedOutcome('Red', true), 'first_win');
+  assert.equal(watchedOutcome('Blue', true), 'second_win');
+  // Game two: the seats have swapped, so the same colours mean the opposite.
+  assert.equal(watchedOutcome('Red', false), 'second_win');
+  assert.equal(watchedOutcome('Blue', false), 'first_win');
+  // Nobody won.
+  assert.equal(watchedOutcome('Neutral', true), 'draw');
+  assert.equal(watchedOutcome('Neutral', false), 'draw');
+});
+
+test('scores the game just watched, and moves the totals with it', () => {
+  const before = run({
+    status: 'running',
+    firstWins: 1,
+    secondWins: 0,
+    draws: 0,
+    games: [game({ gameNumber: 1, result: 'first_win' }), game({ gameNumber: 2 })],
+  });
+  // Game two is the swapped seating, so Blue is the first bot.
+  const after = withWatchedResult(before, {
+    gameId: 'g2',
+    outcome: watchedOutcome('Blue', false),
+    endReason: 'resignation',
+  });
+  const view = seriesView(after);
+  assert.equal(view.games[1].side, 'first');
+  assert.equal(view.games[1].firstPoints, '1');
+  assert.equal(view.games[1].secondPoints, '0');
+  // The column and the totals are the same claim and have to agree.
+  assert.equal(view.firstTotal, '2');
+  assert.equal(view.secondTotal, '0');
+  assert.equal(view.played, 2);
+});
+
+test('leaves a game the archive has already scored alone', () => {
+  const filed = run({
+    firstWins: 0,
+    secondWins: 1,
+    games: [game({ gameNumber: 1, result: 'second_win' })],
+  });
+  const after = withWatchedResult(filed, { gameId: 'g1', outcome: 'first_win' });
+  assert.equal(after, filed, 'a filed result is the one that counts');
+});
+
+test('ignores a result for a game this run has no row for', () => {
+  const other = run({ games: [game({ gameNumber: 1 })] });
+  assert.equal(withWatchedResult(other, { gameId: 'not-here', outcome: 'draw' }), other);
+});
+
+test('gives the board being played right now a column, in playing order', () => {
+  const filed = run({
+    status: 'running',
+    firstWins: 1,
+    games: [game({ gameNumber: 1, result: 'first_win' })],
+  });
+  // Game two is up. The archive has not recorded it yet, and the live row says
+  // the first bot is Blue this game.
+  const after = withLiveGame(filed, { gameId: 'g2', gameNumber: 2, firstIsRed: false });
+  const view = seriesView(after);
+  assert.equal(view.games.length, 2);
+  assert.equal(view.games[1].number, 2);
+  assert.equal(view.games[1].side, 'pending');
+  // The seating has to come out of the live row, or the column would name the
+  // wrong engine on each side.
+  assert.equal(view.games[1].redName, 'Beta');
+  assert.equal(view.games[1].blueName, 'Alpha');
+  // A pending column is worth watching, which is what puts the live mark on it.
+  assert.equal(seriesGameIsOpen(view.games[1], true), true);
+  // And it is not a game anybody has played.
+  assert.equal(view.played, 1);
+  assert.equal(view.firstTotal, '1');
+});
+
+test('does not duplicate a live game the archive has caught up with', () => {
+  const filed = run({ status: 'running', games: [game({ gameNumber: 1 })] });
+  const after = withLiveGame(filed, { gameId: 'g1', gameNumber: 1, firstIsRed: true });
+  assert.equal(after, filed);
+});
+
+test('sorts a late column into place rather than onto the end', () => {
+  // A run whose rows arrive out of order still draws game 2 between 1 and 3.
+  const filed = run({
+    status: 'running',
+    games: [game({ gameNumber: 1, result: 'draw' }), game({ gameNumber: 3 })],
+  });
+  const after = withLiveGame(filed, { gameId: 'g2', gameNumber: 2, firstIsRed: false });
+  assert.deepEqual(
+    seriesView(after).games.map((entry) => entry.number),
+    [1, 2, 3],
+  );
 });

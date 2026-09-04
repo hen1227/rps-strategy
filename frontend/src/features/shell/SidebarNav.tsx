@@ -1,8 +1,9 @@
 import { Link, usePathname } from 'expo-router';
-import { Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { visibleSections } from './sections';
-import { links, YOUTUBE_URL } from '@/navigation/links';
+import TournamentPromoLink from './TournamentPromoLink';
+import {links, webGoatGuy} from '@/navigation/links';
 import { useGameStore } from '@/store/gameStore';
 import { colors, radius, space, type } from '@/theme';
 
@@ -45,7 +46,7 @@ export default function SidebarNav() {
           // `/` would otherwise prefix-match every page, so the front page is
           // current only when it is exactly the front page.
           const current =
-            section.path === '/' ? pathname === '/' : pathname.startsWith(section.path);
+            section.path === pathname;
           return (
             // `StyleSheet.flatten`, and not the usual `({ pressed }) => [...]`
             // function or even a plain array. `Link asChild` clones this child
@@ -90,18 +91,42 @@ export default function SidebarNav() {
         ) : null}
 
         {/*
-          The video this whole game came out of. An outward link rather than a
-          route, so it opens where links open rather than inside the app.
+          Only in the days around the event, and nothing at all the rest of the
+          year — the component decides that for itself so the two places that
+          show it cannot disagree about when. Above the credits link rather than
+          below it because it expires: while it is here it is the more urgent of
+          the two, and when it goes the foot is what it always was.
         */}
-        <Pressable
-          accessibilityLabel="Watch the video this game is based on"
-          accessibilityRole="link"
-          onPress={() => Linking.openURL(YOUTUBE_URL)}
-          style={({ pressed }) => [styles.video, pressed && styles.pressed]}
-        >
-          <Text style={styles.videoMark}>▶</Text>
-          <Text style={styles.videoText}>The video behind this game</Text>
-        </Pressable>
+        <TournamentPromoLink />
+
+        {/*
+          Where this game came from. This used to be a bare link to one YouTube
+          video, labelled "the video behind this game", and that stopped being
+          the whole truth: there are two videos, an official site, and a Discord.
+          A route rather than an outward link, because the page is what holds
+          all four of them.
+        */}
+        <Link asChild href={links.credits()} replace>
+          <Pressable
+            accessibilityLabel="Where this game came from"
+            accessibilityRole="link"
+            // One resolved style object: see the note above.
+            style={styles.video}
+          >
+            <Text style={styles.videoText}>Learn more about this game</Text>
+          </Pressable>
+        </Link>
+
+          <Link asChild href={webGoatGuy.discordURL} replace>
+              <Pressable
+                  accessibilityLabel="Where this game came from"
+                  accessibilityRole="link"
+                  // One resolved style object: see the note above.
+                  style={styles.discord}
+              >
+                  <Text style={styles.videoText}>Official Intransitive Discord</Text>
+              </Pressable>
+          </Link>
 
         <Link href={links.policy()} replace style={styles.policy}>
           Privacy & play agreement
@@ -187,7 +212,18 @@ const styles = StyleSheet.create({
   },
   videoMark: { color: colors.dangerSoft, fontSize: 10 },
   videoText: { ...type.label, color: colors.textSubtle, letterSpacing: 0.4 },
+    discord: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.snug,
+    minHeight: 34,
+    paddingHorizontal: space.small,
+    borderRadius: radius.medium,
+    borderWidth: 1,
+    borderColor: colors.discordBorder,
+    backgroundColor: colors.discordSurface,
+  },
+  discordMark: { color: colors.accentSoft, fontSize: 10 },
+  discordText: { ...type.label, color: colors.textSubtle, letterSpacing: 0.4 },
   policy: { ...type.meta, color: colors.textFaint, paddingHorizontal: space.small },
-
-  pressed: { opacity: 0.7 },
 });

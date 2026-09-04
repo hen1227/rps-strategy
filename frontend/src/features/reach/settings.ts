@@ -5,7 +5,12 @@
 // reads it. A screen never invents its own.
 
 import type { ObstacleModel, SafetyRule } from '@/engine/reach';
-import type { PlayablePiece, Position, SideColor } from '@/types/game';
+import {
+  FIRST_TO_MOVE,
+  type PlayablePiece,
+  type Position,
+  type SideColor,
+} from '@/types/game';
 
 /** What the board is being asked to show. */
 export type ReachView =
@@ -102,7 +107,7 @@ export const DEFAULT_REACH_SETTINGS: ReachSettings = {
   dimBeyond: false,
   showDanger: false,
   showPath: true,
-  side: 'Red',
+  side: FIRST_TO_MOVE,
   kind: 'all',
   focus: null,
   pinned: false,

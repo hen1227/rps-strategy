@@ -16,6 +16,7 @@ import {
   openingKind,
   openingNaming,
   seedOpeningCache,
+  withPublishedName,
   withSuggestion,
   type OpeningBookBootstrap,
   type OpeningLine,
@@ -29,14 +30,18 @@ import {
   walkOpeningLine,
   type OpeningStep,
 } from '@/engine/openingLine';
+import type { OpeningCohort, OpeningStatsNode } from '@/engine/openingStats';
 import { failureMessage } from '@/errors';
-import EvalBar, { formatScore } from '@/features/analysis/EvalBar';
+import EvalBar, { EVAL_BAR_WIDTH, formatScore } from '@/features/analysis/EvalBar';
 import MiniBoard from '@/features/board/MiniBoard';
 import { ApiError } from '@/store/api/http';
 import {
   getOpeningBook,
   getOpeningNameSuggestions,
+  getOpeningNames,
   getOpeningNode,
+  getOpeningStats,
+  nameOpeningLine,
   suggestOpeningName,
 } from '@/store/api/openings';
 import { useGameStore } from '@/store/gameStore';
@@ -45,9 +50,12 @@ import type { ModeDefinition, ModeID } from '@/types/game';
 import ScreenShell from '@/ui/ScreenShell';
 import { Badge, Banner, GhostButton, Panel } from '@/ui/primitives';
 
+import CertifiedOpenings from './CertifiedOpenings';
 import CuratorPanel from './CuratorPanel';
+import NameIndexPanel from './NameIndexPanel';
 import MoveCard, { MOVE_CARD_GAP, moveCardWidthFor } from './MoveCard';
 import NamePanel from './NamePanel';
+import PlayStatsPanel from './PlayStatsPanel';
 import { TurnDot, forcedLabel, redScore, sideOf, ui } from './openingsUi';
 import { useOpeningCurator } from './useOpeningCurator';
 
@@ -59,15 +67,17 @@ interface ModeTab {
 }
 
 const FALLBACK_MODES: ModeTab[] = [
-  { id: 'V3', name: 'Infiltration', shortCode: 'V3' },
+  { id: 'V6', name: 'Intransitive', shortCode: 'V6' },
   { id: 'V5', name: 'Total War', shortCode: 'V5' },
+  { id: 'V3', name: 'Infiltration', shortCode: 'V3' },
 ];
 
 // Board sizes, in points.
 const MAIN_LINE_BOARD = 128;
 const HERO_BOARD_MAX = 300;
 const HERO_BOARD_MIN = 210;
-const EVAL_BAR_COLUMN = 39;
+/** What the hero board has to leave beside it: the eval bar, plus the row gap. */
+const EVAL_BAR_COLUMN = EVAL_BAR_WIDTH + space.small;
 
 /** Two columns fit here; below it the hero and the cards stack. */
 const WIDE_ENOUGH = 720;
@@ -218,7 +228,7 @@ export default function OpeningBookScreen() {
   const { params, settled } = useSettledSearchParams<{ mode?: string; line?: string }>();
   const linkedMode = params.mode as ModeID | undefined;
   const linkedLine = params.line;
-  const [modeId, setModeId] = useState<ModeID>(linkedMode ?? 'V3');
+  const [modeId, setModeId] = useState<ModeID>(linkedMode ?? 'V6');
   const [bookData, setBookData] = useState<OpeningBookBootstrap | null>(null);
   const [line, setLine] = useState<OpeningLine>([]);
   // The book is a graph the server owns, so the screen keeps only what it has
@@ -232,10 +242,23 @@ export default function OpeningBookScreen() {
   const [studioOpen, setStudioOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // What people play, which is a separate request from the book: it is
+  // compiled by the server on its own schedule and a mode can have one without
+  // the other. A 404 means no compile has run, which the panel words
+  // differently from a compile that found no games.
+  const [cohort, setCohort] = useState<OpeningCohort>('human');
+  const [stats, setStats] = useState<OpeningStatsNode | null>(null);
+  const [statsMissing, setStatsMissing] = useState(false);
   // Boards are drawn at a size in points, so the grid has to be measured
   // rather than flexed. Zero until the first layout, which is also what the
   // build-time render reports — see `useSettled` for why that matters.
   const [pageWidth, setPageWidth] = useState(0);
+  // And the hero panel separately. `pageWidth` is measured on the header, which
+  // is outside this panel's padding, so it is 42pt more room than the board
+  // actually has — the width of the padding and border either side. Sizing the
+  // board from it overflowed the row by exactly that, invisibly: react-native-web
+  // paints no scrollbar here.
+  const [heroWidth, setHeroWidth] = useState(0);
 
   const tab = tabs.find((candidate) => candidate.id === modeId) ?? tabs[0];
   // The full definition, which is what carries the starting position every
@@ -319,6 +342,30 @@ export default function OpeningBookScreen() {
     };
   }, [bookData, modeId, node, lineKey(line)]);
 
+  // The statistics, refetched when the mode or the cohort changes. Not part of
+  // the bootstrap: the two are compiled by different things on different days,
+  // and a book that failed to load should not take the counts with it.
+  useEffect(() => {
+    if (!settled) return;
+    let cancelled = false;
+    setStats(null);
+    getOpeningStats(modeId, { cohort })
+      .then((result) => {
+        if (cancelled) return;
+        setStats(result);
+        setStatsMissing(false);
+      })
+      .catch((requestError) => {
+        if (cancelled) return;
+        if (requestError instanceof ApiError && requestError.status === 404) {
+          setStatsMissing(true);
+        } else setError(failureMessage(requestError));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [cohort, modeId, settled]);
+
   // Every board on the page comes from replaying the line locally, so they are
   // all drawn before the server has said anything about the position.
   const walk = useMemo(() => walkOpeningLine(mode, line), [mode, lineKey(line)]);
@@ -331,13 +378,15 @@ export default function OpeningBookScreen() {
   const turn = sideOf(node?.turn ?? game?.currentTurn, line.length);
 
   const isWide = pageWidth >= WIDE_ENOUGH;
+  // What is left for the board once the eval bar beside it is paid for.
+  const heroFit = Math.max(0, heroWidth - EVAL_BAR_COLUMN);
   const heroBoard = Math.round(
-    Math.max(
-      HERO_BOARD_MIN,
-      Math.min(
-        HERO_BOARD_MAX,
-        isWide ? pageWidth * 0.38 : pageWidth - EVAL_BAR_COLUMN,
-      ),
+    Math.min(
+      HERO_BOARD_MAX,
+      Math.max(HERO_BOARD_MIN, isWide ? heroWidth * 0.38 : heroFit),
+      // Last, so the floor gives way to it: a board held at HERO_BOARD_MIN on a
+      // narrow phone pushes the eval bar out of the panel rather than shrinking.
+      heroFit,
     ),
   );
   const cardWidth = moveCardWidthFor(pageWidth, !isWide);
@@ -359,6 +408,41 @@ export default function OpeningBookScreen() {
     // mean over there.
     setLine([]);
     setNotice(null);
+  };
+
+  /**
+   * Name the line outright.
+   *
+   * The 409 case is somebody having named it first, and the honest answer is
+   * to say what it is called rather than to report a failure: the person
+   * typing wanted this line named, and it now is.
+   */
+  const submitName = async (name: string) => {
+    setSuggesting(true);
+    setError(null);
+    try {
+      const published = await nameOpeningLine(modeId, line, name);
+      updateBook((current) => withPublishedName(current, published));
+      setNotice(`This line is now called “${published.name}”.`);
+      return true;
+    } catch (requestError) {
+      if (requestError instanceof ApiError && requestError.status === 409) {
+        // Reload the naming layer so the winning name is on screen rather
+        // than only in the message.
+        try {
+          const names = await getOpeningNames(modeId);
+          updateBook((current) => ({ ...current, names: names.names ?? current.names }));
+        } catch {
+          // The message below still says what happened.
+        }
+        setNotice('Somebody named this line first — put your name forward as an alternative.');
+        return false;
+      }
+      setError(failureMessage(requestError));
+      return false;
+    } finally {
+      setSuggesting(false);
+    }
   };
 
   const submitSuggestion = async (name: string) => {
@@ -394,9 +478,10 @@ export default function OpeningBookScreen() {
   };
 
   const measure = (event: LayoutChangeEvent) => setPageWidth(event.nativeEvent.layout.width);
+  const measureHero = (event: LayoutChangeEvent) => setHeroWidth(event.nativeEvent.layout.width);
   const forced = node ? forcedLabel(node.score) : null;
 
-  const heroDiagram = game && pageWidth > 0 && (
+  const heroDiagram = game && heroWidth > 0 && (
     <View style={styles.heroBoardRow}>
       <MiniBoard
         capture={lastStep?.captured}
@@ -500,7 +585,10 @@ export default function OpeningBookScreen() {
         ) : (
           <>
             <Panel style={styles.hero} tone="accent">
-              <View style={[styles.heroLayout, isWide && styles.heroLayoutWide]}>
+              <View
+                onLayout={measureHero}
+                style={[styles.heroLayout, isWide && styles.heroLayoutWide]}
+              >
                 {heroDiagram}
                 <View style={styles.heroCopy}>
                   <View style={styles.heroEyebrowRow}>
@@ -570,18 +658,38 @@ export default function OpeningBookScreen() {
               </View>
             </Panel>
 
+            {/* The certified openings are the page's headline now, in place of
+                a "featured" strip that followed the best three lines a fixed
+                twelve plies whether or not the search had separated the moves
+                along them. */}
+            {line.length === 0 && (
+              <CertifiedOpenings
+                certainty={book.certainty}
+                mode={mode}
+                modeId={modeId}
+                nameFor={naming.nameFor}
+                onOpen={setLine}
+                openings={book.certified ?? []}
+                titleFor={naming.titleFor}
+              />
+            )}
+
+            {/* The main line stays, one rung down: it is the engine's best
+                continuation regardless of how sure it is, which is still worth
+                seeing next to the lines it will vouch for. */}
             {line.length === 0 && book.mainLine.length > 0 && (
               <Panel style={styles.mainLinePanel}>
                 <View style={styles.sectionHeader}>
                   <View style={styles.sectionHeaderCopy}>
-                    <Text style={ui.eyebrow}>CORE OPENING</Text>
+                    <Text style={ui.eyebrow}>DEEPEST LINE</Text>
                     <Text style={styles.sectionTitle}>Main line</Text>
                   </View>
                   <Badge label={`${book.mainLine.length} PLIES`} tone="accent" />
                 </View>
                 <Text style={styles.sectionCopy}>
-                  RPSFish’s best continuation through the analyzed graph, board by board. Tap any
-                  move to open that position.
+                  RPSFish’s best continuation through the analyzed graph, board by board — followed
+                  as far as the scan goes rather than as far as it is certain. Tap any move to open
+                  that position.
                 </Text>
                 <MainLineStrip
                   mainLine={book.mainLine}
@@ -670,10 +778,23 @@ export default function OpeningBookScreen() {
               curator={curator}
               line={line}
               naming={naming}
+              onName={submitName}
               onOpenLine={setLine}
               onSuggest={submitSuggestion}
               suggesting={suggesting}
             />
+
+            <PlayStatsPanel
+              cohort={cohort}
+              missing={statsMissing}
+              mode={mode}
+              modeId={modeId}
+              onCohort={setCohort}
+              onOpen={setLine}
+              stats={stats}
+            />
+
+            <NameIndexPanel modeId={modeId} onOpenLine={setLine} />
           </>
         )}
 

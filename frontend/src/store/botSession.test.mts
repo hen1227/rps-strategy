@@ -137,9 +137,10 @@ test('a rematch alternates the side when the player did not choose one', () => {
 test('a rematch opens a fresh board against the same bot', () => {
   const get = openStore();
   const mode = testMode('V5');
-  get().startBotGame({ mode, playerColor: 'Red', profileId: 'pebble' });
-  get().botSelectTile({ x: 3, y: 6 });
-  get().botSelectTile({ x: 3, y: 5 });
+  // Blue opens, so the player has to be Blue for the opening move to be theirs.
+  get().startBotGame({ mode, playerColor: 'Blue', profileId: 'pebble' });
+  get().botSelectTile({ x: 3, y: 2 });
+  get().botSelectTile({ x: 3, y: 3 });
   assert.equal(get().botMoves.length, 1, 'test setup: expected the opening move to land');
 
   get().restartBotGame();

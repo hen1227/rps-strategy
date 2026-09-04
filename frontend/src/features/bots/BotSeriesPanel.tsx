@@ -13,6 +13,7 @@ import {
   startBotSeries,
   type BotSeries,
 } from '@/store/api/bots';
+import { timeControlLabel } from '@/store/setupSelectors';
 import { colors, space, type } from '@/theme';
 import LinkRow from '@/ui/LinkRow';
 import {
@@ -24,7 +25,7 @@ import {
   PrimaryButton,
   SectionHeading,
 } from '@/ui/primitives';
-import type { ModeDefinition, ModeID } from '@/types/game';
+import type { ModeDefinition, ModeID, TimeControl } from '@/types/game';
 import type { BotPresence } from '@/types/protocol';
 
 // Pit two engine bots against each other.
@@ -59,8 +60,26 @@ const PUBLIC_MAX_PLIES = 6;
 const HOST_MAX_PAIRS = 100;
 const HOST_MAX_PLIES = 20;
 
+/**
+ * The shortest clock the form will send: 0.1+1, six seconds each with a second
+ * back every move.
+ *
+ * A bullet clock is not the degenerate setting between two engines that it is
+ * between two people. Neither of them is going to fumble a mouse, the increment
+ * is what carries a game this short, and six of them are over in less time than
+ * one game at the default clock takes — which is the difference between
+ * watching a run settle a question and starting one and coming back later.
+ */
+const MIN_MINUTES = 0.1;
+
 const numeric = (value: string, fallback: number) => {
   const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+/** Minutes alone may be fractional — see MIN_MINUTES — so they are not rounded. */
+const decimal = (value: string, fallback: number) => {
+  const parsed = Number.parseFloat(value);
   return Number.isFinite(parsed) ? parsed : fallback;
 };
 
@@ -82,7 +101,7 @@ export default function BotSeriesPanel({ bots, modes }: BotSeriesPanelProps) {
 
   const [firstBotId, setFirstBotId] = useState<string | null>(null);
   const [secondBotId, setSecondBotId] = useState<string | null>(null);
-  const [modeId, setModeId] = useState<ModeID>(modes[0]?.id ?? 'V5');
+  const [modeId, setModeId] = useState<ModeID>(modes[0]?.id ?? 'V6');
   const [pairs, setPairs] = useState('2');
   const [plies, setPlies] = useState('3');
   const [seed, setSeed] = useState('');
@@ -103,6 +122,20 @@ export default function BotSeriesPanel({ bots, modes }: BotSeriesPanelProps) {
 
   const refresh = useCallback(() => setChanged((count) => count + 1), []);
 
+  // The clock as the request will carry it, so the button underneath reports
+  // the number that will be sent rather than whatever is half-typed in the
+  // field. The increment is fixed at a second: it is what makes the shortest
+  // clock on offer playable at all, and nobody came here to choose it.
+  const clock = useMemo<TimeControl>(
+    () => ({
+      initialTimeMs: Math.round(
+        clamp(decimal(minutes, 1), MIN_MINUTES, maxMinutes) * 60_000,
+      ),
+      incrementMs: 1000,
+    }),
+    [minutes, maxMinutes],
+  );
+
   const start = async () => {
     if (!firstBotId || !secondBotId) return;
     setBusy(true);
@@ -118,10 +151,7 @@ export default function BotSeriesPanel({ bots, modes }: BotSeriesPanelProps) {
         // here is one they copied off a finished run, and `Number.parseInt`
         // would round it before it ever left the browser.
         seed: seed.trim().replace(/\D/g, ''),
-        timeControl: {
-          initialTimeMs: clamp(numeric(minutes, 1), 1, maxMinutes) * 60_000,
-          incrementMs: 1000,
-        },
+        timeControl: clock,
       };
       if (asHost) await startAdminBotSeries(admin.token, options);
       else await startBotSeries(identity, options);
@@ -151,7 +181,10 @@ export default function BotSeriesPanel({ bots, modes }: BotSeriesPanelProps) {
   // because its owner is allowed to enter it and the server is the one that
   // knows who that is.
   const idle = useMemo(
-    () => bots.filter((bot) => !bot.busy && !bot.draining),
+    // `benched` as well as `draining`: the server refuses to start a series
+    // during a scheduled bench, so offering the engines here would be a form
+    // that can only fail.
+    () => bots.filter((bot) => !bot.busy && !bot.draining && !bot.benched),
     [bots],
   );
   const botOptions = useMemo(
@@ -163,6 +196,20 @@ export default function BotSeriesPanel({ bots, modes }: BotSeriesPanelProps) {
     [idle],
   );
   const enoughBots = idle.length >= 2;
+  // Whether the two chosen engines belong to one person, which is what decides
+  // whether the run is casual. The server settles it — see sameBotOwner in
+  // bot_series.go — and this is the form saying so in advance rather than a
+  // second opinion about it.
+  //
+  // The empty check is the whole of the care needed: `ownerUserId` is absent for
+  // an engine whose owner the roster does not carry, and two absent owners
+  // compared as strings would read as one person owning both.
+  const sameOwner = useMemo(() => {
+    const ownerOf = (botId: string | null) =>
+      bots.find((bot) => bot.botId === botId)?.ownerUserId ?? '';
+    const first = ownerOf(firstBotId);
+    return first !== '' && first === ownerOf(secondBotId);
+  }, [bots, firstBotId, secondBotId]);
   const canStart =
     !busy && Boolean(firstBotId) && Boolean(secondBotId) && firstBotId !== secondBotId;
   const mine = (run: BotSeries) =>
@@ -187,12 +234,6 @@ export default function BotSeriesPanel({ bots, modes }: BotSeriesPanelProps) {
           )
         }
       />
-
-      <Text style={styles.help}>
-        {asHost
-          ? 'Host limits: up to 100 pairs at any clock. The public form is capped at 3 pairs and 10 minutes each.'
-          : `Up to ${PUBLIC_MAX_PAIRS} pairs at ${PUBLIC_MAX_MINUTES} minutes each, and one run at a time per person. Both engines have to be open to public play — or be yours.`}
-      </Text>
 
       {hostFormOpen && !asHost ? (
         <>
@@ -234,6 +275,14 @@ export default function BotSeriesPanel({ bots, modes }: BotSeriesPanelProps) {
             value={modeId}
           />
 
+          {sameOwner ? (
+            <Text style={styles.help}>
+              Both engines have the same owner, so this run is casual — the ladder does
+              not rate a pair of bots one person registered. Pick engines from different
+              owners for a rated run.
+            </Text>
+          ) : null}
+
           {optionsOpen ? (
             <View style={styles.fields}>
               <LabeledInput
@@ -258,8 +307,8 @@ export default function BotSeriesPanel({ bots, modes }: BotSeriesPanelProps) {
                 value={seed}
               />
               <LabeledInput
-                hint={`Max ${maxMinutes}`}
-                keyboardType="number-pad"
+                hint={`${MIN_MINUTES} is a six-second bullet clock · max ${maxMinutes}`}
+                keyboardType="decimal-pad"
                 label="MINUTES EACH"
                 onChangeText={setMinutes}
                 value={minutes}
@@ -268,13 +317,17 @@ export default function BotSeriesPanel({ bots, modes }: BotSeriesPanelProps) {
           ) : null}
 
           <View style={styles.actions}>
-            <PrimaryButton disabled={!canStart} label="START SERIES ▶" onPress={start} />
+            <PrimaryButton
+              disabled={!canStart}
+              label={sameOwner ? 'START CASUAL SERIES ▶' : 'START SERIES ▶'}
+              onPress={start}
+            />
             <GhostButton
               compact
               label={
                 optionsOpen
                   ? 'HIDE OPTIONS'
-                  : `${pairs} PAIRS · ${plies} PLIES · ${minutes} MIN`
+                  : `${pairs} PAIRS · ${plies} PLIES · ${timeControlLabel(clock)}`
               }
               onPress={() => setOptionsOpen(!optionsOpen)}
             />

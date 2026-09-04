@@ -8,13 +8,13 @@
 
 import { gridFromRows } from '@/engine/analysisGame';
 import {
+  playerName,
   seriesProgressLabel,
   seriesScoreLabel,
   seriesScoreOf,
-  titledName,
 } from '@/store/spectateSelectors';
 import { isOpenChallenge } from '@/types/protocol';
-import type { BotPresence, Challenge, LiveGameSummary, Tournament } from '@/types/protocol';
+import type { BotPresence, Challenge, LiveGameSummary, TitleID, Tournament } from '@/types/protocol';
 import {
   isBoardRows,
   type Grid,
@@ -53,7 +53,7 @@ export interface WaitingSeat {
 }
 
 /** What an engine is doing, in the one vocabulary every screen spells it in. */
-export type EngineActivity = 'playing' | 'idle' | 'private' | 'draining';
+export type EngineActivity = 'playing' | 'idle' | 'private' | 'draining' | 'benched';
 
 /**
  * One engine on the roster, ready to be drawn.
@@ -74,8 +74,9 @@ export interface EngineSeat {
   mode: ModeDefinition | null;
   /** Which side of that board it plays. */
   color: SideColor | null;
-  /** Who it is playing, titled the way every other row spells a name. */
-  opponent: string | null;
+  /** Who it is playing. Split from its title, which the row draws as a `TitleTag` chip. */
+  opponentName: string | null;
+  opponentTitle: TitleID | null;
   /**
    * The ratings this row should show.
    *
@@ -151,11 +152,41 @@ export const engineStatus = (bot: BotPresence): EngineStatus => {
   // Ahead of `busy`, because a draining engine mid-game is leaving *after* that
   // game. Reading PLAYING would invite somebody to wait for the board to clear
   // and then challenge it, which is the one thing that will not work.
+  //
+  // The bench comes first of all, and is the one state here that is true of
+  // every engine at once. Saying SHUTTING DOWN against the whole ladder for an
+  // afternoon would read as a broken server rather than as a scheduled break,
+  // which is exactly why the server publishes the two apart.
+  if (bot.benched) return { activity: 'benched', label: 'OFFLINE FOR THE TOURNAMENT', tone: 'neutral' };
   if (bot.draining) return { activity: 'draining', label: 'SHUTTING DOWN', tone: 'neutral' };
-  if (bot.busy) return { activity: 'playing', label: 'PLAYING', tone: 'live' };
+  // An engine with several slots can be playing and free at the same moment, so
+  // the badge counts rather than choosing between the two words. `busy` still
+  // decides whether it is playing at all: a bot with every slot held by a
+  // series is between games rather than idle, however few boards it is on.
+  const slots = engineSlots(bot);
+  const active = engineActiveGames(bot);
+  if (active > 0 || bot.busy) {
+    return {
+      activity: 'playing',
+      label: slots > 1 && active > 0 ? `PLAYING ${active} OF ${slots}` : 'PLAYING',
+      tone: 'live',
+    };
+  }
   if (!bot.allowPublicPlay) return { activity: 'private', label: 'PRIVATE', tone: 'neutral' };
   return { activity: 'idle', label: 'IDLE', tone: 'accent' };
 };
+
+/**
+ * How many games an engine takes at once, and how many it is in.
+ *
+ * Defaulted here rather than at each reader: a server that predates concurrent
+ * bots sends neither field, and every bot it knows about plays one game at a
+ * time — which is exactly what `busy` meant on its own.
+ */
+export const engineSlots = (bot: BotPresence): number => Math.max(bot.slots ?? 1, 1);
+
+export const engineActiveGames = (bot: BotPresence): number =>
+  bot.activeGames ?? (bot.busy ? 1 : 0);
 
 /**
  * Whether this engine can take a game right now.
@@ -164,7 +195,7 @@ export const engineStatus = (bot: BotPresence): EngineStatus => {
  * cannot say SHUTTING DOWN next to a live PLAY button.
  */
 export const engineIsAvailable = (bot: BotPresence): boolean =>
-  !bot.busy && !bot.draining && bot.allowPublicPlay;
+  !bot.busy && !bot.draining && !bot.benched && bot.allowPublicPlay;
 
 /**
  * Engines at work first: an idle bot is a button, a playing one is a board.
@@ -178,6 +209,9 @@ const ENGINE_ORDER: Record<EngineActivity, number> = {
   idle: 1,
   private: 2,
   draining: 3,
+  // Below a drain, but it does not matter: a bench is on every engine at once,
+  // so this rank never breaks a tie against anything else.
+  benched: 4,
 };
 
 export interface LiveSnapshot {
@@ -238,6 +272,11 @@ const activeTournamentOf = (tournaments: Tournament[]): Tournament | null =>
  * A bot that the roster calls busy without a matching board is left as a row
  * with no board rather than dropped: the game may have ended a beat before this
  * snapshot, and an engine that exists is still worth listing.
+ *
+ * One row per engine, and so one board per engine: a bot playing three games at
+ * once draws the first of them and says `PLAYING 3 OF 3` beside it. Three rows
+ * for one name would read as three bots, which is the thing this list is for
+ * telling apart.
  */
 const engineSeatsOf = (
   bots: BotPresence[],
@@ -251,7 +290,7 @@ const engineSeatsOf = (
 
   const seats = bots.map((bot): EngineSeat => {
     const status = engineStatus(bot);
-    const game = bot.busy
+    const game = engineActiveGames(bot) > 0
       ? liveGames.find(
           (candidate) =>
             candidate.redPlayer?.userId === bot.userId ||
@@ -271,9 +310,10 @@ const engineSeatsOf = (
       game,
       mode,
       color,
-      opponent: game
-        ? titledName(color === 'Red' ? game.bluePlayer : game.redPlayer, color === 'Red' ? 'Blue' : 'Red')
+      opponentName: game
+        ? playerName(color === 'Red' ? game.bluePlayer : game.redPlayer, color === 'Red' ? 'Blue' : 'Red')
         : null,
+      opponentTitle: game ? (color === 'Red' ? game.bluePlayer : game.redPlayer)?.title ?? null : null,
       // A board names its own mode, so a playing engine is one rating; the mode
       // may predate this client's mode list, in which case the game's own name
       // for it is the honest label.

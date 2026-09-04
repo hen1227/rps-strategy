@@ -42,6 +42,7 @@ import useGameAnalysis from '@/hooks/useGameAnalysis';
 import { usePositionAnalysis } from '@/hooks/usePositionAnalysis';
 import useReplayKeyboard from '@/hooks/useReplayKeyboard';
 import { useReplayCursor } from '@/hooks/useReplayCursor';
+import { useWatchGame } from '@/hooks/useWatchGame';
 import { gameReviewURL, links } from '@/navigation/links';
 import { isGameLive } from '@/store/spectateSelectors';
 import { getGamePGN, putGameAccuracy } from '@/store/api/review';
@@ -242,7 +243,7 @@ export default function ReviewScreen() {
   // Joined once rather than mapped in the render, so the table is not handed a
   // fresh array on every tick of the lobby.
   const liveGameIds = useMemo(() => liveGames.map((live) => live.gameId), [liveGames]);
-  const spectateGame = useGameStore((state) => state.spectateGame);
+  const watchGame = useWatchGame();
   const chatMessages = useGameStore((state) => state.chatMessages);
   const chatRoomId = useGameStore((state) => state.chatRoomId);
   const chatOccupancy = useGameStore((state) => state.chatOccupancy);
@@ -317,9 +318,7 @@ export default function ReviewScreen() {
   // A game still being played is watched rather than read back: it has no
   // archived record yet, so reviewing it lands on "this game cannot be
   // reviewed", and the thing somebody clicking the live column wants is
-  // obviously the board. Spectating from here needs the navigation spelled out —
-  // the global effect that sends a new board to /play deliberately leaves the
-  // review screen alone, so that opening a review does not bounce you off it.
+  // obviously the board.
   //
   // For a finished one, `replace` rather than `push`, so that walking a
   // six-game series does not leave six entries to back out of; the PGN is
@@ -328,8 +327,7 @@ export default function ReviewScreen() {
     (nextGameId: string) => {
       if (!nextGameId || nextGameId === gameId) return;
       if (isGameLive(liveGames, nextGameId)) {
-        spectateGame(nextGameId);
-        router.replace(links.play());
+        watchGame(nextGameId);
         return;
       }
       setSwitchingTo(nextGameId);
@@ -337,7 +335,7 @@ export default function ReviewScreen() {
       setBranch(null);
       router.replace(links.review(nextGameId));
     },
-    [gameId, liveGames, router, spectateGame],
+    [gameId, liveGames, router, watchGame],
   );
 
   // A record that cannot be read is shown as a message rather than thrown:
@@ -672,7 +670,7 @@ export default function ReviewScreen() {
         movableColor={game.currentTurn}
         onPieceDrop={playMove}
         onTilePress={selection.selectTile}
-        playerColor={viewerColor === 'Blue' ? 'Blue' : 'Red'}
+        playerColor={viewerColor === 'Red' ? 'Red' : 'Blue'}
         replayIndex={cursor}
         replayPositions={positionsInView}
         selectedTile={selectedTile}

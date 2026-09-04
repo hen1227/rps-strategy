@@ -11,12 +11,12 @@ import ScreenShell from '@/ui/ScreenShell';
 import { docSections, sectionSource, type DocSection } from '@/ui/markdownSections';
 import { Banner, GhostButton, Panel } from '@/ui/primitives';
 
-// One of the two documents the server ships, as a page of its own.
+// One of the documents the server ships, as a page of its own.
 //
-// Both of these used to be unrolled at the bottom of the Bots page, one after
+// The first two used to be unrolled at the bottom of the Bots page, one after
 // the other, which is how a page about playing a bot came to be twelve screens
 // long. They are reference material: worth having in full, worth arriving at on
-// purpose.
+// purpose, and worth a link somebody can hand to somebody else.
 //
 // The text is still the file in `docs/` — fetched, not retyped — but it is laid
 // out here rather than poured out. Each `##` section gets its own card, so the
@@ -29,14 +29,15 @@ import { Banner, GhostButton, Panel } from '@/ui/primitives';
 // so there the sections simply run in order.
 
 export interface BotDocScreenProps {
-  /** Which of the two the server sends. */
-  doc: 'guide' | 'protocol';
+  /** Which of the documents the server sends. */
+  doc: 'guide' | 'protocol' | 'notation';
 }
 
-/** How the two documents introduce themselves before their own title arrives. */
+/** How each document introduces itself before its own title arrives. */
 const FALLBACK = {
   guide: { eyebrow: 'HANDOUT', title: 'Connect your bot' },
   protocol: { eyebrow: 'REFERENCE', title: 'The engine protocol' },
+  notation: { eyebrow: 'REFERENCE', title: 'Records and notation' },
 } as const;
 
 const jumpTo = (id: string) => {
@@ -65,7 +66,7 @@ export default function BotDocScreen({ doc }: BotDocScreenProps) {
     };
   }, []);
 
-  const source = guide ? (doc === 'guide' ? guide.guide : guide.protocol) : null;
+  const source = guide ? guide[doc === 'guide' ? 'guide' : doc] : null;
   const sections = docSections(source, 2);
   // The document's own `#` heading titles the page, so it is not also a card.
   const lead = sections.find((section) => section.level === 1) ?? null;
