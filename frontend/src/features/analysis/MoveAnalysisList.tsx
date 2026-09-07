@@ -1,4 +1,5 @@
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { useEffect, useRef, type ReactNode } from 'react';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import MoveQualityBadge from './MoveQualityBadge';
 import type { GradableMove, ReviewMove } from '@/engine/gameReview';
@@ -23,6 +24,30 @@ export interface MoveAnalysisListProps<TMove extends ListedMove = ListedMove> {
   onSelect: (positionIndex: number) => void;
   selectedIndex: number;
   title?: string;
+  /**
+   * Scroll the rows inside the card rather than growing it.
+   *
+   * For a caller that gives this a bounded height and wants the furniture
+   * around the rows to stay put — the live board, where the score sheet sits in
+   * a fixed column beside a game that keeps adding to it. Without it, a
+   * forty-move game pushed the replay controls off the bottom of the panel and
+   * moved them again after every move.
+   *
+   * The screens that read a finished game leave it off: a review is a page you
+   * scroll, and a list that scrolled inside a page that also scrolls is two
+   * scrollbars arguing.
+   */
+  scroll?: boolean;
+  /**
+   * Pinned under the rows, inside the card, on a bar of its own.
+   *
+   * Where the replay controls belong when the rows scroll: they are what the
+   * list is steered with, so they have to be reachable without scrolling to
+   * the end of it. The rows take the card's spare height and the bar sits
+   * under them, at the foot of the card, whether the game is two moves old or
+   * forty — so the controls are always in the same place.
+   */
+  footer?: ReactNode;
 }
 
 /** One numbered row of the score sheet: Red's move, then Blue's reply. */
@@ -34,9 +59,11 @@ interface MoveRow<TMove extends ListedMove> {
 
 export default function MoveAnalysisList<TMove extends ListedMove>({
   emptyText = 'This game has no moves yet.',
+  footer,
   moves,
   onSelect,
   selectedIndex,
+  scroll = false,
   title = 'MOVES',
 }: MoveAnalysisListProps<TMove>) {
   const rows: MoveRow<TMove>[] = [];
@@ -44,13 +71,22 @@ export default function MoveAnalysisList<TMove extends ListedMove>({
     rows.push({ number: index / 2 + 1, red: moves[index], blue: moves[index + 1] });
   }
 
-  return (
-    <View style={styles.card}>
-      <Text style={styles.eyebrow}>{title}</Text>
-      {rows.length === 0 ? (
-        <Text style={styles.empty}>{emptyText}</Text>
-      ) : (
-        <View style={styles.rows}>
+  // Follow the game down the list, but only for somebody standing at the end of
+  // it. A viewer who has scrolled up to look at move four is reading, and
+  // yanking them back every time an engine moves would make the list unusable
+  // for the one thing they are using it for.
+  const scroller = useRef<ScrollView | null>(null);
+  const atEnd = selectedIndex >= moves.length;
+  useEffect(() => {
+    if (!scroll || !atEnd) return;
+    scroller.current?.scrollToEnd({ animated: true });
+  }, [atEnd, moves.length, scroll]);
+
+  const body =
+    rows.length === 0 ? (
+      <Text style={styles.empty}>{emptyText}</Text>
+    ) : (
+      <View style={styles.rows}>
           {rows.map((row) => (
             <View key={row.number} style={styles.row}>
               <Text style={styles.number}>{row.number}</Text>
@@ -102,8 +138,25 @@ export default function MoveAnalysisList<TMove extends ListedMove>({
               )}
             </View>
           ))}
-        </View>
+      </View>
+    );
+
+  return (
+    <View style={[styles.card, scroll && styles.cardBounded]}>
+      <Text style={styles.eyebrow}>{title}</Text>
+      {scroll ? (
+        <ScrollView
+          contentContainerStyle={styles.scrollerContent}
+          ref={scroller}
+          showsVerticalScrollIndicator={false}
+          style={styles.scroller}
+        >
+          {body}
+        </ScrollView>
+      ) : (
+        body
       )}
+      {footer ? <View style={styles.footer}>{footer}</View> : null}
     </View>
   );
 }
@@ -115,6 +168,32 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: colors.surface,
+  },
+  // Fills whatever gave it a height, and shrinks to nothing taller than that.
+  // `minHeight: 0` is what actually lets the rows scroll: a flex child measures
+  // at its content height without it, so the card grows and the scroller inside
+  // it never has less room than it needs.
+  cardBounded: { flexGrow: 1, flexShrink: 1, minHeight: 0 },
+  // Takes the room the card's furniture does not want, rather than only as much
+  // as the rows need: the footer under it is then pinned to the foot of the
+  // card instead of floating up under a short game's last move.
+  scroller: { flexGrow: 1, flexShrink: 1, marginHorizontal: -3, paddingHorizontal: 3 },
+  scrollerContent: { paddingBottom: 2 },
+  // Full-bleed to the card's inner edge — hence the negative margins against
+  // the card's padding — and a shade darker than it, so the rows visibly scroll
+  // behind a bar rather than ending at some furniture that happens to be last.
+  footer: {
+    flexShrink: 0,
+    marginTop: 9,
+    marginHorizontal: -13,
+    marginBottom: -13,
+    paddingHorizontal: 13,
+    paddingBottom: 9,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    borderBottomLeftRadius: radius.large - 1,
+    borderBottomRightRadius: radius.large - 1,
+    backgroundColor: colors.surfaceSunken,
   },
   eyebrow: { color: colors.textFaint, fontSize: 8, fontWeight: '900', letterSpacing: 1.2 },
   empty: { color: colors.textFaint, fontSize: 9, marginTop: 9 },

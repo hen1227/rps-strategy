@@ -68,7 +68,7 @@ const FIELDS: { label: string; value: TournamentField }[] = [
 
 const FIELD_DETAIL: Record<TournamentField, string> = {
   open: 'Anybody may enter, engines included.',
-  humans: 'Engines are refused, and are not conscripted by the enrol sweep.',
+  humans: 'Engines are refused, and their owners are not offered them in the entrant picker.',
   bots: 'People are refused. Engines entered in a running event are held in reserve for it — they take no challenges and no series until it finishes, even after their last match.',
 };
 
@@ -134,14 +134,16 @@ export default function TournamentBuilder({
   const [seeding, setSeeding] = useState<TournamentSeeding>(
     tournament?.seeding ?? 'signup',
   );
-  const [requireDiscord, setRequireDiscord] = useState(
-    tournament?.requireDiscord ?? false,
-  );
   // Kept as text rather than as a number, because a cleared field is a real
   // state a host passes through while typing and `Number('')` is zero, which
   // here means something specific: uncapped.
   const [maxPlayers, setMaxPlayers] = useState(
     tournament?.maxPlayers ? String(tournament.maxPlayers) : '',
+  );
+  const [gamesPerMatch, setGamesPerMatch] = useState(
+    String(tournament?.gamesPerMatch && tournament.gamesPerMatch > 1
+      ? tournament.gamesPerMatch
+      : ''),
   );
   const [swissRounds, setSwissRounds] = useState(
     tournament?.swissRounds ? String(tournament.swissRounds) : '',
@@ -167,8 +169,8 @@ export default function TournamentBuilder({
       config.format = format;
       config.field = field;
       config.seeding = seeding;
-      config.requireDiscord = requireDiscord;
       config.swissRounds = Number(swissRounds) || 0;
+      config.gamesPerMatch = Number(gamesPerMatch) || 1;
       config.initialTimeMs = chosenClock.initial;
       config.incrementMs = chosenClock.increment;
     }
@@ -238,29 +240,37 @@ export default function TournamentBuilder({
             />
           ) : null}
 
+          {/*
+            Length is not what this is for, which is why it sits with the format
+            rather than with the clock. One side always moves first, so a single
+            game between two close entrants is partly decided by which of them
+            drew the opening seat — the colours swap every game, and an even
+            number of them cancels it out. It also halves the noise, which is
+            what makes a bot event's table mean anything.
+          */}
+          <LabeledInput
+            hint="Blank or 1 plays a single game. Even numbers give each side the opening seat the same number of times. Ten at most."
+            keyboardType="number-pad"
+            label="GAMES PER MATCH"
+            onChangeText={setGamesPerMatch}
+            placeholder="1"
+            value={gamesPerMatch}
+          />
+          {Number(gamesPerMatch) > 1 && Number(gamesPerMatch) % 2 === 1 ? (
+            <Text style={styles.detail}>
+              An odd number hands one entrant of every pairing an extra turn at opening.
+              Allowed, but an even number is what makes the match fair.
+            </Text>
+          ) : null}
+
           <OptionChips label="WHO MAY ENTER" onChange={setField} options={FIELDS} value={field} />
           <Text style={styles.detail}>{FIELD_DETAIL[field]}</Text>
 
           {/*
-            A second door beside the field rule rather than a fourth chip in it,
-            because it answers a different question. The field rule is what kind
-            of entrant may play; this is how sure you are the entrant is who the
-            form says they are. An event can want either without the other — a
-            bots-only event verifies nobody, and an open one may want every
-            person in it accounted for.
+            No verification switch: every entrant in every event is verified,
+            engines included — asked of the owner, who is the person a host has
+            to reach. See the door in SignupForTournament.
           */}
-          <Checkbox
-            checked={requireDiscord}
-            label="Require a verified Discord account"
-            onToggle={() => setRequireDiscord((current) => !current)}
-          />
-          <Text style={styles.detail}>
-            {requireDiscord
-              ? field === 'bots'
-                ? 'Asked of people only, so this changes nothing for a bots-only event: an engine has no Discord account to link.'
-                : 'Anybody who signs in with Discord is in. Anybody who has not linked one is refused at the signup form and told to link it — it takes about ten seconds. Their signup carries the handle Discord vouched for rather than one they typed, so the handles you contact the field on are known to work.'
-              : 'Anybody may enter and type whatever Discord handle they like, which nothing checks.'}
-          </Text>
 
           <OptionChips
             label="SEEDING"

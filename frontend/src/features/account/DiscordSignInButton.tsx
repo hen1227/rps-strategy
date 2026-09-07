@@ -47,14 +47,27 @@ export default function DiscordSignInButton({
     if (outcome.kind === 'failed') setError(outcome.message);
   };
 
+  // Discord's own colour and the full width of whatever it is dropped into.
+  // This is the front door — on the sign-in panel it is the only way in — so it
+  // is not a button sized to its label sitting in a row of equals.
   return (
-    <View>
+    <View style={styles.wrapper}>
       {error ? <Banner message={error} onDismiss={() => setError(null)} tone="error" /> : null}
-      <PrimaryButton disabled={busy} label={label} loading={busy} onPress={press} />
+      <PrimaryButton
+        disabled={busy}
+        fullWidth
+        label={label}
+        loading={busy}
+        onPress={press}
+        tone="discord"
+      />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
+  // Carries the fill through a row parent, which stretches neither this nor the
+  // button inside it on its own.
+  wrapper: { flexGrow: 1, flexBasis: '100%' },
   unavailable: { color: colors.textMuted, fontSize: 12, lineHeight: 18, marginTop: 8 },
 });

@@ -1,6 +1,8 @@
 import { StyleSheet, Text, View } from 'react-native';
 
+import { up } from '@/navigation/upFrom';
 import { colors, contentWidth, radius } from '@/theme';
+import BackLink from '@/ui/BackLink';
 import ScreenShell from '@/ui/ScreenShell';
 import { Panel, SectionHeading } from '@/ui/primitives';
 import type { PanelTone } from '@/ui/tones';
@@ -86,11 +88,13 @@ const sections: PolicySection[] = [
 ];
 
 export default function PolicyScreen() {
-  // No back button: this page sits inside the app shell, whose sidebar or tab
-  // bar is already the way out.
+  // A back button, unlike every *section* of the shell: nothing in the sidebar
+  // lights up for this page, because it is not one of the sections the sidebar
+  // lists. See the longer note on the credits page.
   return (
     <ScreenShell width={contentWidth.reading}>
       <>
+          <BackLink href={up.policy.href} label={up.policy.label} />
           <View style={styles.hero}>
             <Text style={styles.eyebrow}>THE HOUSE RULES</Text>
             <Text style={styles.title}>Privacy & play</Text>

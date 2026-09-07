@@ -37,7 +37,9 @@ export default function ScreenShell({
   contentStyle,
 }: ScreenShellProps) {
   const content = (
-    <View style={[styles.content, { maxWidth: width }, contentStyle]}>{children}</View>
+    <View style={[styles.content, !scroll && styles.contentFlush, { maxWidth: width }, contentStyle]}>
+      {children}
+    </View>
   );
   if (!scroll) {
     return <View style={[styles.page, { paddingBottom: bottomInset }]}>{content}</View>;
@@ -65,4 +67,21 @@ const styles = StyleSheet.create({
     paddingTop: space.large,
     paddingBottom: space.xlarge,
   },
+  // The frame for a page that scrolls itself, and it differs from the one above
+  // in both directions.
+  //
+  // No vertical padding, because this View is *outside* that page's ScrollView.
+  // Padding out here is not room the content scrolls through, it is a band the
+  // content is clipped at — the first row sliced in half against the top bar
+  // with a strip of background above it, and the last card sliced against the
+  // tab bar. The page carries the same room inside its own
+  // `contentContainerStyle`, where it scrolls.
+  //
+  // And `flex: 1` with `minHeight: 0`, because without a height here there is
+  // nothing for the page's ScrollView to scroll *within*: it is `flexGrow: 1`
+  // inside an auto-height parent, so it resolves to the height of its own
+  // content, reports nothing to scroll, and simply overflows the frame and gets
+  // clipped. The same react-native-web trap the two `flexGrow: 0` comments in
+  // `OpeningExplorerScreen` are about, one level further out.
+  contentFlush: { flex: 1, minHeight: 0, paddingTop: 0, paddingBottom: 0 },
 });

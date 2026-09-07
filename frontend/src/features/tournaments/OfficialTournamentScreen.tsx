@@ -8,8 +8,10 @@ import {
 } from './officialTournament';
 import {useNow} from '@/hooks/useNow';
 import {links} from '@/navigation/links';
+import {up} from '@/navigation/upFrom';
 import {useGameStore} from '@/store/gameStore';
 import {colors, contentWidth, radius, space, type} from '@/theme';
+import BackLink from '@/ui/BackLink';
 import ScreenShell from '@/ui/ScreenShell';
 import LinkRow from '@/ui/LinkRow';
 import {Badge, Panel, SectionHeading} from '@/ui/primitives';
@@ -88,6 +90,12 @@ export default function OfficialTournamentScreen() {
 
     return (
         <ScreenShell width={contentWidth.reading}>
+            {/*
+              The events board, which is the section this page sits beside
+              rather than in — it is somebody else's event, so it is not on that
+              board, and the sidebar therefore lights nothing up here.
+            */}
+            <BackLink href={up.tournamentInfo.href} label={up.tournamentInfo.label} />
             <View style={styles.hero}>
                 <Text style={styles.heroEyebrow}>NOT ON THIS SITE</Text>
                 <Text style={styles.heroTitle}>{officialTournament.name}</Text>

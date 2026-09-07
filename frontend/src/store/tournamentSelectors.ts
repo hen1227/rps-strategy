@@ -28,6 +28,19 @@ export const TOURNAMENT_STATUS: Record<TournamentStatus, StatusBadge> = {
   cancelled: { label: 'CANCELLED', tone: 'live' },
 };
 
+/**
+ * Whether an event is one of the recurring weekend bot arenas.
+ *
+ * They ride the same broadcast as every other tournament — which is what gives
+ * the weekend page live boards for free — and are filtered out of the lists
+ * that are *about* tournaments. One a day would bury the events people came
+ * for, and the weekend arena has a page of its own.
+ */
+export const isWeekendArena = (tournament: Tournament | null | undefined) =>
+  // The stored kind still reads "nightly", from the year this ran every night.
+  // See TournamentKind in the backend for why renaming it would rewrite history.
+  tournament?.kind === 'nightly';
+
 export const statusOf = (tournament: Tournament | null | undefined): StatusBadge =>
   TOURNAMENT_STATUS[tournament?.status as TournamentStatus] ?? TOURNAMENT_STATUS.registration;
 
@@ -50,6 +63,31 @@ export const signupFor = (
   accountId: string | null | undefined,
 ): TournamentPlayer | null =>
   tournament?.players?.find((player) => player.userId === accountId) ?? null;
+
+/**
+ * The entry this account is answerable for: their own, or their bot's.
+ *
+ * The pair to `signupFor`, and the difference matters on exactly one screen
+ * state — an owner who entered an engine is *in*, and a page that only compared
+ * their own account id would keep offering them the registration form for an
+ * event they have already filled their one place in.
+ *
+ * Deliberately not used for pairings. A bot's matches belong to the bot, which
+ * turns up for them by itself; giving its owner a Ready button would be
+ * offering to play somebody else's game.
+ */
+export const entryFor = (
+  tournament: Tournament | null | undefined,
+  accountId: string | null | undefined,
+  botUserIds: readonly string[] = [],
+): TournamentPlayer | null => {
+  const own = signupFor(tournament, accountId);
+  if (own) return own;
+  if (botUserIds.length === 0) return null;
+  return (
+    tournament?.players?.find((player) => botUserIds.includes(player.userId)) ?? null
+  );
+};
 
 /** The requesting player's seat in a match, plus their opponent. */
 export interface MatchSeats {
@@ -106,6 +144,33 @@ export const matchResultLabel = (match: TournamentMatch) => {
   if (match.result === 'player1_win') return `${match.player1?.ign} won`;
   if (match.result === 'player2_win') return `${match.player2?.ign} won`;
   return 'Not played yet';
+};
+
+/** A score as a table writes it: whole numbers, halves as ½. */
+const scorePart = (points: number) => {
+  const whole = Math.floor(points);
+  const half = points - whole >= 0.5;
+  if (!half) return String(whole);
+  return whole === 0 ? '½' : `${whole}½`;
+};
+
+/**
+ * The running score of a pairing that plays more than one game, or null when
+ * there is nothing to say.
+ *
+ * Null rather than "0–0" on a match that has not started, and null on the
+ * ordinary one-game match, where `matchResultLabel` already says everything and
+ * a score line would be noise on every row of every event.
+ */
+export const matchScoreLabel = (
+  tournament: Tournament | null | undefined,
+  match: TournamentMatch,
+): string | null => {
+  const target = tournament?.gamesPerMatch ?? 1;
+  const played = match.gamesPlayed ?? 0;
+  if (target <= 1 || played === 0) return null;
+  const score = `${scorePart(match.player1Points ?? 0)}–${scorePart(match.player2Points ?? 0)}`;
+  return played >= target ? score : `${score} after ${played} of ${target}`;
 };
 
 // Call-to-action kinds, most urgent first. The persistent banner and the home
@@ -211,8 +276,17 @@ export const CALL_TO_ACTION_COPY: Record<CallKind, CallCopy> = {
 
 // Home screen priority: an event this player is playing in outranks an open
 // signup, which outranks someone else's live game.
-const homeRank = (tournament: Tournament, accountId: string | null | undefined) => {
-  const entered = Boolean(signupFor(tournament, accountId));
+//
+// "Playing in" counts an engine this account entered. The owner has no button
+// to press for it — see `entryFor` — but an event their bot is competing in is
+// the one they most want on the front page, and ranking it below a stranger's
+// live game would bury it.
+const homeRank = (
+  tournament: Tournament,
+  accountId: string | null | undefined,
+  botUserIds: readonly string[],
+) => {
+  const entered = Boolean(entryFor(tournament, accountId, botUserIds));
   if (tournament.status === 'in_progress' && entered) return 0;
   if (tournament.status === 'registration') return entered ? 1 : 2;
   return 3;
@@ -227,14 +301,24 @@ export const homeTournaments = (
   tournaments: Tournament[] | null | undefined,
   accountId: string | null | undefined,
   limit = 3,
+  botUserIds: readonly string[] = [],
 ): Tournament[] =>
   (tournaments ?? [])
     .filter((tournament) => {
+      // The weekend arena has its own page and its own countdown; putting it in the
+      // home rotation as well would mean the front page carries it every day.
+      if (isWeekendArena(tournament)) return false;
       if (tournament.status === 'registration') return true;
       if (tournament.status === 'completed') return false;
-      return Boolean(signupFor(tournament, accountId)) || liveMatchesOf(tournament).length > 0;
+      return (
+        Boolean(entryFor(tournament, accountId, botUserIds)) ||
+        liveMatchesOf(tournament).length > 0
+      );
     })
-    .sort((first, second) => homeRank(first, accountId) - homeRank(second, accountId))
+    .sort(
+      (first, second) =>
+        homeRank(first, accountId, botUserIds) - homeRank(second, accountId, botUserIds),
+    )
     .slice(0, limit);
 
 /**
@@ -249,7 +333,7 @@ export const pastTournaments = (
   tournaments: Tournament[] | null | undefined,
 ): Tournament[] =>
   (tournaments ?? [])
-    .filter((tournament) => tournament.status === 'completed')
+    .filter((tournament) => tournament.status === 'completed' && !isWeekendArena(tournament))
     .sort(
       (first, second) =>
         (second.completedAtUnixMs ?? second.createdAtUnixMs) -
@@ -260,7 +344,9 @@ export const pastTournaments = (
 export const currentTournaments = (
   tournaments: Tournament[] | null | undefined,
 ): Tournament[] =>
-  (tournaments ?? []).filter((tournament) => tournament.status !== 'completed');
+  (tournaments ?? []).filter(
+    (tournament) => tournament.status !== 'completed' && !isWeekendArena(tournament),
+  );
 
 /** Who won, when an event has finished and anybody played in it. */
 export const championOf = (tournament: Tournament): string | null =>
@@ -271,5 +357,9 @@ export const hiddenHomeTournamentCount = (
   tournaments: Tournament[] | null | undefined,
   accountId: string | null | undefined,
   limit = 3,
+  botUserIds: readonly string[] = [],
 ) =>
-  Math.max(0, homeTournaments(tournaments, accountId, Infinity).length - limit);
+  Math.max(
+    0,
+    homeTournaments(tournaments, accountId, Infinity, botUserIds).length - limit,
+  );

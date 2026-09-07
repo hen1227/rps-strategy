@@ -3,6 +3,7 @@ import { StyleSheet, Text, View } from 'react-native';
 import { colors, radius } from '@/theme';
 import {
   matchResultLabel,
+  matchScoreLabel,
   matchStateFor,
   seatsFor,
 } from '@/store/tournamentSelectors';
@@ -49,6 +50,7 @@ export default function TournamentMatchRow({
   const opponentReady = Boolean(seats) && readyUserIds.includes(seats?.opponent.userId ?? '');
   const isDecided = match.result !== 'pending';
   const isMine = Boolean(seats);
+  const score = matchScoreLabel(tournament, match);
 
   return (
     <View
@@ -85,6 +87,7 @@ export default function TournamentMatchRow({
             {match.player2?.ign ?? 'TBD'}
           </Text>
         </View>
+        {score ? <Text style={styles.score}>{score}</Text> : null}
         <Text style={[styles.status, isDecided && styles.statusDecided]}>
           {isDecided
             ? matchResultLabel(match)
@@ -157,6 +160,7 @@ const styles = StyleSheet.create({
   playerRight: { textAlign: 'right' },
   playerMine: { color: colors.accentBright },
   versus: { color: colors.textFaint, fontSize: 8, fontWeight: '900', marginHorizontal: 9 },
+  score: { color: colors.text, fontSize: 13, fontWeight: '800', marginTop: 5 },
   status: { color: colors.textMuted, fontSize: 10, marginTop: 5 },
   statusDecided: { color: colors.accentSoft, fontWeight: '800' },
   actions: { alignItems: 'flex-end', gap: 6 },

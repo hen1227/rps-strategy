@@ -1,18 +1,20 @@
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 
 import AccountsPanel from './AccountsPanel';
 import AnalyticsPanel from './AnalyticsPanel';
 import BotControlPanel from './BotControlPanel';
 import GamesPanel from './GamesPanel';
 import ServerControlsPanel from './ServerControlsPanel';
+import WeekendAdminPanel from './WeekendAdminPanel';
 import TournamentAdminPanel from './TournamentAdminPanel';
 import { adminStyles } from './adminStyles';
 import { useAdminToken } from '@/hooks/useAdminToken';
 import { links } from '@/navigation/links';
-import { colors, contentWidth, radius, space, type } from '@/theme';
+import { colors, contentWidth, space, type } from '@/theme';
 import ScreenShell from '@/ui/ScreenShell';
+import TabBar from '@/ui/TabBar';
 import { Banner, LabeledInput, Panel, PrimaryButton, SectionHeading } from '@/ui/primitives';
 
 // The host's screen.
@@ -43,6 +45,7 @@ const TABS = [
   { id: 'players', label: 'Players' },
   { id: 'games', label: 'Games' },
   { id: 'tournaments', label: 'Tournaments' },
+  { id: 'weekend', label: 'Weekend' },
   { id: 'bots', label: 'Engines' },
   { id: 'server', label: 'Server' },
 ] as const;
@@ -72,34 +75,21 @@ export default function AdminScreen({ tab }: AdminScreenProps) {
   return (
     <ScreenShell width={contentWidth.wide}>
       <View style={styles.tabBar}>
-        {TABS.map((entry) => {
-          const selected = entry.id === current;
-          return (
-            <Pressable
-              accessibilityRole="tab"
-              accessibilityState={{ selected }}
-              key={entry.id}
-              // `replace`, so six tab presses do not leave six entries in the
-              // back stack between the host and the page they came from.
-              onPress={() => router.replace(links.admin(entry.id))}
-              style={({ pressed }) => [
-                styles.tab,
-                selected && styles.tabSelected,
-                pressed && styles.pressed,
-              ]}
-            >
-              <Text style={[styles.tabLabel, selected && styles.tabLabelSelected]}>
-                {entry.label}
-              </Text>
-            </Pressable>
-          );
-        })}
+        <TabBar
+          accessibilityLabel="Host controls"
+          // `replace`, so six tab presses do not leave six entries in the back
+          // stack between the host and the page they came from.
+          onChange={(next) => router.replace(links.admin(next))}
+          options={TABS.map((entry) => ({ value: entry.id, label: entry.label }))}
+          value={current}
+        />
       </View>
 
       {current === 'overview' ? <AnalyticsPanel admin={admin} /> : null}
       {current === 'players' ? <AccountsPanel admin={admin} /> : null}
       {current === 'games' ? <GamesPanel admin={admin} /> : null}
       {current === 'tournaments' ? <TournamentAdminPanel admin={admin} /> : null}
+      {current === 'weekend' ? <WeekendAdminPanel admin={admin} /> : null}
       {current === 'bots' ? <BotControlPanel admin={admin} /> : null}
       {current === 'server' ? <ServerControlsPanel admin={admin} /> : null}
     </ScreenShell>
@@ -147,27 +137,7 @@ function AdminUnlock({ admin }: { admin: ReturnType<typeof useAdminToken> }) {
 }
 
 const styles = StyleSheet.create({
-  tabBar: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: space.snug,
-    paddingBottom: space.tight,
-  },
-  tab: {
-    paddingHorizontal: space.medium,
-    paddingVertical: space.small,
-    borderRadius: radius.medium,
-    borderWidth: 1,
-    borderColor: colors.borderSoft,
-    backgroundColor: colors.surface,
-  },
-  tabSelected: {
-    borderColor: colors.goldBorder,
-    backgroundColor: colors.goldSurfaceDeep,
-  },
-  tabLabel: { ...type.label, color: colors.textMuted },
-  tabLabelSelected: { color: colors.goldBright },
-  pressed: { opacity: 0.7 },
+  tabBar: { paddingBottom: space.tight },
 
   help: { ...type.body, color: colors.textFaint, marginBottom: space.small },
 });

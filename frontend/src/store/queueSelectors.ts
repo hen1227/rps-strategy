@@ -33,6 +33,8 @@ export type QueueCallKind =
   | 'posted'
   /** The last board opened for you was never played in. You are still queued. */
   | 'missed'
+  /** Waiting, but the server is draining for an update and nothing is pairing. */
+  | 'paused_for_update'
   /** The socket is down and we believe we are still queued. */
   | 'reconnecting';
 
@@ -61,6 +63,8 @@ export interface QueueSource {
   pushLive: boolean;
   /** Whether the alerts offer is worth making at all. */
   canOfferAlerts: boolean;
+  /** A graceful restart is under way, so matchmaking has stopped pairing. */
+  updating: boolean;
   nowMs: number;
 }
 
@@ -93,6 +97,31 @@ export const queueCallState = (source: QueueSource): QueueCall | null => {
 
   if (queue.isSearching && connectionStatus !== 'connected') {
     return { ...base, kind: 'reconnecting', modeName: modeNameFor(modes, queue.modeId) };
+  }
+
+  // Above the ordinary search and below the dead socket. The server stops
+  // pairing for the length of a drain but keeps everybody's place — see
+  // seekBoard.pair and the note on cancelling a drain — so this is a real wait
+  // that cannot presently end, and a card counting up as though it might is the
+  // one thing it must not be. The alerts offer is not made here either: `base`
+  // leaves it off, and "we will call you back" is not a promise a server on its
+  // way out can keep.
+  //
+  // A posted game is in exactly the same position and is told so here rather
+  // than in its own branch below: nobody can take it either, so a card saying
+  // anybody in the lobby can is the same wait dressed as a live one. The seek is
+  // still carried through, because cancelling it is still the way out.
+  if (source.updating && (queue.isSearching || source.outgoingChallenge)) {
+    const posted = queue.isSearching ? null : source.outgoingChallenge;
+    return {
+      ...base,
+      kind: 'paused_for_update',
+      waitedMs: posted ? clampAtZero(nowMs - posted.createdAtUnixMs) : waitedMs,
+      modeName: posted ? posted.modeName : modeNameFor(modes, queue.modeId),
+      setup: posted ? posted.setup : base.setup,
+      challengeId: posted?.id ?? null,
+      targetUsername: posted?.targetUsername ?? null,
+    };
   }
 
   const missing = source.miss && nowMs - source.miss.atUnixMs < MISS_NOTICE_MS;
@@ -232,6 +261,11 @@ export const QUEUE_COPY: Record<QueueCallKind, QueueCopy> = {
         : `${formatWait(call.waitedMs)} in · anybody in the lobby can take it`,
     action: 'CANCEL',
   },
+  paused_for_update: {
+    title: () => 'Paused for a server update',
+    detail: () => 'No game can be arranged until the server is back',
+    action: 'CANCEL',
+  },
   missed: {
     title: () => 'That game was called off',
     detail: (call) => `Back to searching · ${formatWait(call.waitedMs)} in, and your place is intact`,
@@ -272,6 +306,16 @@ export const ALERTS_PITCH = {
 export interface LobbyGate {
   /** At a real board, or the socket is down. Nothing can be started at all. */
   atBoard: boolean;
+  /**
+   * The server is draining for an update, so no new game can be arranged.
+   *
+   * Separate from `atBoard` because it is not about this player at all and it
+   * is the one reason with a horizon: the connection is fine, the board they
+   * are already playing on is fine, and what has stopped is pairing. The
+   * server refuses a seek for the duration — see postSeek — so a button left
+   * live here is a button whose only outcome is a refusal.
+   */
+  paused: boolean;
   /** A second seek would be refused, because one is already out. */
   seekTaken: boolean;
   /**
@@ -291,14 +335,29 @@ export const lobbyGate = (source: {
   outgoingChallenge: Challenge | null;
   queue: QueueState;
   signedIn: boolean;
+  /** A graceful restart is under way. */
+  updating: boolean;
 }): LobbyGate => ({
   atBoard: source.atOwnBoard || source.connectionStatus !== 'connected',
+  paused: source.updating,
   // Taking somebody's game off the board while queued is not a conflict: it is
   // the same act as being matched, only faster, and the server drops your seek
   // the moment a game starts. So only *creating* a second seek is gated here.
   seekTaken: source.queue.isSearching || Boolean(source.outgoingChallenge),
   needsAccount: !source.signedIn,
 });
+
+/**
+ * What a press is answered with while the server is on its way out.
+ *
+ * One sentence in one place, because four buttons and the store all have to say
+ * it: the store refuses the press, and the lobby explains the disabled button
+ * before anybody presses it. The administrator's own note is the half that says
+ * how long this is for, which is the half that stops "paused" reading as broken.
+ */
+export const updatePausedReason = (note?: string): string =>
+  `${note?.trim() || 'The server is restarting.'} New games are paused until it is back — ` +
+  'this page will reconnect on its own.';
 
 /* -------------------------------------------------------- lobby counting -- */
 

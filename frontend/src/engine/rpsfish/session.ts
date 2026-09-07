@@ -410,9 +410,12 @@ export const createEngine = (backend: EngineBackend, lock: EngineLock = withoutL
 
       cumulativeNodes += raw.nodes;
       latest = readAnalysis(raw, position, cumulativeNodes, started);
-      const exactDepthZero = ['terminal', 'repetition', 'no-legal-move'].includes(
-        latest.stopReason,
-      );
+      const exactDepthZero = [
+        'terminal',
+        'repetition',
+        'no-legal-move',
+        'no-capture',
+      ].includes(latest.stopReason);
       if (latest.depth > lastCompletedDepth && (latest.depth > 0 || exactDepthZero)) {
         lastCompletedDepth = latest.depth;
         onUpdate(latest);

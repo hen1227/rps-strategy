@@ -5,6 +5,7 @@ import { Linking, StyleSheet, Text, View } from 'react-native';
 import BotManagerPanel from './BotManagerPanel';
 import { failureMessage } from '@/errors';
 import { links } from '@/navigation/links';
+import { up } from '@/navigation/upFrom';
 import {
   botClientScriptUrl,
   botGuide,
@@ -60,7 +61,7 @@ export default function MyBotsScreen() {
   return (
     <ScreenShell width={contentWidth.standard}>
       <PageHeading
-        back={{ href: links.account(), label: 'Account' }}
+        back={up.myBots}
         detail="A bot is a program on your machine that plays through a small client. It gets its own name, its own rating, and its own place on the ladder."
         eyebrow="YOUR ENGINES"
         title="Your bots"

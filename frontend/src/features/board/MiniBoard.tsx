@@ -1,7 +1,8 @@
-import { memo, useId, useMemo, useState } from 'react';
+import { memo, useMemo, useState } from 'react';
 import { Image, StyleSheet, View } from 'react-native';
-import Svg, { Defs, Line, Marker, Polygon } from 'react-native-svg';
+import Svg, { Path } from 'react-native-svg';
 
+import { arrowPath } from './arrowShape';
 import PieceIcon from './PieceIcon';
 import TileMark from './TileMark';
 import { overlayCellAt, type BoardOverlay } from './overlay';
@@ -32,12 +33,10 @@ const pieceSizeFor = (size: number, across: number) =>
 /** Below this the corner marks need their tighter geometry to read at all. */
 const COMPACT_BELOW = 260;
 
-// How far the move arrow keeps clear of the two piece icons it runs between,
-// in squares. A book move is a single step, so the whole arrow is about one
-// square long and the head is most of it: any less clearance and the head
-// disappears under the piece it is pointing at.
-const ARROW_TAIL_CLEARANCE = 0.26;
-const ARROW_HEAD_CLEARANCE = 0.2;
+// The thumbnail's arrow is drawn a shade heavier than the live board's own.
+// It is the only thing on a card the reader is meant to take from it, and it
+// is being read at a third of the size.
+const ARROW_WIDTH = 0.175;
 
 export interface MiniBoardProps {
   /** Ring the destination, to say the move took a piece. */
@@ -86,10 +85,6 @@ export default memo(function MiniBoard({
   pieceSize,
   size,
 }: MiniBoardProps) {
-  // Several of these diagrams share a page, and an SVG marker is addressed by
-  // a document-wide id, so a fixed one would give every arrow on the screen the
-  // colour of whichever board rendered first.
-  const arrowId = `mini-board-arrow-${useId().replace(/:/g, '')}`;
   // Even a diagram needs this: without it a background that will not load leaves
   // the tiles dimmed over nothing, which reads worse than no picture at all.
   const [backgroundFailed, setBackgroundFailed] = useState<string | null>(null);
@@ -104,16 +99,20 @@ export default memo(function MiniBoard({
   const arrowOwner = mover ?? (destination?.occupantOwner === 'Blue' ? 'Blue' : 'Red');
   const arrowColor = players[arrowOwner].strong;
 
-  // Centre to centre, pulled back at both ends. In viewBox units one square is
-  // one unit, so the clearances above are literal fractions of a square.
-  const span = move
-    ? Math.hypot(move.to.x - move.from.x, move.to.y - move.from.y) || 1
-    : 1;
-  const stepX = move ? (move.to.x - move.from.x) / span : 0;
   // Rank 1 is drawn at the bottom, the way Board draws it, so a rank is
-  // mirrored on the way to the screen and so is anything measured up the page.
-  const stepY = move ? (move.from.y - move.to.y) / span : 0;
+  // mirrored on the way to the screen.
   const displayY = (y: number) => rows - 1 - y;
+  // The same arrow the live board draws, in the same units: one viewBox unit
+  // is one square, so nothing here needs to know how big the thumbnail is.
+  const arrowD = move
+    ? arrowPath({
+        fromX: move.from.x + 0.5,
+        fromY: displayY(move.from.y) + 0.5,
+        toX: move.to.x + 0.5,
+        toY: displayY(move.to.y) + 0.5,
+        width: ARROW_WIDTH,
+      })
+    : null;
   const drawnRows = useMemo(() => [...grid].reverse(), [grid]);
 
   return (
@@ -210,31 +209,16 @@ export default memo(function MiniBoard({
 
       {move && (
         <Svg aria-hidden style={styles.arrowLayer} viewBox={`0 0 ${columns} ${rows}`}>
-          <Defs>
-            <Marker
-              id={arrowId}
-              markerHeight="4"
-              markerUnits="strokeWidth"
-              markerWidth="4"
-              orient="auto"
-              refX="8"
-              refY="5"
-              viewBox="0 0 10 10"
-            >
-              <Polygon fill={arrowColor} points="0,0 10,5 0,10 2.5,5" />
-            </Marker>
-          </Defs>
-          <Line
-            markerEnd={`url(#${arrowId})`}
-            opacity={0.95}
-            stroke={arrowColor}
-            strokeLinecap="round"
-            strokeWidth={0.13}
-            x1={move.from.x + 0.5 + stepX * ARROW_TAIL_CLEARANCE}
-            x2={move.to.x + 0.5 - stepX * ARROW_HEAD_CLEARANCE}
-            y1={displayY(move.from.y) + 0.5 + stepY * ARROW_TAIL_CLEARANCE}
-            y2={displayY(move.to.y) + 0.5 - stepY * ARROW_HEAD_CLEARANCE}
-          />
+          {arrowD && (
+            <Path
+              d={arrowD}
+              fill={arrowColor}
+              opacity={0.95}
+              stroke={board.arrowOutline}
+              strokeLinejoin="round"
+              strokeWidth={0.03}
+            />
+          )}
         </Svg>
       )}
     </View>

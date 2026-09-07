@@ -1,5 +1,5 @@
 import { Link, usePathname } from 'expo-router';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { visibleSections } from './sections';
 import TournamentPromoLink from './TournamentPromoLink';
@@ -16,11 +16,13 @@ import { colors, radius, space, type } from '@/theme';
 
 const BrandMark = () => (
   <View style={styles.brand}>
-    <Text style={styles.brandLetter}>R</Text>
-    <Text style={styles.brandSlash}>/</Text>
-    <Text style={styles.brandLetter}>P</Text>
-    <Text style={styles.brandSlash}>/</Text>
-    <Text style={styles.brandLetter}>S</Text>
+    <Image
+      source={require('../../../assets/pieces/blue_rock.png')}
+      style={styles.brandIcon}
+      resizeMode="contain"
+      accessibilityLabel="Blue rock"
+    />
+    {/* <Text style={styles.brandName}>Stoneplay</Text> */}
   </View>
 );
 
@@ -149,9 +151,9 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surfaceSunken,
   },
   head: { gap: space.small, paddingHorizontal: space.snug, marginBottom: space.large },
-  brand: { flexDirection: 'row', alignItems: 'center' },
-  brandLetter: { ...type.cardTitle, color: colors.accentBright, letterSpacing: 0.5 },
-  brandSlash: { color: colors.textFaint, fontSize: 12, fontWeight: '700', marginHorizontal: 3 },
+  brand: { flexDirection: 'row', alignItems: 'center', gap: space.small },
+  brandIcon: { width: 40, height: 40 },
+  brandName: { ...type.cardTitle, color: colors.accentBright, letterSpacing: 0.5 },
   status: { flexDirection: 'row', alignItems: 'center', gap: space.snug },
   dot: { width: 7, height: 7, borderRadius: 4 },
   dotOnline: { backgroundColor: colors.accent },

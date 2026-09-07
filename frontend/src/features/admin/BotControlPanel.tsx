@@ -209,14 +209,6 @@ export default function BotControlPanel({ admin }: BotControlPanelProps) {
           ) : null}
         </>
       )}
-      <Text style={adminStyles.help}>
-        Draining lets an engine finish its games and then leave, which is nearly always what
-        you want. Disconnecting closes its sockets immediately, mid-game if necessary, and any
-        series it was in is aborted first so the run ends cleanly rather than timing out. It
-        does not stop the owner&apos;s process, which will probably reconnect — to keep an
-        engine off the ladder or out of events, restrict its account on the Players tab
-        instead.
-      </Text>
     </Panel>
   );
 }

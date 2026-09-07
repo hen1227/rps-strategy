@@ -11,4 +11,6 @@ export type PanelTone = 'default' | 'accent' | 'live';
 
 export type BannerTone = 'notice' | 'error';
 
-export type ButtonTone = 'accent' | 'quiet';
+// `discord` is the one tone borrowed from outside the app: a button that signs
+// into someone else's service is expected to look like that service.
+export type ButtonTone = 'accent' | 'quiet' | 'discord';

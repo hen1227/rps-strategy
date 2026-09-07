@@ -12,7 +12,7 @@ import { createBotSlice, initialBotState } from './botSession';
 import { createLocalSlice, initialLocalState } from './localSession';
 import { createSessionSlice } from './accountSession';
 import { createReachSlice } from './reachTool';
-import { chatRoomIdOf, withChatMessage } from './chatSelectors';
+import { chatRoomIdOf, chatRoomScopeOf, withChatMessage } from './chatSelectors';
 import { grantedTimeExtension, type TimeExtension } from './clockSelectors';
 import { activePushTransport, pushEnabledFor } from './push';
 import { WS_URL } from './serverConfig';
@@ -23,8 +23,10 @@ import {
   type SeatChoice,
 } from './setupSelectors';
 import { send } from './socketSend';
+import { updatePausedReason } from './queueSelectors';
 import type {
   ActiveGame,
+  CancelledGame,
   ConnectionStatus,
   GameStore,
   QueueMiss,
@@ -48,6 +50,7 @@ import type {
   BotPresence,
   Challenge,
   ChatMessage,
+  ChatRoomScope,
   LiveGameSummary,
   ModeCounts,
   Restriction,
@@ -69,7 +72,7 @@ const BASE_MODES: ModeDefinition[] = [
     objective: "Move any piece onto the corner the opponent's army started in.",
     displayOrder: 1,
     playable: true,
-    features: ['no_repetition_draw', 'stalemate_loses'],
+    features: ['stalemate_loses'],
     startingPosition: {
       rows: [
         '.........',
@@ -271,6 +274,14 @@ export interface LobbyState {
   gameSessionId: string | null;
   connectionStatus: ConnectionStatus;
   error: string | null;
+  /**
+   * Bumped every time the server turns a move down.
+   *
+   * A count rather than a flag because the interesting thing is that it
+   * happened *again* — two rejections in a row set the same `error` string, so
+   * a listener watching that would hear the first and miss the second.
+   */
+  rejectedMoveCount: number;
   modes: ModeDefinition[];
   engineBots: BotPresence[];
   /**
@@ -374,6 +385,15 @@ export interface LobbyState {
   firstMoveDeadline: number | null;
   /** Why the last hold came to nothing. Shown briefly, then forgotten. */
   queueMiss: QueueMiss | null;
+  /**
+   * The board that was taken away, and why — see CancelledGame.
+   *
+   * Held until another board replaces it rather than shown briefly and
+   * forgotten, unlike `queueMiss` beside it: this is the only account anybody
+   * gets of a game that was never filed, and the person reading it may have
+   * been away from the screen when it went.
+   */
+  cancelledGame: CancelledGame | null;
   /** People per mode who are waiting *and* at the keyboard right now. */
   modeReadyCounts: ModeCounts;
   /**
@@ -417,10 +437,17 @@ export interface LobbyState {
   chatMessages: ChatMessage[];
   /**
    * The conversation `chatMessages` belongs to. Not always the game on screen:
-   * every game of a bot series shares one room, so following a run to its next
-   * board stays in the same chat as the board left behind.
+   * every game of a bot series shares one room, and every match of a bots-only
+   * tournament shares one, so following a run to its next board — or an event
+   * to another of its boards — stays in the chat the last one was in.
    */
   chatRoomId: string | null;
+  /**
+   * What that conversation covers, which is what a screen showing it calls it.
+   * `game` for nearly all of them; `series` for a run and `tournament` for a
+   * bots-only event, both of which carry across more than one board.
+   */
+  chatRoomScope: ChatRoomScope;
   /**
    * How many people are in that conversation. Not the same figure as the live
    * table's spectator count and it outlives it: a finished game leaves the
@@ -469,6 +496,8 @@ export interface LobbyActions {
   dismissBotFault: () => void;
   dismissServerNotice: () => void;
   spectateGame: (gameId: string) => void;
+  /** The other half of `spectateGame`: put the watched board down. */
+  stopSpectating: () => void;
   loadTournaments: () => Promise<void>;
   applyTournamentUpdate: (tournament: Tournament) => void;
   readyForTournamentMatch: (tournamentId: string, matchId: number) => void;
@@ -500,6 +529,7 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
   gameSessionId: readGameSessionId(),
   connectionStatus: 'disconnected',
   error: null,
+  rejectedMoveCount: 0,
   modes: BASE_MODES,
   // Engines connected from someone's machine. Deliberately *not* named after
   // botPlayerCount below, which counts people practising against a browser
@@ -533,6 +563,7 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
   queue: initialQueue,
   firstMoveDeadline: null,
   queueMiss: null,
+  cancelledGame: null,
   playerColor: null,
   isSpectating: false,
   spectatedGameId: null,
@@ -545,6 +576,7 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
   opponentReconnectDeadline: null,
   chatMessages: [],
   chatRoomId: null,
+  chatRoomScope: 'game',
   chatOccupancy: 0,
   chatVisible: true,
   showSpectatorMessages: true,
@@ -888,11 +920,20 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
           challengeNotice: message.message ?? null,
         });
         break;
-      case 'game_cancelled':
+      case 'game_cancelled': {
         // Nothing was played, so nothing is kept: the board goes, the stored
         // session id goes, and no result is ever shown. Whether the search
         // resumes is the server's call — a queue_update follows for whoever it
         // put back — so this only has to explain the gap.
+        //
+        // The explanation is kept twice over, because the people who need it
+        // are on different screens. `queueMiss` and `challengeNotice` reach
+        // somebody who was sent back to the lobby; `cancelledGame` reaches
+        // whoever is still looking at the board that has just gone, which is
+        // every spectator and any player who was on the game screen. Only the
+        // last of those survives long enough to be read by somebody who was
+        // away from the keyboard.
+        const stoppedGameId = message.gameId ?? get().gameState?.gameId ?? '';
         set({
           playerColor: null,
           isSpectating: false,
@@ -908,12 +949,21 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
           opponentReconnectDeadline: null,
           chatMessages: [],
           chatRoomId: null,
+          chatRoomScope: 'game',
           chatOccupancy: 0,
           queueMiss: { message: message.message ?? '', atUnixMs: Date.now() },
           challengeNotice: message.message ?? null,
+          cancelledGame: stoppedGameId
+            ? {
+                gameId: stoppedGameId,
+                message: message.message ?? '',
+                atUnixMs: Date.now(),
+              }
+            : null,
           error: null,
         });
         break;
+      }
       case 'challenge_received': {
         const received = message.challenge;
         if (received) {
@@ -1005,6 +1055,7 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
           gameSessionId,
           firstMoveDeadline: message.firstMoveDeadlineUnixMs || null,
           connectionStatus: 'connected',
+          cancelledGame: null,
           queue: initialQueue,
           queueMiss: null,
           incomingChallenges: [],
@@ -1016,6 +1067,11 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
           opponentReconnectDeadline: null,
           chatMessages: message.chatMessages ?? [],
           chatRoomId: chatRoomIdOf(message.chatRoomId, message.gameState?.gameId),
+          chatRoomScope: chatRoomScopeOf(
+            message.chatRoomScope,
+            message.chatRoomId,
+            message.gameState?.gameId,
+          ),
           chatOccupancy: message.chatOccupancy ?? 0,
           error: null,
         });
@@ -1033,12 +1089,18 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
           gameSessionId,
           firstMoveDeadline: message.firstMoveDeadlineUnixMs || null,
           connectionStatus: 'connected',
+          cancelledGame: null,
           queue: initialQueue,
           selectedTile: null,
           validMoves: [],
           opponentReconnectDeadline: message.reconnectDeadlineUnixMs || null,
           chatMessages: message.chatMessages ?? [],
           chatRoomId: chatRoomIdOf(message.chatRoomId, message.gameState?.gameId),
+          chatRoomScope: chatRoomScopeOf(
+            message.chatRoomScope,
+            message.chatRoomId,
+            message.gameState?.gameId,
+          ),
           chatOccupancy: message.chatOccupancy ?? 0,
           error: null,
         });
@@ -1056,12 +1118,18 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
           lastMove: null,
           gameSessionId: null,
           connectionStatus: 'connected',
+          cancelledGame: null,
           queue: initialQueue,
           selectedTile: null,
           validMoves: [],
           opponentReconnectDeadline: null,
           chatMessages: message.chatMessages ?? [],
           chatRoomId: chatRoomIdOf(message.chatRoomId, message.gameState?.gameId),
+          chatRoomScope: chatRoomScopeOf(
+            message.chatRoomScope,
+            message.chatRoomId,
+            message.gameState?.gameId,
+          ),
           chatOccupancy: message.chatOccupancy ?? 0,
           error: null,
         });
@@ -1082,6 +1150,7 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
           opponentReconnectDeadline: null,
           chatMessages: [],
           chatRoomId: null,
+          chatRoomScope: 'game',
           chatOccupancy: 0,
           error: null,
         });
@@ -1099,6 +1168,7 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
           opponentReconnectDeadline: null,
           chatMessages: [],
           chatRoomId: null,
+          chatRoomScope: 'game',
           chatOccupancy: 0,
           connectionStatus: 'connected',
           error: message.message ?? 'That game is no longer available to spectate.',
@@ -1176,6 +1246,7 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
             validMoves: [],
             chatMessages: [],
             chatRoomId: null,
+            chatRoomScope: 'game',
             chatOccupancy: 0,
           });
         }
@@ -1198,6 +1269,14 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
         });
         break;
       case 'move_rejected':
+        // Counted as well as shown, so the board can say it out loud. A
+        // rejected chat line deliberately does not: only a refused *move* is
+        // what the illegal-move sound means.
+        set((state) => ({
+          error: message.message ?? 'Something went wrong.',
+          rejectedMoveCount: state.rejectedMoveCount + 1,
+        }));
+        break;
       case 'action_rejected':
       case 'chat_rejected':
       case 'error':
@@ -1209,11 +1288,21 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
   },
 
   joinQueue: (requestedModeId) => {
-    const { socket, modes, defaultTimeControl, queue } = get();
+    const { socket, modes, defaultTimeControl, queue, serverUpdate } = get();
     const modeId = requestedModeId ?? modes[0]?.id;
     const mode = modes.find((candidate) => candidate.id === modeId);
     if (!modeId) {
       set({ error: 'No game modes are available.' });
+      return;
+    }
+    // Answered here rather than sent and corrected. The server refuses a seek
+    // for the whole of a drain — matchmaking stops pairing, so one posted now
+    // could never fill — and its refusal comes back as a plain `error`, which
+    // sets the banner and leaves the optimistic search below standing. That was
+    // a wait counting up for the length of a deploy against a queue the server
+    // had never put anybody in.
+    if (serverUpdate) {
+      set({ error: updatePausedReason(serverUpdate.note) });
       return;
     }
     // Switching modes is leaving one queue and joining another. The server
@@ -1269,7 +1358,13 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
   },
 
   challengePlayer: (username, setup) => {
-    const { socket } = get();
+    const { socket, serverUpdate } = get();
+    // The same refusal the queue gets, and for the same reason: a challenge is
+    // a seek, and postSeek turns every one of them away while a drain is on.
+    if (serverUpdate) {
+      set({ error: updatePausedReason(serverUpdate.note) });
+      return false;
+    }
     const trimmedUsername = username?.trim();
     if (!trimmedUsername) {
       set({ error: 'Enter the username you want to challenge.' });
@@ -1290,9 +1385,13 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
   },
 
   postOpenChallenge: (setup) => {
-    const { socket, modes, defaultTimeControl } = get();
+    const { socket, modes, defaultTimeControl, serverUpdate } = get();
     if (!setup?.modeId) {
       set({ error: 'No game modes are available.' });
+      return false;
+    }
+    if (serverUpdate) {
+      set({ error: updatePausedReason(serverUpdate.note) });
       return false;
     }
     const mode = modes.find((candidate) => candidate.id === setup.modeId);
@@ -1368,6 +1467,45 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
       return;
     }
     set({ spectatedGameId: gameId, error: null });
+  },
+
+  // Watching is a thing you are doing, not a thing you did, so somebody who
+  // walks away from the watch screen has to be taken out of the game they were
+  // watching — see the rule in `SessionBridge` that calls this. Left standing,
+  // it is wrong twice over: the server goes on counting a viewer who left in
+  // the game's audience and delivering it their chat, and every WATCH button on
+  // the lobby stays disabled, because the store still holds a board. That is
+  // the bug this exists to fix; it used to take a page refresh to clear.
+  //
+  // A pending request counts. `spectatedGameId` is set the moment the board is
+  // asked for, and somebody who turns back before the answer arrives has still
+  // stopped watching.
+  //
+  // `leave_game` rather than `stop_spectating`, because a watched game that has
+  // *finished* leaves the viewer sitting in its chat room rather than in its
+  // spectator set, and only the one message covers both — it is what the back
+  // button on the board sends for the same reason. The server ignores it from a
+  // client that is in neither.
+  stopSpectating: () => {
+    const { isSpectating, spectatedGameId } = get();
+    if (!isSpectating && !spectatedGameId) return;
+    send(get().socket, { type: 'leave_game' });
+    set({
+      playerColor: null,
+      isSpectating: false,
+      spectatedGameId: null,
+      gameState: null,
+      livePGN: null,
+      lastMove: null,
+      selectedTile: null,
+      validMoves: [],
+      opponentReconnectDeadline: null,
+      chatMessages: [],
+      chatRoomId: null,
+      chatRoomScope: 'game',
+      chatOccupancy: 0,
+      error: null,
+    });
   },
 
   // The tournament board also loads over HTTP so it is on screen before the
@@ -1567,6 +1705,10 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
       playerColor: null,
       isSpectating: false,
       spectatedGameId: null,
+      // Walking away from the board is having read why it went. Left standing,
+      // the notice would still be the first thing on this screen the next time
+      // somebody arrived at it with no game on.
+      cancelledGame: null,
       gameState: null,
       livePGN: null,
       lastMove: null,
@@ -1576,6 +1718,7 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
       opponentReconnectDeadline: null,
       chatMessages: [],
       chatRoomId: null,
+      chatRoomScope: 'game',
       chatOccupancy: 0,
       error: null,
     });

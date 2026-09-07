@@ -274,7 +274,7 @@ const MODE_FALLBACK_ROWS = [
  */
 const MODE_FALLBACK_FEATURES: Record<string, ModeFeature[]> = {
   V5: ['territory'],
-  V6: ['no_repetition_draw', 'stalemate_loses'],
+  V6: ['stalemate_loses'],
 };
 
 export class ReviewError extends Error {

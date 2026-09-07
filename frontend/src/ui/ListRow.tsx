@@ -6,10 +6,12 @@ import { colors, space, type } from '@/theme';
 // One row of a table.
 //
 // The lobby's live-game rows and the connected-engine rows were already the same
-// shape on purpose — `EngineBotRow` says so in its own comment — and the
-// leaderboard, the open-challenge board, and the tournament history all want it
-// too. Five copies of "54px tall, hairline rule on top, art, two lines of copy,
-// badges, an action" is five chances for one of them to drift.
+// shape on purpose, and the leaderboard, the open-challenge board, and the
+// tournament history all want it too. Five copies of "54px tall, hairline rule
+// on top, art, two lines of copy, badges, an action" is five chances for one of
+// them to drift. (The bots page's own engine list has since become a grid of
+// cards — see `EngineBotCard` — because a dozen near-identical rows read as a
+// log rather than as a roster. The rail's engine rows are still these.)
 
 export interface ListRowProps {
   /** Art at the leading edge: a bot portrait, a rank number, an avatar. */

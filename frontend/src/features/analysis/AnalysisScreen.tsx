@@ -15,11 +15,9 @@ import {
   type AnalysisGame,
 } from '@/engine/analysisGame';
 import { reviewSourceFromPGN, type GradedMove, type ReviewMove } from '@/engine/gameReview';
-import {
-  ANALYSIS_PRESETS,
-  engineUnavailableMessage,
-  type AnalysisPresetName,
-} from '@/engine/rpsfish/client';
+import { engineUnavailableMessage } from '@/engine/rpsfish/client';
+import { interactiveLimits, type AnalysisEffort } from '@/engine/analysisBudget';
+import type { RefinePass } from '@/engine/gameAnalysis';
 import type { Analysis } from '@/engine/rpsfish/protocol';
 import Board from '@/features/board/Board';
 import { usePieceDrag } from '@/features/board/pieceDrag';
@@ -33,7 +31,9 @@ import useGameAnalysis from '@/hooks/useGameAnalysis';
 import { usePositionAnalysis, type SearchStatus } from '@/hooks/usePositionAnalysis';
 import useReplayKeyboard from '@/hooks/useReplayKeyboard';
 import { links } from '@/navigation/links';
+import { up } from '@/navigation/upFrom';
 import { useSettledSearchParams } from '@/navigation/useSettledSearchParams';
+import BackLink from '@/ui/BackLink';
 import { useGameStore } from '@/store/gameStore';
 import { useReviewHandoff } from '@/store/reviewHandoff';
 import { colors, players, radius } from '@/theme';
@@ -44,9 +44,6 @@ import type {
   SideColor,
   StartingPosition,
 } from '@/types/game';
-
-/** How hard the interactive search is allowed to think. */
-type AnalysisSearchMode = AnalysisPresetName;
 
 /**
  * A move played on this board.
@@ -62,11 +59,11 @@ interface BoardPlay extends Move {
 // The board's own search budget and the budget its grades are measured at are
 // two different things: one is redone every time the position changes and only
 // has to keep up with a person clicking, the other has to be worth writing a
-// grade down from. They move together so that "GO DEEP" deepens both.
-const GRADE_PRESETS: Record<AnalysisSearchMode, string> = { standard: 'standard', deep: 'deep' };
-
-/** The two budgets the board offers, weakest first. */
-const SEARCH_MODES: AnalysisSearchMode[] = ['standard', 'deep'];
+// grade down from. Both now deepen on their own — the search by iterative
+// deepening, which streams every completed depth into the arrows, and the
+// grades by regrading the whole line at each rung the device can afford — so
+// there is nothing left to choose between them. One switch drives both, and it
+// says how much of the device to spend rather than how deep to look.
 
 const confidenceLabel = (confidence: number) => {
   if (confidence >= 80) return 'HIGH';
@@ -89,14 +86,20 @@ const lastMoveVerdict = (entry: ReviewMove<BoardPlay>) => {
 
 interface AnalysisPanelProps {
   analysis: Analysis | null;
-  analysisMode: AnalysisSearchMode;
   canMakeBestMove: boolean;
+  /** Whether the grades may still be replaced by a deeper pass. */
+  deeperToCome: boolean;
   engineState: SearchStatus;
   game: AnalysisGame;
   gradeError: string | null;
   gradedMoves: ReviewMove<BoardPlay>[];
-  onAnalysisModeChange: (mode: AnalysisSearchMode) => void;
+  /** The depth the grades below were measured at. */
+  gradeDepth: number;
   onMakeBestMove: () => void;
+  onToggleQuick: () => void;
+  quick: boolean;
+  /** A deeper grading pass in flight, and how far through the line it is. */
+  refining: RefinePass | null;
   onSetPosition: () => void;
   /** Absent in a mode with no goal row for the reach tool to measure against. */
   onToggleReach?: () => void;
@@ -105,17 +108,20 @@ interface AnalysisPanelProps {
 
 function AnalysisPanel({
   analysis,
-  analysisMode,
   canMakeBestMove,
+  deeperToCome,
   engineState,
   game,
+  gradeDepth,
   gradeError,
   gradedMoves,
-  onAnalysisModeChange,
   onMakeBestMove,
   onSetPosition,
+  onToggleQuick,
   onToggleReach,
+  quick,
   reachShowing = false,
+  refining,
 }: AnalysisPanelProps) {
   const lastMove = gradedMoves[gradedMoves.length - 1];
   const activeColor = game.currentTurn;
@@ -139,39 +145,37 @@ function AnalysisPanel({
         <Text style={styles.cardBody}>
           {engineState === 'thinking'
             ? analysis
-              ? `Searching deeper from depth ${analysis.depth}. The top three moves update after each completed iteration.`
-              : analysisMode === 'deep'
-                ? 'Starting a long, three-line search with strict time and node safety caps…'
-                : 'Calculating the three strongest continuations…'
+              ? `Searching deeper from depth ${analysis.depth}. The arrows and the scores below are redrawn after each completed iteration, and go on getting better while you look at them.`
+              : quick
+                ? 'Calculating the three strongest continuations…'
+                : 'Starting a three-line search that deepens until this device runs out of headroom…'
             : game.status === 'Finished'
               ? 'Review the move grades below or reset the board for another line.'
               : 'The arrows match the ranked engine lines below. You control both sides.'}
         </Text>
         <View style={styles.analysisModeRow}>
           <Text style={styles.analysisModeLabel}>SEARCH</Text>
-          {SEARCH_MODES.map((searchMode) => (
-            <Pressable
-              accessibilityLabel={`Use ${searchMode} RPSFish analysis`}
-              accessibilityRole="button"
-              accessibilityState={{ selected: analysisMode === searchMode }}
-              key={searchMode}
-              onPress={() => onAnalysisModeChange(searchMode)}
-              style={({ pressed }) => [
-                styles.analysisModeButton,
-                analysisMode === searchMode && styles.analysisModeButtonActive,
-                pressed && styles.buttonPressed,
+          <Pressable
+            accessibilityHint="A quick search grades the line once at a shallow depth and stops. Off, the search keeps deepening for as long as this device and a reasonable wait allow."
+            accessibilityLabel="Quick analysis"
+            accessibilityRole="switch"
+            accessibilityState={{ checked: quick }}
+            onPress={onToggleQuick}
+            style={({ pressed }) => [
+              styles.analysisModeButton,
+              quick && styles.analysisModeButtonActive,
+              pressed && styles.buttonPressed,
+            ]}
+          >
+            <Text
+              style={[
+                styles.analysisModeButtonText,
+                quick && styles.analysisModeButtonTextActive,
               ]}
             >
-              <Text
-                style={[
-                  styles.analysisModeButtonText,
-                  analysisMode === searchMode && styles.analysisModeButtonTextActive,
-                ]}
-              >
-                {searchMode === 'deep' ? 'GO DEEP' : 'STANDARD'}
-              </Text>
-            </Pressable>
-          ))}
+              QUICK
+            </Text>
+          </Pressable>
           <Pressable
             accessibilityLabel="Set up a custom analysis position"
             accessibilityRole="button"
@@ -260,14 +264,31 @@ function AnalysisPanel({
         }
         meta={
           analysis
-            ? `${analysisMode.toUpperCase()} · DEPTH ${analysis.depth}/${analysis.selectiveDepth} · ${analysis.nodes.toLocaleString()} NODES · ${confidenceLabel(analysis.confidence)} CONFIDENCE`
+            ? `DEPTH ${analysis.depth}/${analysis.selectiveDepth} · ${analysis.nodes.toLocaleString()} NODES · ${confidenceLabel(analysis.confidence)} CONFIDENCE`
             : null
         }
         turn={activeColor}
       />
 
       <View style={styles.historyCard}>
-        <Text style={styles.cardEyebrow}>MOVE QUALITY</Text>
+        <View style={styles.cardHeader}>
+          <Text style={styles.cardEyebrow}>MOVE QUALITY</Text>
+          {/*
+            What the grades below currently mean. Worth saying out loud because
+            they move: a grade written at depth 6 can become a different grade
+            at depth 12, and a reviewer who saw one change should be able to see
+            why rather than doubt what they read the first time.
+          */}
+          {gradedMoves.length > 0 ? (
+            <Text style={styles.historyMeta}>
+              {refining
+                ? `REGRADING AT DEPTH ${refining.limits.maxDepth} · ${refining.done}/${refining.total}`
+                : deeperToCome
+                  ? `DEPTH ${gradeDepth} · DEEPENING SOON`
+                  : `DEPTH ${gradeDepth}`}
+            </Text>
+          ) : null}
+        </View>
         {gradeError ? <Text style={styles.historyEmpty}>{gradeError}</Text> : null}
         {gradedMoves.length === 0 ? (
           <Text style={styles.historyEmpty}>Your move-by-move report will appear here.</Text>
@@ -311,7 +332,6 @@ interface RedoStep {
  * mode, and a static page learns its query string one render after it mounts.
  */
 export default function AnalysisScreen() {
-  const router = useRouter();
   const modes = useGameStore((state) => state.modes);
   // The mode travels in the URL, so `/analysis?mode=V5` is a page somebody can
   // link to. An unknown or absent id falls back to the first playable mode.
@@ -341,14 +361,7 @@ export default function AnalysisScreen() {
             <Text style={styles.cardEyebrow}>RPSFISH TOURNAMENT LOCK</Text>
             <Text style={styles.cardTitle}>Intransitive analysis is temporarily disabled</Text>
             <Text style={styles.cardBody}>{unavailable}</Text>
-            <Pressable
-              accessibilityLabel="Return to the game modes"
-              accessibilityRole="button"
-              onPress={() => router.back()}
-              style={({ pressed }) => [styles.disabledBackButton, pressed && styles.buttonPressed]}
-            >
-              <Text style={styles.disabledBackText}>← Back</Text>
-            </Pressable>
+            <BackLink href={up.analysis.href} label={up.analysis.label} />
           </View>
         </View>
       </SafeAreaView>
@@ -365,7 +378,7 @@ function AnalysisBoard({ mode }: { mode: ModeDefinition }) {
   const modes = useGameStore((state) => state.modes);
   const draggingPiece = usePieceDrag((state) => state.dragging);
   const [game, setGame] = useState(() => createAnalysisGame(mode));
-  const [analysisMode, setAnalysisMode] = useState<AnalysisSearchMode>('standard');
+  const [effort, setEffort] = useState<AnalysisEffort>('full');
   const [history, setHistory] = useState<BoardMove[]>([]);
   const [pastGames, setPastGames] = useState<AnalysisGame[]>([]);
   const [redoMoves, setRedoMoves] = useState<RedoStep[]>([]);
@@ -390,7 +403,7 @@ function AnalysisBoard({ mode }: { mode: ModeDefinition }) {
   const positionAnalysis = usePositionAnalysis({
     position: game,
     history: pastGames,
-    limits: ANALYSIS_PRESETS[analysisMode],
+    limits: interactiveLimits({ effort }),
   });
   const analysis = positionAnalysis.analysis;
   const engineState = positionAnalysis.status;
@@ -409,7 +422,7 @@ function AnalysisBoard({ mode }: { mode: ModeDefinition }) {
     mode: game.mode,
     moves,
     positions,
-    preset: GRADE_PRESETS[analysisMode],
+    effort,
     // Another move can always arrive on a board somebody is playing on, so the
     // position on screen is not graded here — the search above already covers
     // it, and grading it now would cost the move played out of it its grade.
@@ -538,20 +551,23 @@ function AnalysisBoard({ mode }: { mode: ModeDefinition }) {
     <>
       <AnalysisPanel
         analysis={analysis}
-        analysisMode={analysisMode}
         canMakeBestMove={game.status === 'InProgress' && Boolean(analysis?.lines[0])}
+        deeperToCome={gradeAnalysis.deeperToCome}
         engineState={engineState}
         game={game}
+        gradeDepth={gradeAnalysis.depth}
         gradeError={gradeAnalysis.error}
         gradedMoves={gradedMoves}
-        onAnalysisModeChange={setAnalysisMode}
         onMakeBestMove={makeBestMove}
         onSetPosition={() => {
           setPositionModalInitial(startingPositionFromGrid(game.grid));
           setPositionModalOpen(true);
         }}
+        onToggleQuick={() => setEffort((current) => (current === 'quick' ? 'full' : 'quick'))}
         onToggleReach={reachTool.available ? reachTool.toggle : undefined}
+        quick={effort === 'quick'}
         reachShowing={reachTool.active}
+        refining={gradeAnalysis.refining}
       />
       <ReachPanel tool={reachTool} />
     </>
@@ -561,14 +577,7 @@ function AnalysisBoard({ mode }: { mode: ModeDefinition }) {
     <SafeAreaView style={styles.safeArea} edges={['top', 'right', 'bottom', 'left']}>
       <View style={styles.screen}>
         <View style={styles.topBar}>
-          <Pressable
-            accessibilityLabel="Return to lobby"
-            accessibilityRole="button"
-            onPress={() => router.back()}
-            style={({ pressed }) => [styles.backButton, pressed && styles.buttonPressed]}
-          >
-            <Text style={styles.backIcon}>‹</Text>
-          </Pressable>
+          <BackLink href={up.analysis.href} label={up.analysis.label} />
           <View style={styles.titleCopy}>
             <Text numberOfLines={1} style={styles.kicker}>
               {mode.shortCode} · SELF ANALYSIS
@@ -691,24 +700,23 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingBottom: 10,
   },
+  // Wraps. Four buttons, a title and the way out do not fit across a phone,
+  // and the row used to resolve that by squeezing the title to nothing — the
+  // mode name was invisible at 390 long before the back button was added
+  // beside it. On a second line they all keep their size.
   topBar: {
     minHeight: 64,
     flexDirection: 'row',
     alignItems: 'center',
+    flexWrap: 'wrap',
+    columnGap: 10,
+    rowGap: 8,
+    paddingVertical: 8,
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
     marginBottom: 12,
   },
-  backButton: {
-    width: 38,
-    height: 38,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: radius.large,
-    backgroundColor: colors.surface,
-  },
-  backIcon: { color: colors.text, fontSize: 31, lineHeight: 31, marginTop: -3 },
-  titleCopy: { flex: 1, minWidth: 0, paddingHorizontal: 10 },
+  titleCopy: { flex: 1, flexBasis: 140, minWidth: 0 },
   kicker: { color: colors.accentBright, fontSize: 8, fontWeight: '900', letterSpacing: 1.35 },
   title: { color: colors.textStrong, fontSize: 20, fontWeight: '900', marginTop: 2 },
   resetButton: {
@@ -722,7 +730,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
   },
   resetText: { color: colors.textSoft, fontSize: 10, fontWeight: '900' },
-  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  headerActions: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 5 },
   historyButton: {
     minWidth: 54,
     minHeight: 38,
@@ -757,6 +765,7 @@ const styles = StyleSheet.create({
     maxWidth: 560,
     width: '100%',
     alignSelf: 'center',
+    gap: 12,
     marginTop: 40,
     padding: 20,
     borderRadius: radius.large,
@@ -764,15 +773,6 @@ const styles = StyleSheet.create({
     borderColor: colors.accentBorder,
     backgroundColor: colors.accentSurface,
   },
-  disabledBackButton: {
-    alignSelf: 'flex-start',
-    marginTop: 16,
-    paddingHorizontal: 12,
-    paddingVertical: 9,
-    borderRadius: radius.medium,
-    backgroundColor: colors.surfaceRaised,
-  },
-  disabledBackText: { color: colors.textStrong, fontSize: 10, fontWeight: '900' },
   coachCard: {
     padding: 14,
     borderRadius: radius.large,
@@ -784,6 +784,7 @@ const styles = StyleSheet.create({
   cardEyebrow: { color: colors.textFaint, fontSize: 8, fontWeight: '900', letterSpacing: 1.2 },
   cardTitle: { color: colors.textStrong, fontSize: 17, fontWeight: '900', marginTop: 5 },
   cardBody: { color: colors.accentSoft, fontSize: 10, lineHeight: 15, marginTop: 8 },
+  historyMeta: { color: colors.textFaint, fontSize: 7, fontWeight: '900', letterSpacing: 0.6 },
   analysisModeRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 11 },
   analysisModeLabel: { color: colors.textFaint, fontSize: 7, fontWeight: '900', letterSpacing: 1 },
   analysisModeButton: {

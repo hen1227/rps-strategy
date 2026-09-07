@@ -31,7 +31,7 @@ export const ENGINE_MODE_CODES: Readonly<Record<string, number>> = {
 export const RPSFISH_TOURNAMENT_NOTICE =
   'RPSFish is disabled for Intransitive until after the official tournament.';
 
-const ENGINE_TOURNAMENT_DISABLED_MODES = new Set(['V6']);
+const ENGINE_TOURNAMENT_DISABLED_MODES = new Set<string>();
 
 /** Why a known mode cannot be handed to the public engine right now. */
 export const engineUnavailableMessage = (modeId: string | undefined): string | null =>
@@ -59,6 +59,7 @@ export type StopReason =
   | 'terminal'
   | 'repetition'
   | 'no-legal-move'
+  | 'no-capture'
   | 'unknown';
 
 export const STOP_REASONS: readonly StopReason[] = [
@@ -69,6 +70,10 @@ export const STOP_REASONS: readonly StopReason[] = [
   'terminal',
   'repetition',
   'no-legal-move',
+  // Index 7 because the engine numbers it 7. The order here *is* the ABI —
+  // `stop_reason_code` in `RPSFish/src/wasm.rs` — so a reason is appended and
+  // never inserted.
+  'no-capture',
 ];
 
 /** What a caller may ask of one search. The worker clamps every field. */

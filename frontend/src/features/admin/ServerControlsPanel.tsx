@@ -171,13 +171,6 @@ export default function ServerControlsPanel({ admin }: { admin: AdminToken }) {
               )
             }
           />
-          <Text style={styles.help}>
-            Stops new games, lets the ones on the board finish, then exits so systemd starts
-            the binary that is on disk. Install the new build first, or this restarts the one
-            already running. A bot series finishes its current pair and stops; a tournament
-            keeps its pairings and both players ready up again afterwards. If nothing has
-            finished in twelve minutes the server restarts anyway.
-          </Text>
         </View>
       )}
 
@@ -249,13 +242,6 @@ export default function ServerControlsPanel({ admin }: { admin: AdminToken }) {
             }
           />
         </View>
-        <Text style={styles.help}>
-          Goes to every open page and to every connected engine, whose client prints it in its
-          owner&apos;s log. It is held for fifteen minutes, so somebody who reloads or arrives
-          just after still reads it, and then it goes on its own. Closing the banner on your
-          own screen does not take it down — that is what the button above it is for, and why
-          this panel says what is up.
-        </Text>
       </View>
     </Panel>
   );

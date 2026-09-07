@@ -31,6 +31,7 @@ export const endReasonPhrase = (
     draw_agreement: 'agreement',
     infiltration: 'infiltration',
     move_limit: 'move limit',
+    no_capture: '100 moves with no capture',
     repetition: 'threefold repetition',
     resignation: 'resignation',
     stalemate: 'stalemate',

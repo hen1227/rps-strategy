@@ -54,8 +54,6 @@ export const ANALYSIS_PRESETS = {
   },
 } as const satisfies Record<string, SearchLimits>;
 
-export type AnalysisPresetName = keyof typeof ANALYSIS_PRESETS;
-
 /**
  * Per-position budgets for a whole-game review.
  *
@@ -63,6 +61,10 @@ export type AnalysisPresetName = keyof typeof ANALYSIS_PRESETS;
  * preset finishes in a few seconds and the deep one in well under a minute,
  * and both stream, so the first grades appear immediately. Reviewing runs in
  * the browser, so the only cost of the deep preset is the reviewer's patience.
+ *
+ * No screen picks one of these any more. They are the rungs a walk climbs on
+ * its own, weakest first, for as long as the device and the clock allow — see
+ * `engine/analysisBudget.ts`, which is the only thing that should read them.
  */
 export const REVIEW_PRESETS = {
   fast: {

@@ -6,8 +6,8 @@ import TournamentBuilder from './TournamentBuilder';
 import { adminStyles } from './adminStyles';
 import { failureMessage } from '@/errors';
 import type { AdminToken } from '@/hooks/useAdminToken';
-import { links } from '@/navigation/links';
 import { enrollBotsInTournament } from '@/store/api/bots';
+import { links } from '@/navigation/links';
 import {
   advanceTournament,
   cancelTournament,
@@ -84,7 +84,7 @@ const summarise = (tournament: Tournament): string => {
     } entered`,
   ];
   if (FIELD_LABEL[tournament.field]) parts.push(FIELD_LABEL[tournament.field]);
-  if (tournament.requireDiscord) parts.push('Discord verified only');
+  if (tournament.gamesPerMatch > 1) parts.push(`${tournament.gamesPerMatch} games per match`);
   if (tournament.seeding === 'rating') parts.push('seeded by rating');
   if (tournament.rounds) {
     const played = tournament.matches.length
@@ -137,10 +137,27 @@ export default function TournamentAdminPanel({ admin }: TournamentAdminPanelProp
     refresh();
   }, [refresh]);
 
-  // `successNotice` is optional because two of the actions below report their
+  // `successNotice` is optional because two of the actions here report their
   // own scope — the enrol sweep lists what it skipped, and a delete names what
   // it removed — and a generic sentence written over the top of either of those
   // loses the only part worth reading.
+  // Only offered where it can do anything: an event that admits no engines has
+  // no enrol step, and a button whose only outcome is a list of refusals is not
+  // a button.
+  const enrol = (tournament: Tournament) =>
+    run(async () => {
+      const result = await enrollBotsInTournament(admin.token, tournament.tournamentId);
+      const skipped = Object.entries(result.skipped ?? {});
+      setNotice(
+        `Enrolled ${result.enrolled?.length ?? 0} engine(s)` +
+          (result.enrolled?.length ? `: ${result.enrolled.join(', ')}` : '') +
+          '.' +
+          (skipped.length
+            ? ` Skipped: ${skipped.map(([name, why]) => `${name} (${why})`).join(', ')}.`
+            : ''),
+      );
+    });
+
   const run = async (action: () => Promise<unknown>, successNotice?: string) => {
     setBusy(true);
     setError(null);
@@ -168,18 +185,6 @@ export default function TournamentAdminPanel({ admin }: TournamentAdminPanelProp
         ? 'Saved.'
         : 'Draft created. It is not public and takes no signups until you publish it.',
     );
-
-  const enrol = (tournament: Tournament) =>
-    run(async () => {
-      const result = await enrollBotsInTournament(admin.token, tournament.tournamentId);
-      const skipped = Object.entries(result.skipped ?? {});
-      setNotice(
-        `Enrolled ${result.enrolled?.length ?? 0} engine(s).` +
-          (skipped.length
-            ? ` Skipped: ${skipped.map(([name, why]) => `${name} (${why})`).join(', ')}.`
-            : ''),
-      );
-    });
 
   return (
     <>
@@ -317,16 +322,11 @@ export default function TournamentAdminPanel({ admin }: TournamentAdminPanelProp
 
                     {open ? (
                       <>
-                        {/*
-                          Only where it can do anything: an event that admits no
-                          engines has no enrol step, and offering one would be a
-                          button whose only outcome is a list of refusals.
-                        */}
                         {tournament.field === 'humans' ? null : (
                           <GhostButton
                             compact
                             disabled={busy}
-                            label="ENROL BOTS"
+                            label="ENROL ONLINE BOTS"
                             onPress={() => enrol(tournament)}
                           />
                         )}
@@ -517,27 +517,6 @@ export default function TournamentAdminPanel({ admin }: TournamentAdminPanelProp
             })}
           </View>
         )}
-
-        <Text style={adminStyles.help}>
-          An event is written down as a draft, which is private: not on the board, not in the
-          lobby broadcast, and its address answers as though it does not exist. Publishing
-          opens signups and freezes the rules — the format, the mode, the seeding and the
-          clock are what people entered for. Starting closes the field and builds the
-          schedule.
-        </Text>
-        <Text style={adminStyles.help}>
-          There are three ways to get an event off the board and they are not the same thing.
-          <Text style={styles.term}> Cancelling</Text> ends one that is still going and keeps
-          everything that was played.
-          <Text style={styles.term}> Hiding</Text> is the tidying tool: the event stops being
-          listed, and stays readable at its own address, on its entrants&apos; profile pages,
-          and in every total. That is the one to reach for on a board full of old events.
-          <Text style={styles.term}> Deleting</Text> destroys it — the entrants, the schedule,
-          and the placements on people&apos;s profiles. The games themselves are kept, because
-          two people played them. One thing that is easy to miss: the Tournament Champion
-          title is worked out from the events on record, so deleting a finished one takes that
-          title away from whoever won it.
-        </Text>
       </Panel>
     </>
   );

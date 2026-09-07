@@ -7,7 +7,7 @@ import { activeRestriction, restrictionNotice } from '@/store/moderationSelector
 import { colors, players, radius } from '@/theme';
 import TitleTag from '@/ui/TitleTag';
 import type { GameStatus } from '@/types/game';
-import type { ChatMessage } from '@/types/protocol';
+import type { ChatMessage, ChatRoomScope } from '@/types/protocol';
 
 /**
  * How often the composer re-checks whether a mute has lapsed.
@@ -17,6 +17,24 @@ import type { ChatMessage } from '@/types/protocol';
  * fifty seconds left can read "under a minute" for most of the following one.
  */
 const MUTE_TICK_MS = 30_000;
+
+/** What the header calls the conversation, which is what the room covers. */
+const ROOM_TITLE: Record<ChatRoomScope, string> = {
+  game: 'GAME CHAT',
+  series: 'SERIES CHAT',
+  tournament: 'TOURNAMENT CHAT',
+};
+
+/**
+ * What the board being over means for the room, which is not the same thing in
+ * each of them. A game's room is winding down; a run's and an event's are not,
+ * because there are boards still being played in both.
+ */
+const FINISHED_LABEL: Record<ChatRoomScope, string> = {
+  game: 'Game over',
+  series: 'Between games',
+  tournament: 'Other matches',
+};
 
 const senderLabel = (message: ChatMessage, accountId: string) => {
   const name = message.senderName?.trim() || 'Guest';
@@ -43,12 +61,13 @@ export interface GameChatProps {
    */
   roomOccupancy: number;
   /**
-   * Whether this room spans a bot series rather than a single game. Worth
-   * saying: the conversation carries across the run's boards, so a message
-   * sent from the game that just finished still reaches the one now being
-   * played, and the header would otherwise read as a room about to close.
+   * What this room covers. Worth saying whenever it is more than this game:
+   * the conversation carries across a run's boards, or across the matches of a
+   * bots-only event, so a message sent from a game that has finished still
+   * reaches the ones still being played — and the header would otherwise read
+   * as a room about to close.
    */
-  series?: boolean;
+  scope?: ChatRoomScope;
   showSpectatorMessages: boolean;
   spectatorCount: number;
   /** Laid out beside the board rather than under it. */
@@ -66,7 +85,7 @@ export default function GameChat({
   onToggleChat,
   onToggleSpectatorMessages,
   roomOccupancy,
-  series,
+  scope = 'game',
   showSpectatorMessages,
   spectatorCount,
   wide,
@@ -89,10 +108,11 @@ export default function GameChat({
   // The room outlives the result, so the composer stays open after the game
   // ends and closes only when the server stops accepting messages.
   const isFinished = gameStatus === 'Finished';
-  const title = series ? 'SERIES CHAT' : 'GAME CHAT';
-  // A finished board in a series is not a finished conversation: the run is
-  // still going and this room is where it is being talked about.
-  const finishedLabel = series ? 'Between games' : 'Game over';
+  const title = ROOM_TITLE[scope];
+  // A finished board is not a finished conversation when the room is bigger
+  // than it: the run — or the event — is still going, and this room is where it
+  // is being talked about.
+  const finishedLabel = FINISHED_LABEL[scope];
   // A mute is enforced on the server, which refuses the message and says why.
   // This is the same fact said *before* the attempt: a chat box that swallows
   // what you typed and answers with a banner reads as the site being broken,

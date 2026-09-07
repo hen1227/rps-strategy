@@ -98,6 +98,11 @@ export interface ButtonProps {
   compact?: boolean;
   tone?: ButtonTone;
   accessibilityLabel?: string;
+  /**
+   * Fill the row rather than hugging the label. A button in a column already
+   * stretches; this is for the ones sitting in a row of actions.
+   */
+  fullWidth?: boolean;
 }
 
 export function PrimaryButton({
@@ -108,6 +113,7 @@ export function PrimaryButton({
   compact,
   tone = 'accent',
   accessibilityLabel,
+  fullWidth,
 }: ButtonProps) {
   return (
     <Pressable
@@ -119,9 +125,13 @@ export function PrimaryButton({
       style={({ pressed }) => [
         styles.primaryButton,
         tone === 'quiet' && styles.primaryButtonQuiet,
+        tone === 'discord' && styles.primaryButtonDiscord,
         compact && styles.primaryButtonCompact,
+        fullWidth && styles.buttonFullWidth,
         (disabled || loading) && styles.disabled,
-        pressed && styles.pressed,
+        // The brand tone dims to Discord's own darker step instead of going
+        // translucent, which on a coloured fill reads as the button greying out.
+        pressed && (tone === 'discord' ? styles.primaryButtonDiscordPressed : styles.pressed),
       ]}
     >
       {loading ? (
@@ -321,6 +331,81 @@ export function OptionChips<Value extends string | number | boolean | null>({
   );
 }
 
+export interface ToggleChipsProps<Value> {
+  /** The tiny all-caps label above the row. */
+  label?: string;
+  options: readonly { value: Value; label: string }[];
+  /** Every ticked value. Order is irrelevant; membership is what is drawn. */
+  values: readonly Value[];
+  onChange: (values: Value[]) => void;
+  disabled?: boolean;
+}
+
+/**
+ * Any number of choices from a handful, as a row of chips.
+ *
+ * The plural of `OptionChips`, drawn the same way on purpose: the two sit above
+ * each other on the explorer, and a reader should be able to see at a glance
+ * that one row picks a mode and the other picks any set of sources. The tick is
+ * what tells them apart — a chip that can be on *with its neighbour* on has to
+ * look different from one that cannot.
+ *
+ * Unticking everything is allowed. A row that refuses to let go of its last
+ * chip leaves somebody fighting the control to ask "what if I turn all of this
+ * off", and the honest answer to that is an empty result, which the caller can
+ * say plainly.
+ */
+export function ToggleChips<Value extends string | number>({
+  label,
+  options,
+  values,
+  onChange,
+  disabled,
+}: ToggleChipsProps<Value>) {
+  const chosen = new Set(values);
+  return (
+    <View style={styles.chipGroup}>
+      {label ? <Text style={styles.chipGroupLabel}>{label}</Text> : null}
+      <View style={styles.chipRow}>
+        {options.map((option) => {
+          const selected = chosen.has(option.value);
+          return (
+            <Pressable
+              accessibilityRole="checkbox"
+              accessibilityState={{ checked: selected, disabled: Boolean(disabled) }}
+              disabled={disabled}
+              key={String(option.value)}
+              onPress={() =>
+                onChange(
+                  options
+                    .map((candidate) => candidate.value)
+                    .filter((candidate) =>
+                      candidate === option.value ? !selected : chosen.has(candidate),
+                    ),
+                )
+              }
+              style={({ pressed }) => [
+                styles.chip,
+                styles.toggleChip,
+                selected && styles.chipSelected,
+                disabled && styles.disabled,
+                pressed && styles.pressed,
+              ]}
+            >
+              <View style={[styles.toggleChipTick, selected && styles.toggleChipTickOn]}>
+                <Text style={styles.toggleChipMark}>{selected ? '\u2713' : ''}</Text>
+              </View>
+              <Text style={[styles.chipLabel, selected && styles.chipLabelSelected]}>
+                {option.label}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
+
 export interface BannerProps {
   message?: string | null;
   onDismiss?: () => void;
@@ -415,6 +500,8 @@ const styles = StyleSheet.create({
     backgroundColor: colors.accent,
   },
   primaryButtonQuiet: { backgroundColor: colors.surfaceMuted },
+  primaryButtonDiscord: { backgroundColor: colors.discordBrand },
+  primaryButtonDiscordPressed: { backgroundColor: colors.discordBrandPressed },
   primaryButtonCompact: { minHeight: 36, paddingHorizontal: 12 },
   primaryButtonText: {
     color: colors.textStrong,
@@ -423,6 +510,10 @@ const styles = StyleSheet.create({
     letterSpacing: 0.9,
   },
   primaryButtonTextQuiet: { color: colors.textSoft },
+
+  // A row lays its children out along the main axis, so filling it is `flex`
+  // and not the `alignSelf: 'stretch'` that would fill a column.
+  buttonFullWidth: { flexGrow: 1, flexBasis: '100%' },
 
   ghostButton: {
     minHeight: 42,
@@ -467,6 +558,18 @@ const styles = StyleSheet.create({
   },
   inputHint: { color: colors.textFaint, fontSize: 10, marginTop: 5 },
 
+  toggleChip: { flexDirection: 'row', alignItems: 'center', gap: 7 },
+  toggleChipTick: {
+    width: 13,
+    height: 13,
+    borderRadius: 3,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  toggleChipTickOn: { borderColor: colors.accent, backgroundColor: colors.accent },
+  toggleChipMark: { color: colors.textStrong, fontSize: 9, fontWeight: '900', lineHeight: 11 },
   checkboxRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, marginTop: 13 },
   checkbox: {
     width: 21,

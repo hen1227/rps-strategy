@@ -87,6 +87,14 @@ const palette = {
     blue700: '#2f3f52',
     blue050: '#d8ecff',
 
+    // Discord's brand blurple, for the one button that belongs to Discord
+    // rather than to the app. Unlike `titleHues.blurple` this is the brand
+    // value untouched: a sign-in button is expected to look like the service it
+    // signs into, and white letters clear 4.5:1 on it without darkening. The
+    // second is Discord's own darker step, used when the button is pressed.
+    blurple500: '#5865f2',
+    blurple600: '#4752c4',
+
     // Review annotations need to stand apart from both player fields.
     purple400: '#9b6fe8',
     coral400: '#f0643e',
@@ -98,6 +106,18 @@ const palette = {
     liveBorder: '#7a4b3c',
     gold200: '#f4dda3',
     gold300: '#f0deb0',
+    // The plinth the first medal stands on. Lighter than gold900 and lighter
+    // than either of the other two medals, which is what makes first place read
+    // as first at a glance rather than after comparing three borders.
+    gold850: '#3d3520',
+    // Third place. The one hue the palette had no answer for: the golds above
+    // are all yellow and the reds below are all player red, and a bronze that
+    // is either of those does not read as the third medal beside the other two.
+    // The surface is the darkest of the three plinths, so the podium reads as a
+    // ramp down rather than as three unrelated warm cards.
+    bronze400: '#c99160',
+    bronze700: '#5c3f28',
+    bronze950: '#2b2118',
     gold500: '#f0c964',
     gold600: '#d5ae4f',
     gold650: '#ad9d75',
@@ -204,6 +224,11 @@ export const colors = {
     // Discord brand blue/purple
     discordBorder: palette.blue400,
     discordSurface: palette.blue700,
+    // The brand itself, worn only by the button that starts a Discord sign-in.
+    // The two above are the app's blue standing in for Discord on a panel about
+    // it; these two are Discord's.
+    discordBrand: palette.blurple500,
+    discordBrandPressed: palette.blurple600,
 
     // The tag worn by a title this client has never heard of. Deliberately a
     // neutral rather than a spare hue: a title added to the server's catalogue
@@ -406,12 +431,40 @@ export const board = {
     lastMoveTo: withAlpha(palette.green400, 0.7),
     lastMoveMark: withAlpha(palette.green100, 0.72),
     moveHint: withAlpha(palette.ink950, 0.42),
+    // The thin dark edge every arrow on a board carries.
+    //
+    // An arrow crosses light squares and dark ones on its way, and a colour
+    // that separates from one sinks into the other. Rather than restrict the
+    // arrows to colours that read on both -- there are not many, and the
+    // ranked ones must be told apart from each other as well as from the
+    // board -- each is edged, so the outline does the separating and the fill
+    // is left free to mean something.
+    arrowOutline: withAlpha(palette.ink950, 0.5),
+
     annotation: palette.orange,
     annotationTint: withAlpha(palette.orange, 0.78),
     annotationMark: withAlpha(palette.white, 0.76),
 
-    // Ranked engine suggestions: best line first.
-    analysisArrows: [palette.green400, palette.blue300, palette.gold500],
+    // Ranked suggestions, best first — and one colour per rank, all the way to
+    // the five the board will draw.
+    //
+    // It was three for a long time and the two past it shared the last colour,
+    // which was a reasonable answer while colour only meant "which rank". It
+    // stopped being one when the opening explorer began drawing a move that can
+    // be played two ways as two arrows of *one* colour: with the ramp repeating
+    // itself, two unrelated continuations could wear the same colour as well,
+    // and the reader has no way to tell that pair from the real one.
+    //
+    // The last two are the review's own annotation hues, which were chosen to
+    // stand apart from both players' fields — the property an arrow crossing a
+    // board full of red and blue pieces needs most.
+    analysisArrows: [
+        palette.green400,
+        palette.blue300,
+        palette.gold500,
+        palette.purple400,
+        palette.coral400,
+    ],
 };
 
 // The reach overlay's own colours — everything about it that is not one side's
@@ -451,6 +504,48 @@ export const reach = {
     // than the rank and file letters, which only have to be findable.
     numberOnLight: withAlpha(palette.ink950, 0.88),
     numberOnDark: withAlpha(palette.white, 0.92),
+};
+
+/** What one medal is drawn with. */
+export interface MedalTone {
+    /** The rank number, and the name beside it. */
+    text: string;
+    /** The card behind them. */
+    surface: string;
+    border: string;
+}
+
+/**
+ * The top three of a ladder, best first.
+ *
+ * The one place in this app where a *rank* is a colour, which is why it is a
+ * band of its own rather than three entries in `colors`: nothing outside a
+ * podium may use these, because a card wearing gold anywhere else would read as
+ * a position somebody holds. Fourth place is a number, not a colour — see
+ * `rankTone` in `LadderRows`, which stops here.
+ *
+ * Gold, silver and bronze rather than three steps of the accent, because these
+ * are the colours a medal has meant for longer than this game has existed and
+ * an invented ramp would have to be learned.
+ */
+export const podium: readonly MedalTone[] = [
+    {text: palette.gold300, surface: palette.gold850, border: palette.gold700},
+    {text: palette.ink150, surface: palette.ink750, border: palette.ink500},
+    {text: palette.bronze400, surface: palette.bronze950, border: palette.bronze700},
+];
+
+/**
+ * The three parts of a win-draw-loss ratio.
+ *
+ * Reusing the accent for wins and the muted danger for losses, because those
+ * already mean going well and going badly everywhere else on the site. Draws
+ * take a neutral: a draw is neither, and giving it a hue of its own would make
+ * a drawish engine look like it had a third kind of result.
+ */
+export const record = {
+    win: palette.green500,
+    draw: palette.ink450,
+    loss: palette.red500,
 };
 
 // Engine verdict on a move, best to worst. Used for badges and history rows,

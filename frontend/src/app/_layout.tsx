@@ -55,6 +55,14 @@ function SessionBridge() {
     state.isSpectating ? null : (state.gameState?.gameId ?? null),
   );
   const gameFinished = useGameStore((state) => state.gameState?.status === 'Finished');
+  // Somebody else's game, which is the mirror image: watching does not follow a
+  // person around the site, it belongs to the page it is done on. A board asked
+  // for and not yet arrived counts as watching — turning back before the answer
+  // comes is still turning back.
+  const watching = useGameStore(
+    (state) => state.isSpectating || Boolean(state.spectatedGameId),
+  );
+  const stopSpectating = useGameStore((state) => state.stopSpectating);
   const sessionToken = useGameStore((state) => state.sessionToken);
   const detectPush = usePushStore((state) => state.detect);
 
@@ -116,6 +124,34 @@ function SessionBridge() {
     if (gameFinished && pathname === '/openings') return;
     router.replace(links.play());
   }, [gameFinished, gameId, pathname, router]);
+
+  // Leaving `/watch` stops the watching.
+  //
+  // The rule above holds a player at their own board; this is its mirror, and
+  // it is a rule about the address for the same reason. The watch screen asks
+  // to spectate and nothing else does, but it cannot see its own exit: the back
+  // button, a swipe on a phone, and a link out of the board all unmount it, and
+  // its own back button is the only way out that was telling anybody. So the
+  // audience kept the person who left in it — the game went on reporting them
+  // as watching, and delivering them its chat — and, because a board was still
+  // in the store, every WATCH button in the lobby stayed disabled until the
+  // page was refreshed. That is the bug.
+  //
+  // Deliberately the address rather than the screen unmounting, which is not
+  // the same question: switching boards from the rail over a game replaces one
+  // watch page with another, and going by the screen would put the board down
+  // and pick it straight back up, emptying the screen between two games it is
+  // meant to switch smoothly between.
+  useEffect(() => {
+    if (!watching) return;
+    if (pathname === '/watch') return;
+    // The record of the game just watched. A spectator who follows a finished
+    // game to its review is still in that game's chat room, and closing it is
+    // exactly what leaving would do — the same courtesy the rule above pays
+    // the two players going over the board.
+    if (pathname === '/review') return;
+    stopSpectating();
+  }, [pathname, stopSpectating, watching]);
 
   return null;
 }

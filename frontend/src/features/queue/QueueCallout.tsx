@@ -32,7 +32,9 @@ export default function QueueCallout({ call }: { call: QueueCall }) {
   const snoozeOffer = usePushStore((state) => state.snoozeOffer);
 
   const copy = QUEUE_COPY[call.kind];
-  const isPaused = call.kind === 'reconnecting';
+  // A grey dot rather than the live one for both kinds of stopped wait: a socket
+  // that is down, and a server that is up but not pairing.
+  const isPaused = call.kind === 'reconnecting' || call.kind === 'paused_for_update';
 
   return (
     <View style={styles.card}>
@@ -46,16 +48,20 @@ export default function QueueCallout({ call }: { call: QueueCall }) {
             {(IS_NATIVE ? copy.nativeDetail ?? copy.detail : copy.detail)(call)}
           </Text>
         </View>
+        {/*
+          Keyed on the seek rather than on the kind. A posted game is cancelled
+          by its id and a search is left by asking; which of the two this is is
+          exactly whether there is an id here, and reading the kind instead meant
+          a paused posted game — same seek, different card — took the other path.
+        */}
         <GhostButton
           accessibilityLabel={
-            call.kind === 'posted' ? 'Take your game off the board' : 'Leave the queue'
+            call.challengeId ? 'Take your game off the board' : 'Leave the queue'
           }
           compact
           label={copy.action}
           onPress={() =>
-            call.kind === 'posted' && call.challengeId
-              ? cancelChallenge(call.challengeId)
-              : leaveQueue()
+            call.challengeId ? cancelChallenge(call.challengeId) : leaveQueue()
           }
         />
       </View>

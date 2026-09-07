@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { gameReviewURL, links, seriesURL, shareURL } from './links.ts';
+import { gameReviewURL, links, playerHandle, seriesURL, shareURL } from './links.ts';
 import { SITE_URL } from '@/store/serverConfig';
 
 test('a game review link is the review route, whole, with the id escaped', () => {
@@ -42,4 +42,26 @@ test('a shared address carries every parameter its route was given', () => {
   // already drop the ones they were not given, and a bare `?mode=` would be a
   // page asking itself to open on nothing.
   assert.equal(shareURL(links.openings()), `${SITE_URL}/openings`);
+});
+
+test('a player page answers to `bot=` as well as to the `user=` it shares', () => {
+  // The two spellings are one page because a bot and a person claim names out
+  // of one namespace. If this ever stopped holding, `?bot=x` and `?user=x`
+  // could be two different players, which is the thing it exists to prevent.
+  assert.equal(playerHandle({ user: 'RPSFish' }), 'RPSFish');
+  assert.equal(playerHandle({ bot: 'RPSFish' }), 'RPSFish');
+  assert.deepEqual(links.player('RPSFish'), {
+    pathname: '/player',
+    params: { user: 'RPSFish' },
+  });
+});
+
+test('a player address with no handle is empty rather than undefined', () => {
+  // The screen renders a placeholder for '' and would ask the server for
+  // `undefined` otherwise.
+  assert.equal(playerHandle({}), '');
+});
+
+test('the shared spelling wins over the alias', () => {
+  assert.equal(playerHandle({ user: 'yuki', bot: 'RPSFish' }), 'yuki');
 });

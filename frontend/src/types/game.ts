@@ -105,6 +105,7 @@ export type GameEndReason =
   | 'repetition'
   | 'stalemate'
   | 'abandonment'
+  | 'no_capture'
   | 'move_limit';
 
 /**
@@ -177,6 +178,25 @@ export interface GameSetup {
   preferredColor?: SideColor;
 }
 
+/**
+ * A relabelling of the board that leaves a mode alone, and so one under which
+ * two positions are the same position.
+ *
+ * Colour-preserving, all of them: the side to move stays where it was, which is
+ * what makes it honest to add two folded positions' Red and Blue wins together.
+ *
+ * - `mirror-files` — reflect across the middle file, a↔i on a nine-wide board.
+ *   The symmetry of a mode raced across the ranks: Total War, Infiltration.
+ * - `diagonal` — reflect across the a1–i9 diagonal, so e3↔c5. The symmetry of a
+ *   mode raced along it: Intransitive, whose two goal corners are the two
+ *   squares this reflection leaves alone.
+ *
+ * Declared by the server, which owns the rules. Nothing here computes one: the
+ * explorer asks for a board by the line it walked and is answered in its own
+ * coordinates.
+ */
+export type BoardSymmetry = 'mirror-files' | 'diagonal';
+
 export interface ModeDefinition {
   id: ModeID;
   shortCode: string;
@@ -187,6 +207,15 @@ export interface ModeDefinition {
   playable: boolean;
   features: ModeFeature[];
   startingPosition: StartingPosition;
+  /**
+   * The relabellings this mode's boards are unchanged by, under which the
+   * opening statistics count a position and its reflection as one position.
+   *
+   * Optional because a mode fabricated in the Lab declares none, and because a
+   * server that predates the field sends none. Absent reads as "nothing is
+   * folded", which is the safe answer rather than a guess.
+   */
+  symmetries?: BoardSymmetry[];
   /**
    * The day this mode's rules last changed, `YYYY-MM-DD`.
    *

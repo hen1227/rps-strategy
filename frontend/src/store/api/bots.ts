@@ -114,6 +114,14 @@ export interface IdentityPolicy {
   maxLength: number;
   pattern: string;
   reservedNames: string[];
+  /**
+   * The same rule as it applies to a bot, whose name may be one character
+   * shorter — engine names are often two letters. Nothing here types a bot's
+   * name (a bot claims its own over the socket), so these are for showing the
+   * rule, not enforcing it.
+   */
+  botMinLength: number;
+  botPattern: string;
 }
 
 export const identityPolicy = () =>
@@ -424,14 +432,14 @@ export const botMatches = ({ botUserIds, modeId, limit, offset }: BotMatchQuery 
 };
 
 /**
- * What the enrol sweep did.
+ * What the host's enrol sweep did.
  *
- * The route has always answered with this rather than with the tournament,
- * and the reason is the second half: an engine that was *not* enrolled is the
- * interesting outcome. It is skipped for a reason — it does not play the mode,
- * its owner turned events off, it is draining, it is barred — and a host who
- * pressed the button needs to be told which, because every one of those has a
- * different fix.
+ * The route answers with this rather than with the tournament, and the reason
+ * is the second half: an engine that was *not* enrolled is the interesting
+ * outcome. It is skipped for a reason — it does not play the mode, its owner
+ * turned events off, it is draining, it is barred — and a host who pressed the
+ * button needs to be told which, because every one of those has a different
+ * fix.
  */
 export interface BotEnrolment {
   /** The engines now in the field, by name. */
@@ -440,12 +448,18 @@ export interface BotEnrolment {
   skipped: Record<string, string>;
 }
 
+/**
+ * Enter every connected engine that is set to enter tournaments.
+ *
+ * The host's tool. It is the one path that may seat two engines from the same
+ * author — an entrant choosing for themselves gets one place, and a host
+ * assembling a field out of whatever is online is not making that choice.
+ */
 export const enrollBotsInTournament = (adminToken: string, tournamentId: string) =>
-  request<BotEnrolment>(`/api/admin/tournaments/${tournamentId}/enroll-bots`, {
-    method: 'POST',
-    token: adminToken,
-    what: 'Enrolling bots',
-  });
+  request<BotEnrolment>(
+    `/api/admin/tournaments/${encodeURIComponent(tournamentId)}/enroll-bots`,
+    { method: 'POST', token: adminToken, what: 'Enrolling bots' },
+  );
 
 /* ------------------------------------------------------------------ guide -- */
 

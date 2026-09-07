@@ -1,5 +1,5 @@
 import { usePathname } from 'expo-router';
-import { StyleSheet, Text, View } from 'react-native';
+import { Image, StyleSheet, Text, View } from 'react-native';
 
 import { sectionForPath } from './sections';
 import { liveHeadline } from '@/features/live/liveSelectors';
@@ -32,11 +32,13 @@ export default function MobileTopBar() {
   return (
     <View style={styles.bar}>
       <View style={styles.brand}>
-        <Text style={styles.brandLetter}>R</Text>
-        <Text style={styles.brandSlash}>/</Text>
-        <Text style={styles.brandLetter}>P</Text>
-        <Text style={styles.brandSlash}>/</Text>
-        <Text style={styles.brandLetter}>S</Text>
+        <Image
+          source={require('../../../assets/pieces/blue_rock.png')}
+          style={styles.brandIcon}
+          resizeMode="contain"
+          accessibilityLabel="Blue rock"
+        />
+        {/* <Text style={styles.brandName}>Stoneplay</Text> */}
       </View>
       {/* The tab bar names the four sections it holds; this names the others. */}
       {section && !section.primary ? (
@@ -67,9 +69,9 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.border,
     backgroundColor: colors.surfaceSunken,
   },
-  brand: { flexDirection: 'row', alignItems: 'center' },
-  brandLetter: { ...type.bodyStrong, color: colors.accentBright, fontWeight: '900' },
-  brandSlash: { color: colors.textFaint, fontSize: 10, fontWeight: '700', marginHorizontal: 2 },
+  brand: { flexDirection: 'row', alignItems: 'center', gap: space.small },
+  brandIcon: { width: 32, height: 32 },
+  brandName: { ...type.bodyStrong, color: colors.accentBright, fontWeight: '900' },
   spacer: { flex: 1 },
   // `minWidth: 0` so a long section name ellipsises and gives way to the live
   // line, rather than pushing it off the end of the bar: a flex item will not

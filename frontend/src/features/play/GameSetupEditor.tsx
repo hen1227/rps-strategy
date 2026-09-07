@@ -179,17 +179,19 @@ export default function GameSetupEditor({
       </View>
 
       {/*
-        The three rules a game can drop. Checkboxes rather than chips: each is
-        an independent thing to switch off, and phrasing them as the deviation
+        The rules a game can drop. Checkboxes rather than chips: each is an
+        independent thing to switch off, and phrasing them as the deviation
         keeps an unticked panel meaning "the normal rules".
+
+        There were three. `noRepetitionDraw` is gone from here because there is
+        no repetition draw left to drop — see `REPETITION_DRAW_ENABLED` in
+        `@/engine/modeRules` and `game.RepetitionDrawEnabled` on the server — and
+        a checkbox that changes nothing about the game is worse than one fewer
+        checkbox. The flag itself stays on `RuleFlags`, because setups stored
+        before this still carry it and still have to compare and render.
       */}
       <View style={styles.rules}>
         <Text style={styles.rulesLabel}>RULES TO DROP</Text>
-        <Checkbox
-          checked={Boolean(rules.noRepetitionDraw)}
-          label="No repetition draw — repeating a position three times is play, not half a point"
-          onToggle={() => setRules({ noRepetitionDraw: !rules.noRepetitionDraw || undefined })}
-        />
         <Checkbox
           checked={Boolean(rules.noDrawOffers)}
           label="No draw offers — the game ends on the board"

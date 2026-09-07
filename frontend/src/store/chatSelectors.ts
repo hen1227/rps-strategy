@@ -3,10 +3,12 @@
 // Not the same question as which game it was typed at. Every game of a bot
 // series shares one room, so a spectator who follows a run to its next board
 // and one who stays on the board that just finished are in the same chat and
-// have to hear each other. Matching an arriving message against the game on
-// screen would keep each of them talking to nobody.
+// have to hear each other; every match of a bots-only tournament shares one
+// too, so the people watching one board hear the people watching the next.
+// Matching an arriving message against the game on screen would keep each of
+// them talking to nobody.
 
-import type { ChatMessage } from '@/types/protocol';
+import type { ChatMessage, ChatRoomScope } from '@/types/protocol';
 
 /** How many messages a client keeps, matching the server's own ceiling. */
 export const CHAT_HISTORY_LIMIT = 100;
@@ -24,14 +26,24 @@ export const chatRoomIdOf = (
 ): string | null => chatRoomId ?? gameId ?? null;
 
 /**
- * Whether this room covers more than the game on screen, which today means a
- * bot series. Read from the room's own name rather than from the live table,
- * so it is still true of a run whose current board has left it.
+ * What the room a join message puts this client in covers.
+ *
+ * Taken from the server, which is the only thing that knows: a room that is not
+ * the game on screen is either a run or an event, and the id alone does not say
+ * which. The fallback is for a server from before the field, where a room that
+ * spanned more than one game could only have been a series.
+ *
+ * Read from the room rather than from the live table, so it still holds for a
+ * conversation whose current board has left it.
  */
-export const roomSpansSeries = (
+export const chatRoomScopeOf = (
+  scope: ChatRoomScope | null | undefined,
   roomId: string | null | undefined,
   gameId: string | null | undefined,
-): boolean => Boolean(roomId) && Boolean(gameId) && roomId !== gameId;
+): ChatRoomScope => {
+  if (scope) return scope;
+  return roomId && gameId && roomId !== gameId ? 'series' : 'game';
+};
 
 /** Whether an arriving message is for the conversation on screen. */
 export const belongsToChatRoom = (

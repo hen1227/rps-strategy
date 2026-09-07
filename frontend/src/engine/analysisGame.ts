@@ -7,7 +7,7 @@
 // server exactly is the whole point.
 
 import { goalEndReason, goalOwnerAt } from './goals';
-import { repetitionDraws, stalemateLoses } from './modeRules';
+import { QUIET_PLY_LIMIT, repetitionDraws, stalemateLoses } from './modeRules';
 import { positionKey } from './positionKey';
 import {
   BOARD_SIZE,
@@ -62,6 +62,14 @@ export interface AnalysisGame extends PositionLike {
   endReason: GameEndReason | null;
   /** One entry per position reached, including the starting one. */
   repetitionHistory: string[];
+  /**
+   * Moves played since the last capture, against `QUIET_PLY_LIMIT`.
+   *
+   * A number rather than a second history, because unlike repetition this rule
+   * asks nothing about which positions were reached — only how long ago
+   * something was taken.
+   */
+  quietPlies: number;
 }
 
 /**
@@ -157,6 +165,7 @@ const newGame = (mode: ModeDefinition, grid: Grid, currentTurn: SideColor): Anal
     mode,
     moveNumber: 0,
     currentTurn,
+    quietPlies: 0,
     status: 'InProgress',
     winner: 'Neutral',
   } satisfies Omit<AnalysisGame, 'repetitionHistory'>;
@@ -331,6 +340,10 @@ export const applyAnalysisMove = (
     currentTurn: opposingColor(mover),
     grid,
     moveNumber: game.moveNumber + 1,
+    // A capture is the only thing that restarts the count. Territory is not:
+    // claiming a tile is progress in Total War, but it is progress that mode
+    // already ends the game on when the board fills.
+    quietPlies: captured ? 0 : (game.quietPlies ?? 0) + 1,
   };
 
   // A mode that ends the game on a move never passes the turn — the server's
@@ -394,6 +407,18 @@ export const applyAnalysisMove = (
     next.status = 'Finished';
     next.winner = 'Neutral';
     next.endReason = 'repetition';
+  }
+
+  // Last of the engine's endings, because it is the weakest claim any of them
+  // makes: a move that wins, blockades, or repeats has said something about the
+  // position, and "nothing has been taken for a while" must not overrule it.
+  // `countQuietPlyLocked` in the backend adjudicates in the same order, and for
+  // the same reason — otherwise the hundredth quiet move could turn a blockade,
+  // which wins in a mode where being stuck loses, into half a point.
+  if (next.status === 'InProgress' && next.quietPlies >= QUIET_PLY_LIMIT) {
+    next.status = 'Finished';
+    next.winner = 'Neutral';
+    next.endReason = 'no_capture';
   }
 
   return { captured, game: next, mover };

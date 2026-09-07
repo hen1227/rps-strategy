@@ -80,11 +80,26 @@ export default function ShellLayout() {
   // index; a link from the board to any other section landed on the lobby.
   return (
     <SafeAreaView
-      edges={isWide ? ['top', 'right', 'bottom', 'left'] : ['top', 'right', 'left']}
+      edges={isWide ? ['top', 'right', 'bottom', 'left'] : ['right', 'left']}
       style={styles.screen}
     >
       <View style={isWide ? styles.columns : styles.stack}>
-        {isWide ? <SidebarNav /> : <MobileTopBar />}
+        {isWide ? (
+          <SidebarNav />
+        ) : (
+          /*
+            The top edge belongs to the header, the same way the bottom one
+            belongs to the tab bar. Claimed by the frame instead, the notch band
+            is painted in the page's background colour and reads as a stripe
+            above a header that is a different colour; claimed here, the header
+            simply starts at the top of the screen. Note the frame no longer
+            asks for `top` on a phone — two nested SafeAreaViews both claiming an
+            edge would inset it twice.
+          */
+          <SafeAreaView edges={['top']} style={styles.barHolder}>
+            <MobileTopBar />
+          </SafeAreaView>
+        )}
         <View style={styles.mainColumn}>
           <View style={styles.main}>
             {banner}
@@ -115,5 +130,8 @@ const styles = StyleSheet.create({
   mainColumn: { flex: 1, minWidth: 0 },
   main: { flex: 1, minWidth: 0 },
   banner: { paddingHorizontal: 16, paddingTop: 12 },
+  // Both the header's colour, so the safe area above and below the page reads as
+  // part of the chrome rather than as a band of page behind it.
+  barHolder: { backgroundColor: colors.surfaceSunken },
   tabHolder: { backgroundColor: colors.surfaceSunken },
 });

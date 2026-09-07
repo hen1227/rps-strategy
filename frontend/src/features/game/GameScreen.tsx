@@ -37,7 +37,8 @@ import { useSpectateContext } from '@/hooks/useSpectateContext';
 import { useTournamentCall } from '@/hooks/useTournamentCall';
 import { useWatchGame } from '@/hooks/useWatchGame';
 import { links } from '@/navigation/links';
-import { roomSpansSeries } from '@/store/chatSelectors';
+import { up } from '@/navigation/upFrom';
+import { chatRoomScopeOf } from '@/store/chatSelectors';
 import { useGameStore } from '@/store/gameStore';
 import { firstMoveCall } from '@/store/queueSelectors';
 import { useReviewHandoff } from '@/store/reviewHandoff';
@@ -45,6 +46,7 @@ import { ruleSummary } from '@/store/setupSelectors';
 import { playerName } from '@/store/spectateSelectors';
 import type { ActiveGame } from '@/store/types';
 import { colors, overlay, radius, shadows, type } from '@/theme';
+import BackLink from '@/ui/BackLink';
 import {
   FIRST_TO_MOVE,
   opposingColor,
@@ -73,6 +75,13 @@ interface WaitingMode {
  * there never resizes its board after the first paint.
  */
 const HEADER_HEIGHT = 54;
+/**
+ * The page's own horizontal padding, and so the whole of the board's horizontal
+ * chrome on a phone. Named because `useBoardLayout` has to be told it: the
+ * board fills the width this leaves, and a phone board is bounded by width
+ * alone, so the two must not drift apart.
+ */
+const PHONE_PADDING = 10;
 
 const formatTimeControl = (timeControl: TimeControl | null | undefined) => {
     if (!timeControl) return 'Live';
@@ -112,6 +121,10 @@ const localOutcomeFor = (gameState: ActiveGame): GameOutcome => {
         },
         draw_agreement: {method: 'AGREEMENT', detail: 'The players agreed to a draw.'},
         repetition: {method: 'REPETITION', detail: 'The same position occurred three times.'},
+        no_capture: {
+            method: 'NO CAPTURE',
+            detail: 'One hundred moves passed with nothing taken.',
+        },
         stalemate: {
             method: 'STALEMATE',
             // A draw in most modes and a loss in a race, so the card reads the
@@ -180,6 +193,10 @@ const outcomeFor = (gameState: ActiveGame, playerColor: PlayerColor | null): Gam
         repetition: {
             method: 'REPETITION',
             detail: 'The same position occurred three times.',
+        },
+        no_capture: {
+            method: 'NO CAPTURE',
+            detail: 'One hundred moves passed with nothing taken.',
         },
         stalemate: {
             method: 'STALEMATE',
@@ -1092,27 +1109,26 @@ function StatusCard({
                 </View>
             </View>
 
-            {isFinished || isSpectating ? (
+            {/*
+              What is left to *do* here, and nothing about leaving. The way out
+              used to be a second button in this row — "Leave" while watching,
+              "Return to lobby" once the game was over — which put the only exit
+              from the board halfway down the right-hand panel, where nobody
+              looks for one. It is the back button at the top left now, the same
+              one every other page of this site carries.
+            */}
+            {isFinished && canReview ? (
                 <View style={styles.statusActions}>
-                    {isFinished && canReview && (
-                        <Pressable
-                            accessibilityLabel="Review game with RPSFish"
-                            accessibilityRole="button"
-                            onPress={onReviewGame}
-                            style={({pressed}) => [styles.statusReviewButton, pressed && styles.buttonPressed]}
-                        >
-                            <Text style={styles.statusReviewText}>Review game</Text>
-                        </Pressable>
-                    )}
                     <Pressable
+                        accessibilityLabel="Review game with RPSFish"
                         accessibilityRole="button"
-                        onPress={onReturn}
-                        style={({pressed}) => [styles.returnButton, pressed && styles.buttonPressed]}
+                        onPress={onReviewGame}
+                        style={({pressed}) => [styles.statusReviewButton, pressed && styles.buttonPressed]}
                     >
-                        <Text style={styles.returnButtonText}>{isSpectating && !isFinished ? 'Leave' : 'Return to lobby'}</Text>
+                        <Text style={styles.statusReviewText}>Review game</Text>
                     </Pressable>
                 </View>
-            ) : (
+            ) : isFinished || isSpectating ? null : (
                 <View style={styles.moveBadge}>
                     <Text style={styles.moveBadgeLabel}>MOVE</Text>
                     <Text style={styles.moveBadgeValue}>{gameState.moveNumber + 1}</Text>
@@ -1162,9 +1178,15 @@ export default function GameScreen() {
     const accountId = useGameStore((state) => state.accountId);
     const chatMessages = useGameStore((state) => state.chatMessages);
     const chatRoomId = useGameStore((state) => state.chatRoomId);
+    const chatRoomScope = useGameStore((state) => state.chatRoomScope);
     const chatOccupancy = useGameStore((state) => state.chatOccupancy);
     const liveGames = useGameStore((state) => state.liveGames);
     const spectatedGameId = useGameStore((state) => state.spectatedGameId);
+    // The board that was taken away rather than finished, and why. Everything
+    // else that empties this screen leaves something to go and look at — a
+    // result, a record, a game still loading. A cancelled game leaves nothing
+    // at all, so the reason is the only thing there is to show.
+    const cancelledGame = useGameStore((state) => state.cancelledGame);
     const watchGame = useWatchGame();
     const chatVisible = useGameStore((state) => state.chatVisible);
     const showSpectatorMessages = useGameStore((state) => state.showSpectatorMessages);
@@ -1213,6 +1235,7 @@ export default function GameScreen() {
     // crash React reports as rendering more hooks than during the previous
     // render.
     const hasTerritory = gameState?.mode.features?.includes('territory');
+    const isWatchingSeries = isSpectating && Boolean(spectateContext.series);
     // Everything above the board is measured rather than assumed, because it is
     // not always the same height: a spectated game carries the rail that steers
     // between boards, and a custom game an extra line of terms. Sizing the board
@@ -1223,6 +1246,17 @@ export default function GameScreen() {
         const measured = Math.round(event.nativeEvent.layout.height);
         setHeaderHeight((current) => (current === measured ? current : measured));
     };
+    // The server banner, for the same reason and measured the same way. It is
+    // zero nearly always and a couple of lines during a deploy, and the couple
+    // of lines came out of the board's share of the window: the banner pushed
+    // the page down, the board was still sized for a window without one, and
+    // the bottom player bar — the clock, the resign button — went under the
+    // fold of a wide layout that has nowhere to scroll to.
+    const [bannerHeight, setBannerHeight] = useState(0);
+    const measureBanner = (event: LayoutChangeEvent) => {
+        const measured = Math.round(event.nativeEvent.layout.height);
+        setBannerHeight((current) => (current === measured ? current : measured));
+    };
     // The live board is the tightest fit in the app: it has a player bar above
     // and below, and on a narrow screen the controls and the territory meter
     // under those. What the constants cover is everything the header does not —
@@ -1230,9 +1264,18 @@ export default function GameScreen() {
     const {boardSize, height, isWide} = useBoardLayout({
         minimum: 190,
         sidePanel: 390,
-        chrome: headerHeight + 136,
-        narrowChrome: headerHeight + (hasTerritory ? 336 : 306),
+        chrome: headerHeight + bannerHeight + 136,
+        narrowChrome: headerHeight + bannerHeight + (hasTerritory ? 336 : 306),
+        // Series viewers scroll to the moves and chat; the header should not
+        // shrink their board as the browser's address bar changes height.
+        narrowFit: isWatchingSeries ? 'width' : 'viewport',
+        // Nothing is drawn beside the board on a phone — the layout below is a
+        // single column — so the only horizontal chrome the board owes is
+        // `screen`'s padding. Keep the two numbers together: widening that
+        // padding without widening this hands the board pixels it cannot have.
+        narrowMargin: PHONE_PADDING * 2,
     });
+    const compactSeriesHeader = isWatchingSeries && !isWide;
     // A refresh arrives here with nothing in the store: the socket has to come
     // back up and the game has to be asked for again before there is a board to
     // draw. So an empty screen is two different things, and saying the wrong
@@ -1280,6 +1323,11 @@ export default function GameScreen() {
     // it a shared link read "No active match" for as long as the request took.
     const lookingForGame = !settled || Boolean(gameSessionId) || Boolean(spectatedGameId);
     const lookingToWatch = !gameSessionId && Boolean(spectatedGameId);
+    // A board that was stopped under whoever was looking at it. Nothing is on
+    // its way — the game is gone and was never filed — so this outranks the
+    // "no active match" copy below, which would leave a player and a spectator
+    // alike to conclude the site had lost their game.
+    const stopped = !lookingForGame && cancelledGame?.message ? cancelledGame : null;
 
     if (!gameState) {
         return (
@@ -1293,28 +1341,33 @@ export default function GameScreen() {
                         />
                     ) : null}
                     <Text style={styles.emptyTitle}>
-                        {lookingToWatch
-                            ? 'Opening the board…'
-                            : lookingForGame
-                                ? 'Looking for your game…'
-                                : 'No active match'}
+                        {stopped
+                            ? 'This game was stopped'
+                            : lookingToWatch
+                                ? 'Opening the board…'
+                                : lookingForGame
+                                    ? 'Looking for your game…'
+                                    : 'No active match'}
                     </Text>
                     <Text style={styles.emptyBody}>
-                        {lookingToWatch
-                            ? 'Asking the server to put you on the game you followed.'
-                            : lookingForGame
-                                ? 'A refresh has to ask the server for the board again.'
-                                : 'Return to the mode screen to find an opponent.'}
+                        {stopped
+                            ? stopped.message
+                            : lookingToWatch
+                                ? 'Asking the server to put you on the game you followed.'
+                                : lookingForGame
+                                    ? 'A refresh has to ask the server for the board again.'
+                                    : 'Return to the mode screen to find an opponent.'}
                     </Text>
                     {/* An escape hatch either way: a rejoin that never answers
-                        should not be a screen with nothing on it. */}
-                    <Pressable
-                        accessibilityRole="button"
-                        onPress={() => router.push(links.lobby())}
-                        style={({pressed}) => [styles.emptyButton, pressed && styles.buttonPressed]}
-                    >
-                        <Text style={styles.emptyButtonText}>Choose a mode</Text>
-                    </Pressable>
+                        should not be a screen with nothing on it. The same
+                        control as the one on a board that did arrive, so it is
+                        the same button in the same place whether or not the
+                        game turns up. `replace`, because this address had
+                        nothing on it and is not worth a history entry. */}
+                    <BackLink
+                        label={up.play.label}
+                        onPress={() => router.replace(up.play.href)}
+                    />
                 </View>
             </SafeAreaView>
         );
@@ -1426,9 +1479,30 @@ export default function GameScreen() {
             ? localHistoryLength > 0
             : gameState.moveNumber > 0;
 
+    // Whether there is anything to leave *to*.
+    //
+    // A rated game in progress cannot be walked out of: `SessionBridge` puts a
+    // player back on their own live board from wherever they navigate, so a
+    // press here would land on the lobby and bounce straight back — and
+    // `clearGame` would have thrown the board away on the way past. Resigning
+    // and aborting are the real ways out and they are both in the panel.
+    // Everything else leaves: a finished game (which is only being held open
+    // for its chat room), a game being watched, and the bot and shared-device
+    // boards, which never left this tab.
+    const canLeave =
+        Boolean(bot) || Boolean(local) || isSpectating || gameState.status !== 'InProgress';
+
+    // `replace`, not `push`.
+    //
+    // The board is not somewhere to go back *to* once it has been left: its
+    // game has been cleared out of the store, so the browser's back button
+    // landed on a screen with nothing on it, or — from a watched game that had
+    // since finished — on that game's review, whether or not the archive had
+    // written it yet. Pushing also grew the stack a pair at a time, which is
+    // what made "back" take two or three presses to get anywhere.
     const returnToModes = () => {
         clearGame();
-        router.push(links.lobby());
+        router.replace(up.play.href);
     };
 
     // The game is deliberately left in the store: an online game's chat room
@@ -1663,52 +1737,74 @@ export default function GameScreen() {
     // analysis behind it, so each move gets a plain pip where a review would
     // put a symbol.
     //
+    // The rows scroll inside the card and everything else in it is pinned: the
+    // heading above them, the controls and the hint below. A live game keeps
+    // adding rows, and a card that grew with them pushed the controls off the
+    // bottom of the panel and then moved them again after every move — so the
+    // one thing you steer the list with was never in the same place twice.
+    //
     // Not drawn at all when there is no record to read. That is the honest
     // answer for a game whose history never arrived, and it is what keeps this
     // out of the way on a board that cannot have one.
     const moveHistory = history.available ? (
-        <View style={styles.historyCard}>
-            <MoveAnalysisList
-                emptyText="No moves yet."
-                moves={history.moves}
-                onSelect={replay.goTo}
-                selectedIndex={replay.cursor}
-                title={atLiveEdge ? 'MOVES' : 'MOVES · LOOKING BACK'}
-            />
-            <ReplayControls
-                current={replay.cursor}
-                // The badge is the one place that says whether the board is the
-                // game or a picture of it. `LIVE` while the game is still being
-                // played and the viewer is at the end of it; the move number
-                // otherwise, including for every position of a finished game,
-                // where nothing is live any more.
-                label={atLiveEdge && gameState.status === 'InProgress' ? 'LIVE' : 'MOVE'}
-                onFirst={replay.goToFirst}
-                onLast={replay.goToLast}
-                onNext={replay.stepForward}
-                onPrevious={replay.stepBack}
-                total={replay.lastIndex}
-            />
-            {/*
-              Only while the game is going, and only when the viewer is not at
-              the end of it: there is no live edge to return to in a game that
-              has finished, and a button offering one would be a lie about the
-              board underneath.
-            */}
-            {!atLiveEdge && gameState.status === 'InProgress' ? (
-                <Pressable
-                    accessibilityLabel="Return to the live position"
-                    accessibilityRole="button"
-                    onPress={replay.goToLast}
-                    style={({pressed}) => [styles.returnToLive, pressed && styles.buttonPressed]}
-                >
-                    <Text style={styles.returnToLiveText}>◉ RETURN TO LIVE</Text>
-                </Pressable>
-            ) : null}
-            <Text style={styles.historyHint}>
-                Use the left and right arrow keys to step through the game.
-            </Text>
-        </View>
+        <MoveAnalysisList
+            emptyText="No moves yet."
+            moves={history.moves}
+            onSelect={replay.goTo}
+            scroll
+            selectedIndex={replay.cursor}
+            title={atLiveEdge ? 'MOVES' : 'MOVES · LOOKING BACK'}
+            footer={
+                <>
+                    <ReplayControls
+                        // Beside the buttons rather than under them, and only
+                        // while the game is going and the viewer is not at the
+                        // end of it: there is no live edge to return to in a game
+                        // that has finished, and a button offering one would be a
+                        // lie about the board underneath.
+                        //
+                        // It used to be a full-width row of its own, which meant
+                        // stepping back off the live edge grew the footer and
+                        // moved the controls and the rows above them — the list
+                        // shifting under you as a side effect of reading it. The
+                        // controls row keeps a zone for this, so appearing here
+                        // moves nothing.
+                        accessory={
+                            !atLiveEdge && gameState.status === 'InProgress' ? (
+                                <Pressable
+                                    accessibilityLabel="Return to the live position"
+                                    accessibilityRole="button"
+                                    onPress={replay.goToLast}
+                                    style={({pressed}) => [
+                                        styles.returnToLive,
+                                        pressed && styles.buttonPressed,
+                                    ]}
+                                >
+                                    <Text numberOfLines={1} style={styles.returnToLiveText}>
+                                        ◉ LIVE
+                                    </Text>
+                                </Pressable>
+                            ) : null
+                        }
+                        current={replay.cursor}
+                        // The badge is the one place that says whether the board
+                        // is the game or a picture of it. `LIVE` while the game
+                        // is still being played and the viewer is at the end of
+                        // it; the move number otherwise, including for every
+                        // position of a finished game, where nothing is live.
+                        label={atLiveEdge && gameState.status === 'InProgress' ? 'LIVE' : 'MOVE'}
+                        onFirst={replay.goToFirst}
+                        onLast={replay.goToLast}
+                        onNext={replay.stepForward}
+                        onPrevious={replay.stepBack}
+                        total={replay.lastIndex}
+                    />
+                    <Text style={styles.historyHint}>
+                        Use the left and right arrow keys to step through the game.
+                    </Text>
+                </>
+            }
+        />
     ) : null;
 
     // Nobody is listening on the other side of a bot game, and at a local board
@@ -1725,7 +1821,7 @@ export default function GameScreen() {
             onToggleChat={toggleChat}
             onToggleSpectatorMessages={toggleSpectatorMessages}
             roomOccupancy={chatOccupancy}
-            series={roomSpansSeries(chatRoomId, gameState.gameId)}
+            scope={chatRoomScopeOf(chatRoomScope, chatRoomId, gameState.gameId)}
             showSpectatorMessages={showSpectatorMessages}
             spectatorCount={spectatorCount}
             wide={isWide}
@@ -1786,15 +1882,48 @@ export default function GameScreen() {
               where the message matters most: somebody mid-game is the one person
               a graceful restart is being run for, and they should be able to see
               that their game is the thing it is waiting on. Renders nothing when
-              there is nothing to say, and is deliberately outside the measured
-              header — its height is not part of the board's layout arithmetic.
+              there is nothing to say, which is why it is wrapped and measured
+              rather than allowed a fixed allowance: the wrapper is 0 high until
+              there is a message, and the board gives up exactly the room the
+              message takes.
             */}
-            <ServerBanner />
+            <View onLayout={measureBanner}>
+                <ServerBanner />
+            </View>
             <View onLayout={measureHeader} style={styles.header}>
                 <View style={styles.headerInner}>
-                    <View style={styles.topBar}>
-                        <View style={styles.matchIdentity}>
-                            <Text style={styles.matchKicker}>
+                    <View style={[styles.topBar, compactSeriesHeader && styles.topBarCompact]}>
+                        {/*
+                          The way out, in the corner every other page of this
+                          site keeps it in. There used to be nothing at all up
+                          here: leaving was a button on the right of the status
+                          card, which only appeared once the game was over or if
+                          you were watching, so the one screen people spend the
+                          most time on was the one screen with no navigation
+                          where they reached for it.
+
+                          Disabled rather than missing during your own rated
+                          game, because there is genuinely no leaving one: the
+                          app puts a player back on their live board from
+                          wherever they navigate to, so a working button here
+                          would take somebody to the lobby and bounce them
+                          straight back. Resigning or aborting is the honest way
+                          out and both are in the panel beside the board. A
+                          bot game and a shared-device game are only in this
+                          tab, so those leave freely.
+                        */}
+                        <BackLink
+                            disabled={!canLeave}
+                            hint={
+                                canLeave
+                                    ? undefined
+                                    : 'Resign or abort to leave a game in progress.'
+                            }
+                            label={up.play.label}
+                            onPress={returnToModes}
+                        />
+                        <View style={[styles.matchIdentity, compactSeriesHeader && styles.matchIdentityCompact]}>
+                            <Text style={[styles.matchKicker, compactSeriesHeader && styles.matchKickerCompact]}>
                                 {gameState.mode.shortCode} ·{' '}
                                 {gameState.status === 'Finished'
                                     ? 'FINAL'
@@ -1806,7 +1935,9 @@ export default function GameScreen() {
                                                 ? 'SPECTATING LIVE'
                                                 : 'LIVE MATCH'}
                             </Text>
-                            <Text style={styles.modeName}>{gameState.mode.name}</Text>
+                            <Text style={[styles.modeName, compactSeriesHeader && styles.modeNameCompact]}>
+                                {gameState.mode.name}
+                            </Text>
                             {/*
                               The terms this game was set up with, when they are not
                               the usual ones. Players who accepted a custom game
@@ -1829,8 +1960,8 @@ export default function GameScreen() {
                                 opening={opening}
                             />
                         </View>
-                        <View style={styles.timeControlBadge}>
-                            <Text style={styles.timeControlLabel}>
+                        <View style={[styles.timeControlBadge, compactSeriesHeader && styles.timeControlBadgeCompact]}>
+                            <Text style={[styles.timeControlLabel, compactSeriesHeader && styles.timeControlLabelCompact]}>
                                 {bot || local ? 'OPPONENT' : 'TIME CONTROL'}
                             </Text>
                             <Text style={styles.timeControlValue} numberOfLines={1}>
@@ -1887,18 +2018,24 @@ export default function GameScreen() {
                                     Boolean(tournamentCall) && styles.calloutClearance,
                                 ]}
                             >
+                                {/*
+                                  Pinned above the scroller, not inside it. It
+                                  says whose turn it is and carries the way out
+                                  of the game, and both of those are wanted while
+                                  reading the move list underneath — which is its
+                                  own scroller now, so anything above it in a
+                                  shared one would scroll away.
+                                */}
+                                {statusCard(true)}
+
                                 <ScrollView
                                     contentContainerStyle={styles.sidePanelContent}
                                     keyboardShouldPersistTaps="handled"
                                     showsVerticalScrollIndicator={false}
                                     style={styles.sidePanelScroll}
                                 >
-                                    {statusCard(true)}
-
                                     {matchNotices}
                                     {gameActions}
-
-                                    {moveHistory}
 
                                     {hasTerritory && <TerritoryMeter grid={visibleGrid}/>}
                                     <ReachPanel tool={reachTool}/>
@@ -1962,6 +2099,16 @@ export default function GameScreen() {
                                     )}
                                 </ScrollView>
 
+                                {/*
+                                  Given the column's spare room rather than its
+                                  content height, so the rows have somewhere to
+                                  scroll. It shares what is left with the chat
+                                  below, which claims its room the same way.
+                                */}
+                                {moveHistory ? (
+                                    <View style={styles.historySlot}>{moveHistory}</View>
+                                ) : null}
+
                                 {gameChat}
                             </View>
                         </View>
@@ -1983,7 +2130,16 @@ export default function GameScreen() {
                             <ReachPanel tool={reachTool}/>
                             {matchNotices}
                             {gameActions}
-                            {moveHistory}
+                            {/*
+                              Bounded here too, for the same reason and by a
+                              height rather than by flex: the whole page is one
+                              scroller on a phone, so a card that grew with the
+                              game would put its controls further down the page
+                              after every move.
+                            */}
+                            {moveHistory ? (
+                                <View style={styles.historySlotPhone}>{moveHistory}</View>
+                            ) : null}
                             {gameChat}
                             {gameState.status !== 'Finished' || isSpectating ? statusCard() : null}
                         </ScrollView>
@@ -2055,7 +2211,7 @@ const styles = StyleSheet.create({
         width: '100%',
         maxWidth: 1180,
         alignSelf: 'center',
-        paddingHorizontal: 10,
+        paddingHorizontal: PHONE_PADDING,
     },
     centered: {flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24},
     // Room for the floating tournament call to action.
@@ -2063,14 +2219,6 @@ const styles = StyleSheet.create({
     emptySpinner: {marginBottom: 14},
     emptyTitle: {color: colors.textStrong, fontSize: 25, fontWeight: '900'},
     emptyBody: {color: colors.textMuted, marginTop: 8, textAlign: 'center'},
-    emptyButton: {
-        marginTop: 22,
-        paddingHorizontal: 18,
-        paddingVertical: 11,
-        borderRadius: radius.medium,
-        backgroundColor: colors.accent,
-    },
-    emptyButtonText: {color: colors.textStrong, fontWeight: '900'},
     buttonPressed: {opacity: 0.72},
     statusActions: {flexDirection: 'row', alignItems: 'center', gap: 6},
     statusReviewButton: {
@@ -2107,17 +2255,22 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
+        gap: 11,
     },
+    topBarCompact: {gap: 6},
     // Takes the slack in the top bar so a long mode name cannot squeeze the
     // time-control badge.
     matchIdentity: {flex: 1, minWidth: 0, paddingRight: 10},
+    matchIdentityCompact: {paddingRight: 0},
     matchKicker: {
         color: colors.accentBright,
         fontSize: 8,
         fontWeight: '900',
         letterSpacing: 1.4,
     },
+    matchKickerCompact: {fontSize: 7, letterSpacing: 0.8},
     modeName: {color: colors.textStrong, fontSize: 20, fontWeight: '900', marginTop: 2},
+    modeNameCompact: {fontSize: 16, lineHeight: 20, marginTop: 1},
     customTerms: {...type.meta, color: colors.accentSoft, marginTop: 2},
     timeControlBadge: {
         minWidth: 88,
@@ -2129,12 +2282,14 @@ const styles = StyleSheet.create({
         borderColor: colors.border,
         backgroundColor: colors.surface,
     },
+    timeControlBadgeCompact: {minWidth: 72, paddingHorizontal: 8, paddingVertical: 5},
     timeControlLabel: {
         color: colors.textFaint,
         fontSize: 7,
         fontWeight: '900',
         letterSpacing: 1.1,
     },
+    timeControlLabelCompact: {fontSize: 6, letterSpacing: 0.7},
     timeControlValue: {
         color: colors.textStrong,
         fontSize: 15,
@@ -2307,11 +2462,11 @@ const styles = StyleSheet.create({
         borderColor: colors.border,
         backgroundColor: colors.surface,
     },
-    statusCardWide: {
-        minHeight: 112,
-        alignItems: 'flex-start',
-        padding: 14,
-    },
+    // Beside a board this card is one line of copy and a button, and it used to
+    // reserve 112 points for them with the content pushed to the top — a third
+    // of the panel's width in empty card, above the list somebody is actually
+    // reading. It is as tall as what is in it now.
+    statusCardWide: {padding: 12},
     statusLead: {flex: 1, flexDirection: 'row', alignItems: 'center', minWidth: 0},
     statusIcon: {
         width: 27,
@@ -2340,13 +2495,6 @@ const styles = StyleSheet.create({
         letterSpacing: 1,
     },
     moveBadgeValue: {color: colors.textSoft, fontSize: 17, fontWeight: '900'},
-    returnButton: {
-        paddingHorizontal: 13,
-        paddingVertical: 8,
-        borderRadius: radius.small,
-        backgroundColor: colors.accent,
-    },
-    returnButtonText: {color: colors.textStrong, fontSize: 11, fontWeight: '900'},
     detailCard: {
         padding: 15,
         borderRadius: radius.large,
@@ -2400,19 +2548,21 @@ const styles = StyleSheet.create({
     },
     errorText: {flex: 1, color: colors.dangerText, fontSize: 11, fontWeight: '700'},
     errorDismiss: {color: colors.dangerText, fontSize: 19, paddingHorizontal: 4},
-    // The score sheet's own frame. The list and the controls inside it come
-    // from the analysis screen, so this only has to hold them together and
-    // stand off the cards above and below.
-    historyCard: {gap: 4},
+    // What the score sheet is given to scroll in. Beside a board it takes the
+    // column's spare room; on a phone it is a fixed slice of a page.
+    historySlot: {flexGrow: 1, flexShrink: 1, flexBasis: 0, minHeight: 148},
+    historySlotPhone: {maxHeight: 320},
     historyHint: {
         ...type.meta,
         color: colors.textFaint,
         marginTop: 2,
         textAlign: 'center',
     },
+    // Small enough to live at the end of the controls row without crowding the
+    // buttons: the row's own zone is what keeps it off them.
     returnToLive: {
-        minHeight: 30,
-        marginTop: 4,
+        height: 30,
+        paddingHorizontal: 8,
         alignItems: 'center',
         justifyContent: 'center',
         borderRadius: radius.medium,
@@ -2420,7 +2570,7 @@ const styles = StyleSheet.create({
         borderColor: colors.liveBorder,
         backgroundColor: colors.surfaceRaised,
     },
-    returnToLiveText: {...type.label, color: colors.live},
+    returnToLiveText: {...type.label, fontSize: 8, color: colors.live},
 
     modalBackdrop: {
         flex: 1,

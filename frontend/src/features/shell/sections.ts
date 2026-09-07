@@ -15,7 +15,9 @@ export type SectionId =
     | 'my-bots'
 
     | 'openings'
+    | 'explorer'
     | 'tournaments'
+    | 'weekend'
     | 'leaderboard'
     | 'account'
     | 'admin';
@@ -63,6 +65,13 @@ export const SECTIONS: readonly Section[] = [
         primary: true,
     },
     {
+        id: 'weekend',
+        label: 'Weekend Bot Tourney',
+        href: links.weekend(),
+        path: '/weekend',
+        primary: true,
+    },
+    {
         id: 'account',
         label: 'Account',
         href: links.account(),
@@ -87,6 +96,12 @@ export const SECTIONS: readonly Section[] = [
         label: 'Openings',
         href: links.openings(),
         path: '/openings',
+    },
+    {
+        id: 'explorer',
+        label: 'Explorer',
+        href: links.explorer(),
+        path: '/explorer',
     },
     {
         id: 'admin',

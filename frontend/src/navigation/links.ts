@@ -118,7 +118,36 @@ export const links = {
           },
         }
       : '/openings',
-  leaderboard: (): Href => '/leaderboard',
+
+  /**
+   * The opening explorer, optionally standing on one board.
+   *
+   * The same `?line=` spelling as the book, because it means the same thing:
+   * the moves walked to get here. The explorer's numbers are about the board
+   * that line reaches rather than about the line itself, so two orders share
+   * an answer -- but a link still has to name a route, and a move list is the
+   * only route a board has.
+   */
+  explorer: (options: { mode?: ModeID; line?: readonly string[] } = {}): Href =>
+    options.mode || options.line?.length
+      ? {
+          pathname: '/explorer',
+          params: {
+            ...(options.mode ? { mode: options.mode } : {}),
+            ...(options.line?.length ? { line: options.line.join(',') } : {}),
+          },
+        }
+      : '/explorer',
+  /**
+   * The ladder, optionally opened on one mode's tab.
+   *
+   * The mode is in the address rather than only in state, for the reason
+   * `admin` gives about its own tabs: it costs nothing, and it means the board
+   * somebody is talking about can be linked to. Omitted opens the first
+   * playable mode, so a bare `/leaderboard` is still a page.
+   */
+  leaderboard: (mode?: ModeID): Href =>
+    mode ? { pathname: '/leaderboard', params: { mode } } : '/leaderboard',
 
   /**
    * One player's public page: their games, their rating, their titles.
@@ -160,6 +189,8 @@ export const links = {
    * bot. Reading either therefore keeps Account lit in the sidebar, which is
    * where you came from.
    */
+  /** The recurring bot event, which has its own page because it is a place. */
+  weekend: (): Href => '/weekend',
   myBots: (): Href => '/account/bots',
   botGuide: (): Href => '/account/bots/connect',
   botProtocol: (): Href => '/account/bots/protocol',
@@ -250,6 +281,24 @@ export const watchGameURL = (gameId: string) => shareURL(links.watch(gameId));
  * name is the thing the link is for.
  */
 export const playerURL = (handle: string) => shareURL(links.player(handle));
+
+/**
+ * The handle a `/player` address is asking for.
+ *
+ * `?user=` is the spelling this site writes — `links.player` emits it, and it
+ * is what gets shared. `?bot=` is read beside it because an engine is a player
+ * here rather than a separate kind of thing with a page of its own: a bot
+ * holds an account, and its name is claimed out of the same namespace a
+ * person's is. So `?bot=RPSFish` and `?user=RPSFish` *cannot* name two
+ * different pages, and accepting both is what keeps that true for somebody who
+ * guessed the other spelling — without a second namespace behind it, which is
+ * the thing that would make the two names come apart.
+ *
+ * `user` wins when an address somehow carries both. It is already malformed at
+ * that point, and the spelling this site writes is the one to believe.
+ */
+export const playerHandle = (params: { user?: string; bot?: string }): string =>
+  params.user ?? params.bot ?? '';
 
 /**
  * One run's page, for the same reason.

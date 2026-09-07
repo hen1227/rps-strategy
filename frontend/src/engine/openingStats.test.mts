@@ -3,9 +3,11 @@ import { describe, it } from 'node:test';
 
 import {
   SHARE_IS_MEANINGFUL_AT,
+  arrowWeights,
   formatShare,
   hasEnoughGames,
   openingScoreline,
+  type OpeningStatsExploredMove,
   type OpeningStatsLine,
 } from './openingStats';
 
@@ -63,5 +65,34 @@ describe('hasEnoughGames', () => {
     assert.equal(hasEnoughGames(SHARE_IS_MEANINGFUL_AT - 1), false);
     assert.equal(hasEnoughGames(SHARE_IS_MEANINGFUL_AT), true);
     assert.equal(hasEnoughGames(0), false);
+  });
+});
+
+describe('arrowWeights', () => {
+  const move = (games: number): OpeningStatsExploredMove => ({
+    move: 'd2-c3',
+    games,
+    share: 0,
+    shareOfAll: 0,
+    redWins: 0,
+    blueWins: 0,
+    draws: 0,
+  });
+
+  it('scales against the most played move, not against every game', () => {
+    // A board where every continuation is rare still has a commonest one, and
+    // that is what the thickest arrow has to mean. Scaling against 1 would
+    // draw all five of these almost invisibly.
+    assert.deepEqual(arrowWeights([move(4), move(2), move(1)]), [1, 0.5, 0.25]);
+  });
+
+  it('draws a lone move at full weight', () => {
+    // It is the only thing anybody did, so it is the most played.
+    assert.deepEqual(arrowWeights([move(1)]), [1]);
+  });
+
+  it('has nothing to scale when nothing was played', () => {
+    assert.deepEqual(arrowWeights([]), []);
+    assert.deepEqual(arrowWeights([move(0), move(0)]), [0, 0]);
   });
 });

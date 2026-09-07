@@ -470,15 +470,6 @@ export default function AccountsPanel({ admin }: AccountsPanelProps) {
           ))}
         </View>
       )}
-      <Text style={adminStyles.help}>
-        Restricting is the proportionate answer and is where most incidents should end: a mute
-        stops chat and challenges, and the two ladder bars leave somebody able to play. The
-        two buttons on the right are the ends of the scale. Anonymizing removes the person,
-        not their games — an account that has played is stripped and disabled rather than
-        deleted, because the games belong to both players, and its name is rewritten inside
-        every stored record. Deleting removes the rows instead, and hands every opponent
-        their rating back.
-      </Text>
     </Panel>
   );
 }

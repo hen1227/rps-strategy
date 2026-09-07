@@ -68,6 +68,21 @@ export interface BoardLayoutOptions {
    * a proportion.
    */
   narrowChrome?: number;
+  /** Size a scrollable narrow board by width, without reserving viewport height. */
+  narrowFit?: 'viewport' | 'width';
+  /**
+   * Horizontal space taken by the page's padding and by anything drawn *beside*
+   * the board on a narrow screen.
+   *
+   * The default is the analysis screen's, which is where this number started
+   * life: its board shares a row with the eval bar, so it owes that bar's width
+   * and the gap on top of the page padding. Every other screen inherited the
+   * allowance along with the expression, and the ones with nothing beside the
+   * board — the live game — were paying about 38px for a bar they do not draw.
+   * On a phone the board is bounded by width and nothing else, so that was 38px
+   * straight off the board's edge and about 4px off every tile.
+   */
+  narrowMargin?: number;
   /**
    * The smallest the board may be drawn. Per screen because it was measured per
    * screen: the live board can go smaller than the analysis board because it
@@ -86,9 +101,9 @@ export interface BoardLayout {
 /**
  * The board's edge length for this viewport.
  *
- * Narrow screens stack, so the board is bounded by a share of the height and
- * the full width minus its margins. Wide screens put panels beside it, so it
- * is bounded by what those panels leave.
+ * Narrow screens stack and use the width minus margins. By default they also
+ * reserve room within the viewport height; scrollable views can opt out with
+ * `narrowFit: 'width'`. Wide screens leave room for the panels beside the board.
  */
 export const useBoardLayout = ({
   sidePanel = 440,
@@ -96,6 +111,8 @@ export const useBoardLayout = ({
   below = 0,
   narrowHeightShare = 0.5,
   narrowChrome,
+  narrowFit = 'viewport',
+  narrowMargin = 58,
   minimum = 230,
 }: BoardLayoutOptions = {}): BoardLayout => {
   const { height, width } = useSettledDimensions();
@@ -106,12 +123,14 @@ export const useBoardLayout = ({
       minimum,
       Math.min(
         MAX_BOARD,
-        isWide ? width - sidePanel : width - 58,
+        isWide ? width - sidePanel : width - narrowMargin,
         isWide
           ? height - chrome - below
-          : narrowChrome === undefined
-            ? height * narrowHeightShare
-            : height - narrowChrome,
+          : narrowFit === 'width'
+            ? MAX_BOARD
+            : narrowChrome === undefined
+              ? height * narrowHeightShare
+              : height - narrowChrome,
       ),
     ),
   );

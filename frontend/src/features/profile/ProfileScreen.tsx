@@ -7,9 +7,11 @@ import { failureMessage } from '@/errors';
 import { relativeTime } from '@/features/bots/relativeTime';
 import GameHistoryPanel from '@/features/game/GameHistoryPanel';
 import { links, shareURL } from '@/navigation/links';
+import { up } from '@/navigation/upFrom';
 import { playerProfile, type PlayerProfilePage } from '@/store/api/players';
 import { useGameStore } from '@/store/gameStore';
 import { colors, contentWidth, radius, space, type } from '@/theme';
+import BackLink from '@/ui/BackLink';
 import CopyLinkButton from '@/ui/CopyLinkButton';
 import ScreenShell from '@/ui/ScreenShell';
 import TitleTag from '@/ui/TitleTag';
@@ -115,6 +117,7 @@ export default function ProfileScreen({ handle, settled }: ProfileScreenProps) {
   if (!settled || loading) {
     return (
       <ScreenShell width={contentWidth.standard}>
+        <BackLink href={up.player.href} label={up.player.label} />
         <Panel>
           <Text style={styles.note}>Loading…</Text>
         </Panel>
@@ -125,6 +128,7 @@ export default function ProfileScreen({ handle, settled }: ProfileScreenProps) {
   if (notFound) {
     return (
       <ScreenShell width={contentWidth.reading}>
+        <BackLink href={up.player.href} label={up.player.label} />
         <Panel>
           <SectionHeading eyebrow="PLAYER" title="No such player" />
           <Text style={styles.note}>
@@ -141,6 +145,7 @@ export default function ProfileScreen({ handle, settled }: ProfileScreenProps) {
   if (error || !profile) {
     return (
       <ScreenShell width={contentWidth.reading}>
+        <BackLink href={up.player.href} label={up.player.label} />
         <Panel>
           <SectionHeading eyebrow="PLAYER" title="Could not load" />
           <Banner message={error ?? 'That player could not be loaded.'} tone="error" />
@@ -160,6 +165,13 @@ export default function ProfileScreen({ handle, settled }: ProfileScreenProps) {
 
   return (
     <ScreenShell width={contentWidth.standard}>
+      {/*
+        The same control in the same corner as everywhere else, and this page
+        needs it more than most: it is reached from a name on the ladder, from a
+        row of somebody's game history, or from a link somebody pasted, and the
+        sidebar lights nothing up for it because a player is not a section.
+      */}
+      <BackLink href={up.player.href} label={up.player.label} />
       <Panel>
         <View style={styles.identity}>
           <View style={styles.nameBlock}>

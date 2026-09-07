@@ -20,6 +20,7 @@ import { useWideScreen } from '@/hooks/useBoardLayout';
 import { useLobbyGate, useQueueCall } from '@/hooks/useQueueCall';
 import { links } from '@/navigation/links';
 import { useGameStore } from '@/store/gameStore';
+import { updatePausedReason } from '@/store/queueSelectors';
 import { useReviewHandoff } from '@/store/reviewHandoff';
 import {
   hasCustomPosition,
@@ -73,6 +74,9 @@ export default function PlayOnlineScreen() {
   const declineChallenge = useGameStore((state) => state.declineChallenge);
   const cancelChallenge = useGameStore((state) => state.cancelChallenge);
   const gameState = useGameStore((state) => state.gameState);
+  // Read for its sentence only. Whether anything is paused at all is the gate's
+  // answer below, so the two cannot disagree about it.
+  const serverUpdate = useGameStore((state) => state.serverUpdate);
   const accountId = useGameStore((state) => state.accountId);
   const defaultTimeControl = useGameStore((state) => state.defaultTimeControl);
 
@@ -200,7 +204,7 @@ export default function PlayOnlineScreen() {
                         <PrimaryButton
                           accessibilityLabel={`Accept the challenge from ${from}`}
                           compact
-                          disabled={gate.atBoard}
+                          disabled={gate.atBoard || gate.paused}
                           label="ACCEPT"
                           loading={accepting}
                           onPress={() => acceptChallenge(challenge.id)}
@@ -347,13 +351,15 @@ export default function PlayOnlineScreen() {
                               : `Play ${mode.name} online`
                           }
                           compact
-                          disabled={gate.atBoard || Boolean(outgoingChallenge)}
+                          disabled={gate.atBoard || gate.paused || Boolean(outgoingChallenge)}
                           label={
-                            isConnected
-                              ? gate.needsAccount
-                                ? 'PLAY CASUAL ▶'
-                                : 'PLAY ▶'
-                              : 'CONNECTING'
+                            gate.paused
+                              ? 'PAUSED'
+                              : isConnected
+                                ? gate.needsAccount
+                                  ? 'PLAY CASUAL ▶'
+                                  : 'PLAY ▶'
+                                : 'CONNECTING'
                           }
                           onPress={() => joinQueue(mode.id)}
                         />
@@ -459,13 +465,15 @@ export default function PlayOnlineScreen() {
                           ? 'Find a match'
                           : 'Post this game to the lobby'
                     }
-                    disabled={gate.atBoard || gate.seekTaken}
+                    disabled={gate.atBoard || gate.seekTaken || gate.paused}
                     label={
-                      namedOpponent
-                        ? `CHALLENGE ${namedOpponent.toUpperCase()} ▶`
-                        : setupIsPlainSearch
-                          ? 'FIND A GAME ▶'
-                          : 'POST THIS GAME ▶'
+                      gate.paused
+                        ? 'PAUSED FOR AN UPDATE'
+                        : namedOpponent
+                          ? `CHALLENGE ${namedOpponent.toUpperCase()} ▶`
+                          : setupIsPlainSearch
+                            ? 'FIND A GAME ▶'
+                            : 'POST THIS GAME ▶'
                     }
                     onPress={() => {
                       const sent = namedOpponent
@@ -483,11 +491,13 @@ export default function PlayOnlineScreen() {
                     different headings is how a panel stops being read at all.
                   */}
                   <Text style={styles.actionHint}>
-                    {namedOpponent
-                      ? 'It waits ten minutes for them to answer.'
-                      : setupIsPlainSearch
-                        ? 'You go straight into matchmaking.'
-                        : 'It sits on the open board for ten minutes, and pairs you at once with anybody waiting for the same game.'}
+                    {gate.paused
+                      ? updatePausedReason(serverUpdate?.note)
+                      : namedOpponent
+                        ? 'It waits ten minutes for them to answer.'
+                        : setupIsPlainSearch
+                          ? 'You go straight into matchmaking.'
+                          : 'It sits on the open board for ten minutes, and pairs you at once with anybody waiting for the same game.'}
                   </Text>
                   {gate.needsAccount ? (
                     <Text style={styles.actionHint}>

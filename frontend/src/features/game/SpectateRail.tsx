@@ -276,8 +276,9 @@ function SeriesRail({
     <View style={styles.seriesFrame}>
     <View style={styles.railRow}>
       <View style={isWide ? styles.railCopy : styles.railCopyStacked}>
-        <Text style={styles.eyebrow}>BOT SERIES</Text>
-        <Text style={styles.railTitle} numberOfLines={1}>
+        {isWide && <Text style={styles.eyebrow}>BOT SERIES</Text>}
+        <Text style={[styles.railTitle, !isWide && styles.railTitleCompact]} numberOfLines={1}>
+          {!isWide && <Text style={[styles.eyebrow, styles.eyebrowCompact]}>BOT SERIES · </Text>}
           {seriesProgressLabel(series)}
         </Text>
         <SeriesMeter played={played} position={series.gameNumber} total={series.totalGames} />
@@ -444,6 +445,8 @@ const styles = StyleSheet.create({
     letterSpacing: 1.1,
   },
   railTitle: { color: colors.textStrong, fontSize: 13, fontWeight: '900' },
+  eyebrowCompact: { fontSize: 8, letterSpacing: 0.6 },
+  railTitleCompact: { fontSize: 12 },
   railCount: { color: colors.textMuted, fontSize: 11, fontWeight: '700' },
 
   meter: {

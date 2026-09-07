@@ -9,7 +9,11 @@ import type {
   OpeningNamingInput,
   OpeningNodeResponse,
 } from '@/engine/openingBook';
-import type { OpeningCohort, OpeningStatsNode } from '@/engine/openingStats';
+import type {
+  OpeningSegment,
+  OpeningStatsExplored,
+  OpeningStatsNode,
+} from '@/engine/openingStats';
 import type { ModeID } from '@/types/game';
 
 const request = apiClient('opening-book server');
@@ -167,14 +171,36 @@ export const browseOpeningNames = (
  */
 export const getOpeningStats = (
   modeId: ModeID,
-  options: { cohort?: OpeningCohort; line?: OpeningLine } = {},
+  options: { segments?: readonly OpeningSegment[]; line?: OpeningLine } = {},
 ) => {
   const parameters = new URLSearchParams();
-  if (options.cohort) parameters.set('cohort', options.cohort);
+  if (options.segments?.length) parameters.set('segments', options.segments.join(','));
   if (options.line?.length) parameters.set('line', options.line.join(','));
   const query = parameters.toString();
   return request<OpeningStatsNode>(
     `/api/openings/${modePath(modeId)}/stats${query ? `?${query}` : ''}`,
     { what: 'Loading what people play' },
+  );
+};
+
+/**
+ * What happened from one board.
+ *
+ * The line is sent, not a position key: the server replays it, because the
+ * rules live there and a key computed here is one it could not check. That
+ * also means two move orders to the same board come back with the same
+ * numbers, which is the whole point of the explorer.
+ */
+export const exploreOpeningPosition = (
+  modeId: ModeID,
+  options: { segments?: readonly OpeningSegment[]; line?: OpeningLine } = {},
+) => {
+  const parameters = new URLSearchParams();
+  if (options.segments?.length) parameters.set('segments', options.segments.join(','));
+  if (options.line?.length) parameters.set('line', options.line.join(','));
+  const query = parameters.toString();
+  return request<OpeningStatsExplored>(
+    `/api/openings/${modePath(modeId)}/explore${query ? `?${query}` : ''}`,
+    { what: 'Reading this position' },
   );
 };

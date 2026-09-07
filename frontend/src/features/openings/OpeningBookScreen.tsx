@@ -30,7 +30,7 @@ import {
   walkOpeningLine,
   type OpeningStep,
 } from '@/engine/openingLine';
-import type { OpeningCohort, OpeningStatsNode } from '@/engine/openingStats';
+import type { OpeningStatsNode } from '@/engine/openingStats';
 import { failureMessage } from '@/errors';
 import EvalBar, { EVAL_BAR_WIDTH, formatScore } from '@/features/analysis/EvalBar';
 import MiniBoard from '@/features/board/MiniBoard';
@@ -48,14 +48,14 @@ import { useGameStore } from '@/store/gameStore';
 import { colors, contentWidth, radius, space } from '@/theme';
 import type { ModeDefinition, ModeID } from '@/types/game';
 import ScreenShell from '@/ui/ScreenShell';
+import TabBar from '@/ui/TabBar';
 import { Badge, Banner, GhostButton, Panel } from '@/ui/primitives';
 
-import CertifiedOpenings from './CertifiedOpenings';
 import CuratorPanel from './CuratorPanel';
 import NameIndexPanel from './NameIndexPanel';
 import MoveCard, { MOVE_CARD_GAP, moveCardWidthFor } from './MoveCard';
 import NamePanel from './NamePanel';
-import PlayStatsPanel from './PlayStatsPanel';
+import ExplorerLink from './ExplorerLink';
 import { TurnDot, forcedLabel, redScore, sideOf, ui } from './openingsUi';
 import { useOpeningCurator } from './useOpeningCurator';
 
@@ -242,13 +242,11 @@ export default function OpeningBookScreen() {
   const [studioOpen, setStudioOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  // What people play, which is a separate request from the book: it is
-  // compiled by the server on its own schedule and a mode can have one without
-  // the other. A 404 means no compile has run, which the panel words
-  // differently from a compile that found no games.
-  const [cohort, setCohort] = useState<OpeningCohort>('human');
+  // One figure from the statistics, for the card that points at the explorer.
+  // Fetched here rather than there because the card is on this page and the
+  // number is what makes somebody click it; the explorer asks its own,
+  // per-position questions when they arrive.
   const [stats, setStats] = useState<OpeningStatsNode | null>(null);
-  const [statsMissing, setStatsMissing] = useState(false);
   // Boards are drawn at a size in points, so the grid has to be measured
   // rather than flexed. Zero until the first layout, which is also what the
   // build-time render reports — see `useSettled` for why that matters.
@@ -349,22 +347,22 @@ export default function OpeningBookScreen() {
     if (!settled) return;
     let cancelled = false;
     setStats(null);
-    getOpeningStats(modeId, { cohort })
+    getOpeningStats(modeId)
       .then((result) => {
-        if (cancelled) return;
-        setStats(result);
-        setStatsMissing(false);
+        if (!cancelled) setStats(result);
       })
       .catch((requestError) => {
-        if (cancelled) return;
-        if (requestError instanceof ApiError && requestError.status === 404) {
-          setStatsMissing(true);
-        } else setError(failureMessage(requestError));
+        // A mode with no compile yet leaves the card on its generic wording.
+        // Nothing on this page depends on the numbers, so a failure here is
+        // not worth a banner over the book.
+        if (!cancelled && !(requestError instanceof ApiError && requestError.status === 404)) {
+          setError(failureMessage(requestError));
+        }
       });
     return () => {
       cancelled = true;
     };
-  }, [cohort, modeId, settled]);
+  }, [modeId, settled]);
 
   // Every board on the page comes from replaying the line locally, so they are
   // all drawn before the server has said anything about the position.
@@ -528,32 +526,20 @@ export default function OpeningBookScreen() {
           )}
         </View>
 
-        <View style={styles.modeTabs}>
-          {tabs.map((candidate) => (
-            <Pressable
-              accessibilityRole="tab"
-              accessibilityState={{ selected: candidate.id === modeId }}
-              key={candidate.id}
-              onPress={() => chooseMode(candidate.id)}
-              style={({ pressed }) => [
-                styles.modeTab,
-                candidate.id === modeId && styles.modeTabActive,
-                pressed && ui.pressed,
-              ]}
-            >
-              <Text
-                style={[styles.modeTabCode, candidate.id === modeId && styles.modeTabCodeActive]}
-              >
-                {candidate.shortCode ?? candidate.id}
-              </Text>
-              <Text
-                style={[styles.modeTabName, candidate.id === modeId && styles.modeTabNameActive]}
-              >
-                {candidate.name}
-              </Text>
-            </Pressable>
-          ))}
-        </View>
+        <TabBar
+          accessibilityLabel="Game mode"
+          // `fill`: the hand-rolled row these replaced stretched its tabs to
+          // share the width, and at three modes that is what reads as one
+          // control rather than three buttons.
+          fill
+          onChange={chooseMode}
+          options={tabs.map((candidate) => ({
+            value: candidate.id,
+            label: candidate.name,
+            eyebrow: candidate.shortCode ?? candidate.id,
+          }))}
+          value={modeId}
+        />
 
         <Banner message={error} onDismiss={() => setError(null)} tone="error" />
         <Banner message={curator.error} onDismiss={curator.dismissError} tone="error" />
@@ -657,22 +643,6 @@ export default function OpeningBookScreen() {
                 </View>
               </View>
             </Panel>
-
-            {/* The certified openings are the page's headline now, in place of
-                a "featured" strip that followed the best three lines a fixed
-                twelve plies whether or not the search had separated the moves
-                along them. */}
-            {line.length === 0 && (
-              <CertifiedOpenings
-                certainty={book.certainty}
-                mode={mode}
-                modeId={modeId}
-                nameFor={naming.nameFor}
-                onOpen={setLine}
-                openings={book.certified ?? []}
-                titleFor={naming.titleFor}
-              />
-            )}
 
             {/* The main line stays, one rung down: it is the engine's best
                 continuation regardless of how sure it is, which is still worth
@@ -784,15 +754,11 @@ export default function OpeningBookScreen() {
               suggesting={suggesting}
             />
 
-            <PlayStatsPanel
-              cohort={cohort}
-              missing={statsMissing}
-              mode={mode}
-              modeId={modeId}
-              onCohort={setCohort}
-              onOpen={setLine}
-              stats={stats}
-            />
+            {/* What people *play* is a different claim from what the engine
+                recommends, and it wants a board you can move pieces on rather
+                than a section at the foot of a six-screen page. It has its own
+                one; this is the door. */}
+            <ExplorerLink line={line} modeId={modeId} stats={stats} />
 
             <NameIndexPanel modeId={modeId} onOpenLine={setLine} />
           </>
@@ -844,24 +810,6 @@ const styles = StyleSheet.create({
   curatorSwitchOn: { borderColor: colors.goldBorder, backgroundColor: colors.goldSurfaceDeep },
   curatorSwitchText: { color: colors.textFaint, fontSize: 8, fontWeight: '900', letterSpacing: 1 },
   curatorSwitchTextOn: { color: colors.goldBright },
-
-  modeTabs: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  modeTab: {
-    minWidth: 126,
-    flexGrow: 1,
-    flexBasis: 0,
-    paddingHorizontal: 13,
-    paddingVertical: 10,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.medium,
-    backgroundColor: colors.surface,
-  },
-  modeTabActive: { borderColor: colors.accentBorder, backgroundColor: colors.accentSurfaceQuiet },
-  modeTabCode: { color: colors.textFaint, fontSize: 8, fontWeight: '900', letterSpacing: 1 },
-  modeTabCodeActive: { color: colors.accentBright },
-  modeTabName: { color: colors.textMuted, fontSize: 12, fontWeight: '800', marginTop: 2 },
-  modeTabNameActive: { color: colors.textStrong },
 
   loadingState: { alignItems: 'center', justifyContent: 'center', gap: 10, paddingVertical: 70 },
   loadingText: { color: colors.textMuted, fontSize: 12 },

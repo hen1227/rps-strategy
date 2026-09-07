@@ -1,9 +1,9 @@
 import { failureMessage } from '@/errors';
 import { useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import DiscordSignInButton from './DiscordSignInButton';
-import { Banner, GhostButton, LabeledInput, Panel, PrimaryButton, SectionHeading } from '@/ui/primitives';
+import { Banner, LabeledInput, Panel, PrimaryButton, SectionHeading } from '@/ui/primitives';
 import { useGameStore } from '@/store/gameStore';
 import { colors } from '@/theme';
 
@@ -39,12 +39,7 @@ export default function AccountSignInPanel() {
   return (
     <Panel tone="accent">
       <SectionHeading eyebrow="ACCOUNT" title="Sign in with Discord" />
-      <Text style={styles.help}>
-        Everything this browser has already earned comes with you: your rating, your record, and
-        every game you have played. Signing in is also what unlocks ranked games.
-      </Text>
-
-      <View style={styles.actions}>
+      <View style={styles.discordAction}>
         <DiscordSignInButton />
       </View>
 
@@ -82,10 +77,17 @@ export default function AccountSignInPanel() {
           </View>
         </View>
       ) : (
-        <GhostButton
-          label="I have an older account with a password"
+        // A footnote rather than a second button. Everyone it is for already
+        // knows they have a password; anybody else reading this panel should
+        // see one way in, not a choice between two.
+        <Pressable
+          accessibilityRole="button"
+          hitSlop={10}
           onPress={() => setShowPasswordForm(true)}
-        />
+          style={({ pressed }) => [styles.legacyLink, pressed && styles.legacyLinkPressed]}
+        >
+          <Text style={styles.legacyLinkText}>I have an older account with a password</Text>
+        </Pressable>
       )}
     </Panel>
   );
@@ -93,6 +95,17 @@ export default function AccountSignInPanel() {
 
 const styles = StyleSheet.create({
   help: { color: colors.textMuted, fontSize: 11, lineHeight: 17, marginTop: 8 },
+  discordAction: { marginTop: 14 },
+  legacyLink: { alignSelf: 'center', marginTop: 16, paddingVertical: 2 },
+  legacyLinkPressed: { opacity: 0.7 },
+  // Muted and small, but not dimmer than that: it is still the only door left
+  // for the accounts that need it, and it has to stay readable.
+  legacyLinkText: {
+    color: colors.textMuted,
+    fontSize: 10,
+    lineHeight: 14,
+    textDecorationLine: 'underline',
+  },
   actions: {
     flexDirection: 'row',
     flexWrap: 'wrap',

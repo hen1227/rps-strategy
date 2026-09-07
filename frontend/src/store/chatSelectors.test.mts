@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { belongsToChatRoom, chatRoomIdOf, withChatMessage } from './chatSelectors';
+import {
+  belongsToChatRoom,
+  chatRoomIdOf,
+  chatRoomScopeOf,
+  withChatMessage,
+} from './chatSelectors';
 import type { ChatMessage } from '@/types/protocol';
 
 const said = (id: string, roomId: string | undefined, gameId: string): ChatMessage => ({
@@ -26,10 +31,32 @@ describe('chatRoomIdOf', () => {
   });
 });
 
+describe('chatRoomScopeOf', () => {
+  it('takes the server at its word', () => {
+    assert.equal(chatRoomScopeOf('tournament', 'engine-cup', 'game-2'), 'tournament');
+    // Said even when the room is this one game, which is what the server sends
+    // for an ordinary board.
+    assert.equal(chatRoomScopeOf('game', 'game-2', 'game-2'), 'game');
+  });
+
+  it('reads a room bigger than the game as a series when the server does not say', () => {
+    // The only thing that spanned more than one game before events did.
+    assert.equal(chatRoomScopeOf(undefined, 'series-1', 'game-2'), 'series');
+  });
+
+  it('falls back to the game itself', () => {
+    assert.equal(chatRoomScopeOf(undefined, 'game-2', 'game-2'), 'game');
+    assert.equal(chatRoomScopeOf(undefined, null, null), 'game');
+  });
+});
+
 describe('belongsToChatRoom', () => {
   it('accepts a message from another game of the same room', () => {
     // The board that just finished, talking to the board now being played.
     assert.equal(belongsToChatRoom(said('a', 'series-1', 'game-1'), 'series-1'), true);
+    // And one match of a bots-only event talking to another, played at the
+    // same time rather than after it.
+    assert.equal(belongsToChatRoom(said('b', 'engine-cup', 'game-7'), 'engine-cup'), true);
   });
 
   it('rejects a message from an unrelated game', () => {

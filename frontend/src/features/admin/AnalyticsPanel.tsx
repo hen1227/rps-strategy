@@ -238,8 +238,7 @@ export default function AnalyticsPanel({ admin }: AnalyticsPanelProps) {
         */}
         <Text style={adminStyles.help}>
           Red has won {stored?.games.redWins ?? 0}, Blue {stored?.games.blueWins ?? 0}, drawn{' '}
-          {stored?.games.draws ?? 0}. A persistent gap between the two colours is the
-          first-move advantage showing up; a small one is noise.
+          {stored?.games.draws ?? 0}
         </Text>
 
         {stored?.daily?.length ? (

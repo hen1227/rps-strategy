@@ -29,7 +29,7 @@ const MODE_NAMES: Record<string, string> = {
 
 const MODE_FEATURES: Record<string, ModeFeature[]> = {
   V5: ['territory'],
-  V6: ['no_repetition_draw', 'stalemate_loses'],
+  V6: ['stalemate_loses'],
 };
 
 const MODE_OPENINGS: Record<string, string[]> = {

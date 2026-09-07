@@ -11,6 +11,7 @@ import {
   formatWait,
   lobbyGate,
   queueCallState,
+  updatePausedReason,
   waitingPresence,
   type QueueSource,
 } from './queueSelectors.ts';
@@ -50,6 +51,7 @@ const emptySource = (): QueueSource => ({
   atOwnBoard: false,
   pushLive: false,
   canOfferAlerts: true,
+  updating: false,
   nowMs: NOW,
 });
 
@@ -195,6 +197,40 @@ test('every call kind has usable copy', () => {
   }
 });
 
+// A search cannot end while the server is draining: pairing has stopped for the
+// duration. A card counting up as though a game might arrive is the state
+// somebody sits in for the whole of a deploy and then loses without ever being
+// told why, so the wait says what it is waiting on.
+test('a drain says the search is paused rather than counting up', () => {
+  const call = queueCallState({ ...emptySource(), queue: searching(45_000), updating: true });
+  assert.equal(call?.kind, 'paused_for_update');
+  assert.equal(call?.offerAlerts, false);
+});
+
+// A posted game is the same wait: nobody can take it while the board is not
+// pairing. It keeps its id, because cancelling it is still what the button does.
+test('a drain pauses a posted game too, without losing the seek', () => {
+  const call = queueCallState({
+    ...emptySource(),
+    outgoingChallenge: openChallenge(),
+    updating: true,
+  });
+  assert.equal(call?.kind, 'paused_for_update');
+  assert.equal(call?.challengeId, 'post-1');
+});
+
+// Losing the socket still outranks it. Both are stopped waits, and the one the
+// player can do something about — reconnecting — is the more immediate fact.
+test('a dead socket outranks a drain', () => {
+  const call = queueCallState({
+    ...emptySource(),
+    queue: searching(),
+    connectionStatus: 'disconnected',
+    updating: true,
+  });
+  assert.equal(call?.kind, 'reconnecting');
+});
+
 /* ------------------------------------------------------------------ gate -- */
 
 const gateSource = (overrides: Partial<Parameters<typeof lobbyGate>[0]> = {}) => ({
@@ -203,6 +239,7 @@ const gateSource = (overrides: Partial<Parameters<typeof lobbyGate>[0]> = {}) =>
   outgoingChallenge: null,
   queue: idleQueue(),
   signedIn: true,
+  updating: false,
   ...overrides,
 });
 
@@ -238,11 +275,34 @@ test('being signed in asks for nothing', () => {
   assert.equal(lobbyGate(gateSource()).needsAccount, false);
 });
 
-test('the three reasons are independent of one another', () => {
+// A drain is not a fact about this player: their socket is up and the board
+// they are already at is unaffected. What has stopped is pairing, so the reason
+// is its own flag rather than a fourth thing folded into `atBoard`.
+test('a drain pauses new games without putting anybody at a board', () => {
+  const paused = lobbyGate(gateSource({ updating: true }));
+  assert.equal(paused.paused, true);
+  assert.equal(paused.atBoard, false);
+  assert.equal(paused.seekTaken, false);
+});
+
+test('the four reasons are independent of one another', () => {
   const busyGuest = lobbyGate(
     gateSource({ signedIn: false, atOwnBoard: true, queue: searching() }),
   );
-  assert.deepEqual(busyGuest, { atBoard: true, seekTaken: true, needsAccount: true });
+  assert.deepEqual(busyGuest, {
+    atBoard: true,
+    paused: false,
+    seekTaken: true,
+    needsAccount: true,
+  });
+});
+
+// The note is the half of this sentence that says how long it is for, and the
+// fallback is what stops "paused" reading as broken when there is no note.
+test('the paused reason carries the administrator sentence, or stands without one', () => {
+  assert.ok(updatePausedReason('Back in two minutes.').startsWith('Back in two minutes.'));
+  assert.ok(updatePausedReason('   ').includes('The server is restarting.'));
+  assert.ok(updatePausedReason().includes('New games are paused'));
 });
 
 /* ---------------------------------------------------------------- board -- */

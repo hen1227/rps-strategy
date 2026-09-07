@@ -656,6 +656,7 @@ const ADJUDICATED_BY_A_MOVE = new Set<string>([
   'corner',
   'repetition',
   'stalemate',
+  'no_capture',
   'move_limit',
 ]);
 

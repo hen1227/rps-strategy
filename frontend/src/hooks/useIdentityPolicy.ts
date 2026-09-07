@@ -18,6 +18,8 @@ const FALLBACK: IdentityPolicy = Object.freeze({
   maxLength: 32,
   pattern: '^[A-Za-z0-9][A-Za-z0-9_.-]{2,31}$',
   reservedNames: ['Henhen1227', 'webgoatguy'],
+  botMinLength: 2,
+  botPattern: '^[A-Za-z0-9][A-Za-z0-9_.-]{1,31}$',
 });
 
 let cached: IdentityPolicy | null = null;

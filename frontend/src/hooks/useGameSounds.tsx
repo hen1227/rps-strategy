@@ -1,4 +1,4 @@
-import { useAudioPlayer } from 'expo-audio';
+import { setAudioModeAsync, useAudioPlayer } from 'expo-audio';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Platform } from 'react-native';
 
@@ -6,32 +6,44 @@ import { useGameStore } from '@/store/gameStore';
 import type { ActiveGame } from '@/store/types';
 import type { Piece, PlayerColor } from '@/types/game';
 
+// A capture is named for the piece that made it, not the piece that fell,
+// because `canCapture` is a strict cycle — rock takes scissors, scissors takes
+// paper, paper takes rock, in every mode — so the piece removed from the board
+// names its taker exactly. The lookup below is still keyed by the victim,
+// which is what the grid comparison can actually see.
+//
+// Both move sounds are the same clip for now. Keeping them apart here rather
+// than collapsing to one costs nothing and leaves giving the opponent their own
+// voice a one-line change, instead of rebuilding the branch that tells them
+// apart.
 const SOUND_SOURCES = {
-  capturePaper: require('../../assets/sounds/paper_captures.mp3'),
-  captureRock: require('../../assets/sounds/rock_captures.mp3'),
-  captureScissors: require('../../assets/sounds/scissor_captures.mp3'),
-  moveCheck: require('../../assets/sounds/move-check.mp3'),
-  moveOpponent: require('../../assets/sounds/move-opponent.mp3'),
-  moveSelf: require('../../assets/sounds/move-self.mp3'),
-  notify: require('../../assets/sounds/notify.mp3'),
-  promote: require('../../assets/sounds/promote.mp3'),
+  end: require('../../assets/sounds/end.wav'),
+  illegal: require('../../assets/sounds/illegal.wav'),
+  moveOpponent: require('../../assets/sounds/move.wav'),
+  moveSelf: require('../../assets/sounds/move.wav'),
+  notify: require('../../assets/sounds/notify.wav'),
+  paperTakesRock: require('../../assets/sounds/paper_takes_rock.wav'),
+  rockTakesScissors: require('../../assets/sounds/rock_takes_scissors.wav'),
+  scissorsTakesPaper: require('../../assets/sounds/scissors_takes_paper.wav'),
+  start: require('../../assets/sounds/start.wav'),
 };
 
 /** Which sound a transition calls for. */
 export type GameSound =
-  | 'capturePaper'
-  | 'captureRock'
-  | 'captureScissors'
-  | 'moveCheck'
+  | 'end'
+  | 'illegal'
   | 'moveOpponent'
   | 'moveSelf'
   | 'notify'
-  | 'promote';
+  | 'paperTakesRock'
+  | 'rockTakesScissors'
+  | 'scissorsTakesPaper'
+  | 'start';
 
 const CAPTURE_SOUND_BY_PIECE: Partial<Record<Piece, GameSound>> = {
-  Paper: 'capturePaper',
-  Rock: 'captureRock',
-  Scissors: 'captureScissors',
+  Paper: 'scissorsTakesPaper',
+  Rock: 'paperTakesRock',
+  Scissors: 'rockTakesScissors',
 };
 
 const occupiedTileCount = (gameState: ActiveGame) =>
@@ -72,21 +84,22 @@ export const getGameSoundForTransition = (
 ): GameSound | null => {
   if (!next) return null;
 
+  // A game we have not seen before is either one that is just beginning or one
+  // being rejoined, and those want different things said. An untouched board is
+  // the only reliable way to tell them apart from here.
   if (!previous || previous.gameId !== next.gameId) {
-    return 'notify';
+    return next.moveNumber === 0 ? 'start' : 'notify';
   }
 
   if (next.moveNumber <= previous.moveNumber) {
     const didTimeOut = previous.status === 'InProgress' && next.status === 'Finished';
-    return didTimeOut ? 'notify' : null;
+    return didTimeOut ? 'end' : null;
   }
 
-  if (next.status === 'Finished') {
-    // Both goal modes end the same way — a piece arriving somewhere — and both
-    // deserve the arrival sound rather than the ordinary one.
-    const reachedGoal = next.endReason === 'infiltration' || next.endReason === 'corner';
-    return reachedGoal ? 'promote' : 'moveCheck';
-  }
+  // Every ending sounds the same now. Reaching the goal used to be told apart
+  // from the other endings, which is worth restoring if a second ending clip
+  // ever exists: the test was `endReason === 'infiltration' || 'corner'`.
+  if (next.status === 'Finished') return 'end';
 
   const captureSound = captureSoundForTransition(previous, next);
   if (captureSound) return captureSound;
@@ -191,43 +204,97 @@ const usePrimedForBrowser = (players: Record<GameSound, AudioPlayer>) => {
   }, [players]);
 };
 
+/**
+ * Ask the platform to lay these sounds over whatever else is playing.
+ *
+ * Neither platform assumes an app that makes a sound is willing to share. iOS
+ * activates its default `soloAmbient` session on the first `play()`, which
+ * stops whatever the player had on; Android asks for transient audio focus,
+ * which pauses or ducks it. Both are the wrong bargain for a move sound, and
+ * `mixWithOthers` is the mode meant for sound effects: iOS takes the `ambient`
+ * category instead, and Android stops asking for focus at all.
+ *
+ * `playsInSilentMode` is one name for two different switches, so it is answered
+ * per platform. On iOS it is the ring/silent switch, which a game should obey
+ * and which the untouched session already obeyed. On Android it is the ringer
+ * mode, which says nothing about media volume and is left on vibrate by people
+ * who still want to hear the board.
+ *
+ * A browser strikes the same bargain on the page's behalf, and `ambient` is how
+ * it is asked not to: left on `auto`, Safari decides for itself what a page
+ * playing an `<audio>` element is up to and settles on a type that interrupts.
+ * Where the Audio Session API is not implemented — Chrome on Android, today —
+ * there is nothing to ask, and short effects still duck what is playing.
+ */
+const useMixedWithBackgroundAudio = () => {
+  useEffect(() => {
+    if (IS_WEB) {
+      if (typeof navigator === 'undefined') return;
+      const session = (navigator as Navigator & { audioSession?: { type: string } })
+        .audioSession;
+      if (!session) return;
+      try {
+        session.type = 'ambient';
+      } catch {
+        // A browser may know the property without knowing this value.
+      }
+      return;
+    }
+
+    void setAudioModeAsync({
+      interruptionMode: 'mixWithOthers',
+      playsInSilentMode: Platform.OS !== 'ios',
+      allowsRecording: false,
+      shouldPlayInBackground: false,
+    }).catch(() => {
+      // A refused audio mode costs the player their background audio, not the
+      // game, so it is not worth interrupting anything over.
+    });
+  }, []);
+};
+
 const useGameSounds = () => {
   const gameState = useGameStore((state) => state.gameState);
   const playerColor = useGameStore((state) => state.playerColor);
+  const rejectedMoveCount = useGameStore((state) => state.rejectedMoveCount);
   const previousGameState = useRef<ActiveGame | null>(null);
 
-  const capturePaperPlayer = useAudioPlayer(SOUND_SOURCES.capturePaper);
-  const captureRockPlayer = useAudioPlayer(SOUND_SOURCES.captureRock);
-  const captureScissorsPlayer = useAudioPlayer(SOUND_SOURCES.captureScissors);
-  const moveCheckPlayer = useAudioPlayer(SOUND_SOURCES.moveCheck);
+  const endPlayer = useAudioPlayer(SOUND_SOURCES.end);
+  const illegalPlayer = useAudioPlayer(SOUND_SOURCES.illegal);
   const moveOpponentPlayer = useAudioPlayer(SOUND_SOURCES.moveOpponent);
   const moveSelfPlayer = useAudioPlayer(SOUND_SOURCES.moveSelf);
   const notifyPlayer = useAudioPlayer(SOUND_SOURCES.notify);
-  const promotePlayer = useAudioPlayer(SOUND_SOURCES.promote);
+  const paperTakesRockPlayer = useAudioPlayer(SOUND_SOURCES.paperTakesRock);
+  const rockTakesScissorsPlayer = useAudioPlayer(SOUND_SOURCES.rockTakesScissors);
+  const scissorsTakesPaperPlayer = useAudioPlayer(SOUND_SOURCES.scissorsTakesPaper);
+  const startPlayer = useAudioPlayer(SOUND_SOURCES.start);
 
   const players = useMemo<Record<GameSound, AudioPlayer>>(
     () => ({
-      capturePaper: capturePaperPlayer,
-      captureRock: captureRockPlayer,
-      captureScissors: captureScissorsPlayer,
-      moveCheck: moveCheckPlayer,
+      end: endPlayer,
+      illegal: illegalPlayer,
       moveOpponent: moveOpponentPlayer,
       moveSelf: moveSelfPlayer,
       notify: notifyPlayer,
-      promote: promotePlayer,
+      paperTakesRock: paperTakesRockPlayer,
+      rockTakesScissors: rockTakesScissorsPlayer,
+      scissorsTakesPaper: scissorsTakesPaperPlayer,
+      start: startPlayer,
     }),
     [
-      capturePaperPlayer,
-      captureRockPlayer,
-      captureScissorsPlayer,
-      moveCheckPlayer,
+      endPlayer,
+      illegalPlayer,
       moveOpponentPlayer,
       moveSelfPlayer,
       notifyPlayer,
-      promotePlayer,
+      paperTakesRockPlayer,
+      rockTakesScissorsPlayer,
+      scissorsTakesPaperPlayer,
+      startPlayer,
     ],
   );
 
+  useMixedWithBackgroundAudio();
   usePrimedForBrowser(players);
 
   useEffect(() => {
@@ -240,6 +307,14 @@ const useGameSounds = () => {
 
     if (sound) replay(players[sound]);
   }, [gameState, playerColor, players]);
+
+  // A refused move changes no game state at all, so it cannot be heard by
+  // comparing boards the way everything above is. The store counts them
+  // instead, and the count going up is the event.
+  useEffect(() => {
+    if (rejectedMoveCount === 0) return;
+    replay(players.illegal);
+  }, [rejectedMoveCount, players]);
 };
 
 const GameSoundPlayers = () => {

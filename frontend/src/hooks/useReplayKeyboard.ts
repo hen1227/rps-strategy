@@ -18,6 +18,16 @@ export interface ReplayKeyboardOptions {
   onLast: () => void;
   onNext: () => void;
   onPrevious: () => void;
+  /**
+   * Bind only the left and right arrows, leaving the vertical keys alone.
+   *
+   * Every key this hook claims it also `preventDefault`s, and Up, Down, Home
+   * and End are how a keyboard scrolls a page. That is a fair trade on a screen
+   * whose history is the tall thing on it, and a bad one on a screen that is
+   * itself long -- there, taking them means a viewer who presses Down to read
+   * further gets sent to the end of the line instead.
+   */
+  horizontalOnly?: boolean;
 }
 
 // Shared browser keyboard navigation for analysis history, game review, and
@@ -28,6 +38,7 @@ export function useReplayKeyboard({
   onLast,
   onNext,
   onPrevious,
+  horizontalOnly = false,
 }: ReplayKeyboardOptions) {
   useEffect(() => {
     // React Native defines `window` as the global object, so its presence says
@@ -47,14 +58,16 @@ export function useReplayKeyboard({
         return;
       }
 
-      const actions: Record<string, (() => void) | undefined> = {
-        ArrowLeft: onPrevious,
-        ArrowRight: onNext,
-        ArrowUp: onFirst,
-        ArrowDown: onLast,
-        Home: onFirst,
-        End: onLast,
-      };
+      const actions: Record<string, (() => void) | undefined> = horizontalOnly
+        ? { ArrowLeft: onPrevious, ArrowRight: onNext }
+        : {
+            ArrowLeft: onPrevious,
+            ArrowRight: onNext,
+            ArrowUp: onFirst,
+            ArrowDown: onLast,
+            Home: onFirst,
+            End: onLast,
+          };
       const action = actions[event.key];
       if (!action) return;
       event.preventDefault();
@@ -63,7 +76,7 @@ export function useReplayKeyboard({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [enabled, onFirst, onLast, onNext, onPrevious]);
+  }, [enabled, horizontalOnly, onFirst, onLast, onNext, onPrevious]);
 }
 
 export default useReplayKeyboard;

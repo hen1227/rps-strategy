@@ -114,3 +114,21 @@ export interface QueueMiss {
   message: string;
   atUnixMs: number;
 }
+
+/**
+ * A board that was taken away rather than finished, and why.
+ *
+ * A cancelled game is never filed: no result, no rating, no record. That makes
+ * it different from every other way a board leaves the screen, and it is why
+ * this is remembered separately from the game itself. Without it the two
+ * screens that were showing the board are left with nothing to show and nothing
+ * to say — and a spectator is left at an address pointing at a game that no
+ * longer exists and has no record to fall back on.
+ *
+ * Keyed by game id, so it only ever explains its own board.
+ */
+export interface CancelledGame {
+  gameId: string;
+  message: string;
+  atUnixMs: number;
+}

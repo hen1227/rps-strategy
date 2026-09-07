@@ -1,9 +1,14 @@
 // Is this the same position as one we have seen before?
 //
 // One answer, in its own module, because two of them would be two answers to
-// threefold repetition — and because the hand-written rules and the spec
+// the same question — and because the hand-written rules and the spec
 // interpreter both need it, and neither should have to import the other to get
-// it. That import would be a cycle: `interpret.ts` already reads
+// it.
+//
+// Nothing draws on a repeated position at the moment (see `./modeRules`), so
+// the threefold rule this was written for is switched off rather than gone. The
+// key is still built for every position reached, and still has to be the same
+// key the server would build, for the day it is switched back on. That import would be a cycle: `interpret.ts` already reads
 // `analysisGame.ts` for the shape of a game.
 //
 // What counts is exactly what decides legal play: what stands where, whose it

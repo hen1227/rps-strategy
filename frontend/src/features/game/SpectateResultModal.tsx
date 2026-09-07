@@ -15,7 +15,7 @@ import { GhostButton, PrimaryButton } from '@/ui/primitives';
 // underneath you. A result you have to notice for yourself is not a result.
 //
 // So it interrupts, once per game, and every way out of it is a button: back to
-// the board you were watching, back to the lobby, or on to the next game —
+// the board you were watching, return to the lobby, or on to the next game —
 // because "what do I watch now" is the real question at the end of a watched
 // game, and the run or the event is the only thing that knows the answer.
 //
@@ -71,7 +71,7 @@ export default function SpectateResultModal({
       visible={visible}
       footer={
         <>
-          <GhostButton label="Back to lobby" onPress={onReturnToLobby} />
+          <GhostButton label="Return to lobby" onPress={onReturnToLobby} />
           <GhostButton label="View board" onPress={onDismiss} />
           {next ? <PrimaryButton label={next.label} onPress={next.onWatch} /> : null}
         </>

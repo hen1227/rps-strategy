@@ -13,6 +13,7 @@ import { useWideScreen } from '@/hooks/useBoardLayout';
 import { useBotSeries } from '@/hooks/useBotSeries';
 import { useOpenGame } from '@/hooks/useOpenGame';
 import { gameReviewURL, links, seriesURL } from '@/navigation/links';
+import { up } from '@/navigation/upFrom';
 import { useSettledSearchParams } from '@/navigation/useSettledSearchParams';
 import { useGameStore } from '@/store/gameStore';
 import type { BotSeries } from '@/store/api/bots';
@@ -88,7 +89,7 @@ export default function SeriesScreen() {
           shell gives them nothing to say where they are.
         */}
         <PageHeading
-          back={{ label: 'Bots', href: links.bots() }}
+          back={up.series}
           eyebrow="BOT SERIES"
           title="That run is not here"
         />
@@ -118,7 +119,7 @@ export default function SeriesScreen() {
   return (
     <SeriesShell>
       <PageHeading
-        back={{ label: 'Bots', href: links.bots() }}
+        back={up.series}
         detail={`${series.modeId} · ${view.played} game${view.played === 1 ? '' : 's'} played · ${relativeTime(at)}`}
         eyebrow="BOT SERIES"
         title={`${view.firstName} v ${view.secondName}`}

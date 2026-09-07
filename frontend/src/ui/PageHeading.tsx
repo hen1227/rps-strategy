@@ -1,8 +1,8 @@
-import { Link } from 'expo-router';
 import type { ReactNode } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 import type { Href } from 'expo-router';
 
+import BackLink from './BackLink';
 import { colors, space, type } from '@/theme';
 
 // The top of a page that is not a section of its own.
@@ -13,6 +13,11 @@ import { colors, space, type } from '@/theme';
 // A page *underneath* a section is the case that argument does not cover —
 // nothing in the sidebar leads back from the protocol reference to your bots —
 // so these pages carry one line of trail and their own title.
+//
+// The trail is `BackLink`, the same control the board, the review and the bot
+// battle draw in the same corner. It used to be a bare line of faint text here
+// and a `‹` chip there, which is two answers to "how do I leave" that do not
+// look like each other; `navigation/upFrom` is where the destination comes from.
 
 export interface PageHeadingProps {
   eyebrow?: string;
@@ -33,18 +38,7 @@ export default function PageHeading({
 }: PageHeadingProps) {
   return (
     <View style={styles.header}>
-      {back ? (
-        <Link asChild href={back.href}>
-          <Pressable
-            accessibilityLabel={`Back to ${back.label}`}
-            accessibilityRole="link"
-            // One resolved style object: see the note in SidebarNav.
-            style={styles.back}
-          >
-            <Text style={styles.backText}>‹ {back.label}</Text>
-          </Pressable>
-        </Link>
-      ) : null}
+      {back ? <BackLink href={back.href} label={back.label} /> : null}
       <View style={styles.titleRow}>
         <View style={styles.copy}>
           {eyebrow ? <Text style={styles.eyebrow}>{eyebrow}</Text> : null}
@@ -58,9 +52,7 @@ export default function PageHeading({
 }
 
 const styles = StyleSheet.create({
-  header: { gap: space.tight },
-  back: { alignSelf: 'flex-start', paddingVertical: space.tight },
-  backText: { ...type.label, color: colors.textFaint },
+  header: { gap: space.small },
   titleRow: { flexDirection: 'row', alignItems: 'flex-end', gap: space.small },
   copy: { flex: 1, minWidth: 0 },
   eyebrow: { ...type.eyebrow, color: colors.accent, marginBottom: space.hair },

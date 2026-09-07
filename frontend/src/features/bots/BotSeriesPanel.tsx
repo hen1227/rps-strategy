@@ -1,31 +1,34 @@
 import { useCallback, useMemo, useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import BotHistoryFeed from './BotHistoryFeed';
+import BotIcon from './BotIcon';
 import { failureMessage } from '@/errors';
+import { engineElo } from '@/features/live/liveSelectors';
 import { useAdminToken } from '@/hooks/useAdminToken';
 import { useRequestIdentity } from '@/hooks/useRequestIdentity';
 import { links } from '@/navigation/links';
 import {
   abortAdminBotSeries,
   abortBotSeries,
+  botIconUrl,
   startAdminBotSeries,
   startBotSeries,
   type BotSeries,
 } from '@/store/api/bots';
 import { timeControlLabel } from '@/store/setupSelectors';
-import { colors, space, type } from '@/theme';
+import { colors, radius, space, type } from '@/theme';
 import LinkRow from '@/ui/LinkRow';
 import {
   Banner,
+  EmptyState,
   GhostButton,
   LabeledInput,
-  OptionChips,
   Panel,
   PrimaryButton,
   SectionHeading,
 } from '@/ui/primitives';
-import type { ModeDefinition, ModeID, TimeControl } from '@/types/game';
+import type { ModeDefinition, TimeControl } from '@/types/game';
 import type { BotPresence } from '@/types/protocol';
 
 // Pit two engine bots against each other.
@@ -46,6 +49,15 @@ import type { BotPresence } from '@/types/protocol';
 // sensible default, none of them is the decision anybody came here to make, and
 // four labelled fields at the top of a panel read as a form to be filled in
 // rather than a button to be pressed.
+//
+// The two *bots* used to be picked the same way, from two chip rows carrying
+// every online engine's name — directly beneath the list of those same engines,
+// so the page said each name three times and the panel's whole depiction of the
+// run it was about to start was two highlighted words. They are picked on the
+// cards now, and what this panel draws instead is the fight: two portraits with
+// their ratings, facing each other. Which side is which still matters (the first
+// engine opens the first game of every pair), so the slots are labelled and
+// there is a button to exchange them.
 
 /** What the public form may ask for. The server enforces the same numbers. */
 const PUBLIC_MAX_PAIRS = 3;
@@ -86,22 +98,134 @@ const decimal = (value: string, fallback: number) => {
 const clamp = (value: number, low: number, high: number) =>
   Math.min(Math.max(value, low), high);
 
-export interface BotSeriesPanelProps {
-  /** The connected engines to pick two opponents from. */
-  bots: BotPresence[];
-  modes: ModeDefinition[];
+/**
+ * One side of the fight.
+ *
+ * Empty is a real state with a real shape rather than a gap: this panel appears
+ * the moment two engines are online, and a slot nobody has filled has to look
+ * like somewhere an engine goes. Pressing a filled one empties it, which is the
+ * only way to clear a side without scrolling back to its card.
+ */
+function PitSlot({
+  bot,
+  mirrored,
+  mode,
+  onClear,
+  role,
+  stacked,
+}: {
+  bot: BotPresence | null;
+  /**
+   * The two sides are one above the other. `flexBasis` is a *height* on a
+   * column axis, so the side-by-side basis has to be given back or each slot
+   * becomes 220 points tall around a 64-point portrait.
+   */
+  stacked?: boolean;
+  /**
+   * Draw this side facing the other one: portrait at the outer edge, copy
+   * running inward. It is what makes two boxes read as a fight rather than as
+   * two entries in a list.
+   */
+  mirrored?: boolean;
+  mode: ModeDefinition;
+  onClear: () => void;
+  role: 'FIRST' | 'SECOND';
+}) {
+  const align = mirrored ? styles.mirroredText : null;
+  const body = bot ? (
+    <>
+      <BotIcon name={bot.name} size={64} uri={botIconUrl(bot.botId, bot.iconSha256)} />
+      <View style={styles.slotCopy}>
+        <Text style={[styles.slotRoleFilled, align]}>{role}</Text>
+        <Text numberOfLines={1} style={[styles.slotName, align]}>
+          {bot.name}
+        </Text>
+        <Text numberOfLines={1} style={[styles.slotAuthor, align]}>
+          {bot.engineAuthor ? `by ${bot.engineAuthor}` : bot.engineName || 'engine'}
+        </Text>
+        <Text style={[styles.slotRating, align]}>{engineElo(bot, mode.id)}</Text>
+      </View>
+    </>
+  ) : (
+    <>
+      <View style={styles.slotArtEmpty}>
+        <Text style={styles.slotQuery}>?</Text>
+      </View>
+      <View style={styles.slotCopy}>
+        <Text style={[styles.slotRole, align]}>{role}</Text>
+        <Text numberOfLines={1} style={[styles.slotHint, align]}>
+          PRESS VS ON A CARD ABOVE
+        </Text>
+      </View>
+    </>
+  );
+
+  if (!bot) {
+    return (
+      <View
+        style={[
+          styles.slot,
+          styles.slotEmpty,
+          mirrored && styles.slotMirrored,
+          stacked && styles.slotStacked,
+        ]}
+      >
+        {body}
+      </View>
+    );
+  }
+  return (
+    <Pressable
+      accessibilityLabel={`Take ${bot.name} out of the ${role.toLowerCase()} slot`}
+      accessibilityRole="button"
+      onPress={onClear}
+      style={({ pressed }) => [
+        styles.slot,
+        styles.slotFilled,
+        mirrored && styles.slotMirrored,
+        stacked && styles.slotStacked,
+        pressed && styles.pressed,
+      ]}
+    >
+      {body}
+    </Pressable>
+  );
 }
 
-export default function BotSeriesPanel({ bots, modes }: BotSeriesPanelProps) {
+export interface BotSeriesPanelProps {
+  /** The engine on the first side, which opens game one of every pair. */
+  first: BotPresence | null;
+  second: BotPresence | null;
+  /**
+   * How many engines could be entered right now.
+   *
+   * Two slots and a dead START button are not a form, they are a picture of one
+   * — so under two, this panel says why instead of drawing it. The count rather
+   * than a boolean because the sentence needs to tell "nobody is connected"
+   * from "the one connected engine has nobody to play".
+   */
+  available: number;
+  /** The mode the run is played at, chosen once for the page above. */
+  mode: ModeDefinition;
+  /** Exchange the two sides. */
+  onSwap: () => void;
+  onClear: (side: 'first' | 'second') => void;
+}
+
+export default function BotSeriesPanel({
+  first,
+  second,
+  available,
+  mode,
+  onSwap,
+  onClear,
+}: BotSeriesPanelProps) {
   const identity = useRequestIdentity();
   const admin = useAdminToken();
   const [hostFormOpen, setHostFormOpen] = useState(false);
   const [optionsOpen, setOptionsOpen] = useState(false);
   const [draft, setDraft] = useState('');
 
-  const [firstBotId, setFirstBotId] = useState<string | null>(null);
-  const [secondBotId, setSecondBotId] = useState<string | null>(null);
-  const [modeId, setModeId] = useState<ModeID>(modes[0]?.id ?? 'V6');
   const [pairs, setPairs] = useState('2');
   const [plies, setPlies] = useState('3');
   const [seed, setSeed] = useState('');
@@ -109,6 +233,12 @@ export default function BotSeriesPanel({ bots, modes }: BotSeriesPanelProps) {
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Whether the two sides still fit beside each other, measured on the row
+  // itself rather than on the window: this panel sits in a column between the
+  // shell's sidebar and its live rail, and the window is a long way wider than
+  // the space it actually has. Safe against oscillation because the row fills
+  // its parent either way, so the flag cannot change the width it is read from.
+  const [narrow, setNarrow] = useState(false);
   // Bumped after starting or stopping a run, which is how the feed below is told
   // to refetch now rather than on its own timer. The runs themselves are the
   // feed's to hold: this panel is a form, and it kept a second copy of the list
@@ -137,14 +267,14 @@ export default function BotSeriesPanel({ bots, modes }: BotSeriesPanelProps) {
   );
 
   const start = async () => {
-    if (!firstBotId || !secondBotId) return;
+    if (!first || !second) return;
     setBusy(true);
     setError(null);
     try {
       const options = {
-        firstBotId,
-        secondBotId,
-        modeId,
+        firstBotId: first.botId,
+        secondBotId: second.botId,
+        modeId: mode.id,
         pairs: clamp(numeric(pairs, 2), 1, maxPairs),
         openingPlies: clamp(numeric(plies, 3), 0, maxPlies),
         // Passed through as text rather than parsed: the value a person pastes
@@ -174,28 +304,6 @@ export default function BotSeriesPanel({ bots, modes }: BotSeriesPanelProps) {
     }
   };
 
-  // A bot that is mid-game cannot be entered into a new run, and neither can one
-  // that is shutting down — that one is dropped rather than marked, because
-  // unlike a private bot there is nobody, owner included, who can enter it. A
-  // bot whose owner has not opened it to public play is still listed, marked,
-  // because its owner is allowed to enter it and the server is the one that
-  // knows who that is.
-  const idle = useMemo(
-    // `benched` as well as `draining`: the server refuses to start a series
-    // during a scheduled bench, so offering the engines here would be a form
-    // that can only fail.
-    () => bots.filter((bot) => !bot.busy && !bot.draining && !bot.benched),
-    [bots],
-  );
-  const botOptions = useMemo(
-    () =>
-      idle.map((bot) => ({
-        label: bot.allowPublicPlay ? bot.name : `${bot.name} · PRIVATE`,
-        value: bot.botId as string | null,
-      })),
-    [idle],
-  );
-  const enoughBots = idle.length >= 2;
   // Whether the two chosen engines belong to one person, which is what decides
   // whether the run is casual. The server settles it — see sameBotOwner in
   // bot_series.go — and this is the form saying so in advance rather than a
@@ -204,166 +312,198 @@ export default function BotSeriesPanel({ bots, modes }: BotSeriesPanelProps) {
   // The empty check is the whole of the care needed: `ownerUserId` is absent for
   // an engine whose owner the roster does not carry, and two absent owners
   // compared as strings would read as one person owning both.
-  const sameOwner = useMemo(() => {
-    const ownerOf = (botId: string | null) =>
-      bots.find((bot) => bot.botId === botId)?.ownerUserId ?? '';
-    const first = ownerOf(firstBotId);
-    return first !== '' && first === ownerOf(secondBotId);
-  }, [bots, firstBotId, secondBotId]);
-  const canStart =
-    !busy && Boolean(firstBotId) && Boolean(secondBotId) && firstBotId !== secondBotId;
+  const sameOwner =
+    Boolean(first?.ownerUserId) && first?.ownerUserId === second?.ownerUserId;
+  const canStart = !busy && Boolean(first) && Boolean(second) && first !== second;
   const mine = (run: BotSeries) =>
     Boolean(run.requestedByUserId) && run.requestedByUserId === identity.userId;
 
   return (
     <>
-    <Panel style={asHost ? styles.adminPanel : undefined}>
-      <SectionHeading
-        eyebrow={asHost ? 'HOST' : 'ANYBODY'}
-        title="Pit two bots against each other"
-        trailing={
-          admin.bySession ? undefined : (
-            <GhostButton
-              compact
-              label={hostFormOpen || asHost ? 'CLOSE' : 'HOST CONTROLS'}
-              onPress={() => {
-                if (asHost) admin.lock();
-                setHostFormOpen(!hostFormOpen && !asHost);
-              }}
+      <Panel style={asHost ? styles.adminPanel : undefined}>
+        <SectionHeading
+          eyebrow={asHost ? 'HOST' : 'ANYBODY'}
+          title="Pit two engines against each other"
+          trailing={
+            admin.bySession ? undefined : (
+              <GhostButton
+                compact
+                label={hostFormOpen || asHost ? 'CLOSE' : 'HOST CONTROLS'}
+                onPress={() => {
+                  if (asHost) admin.lock();
+                  setHostFormOpen(!hostFormOpen && !asHost);
+                }}
+              />
+            )
+          }
+        />
+
+        {hostFormOpen && !asHost ? (
+          <>
+            {admin.error ? <Banner message={admin.error} tone="error" /> : null}
+            <LabeledInput
+              label="ADMIN TOKEN"
+              onChangeText={setDraft}
+              secureTextEntry
+              value={draft}
             />
-          )
-        }
-      />
-
-      {hostFormOpen && !asHost ? (
-        <>
-          {admin.error ? <Banner message={admin.error} tone="error" /> : null}
-          <LabeledInput
-            label="ADMIN TOKEN"
-            onChangeText={setDraft}
-            secureTextEntry
-            value={draft}
-          />
-          <PrimaryButton
-            disabled={admin.verifying}
-            label="UNLOCK HOST LIMITS"
-            onPress={() => admin.unlock(draft).then((ok) => ok && setDraft(''))}
-          />
-        </>
-      ) : null}
-
-      {error ? <Banner message={error} onDismiss={() => setError(null)} tone="error" /> : null}
-
-      {enoughBots && (
-        <View style={styles.form}>
-          <OptionChips<string | null>
-            label="FIRST BOT"
-            onChange={setFirstBotId}
-            options={botOptions}
-            value={firstBotId}
-          />
-          <OptionChips<string | null>
-            label="SECOND BOT"
-            onChange={setSecondBotId}
-            options={botOptions}
-            value={secondBotId}
-          />
-          <OptionChips<ModeID>
-            label="MODE"
-            onChange={setModeId}
-            options={modes.map((mode) => ({ label: mode.name, value: mode.id }))}
-            value={modeId}
-          />
-
-          {sameOwner ? (
-            <Text style={styles.help}>
-              Both engines have the same owner, so this run is casual — the ladder does
-              not rate a pair of bots one person registered. Pick engines from different
-              owners for a rated run.
-            </Text>
-          ) : null}
-
-          {optionsOpen ? (
-            <View style={styles.fields}>
-              <LabeledInput
-                hint={`Played twice each, colours swapped · max ${maxPairs}`}
-                keyboardType="number-pad"
-                label="PAIRS"
-                onChangeText={setPairs}
-                value={pairs}
-              />
-              <LabeledInput
-                hint={`Random moves both bots start from · max ${maxPlies}`}
-                keyboardType="number-pad"
-                label="OPENING PLIES"
-                onChangeText={setPlies}
-                value={plies}
-              />
-              <LabeledInput
-                hint="Blank picks one"
-                keyboardType="number-pad"
-                label="SEED"
-                onChangeText={setSeed}
-                value={seed}
-              />
-              <LabeledInput
-                hint={`${MIN_MINUTES} is a six-second bullet clock · max ${maxMinutes}`}
-                keyboardType="decimal-pad"
-                label="MINUTES EACH"
-                onChangeText={setMinutes}
-                value={minutes}
-              />
-            </View>
-          ) : null}
-
-          <View style={styles.actions}>
             <PrimaryButton
-              disabled={!canStart}
-              label={sameOwner ? 'START CASUAL SERIES ▶' : 'START SERIES ▶'}
-              onPress={start}
+              disabled={admin.verifying}
+              label="UNLOCK HOST LIMITS"
+              onPress={() => admin.unlock(draft).then((ok) => ok && setDraft(''))}
             />
+          </>
+        ) : null}
+
+        {error ? <Banner message={error} onDismiss={() => setError(null)} tone="error" /> : null}
+
+        {available < 2 ? (
+          <EmptyState
+            detail={
+              available === 1
+                ? 'One engine is free. A run needs two, so wait for another to finish its game or come online.'
+                : 'No engine is free. A run needs two, so wait for one to finish its game or come online.'
+            }
+            title="Not enough free engines"
+          />
+        ) : (
+          <>
+        {/*
+          The fight itself, at the size of the decision. Both slots and the SWAP
+          between them are the same control the cards above are — press VS there
+          to fill a side, press a portrait here to empty one.
+        */}
+        <View
+          onLayout={(event) => setNarrow(event.nativeEvent.layout.width < 520)}
+          style={[styles.pit, narrow && styles.pitStacked]}
+        >
+          <PitSlot
+            bot={first}
+            mode={mode}
+            onClear={() => onClear('first')}
+            role="FIRST"
+            stacked={narrow}
+          />
+          <View style={[styles.versus, narrow && styles.versusStacked]}>
+            <Text style={styles.versusText}>VS</Text>
             <GhostButton
+              accessibilityLabel="Exchange the two engines"
               compact
-              label={
-                optionsOpen
-                  ? 'HIDE OPTIONS'
-                  : `${pairs} PAIRS · ${plies} PLIES · ${timeControlLabel(clock)}`
-              }
-              onPress={() => setOptionsOpen(!optionsOpen)}
+              disabled={!first && !second}
+              label="SWAP"
+              onPress={onSwap}
             />
           </View>
+          {/*
+            Facing inward only while the two are side by side. Stacked, a
+            right-aligned second slot is not a fight, it is one box of text
+            hanging off the wrong edge.
+          */}
+          <PitSlot
+            bot={second}
+            mirrored={!narrow}
+            mode={mode}
+            onClear={() => onClear('second')}
+            role="SECOND"
+            stacked={narrow}
+          />
         </View>
-      )}
 
-      {/*
+        <Text style={styles.summary}>
+          {first && second
+            ? `${mode.name} · ${pairs} pairs, colours swapped each time · ${timeControlLabel(clock)}`
+            : `Pick two engines above. They will play ${mode.name} and the ladder will rate the result.`}
+        </Text>
+
+        {sameOwner ? (
+          <Text style={styles.help}>
+            Both engines have the same owner, so this run is casual — the ladder does
+            not rate a pair of bots one person registered. Pick engines from different
+            owners for a rated run.
+          </Text>
+        ) : null}
+
+        {optionsOpen ? (
+          <View style={styles.fields}>
+            <LabeledInput
+              hint={`Played twice each, colours swapped · max ${maxPairs}`}
+              keyboardType="number-pad"
+              label="PAIRS"
+              onChangeText={setPairs}
+              value={pairs}
+            />
+            <LabeledInput
+              hint={`Random moves both bots start from · max ${maxPlies}`}
+              keyboardType="number-pad"
+              label="OPENING PLIES"
+              onChangeText={setPlies}
+              value={plies}
+            />
+            <LabeledInput
+              hint="Blank picks one"
+              keyboardType="number-pad"
+              label="SEED"
+              onChangeText={setSeed}
+              value={seed}
+            />
+            <LabeledInput
+              hint={`${MIN_MINUTES} is a six-second bullet clock · max ${maxMinutes}`}
+              keyboardType="decimal-pad"
+              label="MINUTES EACH"
+              onChangeText={setMinutes}
+              value={minutes}
+            />
+          </View>
+        ) : null}
+
+        <View style={styles.actions}>
+          <PrimaryButton
+            disabled={!canStart}
+            label={sameOwner ? 'START CASUAL SERIES ▶' : 'START SERIES ▶'}
+            onPress={start}
+          />
+          <GhostButton
+            compact
+            label={
+              optionsOpen
+                ? 'HIDE OPTIONS'
+                : `${pairs} PAIRS · ${plies} PLIES · ${timeControlLabel(clock)}`
+            }
+            onPress={() => setOptionsOpen(!optionsOpen)}
+          />
+        </View>
+          </>
+        )}
+
+        {/*
         Where these runs end up. The standings used to be copied onto this page
         as well, which made a page about starting a run twice as long as the
         run's own scoreboard.
       */}
-      <LinkRow
-        detail="Ranked engine standings, and every game behind them."
-        href={links.leaderboard()}
-        title="The bot ladder"
-      />
-    </Panel>
+        <LinkRow
+          detail="Ranked engine standings, and every game behind them."
+          href={links.leaderboard()}
+          title="The bot ladder"
+        />
+      </Panel>
 
-    {/*
+      {/*
       The same feed the Leaderboard carries, because it is the same question.
       What this page adds is the one thing only it can: a STOP button on a run
       you started, which needs the identity and the admin token this panel is
       already holding.
     */}
-    <BotHistoryFeed
-      emptyDetail="Pick two engines above and press START SERIES."
-      eyebrow="RESULTS"
-      refreshKey={changed}
-      seriesAction={(run) =>
-        String(run.status).toLowerCase() === 'running' && (asHost || mine(run)) ? (
-          <GhostButton compact label="STOP" onPress={() => stop(run)} />
-        ) : null
-      }
-      title="Recent runs"
-    />
+      <BotHistoryFeed
+        emptyDetail="Pick two engines above and press START SERIES."
+        eyebrow="RESULTS"
+        refreshKey={changed}
+        seriesAction={(run) =>
+          String(run.status).toLowerCase() === 'running' && (asHost || mine(run)) ? (
+            <GhostButton compact label="STOP" onPress={() => stop(run)} />
+          ) : null
+        }
+        title="Recent runs"
+      />
     </>
   );
 }
@@ -371,12 +511,69 @@ export default function BotSeriesPanel({ bots, modes }: BotSeriesPanelProps) {
 const styles = StyleSheet.create({
   adminPanel: { borderColor: colors.goldBorder, backgroundColor: colors.goldSurfaceDeep },
   help: { ...type.body, color: colors.textMuted, marginTop: space.small },
-  form: { gap: space.medium, marginTop: space.medium },
-  fields: { flexDirection: 'row', flexWrap: 'wrap', gap: space.medium },
+  summary: { ...type.body, color: colors.textDim, marginTop: space.medium },
+  pit: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    justifyContent: 'center',
+    gap: space.small,
+    marginTop: space.medium,
+  },
+  pitStacked: { flexDirection: 'column' },
+  slot: {
+    // Both slots share whatever is left once VS has taken its width, so the
+    // fight stays symmetrical at every page width instead of the filled side
+    // growing to its name. A basis rather than `flexBasis: 0` so that the row
+    // can wrap on a phone instead of squeezing two portraits into 160 points.
+    flexBasis: 220,
+    flexGrow: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.medium,
+    padding: space.medium,
+    borderRadius: radius.medium,
+    borderWidth: 1,
+  },
+  slotMirrored: { flexDirection: 'row-reverse' },
+  slotStacked: { flexBasis: 'auto', flexGrow: 0 },
+  // `minWidth: 0`, or an engine name with no spaces in it keeps this column at
+  // its own intrinsic width and pushes the portrait off the slot.
+  slotCopy: { flex: 1, minWidth: 0 },
+  mirroredText: { textAlign: 'right' },
+  slotFilled: { borderColor: colors.accentBorder, backgroundColor: colors.accentSurfaceQuiet },
+  slotEmpty: {
+    borderColor: colors.borderSoft,
+    borderStyle: 'dashed',
+    backgroundColor: colors.surfaceSunken,
+  },
+  slotRole: { ...type.eyebrow, color: colors.textFaint },
+  slotRoleFilled: { ...type.eyebrow, color: colors.accentText },
+  slotArtEmpty: {
+    width: 64,
+    height: 64,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: radius.small,
+    borderWidth: 1,
+    borderColor: colors.borderSoft,
+    borderStyle: 'dashed',
+  },
+  slotQuery: { fontSize: 28, fontWeight: '900', color: colors.borderLight },
+  slotHint: { ...type.label, color: colors.textFaint, marginTop: space.tight },
+  slotName: { ...type.cardTitle, color: colors.text },
+  slotAuthor: { ...type.meta, fontSize: 10, color: colors.textFaint },
+  slotRating: { fontSize: 22, fontWeight: '900', color: colors.accentSoft, marginTop: space.hair },
+  versus: { minWidth: 62, alignItems: 'center', justifyContent: 'center', gap: space.snug },
+  versusStacked: { flexDirection: 'row', gap: space.medium },
+  versusText: { ...type.cardTitle, color: colors.textFaint },
+  fields: { flexDirection: 'row', flexWrap: 'wrap', gap: space.medium, marginTop: space.medium },
   actions: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     alignItems: 'center',
     gap: space.small,
+    marginTop: space.medium,
   },
+  pressed: { opacity: 0.7 },
 });

@@ -33,6 +33,7 @@ export const useQueueCall = (): QueueCall | null => {
   const miss = useGameStore((state) => state.queueMiss);
   const outgoingChallenge = useGameStore((state) => state.outgoingChallenge);
   const connectionStatus = useGameStore((state) => state.connectionStatus);
+  const serverUpdate = useGameStore((state) => state.serverUpdate);
   const modes = useGameStore((state) => state.modes);
   const pushEnabled = useGameStore((state) => state.pushEnabled);
   const pushStatus = usePushStore((state) => state.status);
@@ -63,6 +64,7 @@ export const useQueueCall = (): QueueCall | null => {
         atOwnBoard,
         pushLive: pushStatus === 'granted',
         canOfferAlerts: canOfferAlerts(pushStatus, snoozedUntil, pushEnabled, nowMs),
+        updating: Boolean(serverUpdate?.updating),
         nowMs,
       }),
     [
@@ -75,6 +77,7 @@ export const useQueueCall = (): QueueCall | null => {
       pushEnabled,
       pushStatus,
       queue,
+      serverUpdate,
       snoozedUntil,
     ],
   );
@@ -94,11 +97,22 @@ export const useLobbyGate = (): LobbyGate => {
   const queue = useGameStore((state) => state.queue);
   const sessionToken = useGameStore((state) => state.sessionToken);
   const account = useGameStore((state) => state.account);
+  // Held only while a drain is running — the store nulls it the moment the
+  // server says the update is off — so its presence is the whole question.
+  const serverUpdate = useGameStore((state) => state.serverUpdate);
   const atOwnBoard = useAtOwnBoard();
   const signedIn = isSignedIn(sessionToken, account);
 
   return useMemo(
-    () => lobbyGate({ connectionStatus, atOwnBoard, outgoingChallenge, queue, signedIn }),
-    [atOwnBoard, connectionStatus, outgoingChallenge, queue, signedIn],
+    () =>
+      lobbyGate({
+        connectionStatus,
+        atOwnBoard,
+        outgoingChallenge,
+        queue,
+        signedIn,
+        updating: Boolean(serverUpdate?.updating),
+      }),
+    [atOwnBoard, connectionStatus, outgoingChallenge, queue, serverUpdate, signedIn],
   );
 };

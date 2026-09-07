@@ -1,7 +1,9 @@
 import { Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { links, webGoatGuy } from '@/navigation/links';
+import { up } from '@/navigation/upFrom';
 import { colors, contentWidth, radius, space, type } from '@/theme';
+import BackLink from '@/ui/BackLink';
 import ScreenShell from '@/ui/ScreenShell';
 import LinkRow from '@/ui/LinkRow';
 import { Panel, SectionHeading } from '@/ui/primitives';
@@ -97,10 +99,17 @@ function OutwardCard({ link }: { link: OutwardLink }) {
 }
 
 export default function CreditsScreen() {
-  // No back button: this page sits inside the app shell, whose sidebar or tab
-  // bar is already the way out. Same reasoning as the policy page.
+  // A back button, unlike every *section* of the shell.
+  //
+  // This page used to argue that the sidebar was already the way out, and it is
+  // half true: the sidebar is there, but nothing in it lights up for this page,
+  // because this is not one of the sections it lists. It is reached from a link
+  // in the sidebar's foot and from the tab bar's More menu, and neither of those
+  // says where you came from or how to get back. Same reasoning as the policy
+  // page, which had the same note and the same gap.
   return (
     <ScreenShell width={contentWidth.reading}>
+      <BackLink href={up.credits.href} label={up.credits.label} />
       <View style={styles.hero}>
         <Text style={styles.heroEyebrow}>CREDIT WHERE IT IS DUE</Text>
         <Text style={styles.heroTitle}>WebGoatGuy made this game</Text>

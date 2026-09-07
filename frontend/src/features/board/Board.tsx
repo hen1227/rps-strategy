@@ -19,8 +19,9 @@ import {
   View,
   type ViewStyle,
 } from 'react-native';
-import Svg, { Defs, Line, Marker, Polygon } from 'react-native-svg';
+import Svg, { Path } from 'react-native-svg';
 
+import { arrowPath } from './arrowShape';
 import PieceIcon from './PieceIcon';
 import { usePieceDrag } from './pieceDrag';
 import TileMark from './TileMark';
@@ -105,6 +106,11 @@ const frameSizeFor = (boardSize: number, shape: BoardShape) => {
 const boardShapeLabel = ({ columns, rows }: BoardShape) =>
   columns === 9 && rows === 9 ? 'Nine by nine' : `${columns} by ${rows}`;
 const ANNOTATION_COLOR = board.annotation;
+const ARROW_OUTLINE = board.arrowOutline;
+/** In squares, like everything else an arrow is measured in. */
+const ARROW_OUTLINE_WIDTH = 0.028;
+/** A drawn arrow sits between the engine's best and its also-rans: it is the reader's own note. */
+const ANNOTATION_ARROW_WIDTH = 0.17;
 const RIGHT_BUTTON = 2;
 const RIGHT_BUTTON_MASK = 2;
 const IS_WEB = Platform.OS === 'web';
@@ -571,11 +577,101 @@ const overlayLabelText = (size: number, lines: number) => {
   return { fontSize, lineHeight: fontSize + 1 };
 };
 
-/** One ranked engine suggestion, drawn as an arrow. */
-export interface AnalysisArrow extends Move {}
+/**
+ * One ranked suggestion, drawn as an arrow.
+ *
+ * `weight` is what makes the same arrow serve two different claims. Without it
+ * an arrow is drawn by its *rank* -- best one thickest -- which is what an
+ * engine's variations are: an ordered list where the order is the whole point.
+ * With it the arrow is drawn by its *size*, which is what a frequency is: the
+ * opening explorer's second-most-played move can be nearly as popular as the
+ * first or a twentieth of it, and drawing those two the same way would throw
+ * away the only interesting thing about them.
+ */
+export interface AnalysisArrow extends Move {
+  /** 0 to 1. Absent means "draw me by my rank". */
+  weight?: number;
+  /**
+   * Which suggestion this arrow belongs to, and so which colour it is drawn in.
+   *
+   * Absent means "my place in the list", which is what a plain ranked list
+   * wants. It is given when one suggestion needs more than one arrow: on a
+   * board that is its own reflection two different moves reach the same
+   * position, so they are one continuation with one set of numbers, and drawing
+   * them in two colours would say they were two.
+   */
+  rank?: number;
+  /**
+   * Drawn hollow, as a dashed outline: the same move, spelled the other way.
+   *
+   * Only ever true for the second and later arrows of one rank. Solid is the
+   * move the list is labelled with and dashed is its twin, so a reader can see
+   * that both are on offer without having to work out why two arrows are the
+   * same colour.
+   */
+  dashed?: boolean;
+}
+
+/** How many suggestions the board will draw. Twins do not count against it. */
+const MAXIMUM_ARROWS = 5;
+
+/** The dash pattern for a twin, in squares. Long enough to read as a line. */
+const TWIN_DASH = '0.12,0.09';
+/** A ghosted arrow is drawn by its outline, so the outline has to carry it. */
+const TWIN_OUTLINE_WIDTH = 0.055;
+/**
+ * How much of the fill a twin keeps.
+ *
+ * Not zero. A purely hollow arrow reads as a different *kind* of mark rather
+ * than as the same move written elsewhere, and at the weight a rare
+ * continuation is drawn at there is barely a line left to see. A ghost of the
+ * fill under a dashed edge keeps the pair looking like one thing.
+ */
+const TWIN_FILL_OPACITY = 0.24;
+
+/**
+ * How thick and how solid an arrow is drawn.
+ *
+ * Weighted arrows keep a floor: a move two percent of games played is still a
+ * move somebody played, and an arrow too faint to see is worse than no arrow
+ * because the reader cannot tell it from a rendering fault.
+ */
+/**
+ * The colour for an arrow at this rank.
+ *
+ * The palette names three, and the board now draws up to five, so the ranks
+ * past it share the last colour rather than reading `undefined` and painting
+ * nothing -- a silent blank arrow being exactly the kind of failure that looks
+ * like the data was missing.
+ */
+const arrowColor = (index: number) =>
+  board.analysisArrows[Math.min(index, board.analysisArrows.length - 1)];
+
+const arrowInk = (arrow: AnalysisArrow, rank: number) => {
+  if (typeof arrow.weight !== 'number' || !Number.isFinite(arrow.weight)) {
+    return { width: rank === 0 ? 0.185 : 0.145, opacity: rank === 0 ? 0.95 : 0.8 };
+  }
+  const share = Math.max(0, Math.min(1, arrow.weight));
+  return { width: 0.09 + share * 0.1, opacity: 0.58 + share * 0.37 };
+};
+
+/**
+ * Which suggestion an arrow belongs to.
+ *
+ * Its place in the list unless it says otherwise, which keeps every caller that
+ * hands over a plain ranked list drawing exactly what it drew before.
+ */
+const arrowRank = (arrow: AnalysisArrow, index: number) => arrow.rank ?? index;
 
 export interface BoardProps {
-  /** Up to three ranked engine suggestions, best first. */
+  /**
+   * Ranked suggestions, best first, of which the board draws the top five.
+   *
+   * Ordinarily one arrow each. A suggestion that can be played more than one
+   * way -- two moves reaching the same position on a board that is its own
+   * reflection -- hands over one arrow per spelling, all carrying the same
+   * `rank`, and they are drawn in one colour with the twins dashed.
+   */
   analysisArrows?: AnalysisArrow[];
   boardSize: number;
   /** Whether pieces of `movableColor` can be dragged. */
@@ -1137,44 +1233,34 @@ export default function Board({
               style={styles.arrowSurface}
               viewBox={`0 0 ${shape.columns} ${shape.rows}`}
             >
-              <Defs>
-                {analysisArrows.slice(0, 3).map((arrow, index) => {
-                  const color = board.analysisArrows[index];
-                  return (
-                    <Marker
-                      id={`analysis-arrow-${index}`}
-                      key={`marker-${index}`}
-                      markerHeight="5"
-                      markerUnits="strokeWidth"
-                      markerWidth="5"
-                      orient="auto"
-                      refX="8"
-                      refY="5"
-                      viewBox="0 0 10 10"
-                    >
-                      <Polygon fill={color} points="0,0 10,5 0,10 2.5,5" />
-                    </Marker>
-                  );
-                })}
-              </Defs>
-              {analysisArrows.slice(0, 3).map((arrow, index) => {
-                const color = board.analysisArrows[index];
-                const fromX = fileCenter(arrow.from.x, isFlipped, shape.columns);
-                const fromY = rankCenter(arrow.from.y, isFlipped, shape.rows);
-                const toX = fileCenter(arrow.to.x, isFlipped, shape.columns);
-                const toY = rankCenter(arrow.to.y, isFlipped, shape.rows);
+              {analysisArrows.map((arrow, index) => {
+                // Capped by rank rather than by position, so a suggestion that
+                // needs two arrows still costs one of the five.
+                const rank = arrowRank(arrow, index);
+                if (rank >= MAXIMUM_ARROWS) return null;
+                const ink = arrowInk(arrow, rank);
+                const path = arrowPath({
+                  fromX: fileCenter(arrow.from.x, isFlipped, shape.columns),
+                  fromY: rankCenter(arrow.from.y, isFlipped, shape.rows),
+                  toX: fileCenter(arrow.to.x, isFlipped, shape.columns),
+                  toY: rankCenter(arrow.to.y, isFlipped, shape.rows),
+                  width: ink.width,
+                });
+                if (!path) return null;
+                // A twin is the same shape drawn hollow: the filled arrow is
+                // traced instead of painted, so it reads as the same move at
+                // the same weight in the same colour, and as the other one.
                 return (
-                  <Line
+                  <Path
+                    d={path}
+                    fill={arrowColor(rank)}
+                    fillOpacity={arrow.dashed ? TWIN_FILL_OPACITY : 1}
                     key={`${arrow.from.x}:${arrow.from.y}-${arrow.to.x}:${arrow.to.y}`}
-                    markerEnd={`url(#analysis-arrow-${index})`}
-                    opacity={index === 0 ? 0.94 : 0.76}
-                    stroke={color}
-                    strokeLinecap="round"
-                    strokeWidth={index === 0 ? 0.18 : 0.13}
-                    x1={fromX}
-                    x2={toX}
-                    y1={fromY}
-                    y2={toY}
+                    opacity={ink.opacity}
+                    stroke={arrow.dashed ? arrowColor(rank) : ARROW_OUTLINE}
+                    strokeDasharray={arrow.dashed ? TWIN_DASH : undefined}
+                    strokeLinejoin="round"
+                    strokeWidth={arrow.dashed ? TWIN_OUTLINE_WIDTH : ARROW_OUTLINE_WIDTH}
                   />
                 );
               })}
@@ -1189,34 +1275,27 @@ export default function Board({
               style={styles.arrowSurface}
               viewBox={`0 0 ${shape.columns} ${shape.rows}`}
             >
-              <Defs>
-                <Marker
-                  id="board-annotation-arrow"
-                  markerHeight="5"
-                  markerUnits="strokeWidth"
-                  markerWidth="5"
-                  orient="auto"
-                  refX="8"
-                  refY="5"
-                  viewBox="0 0 10 10"
-                >
-                  <Polygon fill={ANNOTATION_COLOR} points="0,0 10,5 0,10 2.5,5" />
-                </Marker>
-              </Defs>
-              {annotationArrows.map((arrow) => (
-                <Line
-                  key={`${arrow.from.x}:${arrow.from.y}-${arrow.to.x}:${arrow.to.y}`}
-                  markerEnd="url(#board-annotation-arrow)"
-                  opacity={0.68}
-                  stroke={ANNOTATION_COLOR}
-                  strokeLinecap="round"
-                  strokeWidth={0.12}
-                  x1={fileCenter(arrow.from.x, isFlipped, shape.columns)}
-                  x2={fileCenter(arrow.to.x, isFlipped, shape.columns)}
-                  y1={rankCenter(arrow.from.y, isFlipped, shape.rows)}
-                  y2={rankCenter(arrow.to.y, isFlipped, shape.rows)}
-                />
-              ))}
+              {annotationArrows.map((arrow) => {
+                const path = arrowPath({
+                  fromX: fileCenter(arrow.from.x, isFlipped, shape.columns),
+                  fromY: rankCenter(arrow.from.y, isFlipped, shape.rows),
+                  toX: fileCenter(arrow.to.x, isFlipped, shape.columns),
+                  toY: rankCenter(arrow.to.y, isFlipped, shape.rows),
+                  width: ANNOTATION_ARROW_WIDTH,
+                });
+                if (!path) return null;
+                return (
+                  <Path
+                    d={path}
+                    fill={ANNOTATION_COLOR}
+                    key={`${arrow.from.x}:${arrow.from.y}-${arrow.to.x}:${arrow.to.y}`}
+                    opacity={0.82}
+                    stroke={ARROW_OUTLINE}
+                    strokeLinejoin="round"
+                    strokeWidth={ARROW_OUTLINE_WIDTH}
+                  />
+                );
+              })}
             </Svg>
           </View>
         )}

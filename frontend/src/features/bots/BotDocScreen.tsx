@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Platform, StyleSheet, Text, View } from 'react-native';
 
 import { failureMessage } from '@/errors';
-import { links } from '@/navigation/links';
+import { up } from '@/navigation/upFrom';
 import { botGuide, type BotGuide } from '@/store/api/bots';
 import { colors, contentWidth, space, type } from '@/theme';
 import Markdown from '@/ui/Markdown';
@@ -75,7 +75,7 @@ export default function BotDocScreen({ doc }: BotDocScreenProps) {
   return (
     <ScreenShell width={contentWidth.reading}>
       <PageHeading
-        back={{ href: links.myBots(), label: 'Your bots' }}
+        back={up.botDoc}
         eyebrow={FALLBACK[doc].eyebrow}
         title={lead?.title ?? FALLBACK[doc].title}
       />

@@ -1,5 +1,4 @@
 import * as Clipboard from 'expo-clipboard';
-import { useRouter } from 'expo-router';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -8,17 +7,12 @@ import { createAnalysisGame, moveLabel, type AnalysisGame } from '@/engine/analy
 import { playBotGame } from '@/engine/bots/arena';
 import { createBot, createSeededRandom } from '@/engine/bots/engine';
 import { botProfile, type BotProfile } from '@/engine/bots/profiles';
-import {
-  ANALYSIS_PRESET_LABELS,
-  WATCHED_GAME_PRESET,
-  type AnalysisPreset,
-} from '@/engine/gameAnalysis';
+import type { AnalysisEffort } from '@/engine/analysisBudget';
 import { expectedScoreCurve, type GradableMove, type ReviewMove } from '@/engine/gameReview';
 import { encodePGN, encodePosition, formatMove, resultFor } from '@/engine/pgn';
-import { REVIEW_PRESETS } from '@/engine/rpsfish/client';
 import { failureMessage } from '@/errors';
 import AccuracyCard from '@/features/analysis/AccuracyCard';
-import AnalysisPresetPicker from '@/features/analysis/AnalysisPresetPicker';
+import AnalysisEffortToggle from '@/features/analysis/AnalysisEffortToggle';
 import EngineLinesCard from '@/features/analysis/EngineLinesCard';
 import EvalBar from '@/features/analysis/EvalBar';
 import EvalChart from '@/features/analysis/EvalChart';
@@ -35,8 +29,10 @@ import type { GameAnalysisResult } from '@/hooks/useGameAnalysis';
 import useGameAnalysis from '@/hooks/useGameAnalysis';
 import { useReplayCursor } from '@/hooks/useReplayCursor';
 import { useSettledSearchParams } from '@/navigation/useSettledSearchParams';
+import { up } from '@/navigation/upFrom';
 import { useGameStore } from '@/store/gameStore';
 import { colors, players, radius } from '@/theme';
+import BackLink from '@/ui/BackLink';
 import type {
   GameEndReason,
   ModeDefinition,
@@ -179,22 +175,27 @@ const moveExplanation = (
 };
 
 /** How far behind the board the analysis is, in a sentence. */
-const analysisProgress = (
-  analysis: GameAnalysisResult<BattleMove>,
-  preset: AnalysisPreset,
-  running: boolean,
-) => {
+const analysisProgress = (analysis: GameAnalysisResult<BattleMove>, running: boolean) => {
   if (analysis.status === 'error') return analysis.error;
-  const depth = REVIEW_PRESETS[preset]?.maxDepth;
+  const { depth, refining } = analysis;
   if (analysis.behind > 0) {
-    return `Grading at ${ANALYSIS_PRESET_LABELS[preset]}, depth ${depth} — ${plural(
+    return `Grading at depth ${depth} — ${plural(
       analysis.behind,
       'move',
     )} behind the board. Every grade appears as it lands.`;
   }
-  return running
-    ? `Grading at ${ANALYSIS_PRESET_LABELS[preset]}, depth ${depth} — level with the board.`
-    : `Every position graded at ${ANALYSIS_PRESET_LABELS[preset]}, depth ${depth}.`;
+  // A deeper pass regrades the whole game rather than extending the report, so
+  // it is worth distinguishing from the walk falling behind: nothing is
+  // missing, and the grades already on screen stay readable until it lands.
+  if (refining) {
+    return `Every position graded at depth ${depth}. Regrading the game at depth ${
+      refining.limits.maxDepth
+    } — ${refining.done} of ${refining.total} positions.`;
+  }
+  if (running) return `Grading at depth ${depth} — level with the board.`;
+  return analysis.deeperToCome
+    ? `Every position graded at depth ${depth}. A deeper pass is still to come.`
+    : `Every position graded at depth ${depth}, as deep as this device goes.`;
 };
 
 /** How the battle ended, once it has. */
@@ -213,7 +214,6 @@ interface BattleOutcome {
  * exists keeps that from being a conditional-hook problem.
  */
 export default function BotBattleScreen() {
-  const router = useRouter();
   const modes = useGameStore((state) => state.modes);
   // The battle is described entirely by the URL, so `/battle?mode=V5&red=
   // crane&blue=snips` is a page somebody can link to or reload into.
@@ -231,11 +231,7 @@ export default function BotBattleScreen() {
           <Text style={styles.emptyTitle}>
             {settled ? 'Choose a battle first' : 'Setting up the battle…'}
           </Text>
-          {settled ? (
-            <Pressable onPress={() => router.back()} style={styles.backToModes}>
-              <Text style={styles.backToModesText}>Return to lobby</Text>
-            </Pressable>
-          ) : null}
+          {settled ? <BackLink href={up.battle.href} label={up.battle.label} /> : null}
         </View>
       </SafeAreaView>
     );
@@ -257,7 +253,6 @@ interface BotBattleProps {
 }
 
 function BotBattle({ blueProfile, mode, redProfile }: BotBattleProps) {
-  const router = useRouter();
   const initialGame = useMemo(() => createAnalysisGame(mode), [mode]);
 
   const [positions, setPositions] = useState<AnalysisGame[]>(() => [initialGame]);
@@ -267,7 +262,7 @@ function BotBattle({ blueProfile, mode, redProfile }: BotBattleProps) {
   const [result, setResult] = useState<BattleOutcome | null>(null);
   const [pgn, setPgn] = useState<string | null>(null);
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'error'>('idle');
-  const [preset, setPreset] = useState<AnalysisPreset>(WATCHED_GAME_PRESET);
+  const [effort, setEffort] = useState<AnalysisEffort>('full');
 
   const positionsRef = useRef<AnalysisGame[]>([initialGame]);
   const movesRef = useRef<BattleMove[]>([]);
@@ -404,7 +399,13 @@ function BotBattle({ blueProfile, mode, redProfile }: BotBattleProps) {
     mode,
     moves,
     positions,
-    preset,
+    effort,
+    // The bots are searching for every move they play. Grading those moves
+    // against a shallower search than the one that chose them would measure the
+    // bots against nothing, so a battle's walk starts at the budget this screen
+    // used when depth was a switch and only deepens once the board holds still.
+    // `docs/review.md` sets out at length why the alternative is not real.
+    live: true,
     streaming: running,
   });
   // A battle always has a mode and a first position by the time this renders,
@@ -438,7 +439,7 @@ function BotBattle({ blueProfile, mode, redProfile }: BotBattleProps) {
   const accuracy = report?.accuracy ?? null;
   const botForMove = visibleMove?.player === 'Blue' ? blueProfile : redProfile;
   const currentExplanation = moveExplanation(visibleMove, botForMove.name, analysis);
-  const analysisNote = analysisProgress(analysis, preset, running);
+  const analysisNote = analysisProgress(analysis, running);
 
   const playerStack = (
     <View style={[styles.playerStack, { width: boardSize + 38 }]}>
@@ -630,14 +631,7 @@ function BotBattle({ blueProfile, mode, redProfile }: BotBattleProps) {
     <SafeAreaView style={styles.safeArea} edges={['top', 'right', 'bottom', 'left']}>
       <View style={styles.screen}>
         <View style={styles.topBar}>
-          <Pressable
-            accessibilityLabel="Leave the bot battle"
-            accessibilityRole="button"
-            onPress={() => router.back()}
-            style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}
-          >
-            <Text style={styles.backIcon}>‹</Text>
-          </Pressable>
+          <BackLink href={up.battle.href} label={up.battle.label} />
           <View style={styles.titleCopy}>
             <Text numberOfLines={1} style={styles.kicker}>
               {mode.shortCode} · BOT VS BOT · {running ? `MOVE ${latestIndex}` : 'FINAL'}
@@ -654,7 +648,13 @@ function BotBattle({ blueProfile, mode, redProfile }: BotBattleProps) {
               <View style={[styles.colorDot, { backgroundColor: players.Blue.strong }]} />
               <Text style={styles.modeBadgeText}>{blueProfile.rating}</Text>
             </View>
-            <AnalysisPresetPicker onChange={setPreset} value={preset} />
+            <AnalysisEffortToggle
+              deeperToCome={analysis.deeperToCome}
+              depth={analysis.depth}
+              onToggleQuick={() => setEffort((current) => (current === 'quick' ? 'full' : 'quick'))}
+              quick={effort === 'quick'}
+              refining={analysis.refining}
+            />
           </View>
         </View>
 
@@ -699,34 +699,23 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingBottom: 10,
   },
-  centered: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 },
+  centered: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 14, padding: 24 },
   emptyTitle: { color: colors.textStrong, fontSize: 24, fontWeight: '900' },
-  backToModes: {
-    marginTop: 16,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: radius.medium,
-    backgroundColor: colors.accent,
-  },
-  backToModesText: { color: colors.textStrong, fontWeight: '900' },
+  // Wraps, for the reason the analysis board's does: the two engines' names
+  // and their ratings do not fit across a phone beside the way out.
   topBar: {
     minHeight: 64,
     flexDirection: 'row',
     alignItems: 'center',
+    flexWrap: 'wrap',
+    columnGap: 10,
+    rowGap: 8,
+    paddingVertical: 8,
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
     marginBottom: 12,
   },
-  backButton: {
-    width: 38,
-    height: 38,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: radius.large,
-    backgroundColor: colors.surface,
-  },
-  backIcon: { color: colors.text, fontSize: 31, lineHeight: 31, marginTop: -3 },
-  titleCopy: { flex: 1, minWidth: 0, paddingHorizontal: 10 },
+  titleCopy: { flex: 1, flexBasis: 140, minWidth: 0 },
   kicker: { color: colors.accentBright, fontSize: 8, fontWeight: '900', letterSpacing: 1.35 },
   title: { color: colors.textStrong, fontSize: 20, fontWeight: '900', marginTop: 2 },
   modeBadge: {

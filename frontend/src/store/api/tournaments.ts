@@ -40,8 +40,11 @@ export interface TournamentConfig {
   maxPlayers?: number;
   /** Zero derives the round count from the field size. */
   swissRounds?: number;
-  /** Admit only entrants who have verified their account with Discord. */
-  requireDiscord?: boolean;
+  /**
+   * How many games one pairing plays. Zero and one both mean a single game;
+   * anything above ten is clamped to ten by the server.
+   */
+  gamesPerMatch?: number;
   /** Zero means the server's default clock. */
   initialTimeMs?: number;
   incrementMs?: number;
@@ -226,11 +229,52 @@ export interface TournamentSignup {
   reservationToken?: string;
 }
 
+/** Enter yourself. */
 export const signupForTournament = (tournamentId: string, signup: TournamentSignup) =>
   request<Tournament>(`/api/tournaments/${encodeURIComponent(tournamentId)}/signups`, {
     method: 'POST',
     body: signup,
-    what: 'Signing up',
+    what: 'Registering',
+  });
+
+/**
+ * Enter one of your engines instead of yourself.
+ *
+ * The same route, and deliberately: an account has one entry in an event, and
+ * this is a different answer to the same question rather than a second door.
+ * Nothing about the bot is sent but its id — its name, the handle the host
+ * reaches it on, and the chat agreement are the server's to read from the
+ * registry and from your account, because none of them is a thing this form
+ * gets to assert about a program.
+ *
+ * The session token is required here where it is optional above: entering an
+ * engine means proving you own it.
+ */
+export const registerBotForTournament = (
+  sessionToken: string,
+  tournamentId: string,
+  botId: string,
+) =>
+  request<Tournament>(`/api/tournaments/${encodeURIComponent(tournamentId)}/signups`, {
+    method: 'POST',
+    token: sessionToken,
+    body: { botId },
+    what: 'Registering your bot',
+  });
+
+/**
+ * Take your entry back out, whichever of you is holding it.
+ *
+ * Registration only — once the pairings exist, every other entrant's schedule
+ * is built around your name being in it, and the host is the only one who can
+ * unpick that. Before then this is how an owner who entered the wrong engine
+ * fixes it: withdraw, then register the right one.
+ */
+export const withdrawFromTournament = (sessionToken: string, tournamentId: string) =>
+  request<Tournament>(`/api/tournaments/${encodeURIComponent(tournamentId)}/signups`, {
+    method: 'DELETE',
+    token: sessionToken,
+    what: 'Withdrawing',
   });
 
 export const startTournament = (adminToken: string, tournamentId: string) =>

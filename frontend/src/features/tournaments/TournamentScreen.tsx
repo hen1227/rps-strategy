@@ -11,7 +11,7 @@ import {
 } from 'react-native';
 
 import TournamentMatchRow from './TournamentMatchRow';
-import TournamentSignupForm from './TournamentSignupForm';
+import TournamentRegisterForm from './TournamentRegisterForm';
 import ScreenShell from '@/ui/ScreenShell';
 import {
   Badge,
@@ -27,17 +27,21 @@ import {
 import { useWatchGame } from '@/hooks/useWatchGame';
 import { useGameStore } from '@/store/gameStore';
 import { links } from '@/navigation/links';
-import { setMatchResult, startTournament } from '@/store/api/tournaments';
+import {
+  setMatchResult,
+  startTournament,
+  withdrawFromTournament,
+} from '@/store/api/tournaments';
 import { useAdminToken } from '@/hooks/useAdminToken';
-import { enrollBotsInTournament } from '@/store/api/bots';
+import { useMyBots } from '@/hooks/useMyBots';
 import {
   championOf,
   currentTournaments,
+  entryFor,
   matchesOf,
   pastTournaments,
   playedMatchCount,
   roundsOf,
-  signupFor,
   statusOf,
 } from '@/store/tournamentSelectors';
 import type {
@@ -49,6 +53,7 @@ import { colors, contentWidth, radius } from '@/theme';
 
 export default function TournamentScreen() {
   const accountId = useGameStore((state) => state.accountId);
+  const sessionToken = useGameStore((state) => state.sessionToken);
   const tournaments = useGameStore((state) => state.tournaments);
   const connectionStatus = useGameStore((state) => state.connectionStatus);
   const spectatedGameId = useGameStore((state) => state.spectatedGameId);
@@ -98,7 +103,11 @@ export default function TournamentScreen() {
   const adminUnlocked = admin.unlocked;
   const adminToken = admin.token;
   const isBusy = busyAction !== null;
-  const signup = selected ? signupFor(selected, accountId) : null;
+  // The account's own entry *or* its engine's: an owner who entered a bot has
+  // used their one place, and the form below must not keep offering it.
+  const mine = useMyBots();
+  const entry = selected ? entryFor(selected, accountId, mine.userIds) : null;
+  const entryIsBot = Boolean(entry) && entry?.userId !== accountId;
 
   useEffect(() => {
     loadTournaments();
@@ -155,18 +164,16 @@ export default function TournamentScreen() {
       'Registration closed. Players can start their matches from the home screen.',
     );
 
-  // Bots do not sign themselves up: their client is a pipe with no tournament
-  // awareness. The host enrols the ones that are online and opted in, and the
-  // server starts their matches when they come due.
-  const enrollBots = () =>
+  // An entrant leaving of their own accord, which the server only allows while
+  // registration is open. The message names what left, because for an owner it
+  // is their engine rather than them.
+  const withdraw = () =>
     runAction(
-      'enroll-bots',
-      async () => {
-        const result = await enrollBotsInTournament(adminToken, selected.tournamentId);
-        await loadTournaments();
-        return result;
-      },
-      'Online bots enrolled.',
+      'withdraw',
+      () => withdrawFromTournament(sessionToken ?? '', selected?.tournamentId ?? ''),
+      entryIsBot
+        ? `${entry?.ign} is out of the event. You can register a different bot.`
+        : 'You are out of the event.',
     );
 
   const updateResult = (match: TournamentMatch, result: TournamentMatchResult) =>
@@ -245,8 +252,8 @@ export default function TournamentScreen() {
                     now. An event is written down as a draft there and only appears here
                     once it is published, so a half-finished one is never in front of
                     anybody. What is left on this page is the match-day half: starting a
-                    published event, enrolling the engines, and recording results while
-                    you watch.
+                    published event and recording results while you watch. Entrants enter
+                    themselves, engines included — an engine is registered by its owner.
                   </Text>
                   <View style={styles.adminSubmit}>
                     <GhostLink
@@ -351,46 +358,36 @@ export default function TournamentScreen() {
                   </View>
                 )}
 
-                {selected.status === 'registration' && !signup && (
+                {selected.status === 'registration' && !entry && (
                   <View style={styles.signupSection}>
-                    <SectionHeading eyebrow="ENTER THE EVENT" title="Player signup" />
-                    <TournamentSignupForm
-                      requireDiscord={selected.requireDiscord}
-                      tournamentId={selected.tournamentId}
-                    />
+                    <SectionHeading eyebrow="ENTER THE EVENT" title="Registration" />
+                    <TournamentRegisterForm tournament={selected} />
                   </View>
                 )}
 
-                {signup ? (
+                {entry ? (
                   <View style={styles.signedUpCard}>
                     <Text style={styles.signedUpCheck}>✓</Text>
                     <View style={styles.signedUpCopy}>
                       <Text style={styles.signedUpTitle}>
-                        You are signed up as {signup.ign}
+                        {entryIsBot
+                          ? `${entry.ign} is registered`
+                          : `You are registered as ${entry.ign}`}
                       </Text>
                       <Text style={styles.signedUpMeta}>
-                        Seed #{signup.signupOrder} · Discord: {signup.discord}
+                        Seed #{entry.signupOrder} · Discord: {entry.discord}
                       </Text>
                     </View>
+                    {selected.status === 'registration' ? (
+                      <GhostButton
+                        compact
+                        disabled={isBusy}
+                        label={busyAction === 'withdraw' ? 'LEAVING' : 'WITHDRAW'}
+                        onPress={withdraw}
+                      />
+                    ) : null}
                   </View>
                 ) : null}
-
-                {adminUnlocked && selected.status === 'registration' && (
-                  <View style={styles.hostAction}>
-                    <View style={styles.hostActionCopy}>
-                      <Text style={styles.cardTitle}>Add the engines</Text>
-                      <Text style={styles.helpText}>
-                        Enrols every bot that is online and set to enter tournaments.
-                      </Text>
-                    </View>
-                    <PrimaryButton
-                      compact
-                      disabled={isBusy}
-                      label="ENROL BOTS"
-                      onPress={enrollBots}
-                    />
-                  </View>
-                )}
 
                 {adminUnlocked && selected.status === 'registration' && (
                   <View style={styles.hostAction}>

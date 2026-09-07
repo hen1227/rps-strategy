@@ -42,7 +42,7 @@ const COPY: Record<PushStatus | 'server-off', PanelCopy> = {
     eyebrow: 'MATCH ALERTS',
     title: 'Wait for a game with the tab closed',
     body:
-      'Right now, closing this tab takes you out of the queue. Let the site send you one notification — only ever "your game has started", never anything else — and your place is held until somebody turns up.',
+      'Enable notifications so you can stay queued for a game with the tab closed.',
     action: 'TURN ON ALERTS ▶',
   },
   error: {
@@ -62,7 +62,7 @@ const COPY: Record<PushStatus | 'server-off', PanelCopy> = {
     eyebrow: 'MATCH ALERTS',
     title: 'Notifications are blocked',
     body:
-      'Your browser is refusing them for this site, so there is no button here that could help. If you change your mind it is in the padlock menu beside the address bar — allow notifications, then reload this page. Until then, staying in the queue means leaving a tab open.',
+      'Your browser is refusing them for this site. Check your browser settings.',
     action: null,
   },
   'needs-home-screen': {

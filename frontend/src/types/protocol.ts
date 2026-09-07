@@ -133,12 +133,24 @@ export interface LiveGameSummary {
 
 export type ChatSenderRole = 'player' | 'spectator';
 
+/**
+ * How much of the site one conversation covers.
+ *
+ * `game` is one board and the room that outlives it, which is nearly every
+ * chat here. `series` is every game of a bot-versus-bot run, played one after
+ * another. `tournament` is every match of a bots-only event, played at the
+ * same time as each other — nobody in that event is a player, so the whole
+ * crowd watching it is one room.
+ */
+export type ChatRoomScope = 'game' | 'series' | 'tournament';
+
 export interface ChatMessage {
   id: string;
   /**
    * The conversation this belongs to, which is what a client matches against.
    * `gameId` below is only the board it was typed at: every game of a bot
-   * series shares one room, so the two are not the same thing there.
+   * series shares one room, and so does every match of a bots-only event, so
+   * the two are not the same thing there.
    *
    * Optional only for a server older than this field, which cannot have a
    * room that is not a game anyway; the store falls back to `gameId` there.
@@ -494,6 +506,13 @@ export interface LeaderboardEntry {
   modeId?: ModeID;
   /** A bot's icon digest. Never set on the human board. See `botIconUrl`. */
   iconSha256?: string;
+  /**
+   * Who entered this engine, and what the engine calls itself. Bot rows only —
+   * a person has neither — and absent from a server older than the fields, so
+   * every reader has to cope with them missing.
+   */
+  ownerUsername?: string;
+  engineName?: string;
 }
 
 /* ------------------------------------------------------------ tournaments -- */
@@ -587,6 +606,15 @@ export interface TournamentMatch {
   winnerPlayerId?: number;
   gameId?: string;
   updatedAtUnixMs: number;
+  /**
+   * How far through a multi-game pairing this match is, and the running score.
+   *
+   * All absent on a one-game match until it is played, at which point `result`
+   * says the same thing more simply — so a single-game event can ignore them.
+   */
+  gamesPlayed?: number;
+  player1Points?: number;
+  player2Points?: number;
 }
 
 /** Which tournament matches are live, and who has pressed ready. */
@@ -612,14 +640,23 @@ export interface Tournament {
   /** What the host asked for. `rounds` below is the answer to use. */
   swissRounds?: number;
   /**
-   * Whether entrants must have verified their account with Discord.
+   * How many games one pairing plays. One unless the host said otherwise.
    *
-   * A second door beside `field`, not a part of it: `field` is what kind of
-   * entrant may play, and this is how sure the host is that the entrant is who
-   * the signup form says. Asked of people only — an engine has no Discord
-   * account, so a bots-only event with this set still admits its engines.
+   * More than one is about fairness rather than length: the colours swap every
+   * game, so an even number cancels the advantage of opening — which decides
+   * close pairings between engines.
    */
-  requireDiscord?: boolean;
+  gamesPerMatch: number;
+  /**
+   * Which series this belongs to. `nightly` is one the recurring schedule made —
+   * and is kept off the tournaments board and out of the Tournament Champion
+   * the stored spelling of what is now the weekend arena, kept because the
+   * archive is full of it. It has its own page and its own crown. See
+   * `isWeekendArena`.
+   */
+  kind?: 'manual' | 'nightly';
+  /** The weekend arena's serial, and absent on a one-off. */
+  nightlyNumber?: number;
   /**
    * How many rounds the event will play in total, which an elimination bracket
    * or a Swiss needs published because its later rounds do not exist yet.
@@ -890,6 +927,7 @@ export type ServerMessage =
       pgn?: string;
       chatMessages?: ChatMessage[];
       chatRoomId?: string;
+      chatRoomScope?: ChatRoomScope;
       chatOccupancy?: number;
       /**
        * When a board nobody has moved on gives up waiting. Zero or absent for a
@@ -907,6 +945,7 @@ export type ServerMessage =
       reconnectDeadlineUnixMs?: number;
       chatMessages?: ChatMessage[];
       chatRoomId?: string;
+      chatRoomScope?: ChatRoomScope;
       chatOccupancy?: number;
       firstMoveDeadlineUnixMs?: number;
     }
@@ -916,6 +955,7 @@ export type ServerMessage =
       pgn?: string;
       chatMessages?: ChatMessage[];
       chatRoomId?: string;
+      chatRoomScope?: ChatRoomScope;
       chatOccupancy?: number;
     }
   | { type: 'spectator_left' }
@@ -932,7 +972,12 @@ export type ServerMessage =
    * list, which is how the figure survives the result: a finished game leaves
    * the live table, and its room does not.
    */
-  | { type: 'chat_presence'; chatRoomId?: string; chatOccupancy?: number }
+  | {
+      type: 'chat_presence';
+      chatRoomId?: string;
+      chatRoomScope?: ChatRoomScope;
+      chatOccupancy?: number;
+    }
   | { type: 'chat_rejected'; message?: string }
   | { type: 'opponent_disconnected'; reconnectDeadlineUnixMs?: number }
   | { type: 'opponent_reconnected' }

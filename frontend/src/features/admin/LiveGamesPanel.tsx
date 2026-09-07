@@ -190,13 +190,6 @@ export default function LiveGamesPanel({ admin }: LiveGamesPanelProps) {
           </View>
         </>
       )}
-      <Text style={adminStyles.help}>
-        Voiding files nothing: the board disappears, no result is stored, and no rating moves.
-        The other three declare a result, and the game is filed and rated exactly as if it had
-        ended that way on the board — which is what to reach for when a player has walked away
-        rather than when a game should never have happened. A tournament round that is voided
-        goes back to being unplayed, so the pair can play it again.
-      </Text>
     </Panel>
   );
 }

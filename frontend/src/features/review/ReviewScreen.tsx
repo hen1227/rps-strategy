@@ -5,7 +5,7 @@ import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { applyAnalysisMove, moveLabel, type AnalysisGame } from '@/engine/analysisGame';
-import { DEFAULT_ANALYSIS_PRESET, type AnalysisPreset } from '@/engine/gameAnalysis';
+import { interactiveLimits, type AnalysisEffort } from '@/engine/analysisBudget';
 import {
   ReviewError,
   expectedScoreCurve,
@@ -16,10 +16,9 @@ import {
   type ReviewSource,
 } from '@/engine/gameReview';
 import { PGNError, formatMove } from '@/engine/pgn';
-import { REVIEW_PRESETS } from '@/engine/rpsfish/client';
 import type { Analysis } from '@/engine/rpsfish/protocol';
 import AccuracyCard from '@/features/analysis/AccuracyCard';
-import AnalysisPresetPicker from '@/features/analysis/AnalysisPresetPicker';
+import AnalysisEffortToggle from '@/features/analysis/AnalysisEffortToggle';
 import EngineLinesCard from '@/features/analysis/EngineLinesCard';
 import EvalBar from '@/features/analysis/EvalBar';
 import EvalChart from '@/features/analysis/EvalChart';
@@ -44,12 +43,14 @@ import useReplayKeyboard from '@/hooks/useReplayKeyboard';
 import { useReplayCursor } from '@/hooks/useReplayCursor';
 import { useWatchGame } from '@/hooks/useWatchGame';
 import { gameReviewURL, links } from '@/navigation/links';
+import { up } from '@/navigation/upFrom';
 import { isGameLive } from '@/store/spectateSelectors';
 import { getGamePGN, putGameAccuracy } from '@/store/api/review';
-import { roomSpansSeries } from '@/store/chatSelectors';
+import { chatRoomScopeOf } from '@/store/chatSelectors';
 import { useGameStore } from '@/store/gameStore';
 import { useReviewHandoff } from '@/store/reviewHandoff';
 import { colors, radius, space } from '@/theme';
+import BackLink from '@/ui/BackLink';
 import {
   SIDE_COLORS,
   sameMove,
@@ -246,6 +247,7 @@ export default function ReviewScreen() {
   const watchGame = useWatchGame();
   const chatMessages = useGameStore((state) => state.chatMessages);
   const chatRoomId = useGameStore((state) => state.chatRoomId);
+  const chatRoomScope = useGameStore((state) => state.chatRoomScope);
   const chatOccupancy = useGameStore((state) => state.chatOccupancy);
   const chatVisible = useGameStore((state) => state.chatVisible);
   const showSpectatorMessages = useGameStore((state) => state.showSpectatorMessages);
@@ -263,12 +265,27 @@ export default function ReviewScreen() {
   // up with two ideas of what a failed lookup looks like. A game that is not
   // part of a run simply answers nothing, and none of this appears.
   const { series } = useSeriesForGame(gameId);
+  // Where the back button goes.
+  //
+  // A game of a run belongs under that run: six games between two engines are
+  // one thing that happened, and somebody who walked in from the series page —
+  // or from a link to a game of it — is going back to the run rather than to
+  // the lobby. Everything else is a game on its own and goes to the lobby,
+  // which is where the archive is read from.
+  //
+  // Derived from the record rather than from history, which is what makes it
+  // the same answer on a refresh and on a pasted link. `router.back()` used to
+  // do this job and got it wrong in the ordinary case: a review reached from a
+  // watched game that had just finished sat on top of that game's `/watch`
+  // entry, so "back" put the reader on a board that no longer existed, which
+  // forwarded straight back to this review.
+  const upTarget = series ? { label: 'Series', href: links.series(series.seriesId) } : up.review;
   // The game asked for while the one on screen is still up, which is what drives
   // the board's hand-off. Cleared when the new record lands. See GameTransition:
   // this is the same animation the spectate screen plays when a series moves on
   // to its next board, because it is the same act.
   const [switchingTo, setSwitchingTo] = useState<string | null>(null);
-  const [preset, setPreset] = useState<AnalysisPreset>(DEFAULT_ANALYSIS_PRESET);
+  const [effort, setEffort] = useState<AnalysisEffort>('full');
   const [branch, setBranch] = useState<ReviewBranch | null>(null);
   // Which of the two things this card copies was last copied, and whether the
   // clipboard took it. One piece of state rather than two, because the line of
@@ -363,11 +380,12 @@ export default function ReviewScreen() {
     mode: record?.mode,
     moves: record?.moves ?? EMPTY_MOVES,
     positions: record?.positions ?? EMPTY_POSITIONS,
-    preset,
+    effort,
   });
   const entries = gameAnalysis.entries;
   const report = gameAnalysis.report;
   const reviewState = gameAnalysis.status;
+  const engineLimits = gameAnalysis.limits;
 
   useEffect(() => {
     if (gameAnalysis.error) setLoadError(gameAnalysis.error);
@@ -401,7 +419,7 @@ export default function ReviewScreen() {
   const branchSearch = usePositionAnalysis({
     position: game,
     history: branchHistory,
-    limits: { ...REVIEW_PRESETS[preset], variations: 3 },
+    limits: interactiveLimits({ effort }),
     enabled: !onMainLine,
   });
   const branchAnalysis = branchSearch.analysis;
@@ -490,8 +508,13 @@ export default function ReviewScreen() {
     onPrevious: stepBack,
   });
 
-  // Store the accuracy once, and only once the whole game has been graded:
-  // an average over the moves reviewed so far is not anybody's accuracy.
+  // Store the accuracy once per depth, and only once the whole game has been
+  // graded: an average over the moves reviewed so far is not anybody's
+  // accuracy. Once per depth rather than once, because the walk deepens on its
+  // own — the accuracy from the first shallow pass is a real number worth
+  // keeping if the reviewer leaves immediately, and each deeper pass that
+  // completes is a better one that should replace it. The server takes the last
+  // report it is sent, so a deeper review corrects a shallower one.
   useEffect(() => {
     const viewerColor: SideColor | null = record
       ? (SIDE_COLORS.find((color) => record.players[color]?.userId === accountId) ?? null)
@@ -499,7 +522,7 @@ export default function ReviewScreen() {
     if (!record || !report?.complete || !gameId || !viewerColor) return;
     const measured = report.accuracy[viewerColor];
     if (!measured) return;
-    const key = `${gameId}:${viewerColor}:${preset}`;
+    const key = `${gameId}:${viewerColor}:${engineLimits.maxDepth}`;
     if (savedRef.current === key) return;
     savedRef.current = key;
     putGameAccuracy(gameId, profileKey, {
@@ -515,19 +538,23 @@ export default function ReviewScreen() {
         best: measured.grades.best + measured.grades.great,
         great: undefined,
       },
+      // The budget the report was actually graded at, read off the walk rather
+      // than off a setting: nobody chooses a depth any more, so a stored
+      // number's provenance is whatever rung the walk had reached when it was
+      // stored.
       engine: {
-        preset,
-        maxDepth: REVIEW_PRESETS[preset].maxDepth,
-        maxNodes: REVIEW_PRESETS[preset].maxNodes,
-        maxTimeMs: REVIEW_PRESETS[preset].maxTimeMs,
-        variations: REVIEW_PRESETS[preset].variations,
+        effort,
+        maxDepth: engineLimits.maxDepth,
+        maxNodes: engineLimits.maxNodes,
+        maxTimeMs: engineLimits.maxTimeMs,
+        variations: engineLimits.variations,
       },
     })
       .then(() => {})
       // A review the archive would not take is not worth interrupting the
       // reviewer over: the numbers on screen are the same either way.
       .catch(() => {});
-  }, [accountId, gameId, preset, profileKey, record, report]);
+  }, [accountId, effort, engineLimits, gameId, profileKey, record, report]);
 
   // Chat lives under the board on a wide screen, so the board leaves room for
   // it rather than pushing it off the bottom.
@@ -555,13 +582,7 @@ export default function ReviewScreen() {
         <View style={styles.centered}>
           <Text style={styles.emptyTitle}>This game cannot be reviewed</Text>
           <Text style={styles.emptyBody}>{loadError}</Text>
-          <Pressable
-            accessibilityRole="button"
-            onPress={() => router.back()}
-            style={({ pressed }) => [styles.emptyButton, pressed && styles.pressed]}
-          >
-            <Text style={styles.emptyButtonText}>Go back</Text>
-          </Pressable>
+          <BackLink href={upTarget.href} label={upTarget.label} />
         </View>
       </SafeAreaView>
     );
@@ -573,13 +594,7 @@ export default function ReviewScreen() {
         <View style={styles.centered}>
           <Text style={styles.emptyTitle}>This record could not be replayed</Text>
           <Text style={styles.emptyBody}>{sourceError}</Text>
-          <Pressable
-            accessibilityRole="button"
-            onPress={() => router.back()}
-            style={({ pressed }) => [styles.emptyButton, pressed && styles.pressed]}
-          >
-            <Text style={styles.emptyButtonText}>Go back</Text>
-          </Pressable>
+          <BackLink href={upTarget.href} label={upTarget.label} />
         </View>
       </SafeAreaView>
     );
@@ -611,7 +626,14 @@ export default function ReviewScreen() {
         : record.moves[cursor - 1]
       : null;
   const chartPoints = expectedScoreCurve(report.evaluations, record.mode.id);
-  const progress = Math.round((report.analyzed / Math.max(1, report.total)) * 100);
+  // How far the walk has got, as one number for the header. A first pass counts
+  // positions graded; a deeper pass counts positions regraded, because by then
+  // every move already has a grade and what is left to wait for is the better
+  // one.
+  const refining = gameAnalysis.refining;
+  const progress = refining
+    ? Math.round((refining.done / Math.max(1, refining.total)) * 100)
+    : Math.round((report.analyzed / Math.max(1, report.total)) * 100);
   const chat = showChat ? (
     <GameChat
       accountId={accountId}
@@ -624,14 +646,22 @@ export default function ReviewScreen() {
       onToggleChat={toggleChat}
       onToggleSpectatorMessages={toggleSpectatorMessages}
       roomOccupancy={chatOccupancy}
-      series={roomSpansSeries(chatRoomId, liveGameId)}
+      scope={chatRoomScopeOf(chatRoomScope, chatRoomId, liveGameId)}
       showSpectatorMessages={showSpectatorMessages}
       spectatorCount={0}
       wide={false}
     />
   ) : null;
 
-  const presetPicker = <AnalysisPresetPicker onChange={setPreset} value={preset} />;
+  const effortToggle = (
+    <AnalysisEffortToggle
+      deeperToCome={gameAnalysis.deeperToCome}
+      depth={gameAnalysis.depth}
+      onToggleQuick={() => setEffort((current) => (current === 'quick' ? 'full' : 'quick'))}
+      quick={effort === 'quick'}
+      refining={gameAnalysis.refining}
+    />
+  );
 
   const boardBlock = (
     <View style={styles.boardStack}>
@@ -815,18 +845,15 @@ export default function ReviewScreen() {
       <View style={styles.screen}>
         <View style={styles.topBar}>
           <View style={styles.topBarRow}>
-            <Pressable
-              accessibilityLabel="Leave the review"
-              accessibilityRole="button"
-              onPress={() => router.back()}
-              style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}
-            >
-              <Text style={styles.backIcon}>‹</Text>
-            </Pressable>
+            <BackLink href={upTarget.href} label={upTarget.label} />
             <View style={styles.titleCopy}>
               <Text numberOfLines={1} style={styles.kicker}>
                 {record.mode.shortCode ?? record.mode.id} · GAME REVIEW ·{' '}
-                {reviewState === 'running' ? `${progress}%` : record.result}
+                {reviewState === 'running'
+                  ? `${progress}%`
+                  : reviewState === 'deepening'
+                    ? `DEPTH ${refining?.limits.maxDepth ?? gameAnalysis.depth} · ${progress}%`
+                    : record.result}
               </Text>
               <Text numberOfLines={1} style={styles.title}>
                 {record.players.Red?.name || 'Red'} vs {record.players.Blue?.name || 'Blue'}
@@ -834,14 +861,16 @@ export default function ReviewScreen() {
             </View>
             {/*
               Beside the matchup where there is room for both, and on its own
-              line where there is not — three depth chips took enough of a phone's
-              header to cut `Henhen1227 vs Guest` down to `Henhen1227 v…`, and
-              whose game this is matters more up here than how deep it is being
-              read.
+              line where there is not — this used to be three depth chips, which
+              took enough of a phone's header to cut `Henhen1227 vs Guest` down
+              to `Henhen1227 v…`, and whose game this is matters more up here
+              than how deep it is being read. One chip and a status line is
+              narrower than three chips were, but only just, and the status line
+              is the part that grows.
             */}
-            {isWide ? presetPicker : null}
+            {isWide ? effortToggle : null}
           </View>
-          {isWide ? null : <View style={styles.presetRow}>{presetPicker}</View>}
+          {isWide ? null : <View style={styles.effortRow}>{effortToggle}</View>}
         </View>
 
         {isWide ? (
@@ -901,14 +930,6 @@ const styles = StyleSheet.create({
   centered: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12, padding: 24 },
   emptyTitle: { color: colors.textStrong, fontSize: 22, fontWeight: '900', textAlign: 'center' },
   emptyBody: { color: colors.textMuted, fontSize: 12, textAlign: 'center' },
-  emptyButton: {
-    marginTop: 10,
-    paddingHorizontal: 18,
-    paddingVertical: 11,
-    borderRadius: radius.medium,
-    backgroundColor: colors.accent,
-  },
-  emptyButtonText: { color: colors.textStrong, fontWeight: '900' },
   pressed: { opacity: 0.68 },
   topBar: {
     borderBottomWidth: 1,
@@ -916,16 +937,7 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   topBarRow: { minHeight: 64, flexDirection: 'row', alignItems: 'center' },
-  presetRow: { flexDirection: 'row', justifyContent: 'flex-end', paddingBottom: 8 },
-  backButton: {
-    width: 38,
-    height: 38,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: radius.large,
-    backgroundColor: colors.surface,
-  },
-  backIcon: { color: colors.text, fontSize: 31, lineHeight: 31, marginTop: -3 },
+  effortRow: { flexDirection: 'row', justifyContent: 'flex-end', paddingBottom: 8 },
   titleCopy: { flex: 1, minWidth: 0, paddingHorizontal: 10 },
   kicker: { color: colors.accentBright, fontSize: 8, fontWeight: '900', letterSpacing: 1.35 },
   title: { color: colors.textStrong, fontSize: 18, fontWeight: '900', marginTop: 2 },
