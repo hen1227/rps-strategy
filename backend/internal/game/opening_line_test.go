@@ -68,7 +68,10 @@ func TestOpeningLineSnapshotsDoNotChangeUnderneathTheirReader(t *testing.T) {
 }
 
 func TestOpeningLineStopsAtItsLimit(t *testing.T) {
-	game := testGame(t, ModeTotalWar)
+	// The rule off, because the walk below plays the first legal move it finds
+	// and that shuffles: a repetition draw would end the game before the line
+	// reached its limit, and this test is about the limit.
+	game := setupGame(t, RuleFlags{NoRepetitionDraw: true})
 	for ply := 0; ply < OpeningLineLimit+4; ply++ {
 		if game.state.Status != InProgress {
 			break

@@ -29,11 +29,8 @@ func startedTournament(t *testing.T, data *persistence.Store) persistence.Tourna
 			t.Fatal(err)
 		}
 	}
-	if _, err := data.CreateTournament(
-		ctx, "cup", "Test Cup", game.ModeTotalWar, "Total War",
-	); err != nil {
-		t.Fatal(err)
-	}
+	openTournament(t, data, "cup", "Test Cup", game.ModeTotalWar, "Total War")
+	verifiedEntrants(t, data, "user-one", "user-two")
 	for _, signup := range []struct{ userID, ign, discord string }{
 		{"user-one", "One", "one.discord"},
 		{"user-two", "Two", "two.discord"},
@@ -52,6 +49,151 @@ func startedTournament(t *testing.T, data *persistence.Store) persistence.Tourna
 		t.Fatalf("expected a single scheduled match, got %d", len(tournament.Matches))
 	}
 	return tournament
+}
+
+// A tournament game plays for a rating, and a pairing that may not is
+// downgraded rather than refused.
+//
+// The downgrade is not decoration: a player under a ranked-play sanction has
+// already entered, the field is built around them, and pulling them out mid-
+// event is a worse answer than letting their games not count.
+// A match of more than one game swaps who opens, and resolves on the aggregate.
+//
+// The swap is the reason a match is longer than one game: one side always moves
+// first here, so an even number of games is what stops the pairing being decided
+// by which of them drew the opening seat.
+func TestAMultiGameMatchSwapsTheOpeningSeat(t *testing.T) {
+	data, err := persistence.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer data.Close()
+	server := NewWithStore(data, nil)
+
+	verifiedEntrants(t, data, "user-one", "user-two")
+	config := persistence.DefaultTournamentConfig(game.ModeTotalWar, "Total War")
+	config.Name = "Match Cup"
+	config.GamesPerMatch = 2
+	if _, err := data.CreateTournament(t.Context(), "cup", config); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := data.PublishTournament(t.Context(), "cup"); err != nil {
+		t.Fatal(err)
+	}
+	for _, seat := range []struct{ userID, ign string }{
+		{"user-one", "One"}, {"user-two", "Two"},
+	} {
+		if _, err := data.SignupForTournament(
+			t.Context(), "cup", seat.userID, seat.ign, seat.ign+".discord", true,
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tournament, err := data.StartTournament(t.Context(), "cup")
+	if err != nil {
+		t.Fatal(err)
+	}
+	match := tournament.Matches[0]
+
+	first := tournamentTestClient("user-one", "One")
+	second := tournamentTestClient("user-two", "Two")
+	server.hub.Register(first)
+	server.hub.Register(second)
+
+	// Game one: the first player opens, which is what a single-game match has
+	// always done.
+	server.startTournamentMatch(tournament, match, first, second)
+	opener := server.participantFor(first)
+	if opener == nil || opener.color != game.FirstToMove {
+		t.Fatalf("the first player should open game one, got %#v", opener)
+	}
+	if !opener.session.tournament.player1Opened {
+		t.Fatal("the session should record that the first player opened")
+	}
+
+	// Game two, after one game is on the record: the seats swap.
+	if _, complete, err := data.RecordTournamentMatchGame(
+		t.Context(), "cup", match.MatchID, "game-one", 2,
+	); err != nil {
+		t.Fatal(err)
+	} else if complete {
+		t.Fatal("a two-game match must not close on its first game")
+	}
+	played, err := data.Tournament(t.Context(), "cup")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.mu.Lock()
+	server.tournamentGames = map[tournamentMatchKey]*GameSession{}
+	server.participants = map[*Client]Participant{}
+	server.mu.Unlock()
+
+	server.startTournamentMatch(played, played.Matches[0], first, second)
+	swapped := server.participantFor(first)
+	if swapped == nil || swapped.color != game.OtherColor(game.FirstToMove) {
+		t.Fatalf("the first player should follow in game two, got %#v", swapped)
+	}
+	if swapped.session.tournament.player1Opened {
+		t.Fatal("the session should record that the first player did not open")
+	}
+}
+
+func TestTournamentGamesAreRatedUnlessAPairingMayNotBe(t *testing.T) {
+	seat := func(t *testing.T, sanction string) *GameSession {
+		t.Helper()
+		data, err := persistence.Open(":memory:")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = data.Close() })
+		server := NewWithStore(data, nil)
+		tournament := startedTournament(t, data)
+		match := tournament.Matches[0]
+
+		clients := make([]*Client, 0, 2)
+		for _, seat := range []struct{ userID, username string }{
+			{"user-one", "One"},
+			{"user-two", "Two"},
+		} {
+			client := tournamentTestClient(seat.userID, seat.username)
+			// Registered, because rankedAllowed asks that first and every
+			// entrant is a claimed account by the time they reach a bracket.
+			client.account = persistence.Account{UserID: seat.userID, Registered: true}
+			server.hub.Register(client)
+			clients = append(clients, client)
+		}
+		if sanction != "" {
+			restriction, err := data.SetRestriction(
+				t.Context(), sanction, persistence.RestrictRanked, "ladder manipulation",
+				"admin", nil,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			server.cacheRestriction(sanction, restriction)
+		}
+
+		for _, client := range clients {
+			server.handleMessage(client, ClientMessage{
+				Type:         "tournament_ready",
+				TournamentID: tournament.TournamentID,
+				MatchID:      match.MatchID,
+			})
+		}
+		participant := server.participantFor(clients[0])
+		if participant == nil {
+			t.Fatal("both ready players must be put into the match")
+		}
+		return participant.session
+	}
+
+	if session := seat(t, ""); !session.ranked {
+		t.Fatal("a tournament game between two eligible players must be rated")
+	}
+	// One barred side is enough: a rated game needs both.
+	if session := seat(t, "user-two"); session.ranked {
+		t.Fatal("a pairing with a barred player must be downgraded to casual")
+	}
 }
 
 func TestTournamentMatchStartsWhenBothPlayersAreReady(t *testing.T) {
@@ -90,8 +232,9 @@ func TestTournamentMatchStartsWhenBothPlayersAreReady(t *testing.T) {
 	if participant == nil || opponent == nil {
 		t.Fatal("both ready players must be put into the match")
 	}
-	if participant.color != game.Red || opponent.color != game.Blue {
-		t.Fatalf("the match's first player must play Red, got %s and %s",
+	if participant.color != game.FirstToMove ||
+		opponent.color != game.OtherColor(game.FirstToMove) {
+		t.Fatalf("the match's first player must take the opening seat, got %s and %s",
 			participant.color, opponent.color)
 	}
 	if participant.session.tournament == nil ||

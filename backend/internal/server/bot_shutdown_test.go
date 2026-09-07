@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"rps-strategy/backend/internal/botclient"
 	"rps-strategy/backend/internal/game"
 	"rps-strategy/backend/internal/persistence"
 )
@@ -99,7 +100,7 @@ func TestAnIdleBotShutsDownImmediately(t *testing.T) {
 	server := New(nil)
 	engine := fakeClient(t, server, "engine", true)
 	engine.bot.mu.Lock()
-	engine.bot.clientVersion = botShutdownExitVersion
+	engine.bot.clientVersion = botclient.Version()
 	engine.bot.mu.Unlock()
 
 	state := server.requestBotShutdown(engine, true, "the website")
@@ -117,7 +118,7 @@ func TestAPausedBotIsNotToldToStop(t *testing.T) {
 	server := New(nil)
 	engine := fakeClient(t, server, "engine", true)
 	engine.bot.mu.Lock()
-	engine.bot.clientVersion = botShutdownExitVersion
+	engine.bot.clientVersion = botclient.Version()
 	engine.bot.mu.Unlock()
 
 	server.requestBotShutdown(engine, false, "the website")
@@ -128,26 +129,6 @@ func TestAPausedBotIsNotToldToStop(t *testing.T) {
 	}
 	if _, ok := messageOfType(messages, "bot_draining"); !ok {
 		t.Fatal("a paused bot should still be told it is draining")
-	}
-}
-
-// Every client since 1.0 exits on bot_rejected, which is what lets a graceful
-// shutdown work for a script its owner has not re-downloaded.
-func TestAnOlderClientIsToldToStopInAWordItKnows(t *testing.T) {
-	server := New(nil)
-	engine := fakeClient(t, server, "engine", true)
-	engine.bot.mu.Lock()
-	engine.bot.clientVersion = "1.1"
-	engine.bot.mu.Unlock()
-
-	server.requestBotShutdown(engine, true, "the website")
-
-	messages := drain(engine)
-	if _, ok := messageOfType(messages, "bot_shutdown"); ok {
-		t.Fatal("a 1.1 client cannot read bot_shutdown and would sit there forever")
-	}
-	if _, ok := messageOfType(messages, "bot_rejected"); !ok {
-		t.Fatal("a 1.1 client should be stopped with the message it does understand")
 	}
 }
 
@@ -191,7 +172,7 @@ func TestADrainDoesNotSurviveAReconnect(t *testing.T) {
 		},
 	}
 	server.mu.Lock()
-	server.bots[restarted.bot.botID] = restarted
+	server.bots[restarted.bot.botID] = []*Client{restarted}
 	server.mu.Unlock()
 
 	if botIsDraining(restarted) {
@@ -206,9 +187,8 @@ func TestADrainWaitsForMatchesInAStartedTournament(t *testing.T) {
 	server := New(nil)
 	data, ctx := server.data, context.Background()
 
-	if _, err := data.CreateTournament(ctx, "cup", "Summer Cup", game.ModeTotalWar, "Total War"); err != nil {
-		t.Fatalf("create tournament: %v", err)
-	}
+	openTournament(t, data, "cup", "Summer Cup", game.ModeTotalWar, "Total War")
+	verifiedEntrants(t, data, "engine", "rival")
 	for _, name := range []string{"engine", "rival"} {
 		if _, err := data.SignupForTournament(ctx, "cup", name, name, "bot."+name, true); err != nil {
 			t.Fatalf("sign up %s: %v", name, err)
@@ -239,9 +219,8 @@ func TestADrainWithdrawsFromATournamentThatHasNotStarted(t *testing.T) {
 	server := New(nil)
 	data, ctx := server.data, context.Background()
 
-	if _, err := data.CreateTournament(ctx, "cup", "Summer Cup", game.ModeTotalWar, "Total War"); err != nil {
-		t.Fatalf("create tournament: %v", err)
-	}
+	openTournament(t, data, "cup", "Summer Cup", game.ModeTotalWar, "Total War")
+	verifiedEntrants(t, data, "engine")
 	if _, err := data.SignupForTournament(ctx, "cup", "engine", "engine", "bot.engine", true); err != nil {
 		t.Fatalf("sign up: %v", err)
 	}
@@ -272,9 +251,8 @@ func TestADrainWithdrawsFromATournamentThatHasNotStarted(t *testing.T) {
 func TestWithdrawingFromAStartedTournamentIsRefused(t *testing.T) {
 	data, ctx := New(nil).data, context.Background()
 
-	if _, err := data.CreateTournament(ctx, "cup", "Summer Cup", game.ModeTotalWar, "Total War"); err != nil {
-		t.Fatalf("create tournament: %v", err)
-	}
+	openTournament(t, data, "cup", "Summer Cup", game.ModeTotalWar, "Total War")
+	verifiedEntrants(t, data, "one", "two")
 	for _, name := range []string{"one", "two"} {
 		if _, err := data.SignupForTournament(ctx, "cup", name, name, "bot."+name, true); err != nil {
 			t.Fatalf("sign up %s: %v", name, err)
@@ -295,7 +273,7 @@ func TestRepeatingAShutdownRequestChangesNothing(t *testing.T) {
 	server := New(nil)
 	engine := fakeClient(t, server, "engine", true)
 	engine.bot.mu.Lock()
-	engine.bot.clientVersion = botShutdownExitVersion
+	engine.bot.clientVersion = botclient.Version()
 	engine.bot.mu.Unlock()
 
 	server.requestBotShutdown(engine, true, "the engine")
@@ -336,7 +314,7 @@ func TestUpgradingASettledPauseStillStopsTheBot(t *testing.T) {
 	server := New(nil)
 	engine := fakeClient(t, server, "engine", true)
 	engine.bot.mu.Lock()
-	engine.bot.clientVersion = botShutdownExitVersion
+	engine.bot.clientVersion = botclient.Version()
 	engine.bot.mu.Unlock()
 
 	server.requestBotShutdown(engine, false, "the website")

@@ -68,7 +68,7 @@ const (
 )
 
 const (
-	// TitleCandidateMaster and the three above it are the rating ladder.
+	// TitleCandidateMaster and the four above it are the rating ladder.
 	TitleCandidateMaster     TitleID = "CM"
 	TitleMaster              TitleID = "FM"
 	TitleInternationalMaster TitleID = "IM"
@@ -83,10 +83,30 @@ const (
 	// is the one who turns up in chat.
 	TitleBotMaster    TitleID = "BM"
 	TitleBotArchitect TitleID = "ARC"
+	// TitleHotStreak is a run of wins with nothing in between.
+	TitleHotStreak TitleID = "STK"
 
-	// TitleDeveloper and TitleModerator exist only to be granted.
-	TitleDeveloper TitleID = "DEV"
-	TitleModerator TitleID = "MOD"
+	// TitleDiscordVerified is the one title with no bar to clear: Discord has
+	// vouched that the account is somebody's, and everybody it vouches for
+	// holds it. Earned rather than granted, because linking is something the
+	// player did — and a single letter because it will be the commonest tag on
+	// the site, sitting in front of a name that has nothing else to say.
+	TitleDiscordVerified TitleID = "D"
+
+	// The last six cannot be earned at all. An administrator hands them out.
+	// TitleVeteran is among them by choice rather than for want of a rule: how
+	// much play deserves it is a judgement, and one a query would get wrong in
+	// both directions.
+	TitleVeteran     TitleID = "VET"
+	TitleDeveloper   TitleID = "DEV"
+	TitleModerator   TitleID = "MOD"
+	TitleContributor TitleID = "CON"
+	TitleFounder     TitleID = "FND"
+	// TitleWebGoatGuy belongs to one person: the one who invented this game.
+	// Not "an award for game design" with a rule somebody could satisfy — the
+	// requirement is being him, which is why there is exactly one of these and
+	// no evaluator that could ever hand out a second.
+	TitleWebGoatGuy TitleID = "WGG"
 )
 
 // MaximumTitleLength is the promise the tag makes to every layout that renders
@@ -153,22 +173,61 @@ var titleCatalogue = []Title{
 		Requirement: "Own an engine that has won a tournament.",
 	},
 	{
+		ID:          TitleHotStreak,
+		Name:        "Hot Streak",
+		Kind:        TitleKindAchievement,
+		Requirement: "Win 8 rated games in a row.",
+	},
+	{
 		ID:          TitleBotSlayer,
 		Name:        "Bot Slayer",
 		Kind:        TitleKindAchievement,
 		Requirement: "Beat a registered engine somebody else owns.",
 	},
 	{
+		ID:          TitleDiscordVerified,
+		Name:        "Discord Verified",
+		Kind:        TitleKindAchievement,
+		Requirement: "Sign in with Discord, or link a Discord account to this one.",
+	},
+	{
+		ID:          TitleVeteran,
+		Name:        "Veteran",
+		Kind:        TitleKindGranted,
+		Requirement: "Granted by the admin.",
+	},
+	{
 		ID:          TitleDeveloper,
 		Name:        "Developer",
 		Kind:        TitleKindGranted,
-		Requirement: "Granted by the host.",
+		Requirement: "Granted by the admin.",
 	},
 	{
 		ID:          TitleModerator,
 		Name:        "Moderator",
 		Kind:        TitleKindGranted,
-		Requirement: "Granted by the host.",
+		Requirement: "Granted by the admin.",
+	},
+	{
+		ID:          TitleContributor,
+		Name:        "Contributor",
+		Kind:        TitleKindGranted,
+		Requirement: "Granted by the admin, for work on the game itself.",
+	},
+	{
+		ID:          TitleFounder,
+		Name:        "Founder",
+		Kind:        TitleKindGranted,
+		Requirement: "Granted by the admin, for being here at the start.",
+	},
+	{
+		ID:   TitleWebGoatGuy,
+		Name: "WebGoatGuy",
+		Kind: TitleKindGranted,
+		// Stated as a fact about one person rather than as a bar to clear, so
+		// that the account page reads honestly to everybody else looking at it:
+		// there is nothing here to work towards.
+		Requirement: "Be WebGoatGuy, who invented this game.",
 	},
 }
 
@@ -215,6 +274,12 @@ var ratingLadder = []ratingRung{
 // is "this was not a fluke of two games", not "this is a settled rating".
 const titleLadderMinimumGames = 10
 
+// titleWinStreakLength is Hot Streak: eight in a row, counting every rated game
+// rather than only the ones against people. A game that moved your rating is a
+// game, and a rule that quietly skipped some of them would make a streak
+// something other than what the player watched happen.
+const titleWinStreakLength = 8
+
 var (
 	// ErrUnknownTitle is an id that is not in the catalogue.
 	ErrUnknownTitle = errors.New("unknown title")
@@ -260,6 +325,33 @@ CREATE INDEX IF NOT EXISTS account_titles_user_idx ON account_titles(user_id);
 `
 	if _, err := store.db.ExecContext(ctx, schema); err != nil {
 		return fmt.Errorf("migrate account titles: %w", err)
+	}
+	return store.retireWithdrawnTitles(ctx)
+}
+
+// retireWithdrawnTitles takes a title that has left the catalogue off the names
+// still wearing it.
+//
+// The owned rows are left where they are. Reads resolve those through the
+// catalogue and drop what they cannot find (see TitleID), so a withdrawn title
+// stops appearing in a collection on its own — and if it is ever reinstated, so
+// is everybody who earned it. The worn column is the one that is not read that
+// way: a dozen queries select `accounts.title` straight into a tag, so an id
+// left there after the catalogue has dropped it is a mark on somebody's name
+// that nothing on the site can explain.
+func (store *Store) retireWithdrawnTitles(ctx context.Context) error {
+	placeholders := make([]string, 0, len(titleCatalogue))
+	arguments := make([]any, 0, len(titleCatalogue)+1)
+	arguments = append(arguments, time.Now().UnixMilli())
+	for _, title := range titleCatalogue {
+		placeholders = append(placeholders, "?")
+		arguments = append(arguments, title.ID)
+	}
+	if _, err := store.db.ExecContext(ctx, `
+UPDATE accounts SET title = '', updated_at_unix_ms = ?
+WHERE title <> '' AND title NOT IN (`+strings.Join(placeholders, ", ")+`)
+`, arguments...); err != nil {
+		return fmt.Errorf("retire withdrawn titles: %w", err)
 	}
 	return nil
 }
@@ -529,6 +621,19 @@ SELECT MAX(elo) FROM account_mode_ratings WHERE user_id = ? AND games_played >= 
 		}
 	}
 
+	// Discord has vouched for this account. The only rule in this file that
+	// reads a column rather than a record: what it asks about happened at the
+	// sign-in page rather than at a board, so there is nothing to count.
+	verified, err := store.exists(ctx, `
+SELECT 1 FROM accounts WHERE user_id = ? AND discord_user_id <> '' LIMIT 1
+`, userID)
+	if err != nil {
+		return nil, fmt.Errorf("evaluate titles: read discord link: %w", err)
+	}
+	if verified {
+		earned = append(earned, TitleDiscordVerified)
+	}
+
 	// Beating an engine, which has to be somebody else's engine. Without that
 	// clause the title is bought rather than won: register a bot, tell it to
 	// resign, and the tag is yours. An unclaimed or deleted bot slot leaves an
@@ -584,6 +689,14 @@ LIMIT 1
 		earned = append(earned, TitleBotArchitect)
 	}
 
+	streak, err := store.longestWinStreak(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	if streak >= titleWinStreakLength {
+		earned = append(earned, TitleHotStreak)
+	}
+
 	// Tournaments, for the player and for their engines in one pass: the
 	// champions of a finished tournament are read once and matched against both
 	// this account and the accounts of the bots it owns.
@@ -598,6 +711,49 @@ LIMIT 1
 		earned = append(earned, TitleBotMaster)
 	}
 	return earned, nil
+}
+
+// longestWinStreak is the longest run of wins in this account's rated games
+// with nothing in between. A loss or a draw ends a run.
+//
+// The longest ever rather than the current one, and so a scan of the whole
+// history rather than a look at the last few games. The cheaper version would
+// only ever award this to a streak that finishes while the evaluator is
+// watching — which would mean every run played before this title existed never
+// happened, and a player who reconnects after eight straight wins is told
+// nothing. Every other rule in this file is retroactive; this one costs an
+// indexed scan of one player's games to be.
+func (store *Store) longestWinStreak(ctx context.Context, userID string) (int, error) {
+	rows, err := store.db.QueryContext(ctx, `
+SELECT CASE WHEN winner_player_id = ?1 THEN 1 ELSE 0 END AS won
+FROM game_history
+WHERE ranked = 1 AND (red_player_id = ?1 OR blue_player_id = ?1)
+ORDER BY finished_at_unix_ms, game_id
+`, userID)
+	if err != nil {
+		return 0, fmt.Errorf("evaluate titles: read win streak: %w", err)
+	}
+	defer rows.Close()
+
+	longest, current := 0, 0
+	for rows.Next() {
+		var won int
+		if err := rows.Scan(&won); err != nil {
+			return 0, fmt.Errorf("evaluate titles: read win streak: %w", err)
+		}
+		if won == 0 {
+			current = 0
+			continue
+		}
+		current++
+		if current > longest {
+			longest = current
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("evaluate titles: read win streak: %w", err)
+	}
+	return longest, nil
 }
 
 // exists runs a query that selects at most one row and reports whether it found
@@ -631,8 +787,9 @@ FROM tournament_players p
 JOIN tournaments t ON t.tournament_id = p.tournament_id
 LEFT JOIN bots b ON b.user_id = p.user_id
 WHERE t.status = ?
+  AND t.kind <> ?
   AND (p.user_id = ? OR b.owner_user_id = ?)
-`, TournamentCompleted, userID, userID)
+`, TournamentCompleted, string(TournamentWeekend), userID, userID)
 	if err != nil {
 		return false, false, fmt.Errorf("evaluate titles: read tournaments: %w", err)
 	}
@@ -674,6 +831,12 @@ WHERE t.status = ?
 	}
 	return own, bots, nil
 }
+
+// Weekend arenas are excluded on purpose. Tournament Champion is a lifetime
+// title for winning an event somebody organised and announced; a series that
+// crowns somebody every week would hand it to every active engine inside a
+// season and it would stop distinguishing anybody. The weekend arena has its
+// own marker instead — see WeekendWins and the rolling crown that reads it.
 
 // tournamentChampions is everybody who finished a completed tournament on the
 // most points, by user id.

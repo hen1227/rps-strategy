@@ -54,7 +54,7 @@ func newClockState(control TimeControl, now time.Time) ClockState {
 	return ClockState{
 		RedRemainingMs:  control.InitialTimeMs,
 		BlueRemainingMs: control.InitialTimeMs,
-		ActiveColor:     Red,
+		ActiveColor:     FirstToMove,
 		UpdatedAtUnixMs: now.UnixMilli(),
 	}
 }

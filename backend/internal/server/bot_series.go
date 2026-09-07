@@ -65,7 +65,9 @@ const (
 	// publicSeriesConcurrent caps visitor-started runs across the whole server.
 	// Series games are sequential and every one of them is a real game in the
 	// lobby, so an unbounded number of them would crowd out the people playing.
-	publicSeriesConcurrent = 2
+	// Ten is well short of that: the per-account ceiling means ten runs are ten
+	// different visitors, and the engines themselves run out of slots first.
+	publicSeriesConcurrent = 10
 )
 
 // botMatchRef links a live game back to the series it belongs to.
@@ -106,6 +108,23 @@ type botSeries struct {
 	// game N+1 twice would seat both engines twice.
 	advancing bool
 	aborted   bool
+	// awaySince is when the server first found one of this run's engines
+	// offline, and is zero the rest of the time. Kept whether or not the run is
+	// between games, because it is what the window for coming back is measured
+	// from. See noteSeriesEnginePresence.
+	awaySince time.Time
+	// stalled is a run that tried to deal its next game, found an engine
+	// missing, and is holding its place until that engine is back: it keeps its
+	// slot claims, its score and its conversation, and resumes at the game it
+	// stopped at. Distinct from awaySince, which is only the clock — a run
+	// whose engine drops mid-game is timing the absence without being stalled,
+	// because the game on the board is what it is waiting for.
+	//
+	// It is also the flag that says who may deal the next game. Exactly one
+	// thing advances a run at a time: the goroutine after a finished game while
+	// `advancing` is set, or the sweep while this is. Clearing it under step
+	// before dealing is what keeps those two from both seating game N+1.
+	stalled bool
 	// firstWins, secondWins and draws are the run's own tally, always from the
 	// first bot's point of view. The database holds the same numbers; this copy
 	// exists so the lobby can put a score on every row of a broadcast without a
@@ -186,6 +205,12 @@ func (server *Server) StartBotSeries(
 	ctx context.Context,
 	ask BotSeriesRequest,
 ) (persistence.BotSeries, error) {
+	// A run started during a drain would be aborted before its second game, so
+	// refusing it up front is both faster and honest. Administrators included:
+	// the one who asked for the restart is the one most likely to be here.
+	if server.isUpdating() {
+		return persistence.BotSeries{}, errSeriesServerUpdating
+	}
 	if ask.FirstBotID == ask.SecondBotID {
 		return persistence.BotSeries{}, errSeriesSameBot
 	}
@@ -215,11 +240,17 @@ func (server *Server) StartBotSeries(
 	if first == nil || second == nil {
 		return persistence.BotSeries{}, errSeriesBotOffline
 	}
-	if server.participantFor(first) != nil || server.participantFor(second) != nil {
+	if server.freeBotConnection(ask.FirstBotID) == nil ||
+		server.freeBotConnection(ask.SecondBotID) == nil {
 		return persistence.BotSeries{}, errSeriesBotBusy
 	}
 	if botIsDraining(first) || botIsDraining(second) {
 		return persistence.BotSeries{}, errSeriesBotDraining
+	}
+	// A series is minutes of both engines' time, which is exactly what an
+	// engine entered in a running tournament does not have. See bot_reserve.go.
+	if server.botIsReserved(first) || server.botIsReserved(second) {
+		return persistence.BotSeries{}, errSeriesBotReserved
 	}
 	if !ask.Privileged &&
 		(!openToPublicSeries(first, ask.RequestedBy) ||
@@ -247,7 +278,7 @@ func (server *Server) StartBotSeries(
 		openings:     make(map[int][]game.Move),
 		openingSeeds: make(map[int]uint64),
 		counted:      make(map[int]bool),
-		chat:         newChatRoom(seriesID),
+		chat:         newScopedChatRoom(seriesID, ChatScopeSeries),
 	}
 	// The run is registered before its database row exists, so that the public
 	// ceiling and the claim on a slot happen under one lock. Checking first and
@@ -255,6 +286,15 @@ func (server *Server) StartBotSeries(
 	// limit of one.
 	if err := server.botSeriesRuns.claim(run); err != nil {
 		return persistence.BotSeries{}, err
+	}
+	// The slots come next, under the run's own id, so that two series starting
+	// together cannot both take the same one — and so that the pair boundaries
+	// below have a seat waiting rather than a search for one.
+	if server.claimSeriesBot(ask.FirstBotID, seriesID) == nil ||
+		server.claimSeriesBot(ask.SecondBotID, seriesID) == nil {
+		server.releaseSeriesBots(run)
+		server.botSeriesRuns.drop(seriesID)
+		return persistence.BotSeries{}, errSeriesBotBusy
 	}
 
 	record, err := server.data.CreateBotSeries(ctx, persistence.BotSeries{
@@ -270,6 +310,7 @@ func (server *Server) StartBotSeries(
 		IncrementMs:       ask.Control.IncrementMs,
 	})
 	if err != nil {
+		server.releaseSeriesBots(run)
 		server.botSeriesRuns.drop(seriesID)
 		return persistence.BotSeries{}, err
 	}
@@ -280,6 +321,13 @@ func (server *Server) StartBotSeries(
 
 // playNextSeriesGame seats the two engines for the next game in the run.
 func (server *Server) playNextSeriesGame(run *botSeries) {
+	// Before the game number moves, so that waiting is a retry of the game
+	// about to be dealt rather than a skip past it. An engine that is not
+	// connected right now is very often one that will be in a second — see
+	// stallSeriesForAbsentEngine.
+	if server.stallSeriesForAbsentEngine(run, time.Now()) {
+		return
+	}
 	run.gameNumber++
 	number := run.gameNumber
 	if run.aborted || number > run.pairs*2 {
@@ -292,13 +340,13 @@ func (server *Server) playNextSeriesGame(run *botSeries) {
 	pair := (number + 1) / 2
 	swapped := number%2 == 0
 
-	// A draining engine leaves on a pair boundary rather than the moment it is
-	// asked, and an odd `number` is exactly that boundary: this game would open
-	// a new pair. Half a pair is not wrong — an unplayed game is recorded
+	// A draining engine — or a server being replaced — leaves on a pair boundary
+	// rather than the moment it is asked, and an odd `number` is exactly that
+	// boundary: this game would open a new pair. Half a pair is not wrong — an unplayed game is recorded
 	// nowhere and reaches no ladder — but the two seatings of a pair exist to
 	// cancel the first-move advantage, and stopping between them leaves the
 	// matchup's sample one game lopsided. Finishing costs one more short game.
-	if !swapped && server.seriesBotIsDraining(run) {
+	if !swapped && (server.isUpdating() || server.seriesBotIsDraining(run)) {
 		server.finishBotSeries(run, persistence.BotSeriesAborted)
 		return
 	}
@@ -306,8 +354,8 @@ func (server *Server) playNextSeriesGame(run *botSeries) {
 	moves, ok := run.openings[pair]
 	if !ok {
 		usedSeed, built := uint64(0), false
-		moves, usedSeed, built = buildOpening(
-			server.registry, run.modeID,
+		moves, usedSeed, built = server.dealOpening(
+			context.Background(), run.modeID,
 			run.seed+uint64(pair)*0x9e3779b97f4a7c15, run.plies,
 		)
 		if !built {
@@ -319,9 +367,24 @@ func (server *Server) playNextSeriesGame(run *botSeries) {
 		run.openingSeeds[pair] = usedSeed
 	}
 
-	first, second := server.readyBot(run.firstBot), server.readyBot(run.secondBot)
+	first := server.claimSeriesBot(run.firstBot, run.seriesID)
+	second := server.claimSeriesBot(run.secondBot, run.seriesID)
 	if first == nil || second == nil {
 		server.finishBotSeries(run, persistence.BotSeriesAborted)
+		return
+	}
+	// Re-read after the claims, because an abort can land between the check at
+	// the top of this function and here: a moderator's stop button, a recall
+	// for a tournament match, the sweep giving up on an engine. releaseSeriesBots
+	// has already run by then, so claiming afterwards would pin two slots to a
+	// run that no longer exists and no later release would ever name — an
+	// engine stuck showing as busy until its owner restarted it.
+	run.step.Lock()
+	dropped := run.aborted
+	run.step.Unlock()
+	if dropped {
+		server.releaseSeriesBots(run)
+		server.broadcastBots()
 		return
 	}
 	red, blue := first, second
@@ -329,12 +392,32 @@ func (server *Server) playNextSeriesGame(run *botSeries) {
 		red, blue = second, first
 	}
 
+	// Ranked, because both sides are bots: this moves bot ratings and cannot
+	// touch a person's, which is the whole of the separate-pool design. Unless
+	// one person owns both engines, and then it is casual.
+	//
+	// Running your new version against your old one is the reason the five-bot
+	// allowance exists, and openToPublicSeries lets an owner do it with bots
+	// nobody else may challenge. A rating is the one thing it must not produce.
+	// Two accounts the same hand controls can be made to lose to each other on
+	// purpose, so their record says where those two stand against each other and
+	// nothing whatever about where either stands on the board.
+	//
+	// Marked here, on the game, rather than filtered out further down, so that
+	// every place a game is shown reads it from the same flag: the history row,
+	// the archive, the PGN and the review screen all say casual without being
+	// told separately. The ladder does not depend on it — botHeadToHeadTx drops
+	// a same-owner pair whatever the flag says, which is what covers the games
+	// that were recorded before this rule existed.
+	setup := game.GameSetup{
+		ModeID:      run.modeID,
+		TimeControl: run.control,
+		Casual:      sameBotOwner(first, second),
+	}
 	entry := func(client *Client) QueueEntry {
 		return QueueEntry{
-			Client: client,
-			// Ranked: both sides are bots, so this moves bot ratings and cannot
-			// touch a person's. That is the whole of the separate-pool design.
-			Setup:    game.GameSetup{ModeID: run.modeID, TimeControl: run.control},
+			Client:   client,
+			Setup:    setup,
 			Elo:      matchmakingElo(client, run.modeID),
 			JoinedAt: time.Now(),
 		}
@@ -533,6 +616,27 @@ func openToPublicSeries(client *Client, requestedBy string) bool {
 	return requestedBy != "" && record.OwnerUserID == requestedBy
 }
 
+// sameBotOwner reports whether one person owns both engines.
+//
+// Unclaimed is never the same as unclaimed: a bot that has not finished its
+// handshake has no owner on record here, and two unknowns are not a match. The
+// callers only ever ask about ready bots, so this is a guard rather than a case.
+func sameBotOwner(first *Client, second *Client) bool {
+	one, other := botOwner(first), botOwner(second)
+	return one != "" && one == other
+}
+
+// botOwner reads the account a bot is registered to, or empty for a client that
+// is not a bot or has not been claimed.
+func botOwner(client *Client) string {
+	if client == nil || client.bot == nil {
+		return ""
+	}
+	client.bot.mu.Lock()
+	defer client.bot.mu.Unlock()
+	return client.bot.record.OwnerUserID
+}
+
 func (server *Server) finishBotSeries(run *botSeries, status persistence.BotSeriesStatus) {
 	run.step.Lock()
 	if run.aborted {
@@ -545,14 +649,228 @@ func (server *Server) finishBotSeries(run *botSeries, status persistence.BotSeri
 	server.botSeriesRuns.mu.Lock()
 	delete(server.botSeriesRuns.series, run.seriesID)
 	server.botSeriesRuns.mu.Unlock()
+	server.releaseSeriesBots(run)
+	// A held slot reads as busy even between the games of a run, which is the
+	// point of holding it — so handing the slots back is a change to the roster
+	// with no game ending to publish it. The last game of the run was retired
+	// before this, and said its engines were in a series that still held them.
+	server.broadcastBots()
 
 	if err := server.data.CloseBotSeries(context.Background(), run.seriesID, status); err != nil {
 		log.Printf("close series: %v", err)
 	}
+	// A run is a commitment a drain waits on even between its games, so a run
+	// ending is a commitment clearing — the same event as a game finishing, and
+	// it needs the same hook. Without it the last thing a deploy was waiting for
+	// is a series that stops on a pair boundary, and the exit waits for a lobby
+	// tick to notice. Only ever a no-op unless a deploy is in progress.
+	server.settleUpdateDrain()
+	// And the same at the other scale, which was missing: the whole point of
+	// stopping on a pair boundary is that a draining engine can then go, so the
+	// engine should be told the moment the pair is done rather than on whichever
+	// lobby tick came next. Both bots, because either one of them may be the one
+	// that is leaving.
+	for _, botID := range []string{run.firstBot, run.secondBot} {
+		if client := server.readyBot(botID); client != nil && botHasOwnDrain(client) {
+			server.settleBotShutdown(client)
+		}
+	}
 }
 
-// abortSeriesForBot ends any run a departing bot was part of. A series with one
-// engine in it is not a series.
+// An engine that is not there right now, and the difference between that and an
+// engine that is gone.
+//
+// rpsbot.py reconnects on its own, on a backoff that starts at one second, and
+// a supervised host restarts it if the process dies. So the overwhelmingly
+// common reason a slot is missing is that it is on its way back — a redeploy of
+// the owner's machine, a wifi drop, a laptop lid. A run used to be written off
+// the instant that happened, which turned a two-second blip into a lost
+// afternoon of engine time and, when the blip was mid-pair, into a matchup whose
+// sample is one game lopsided in the first mover's favour.
+//
+// So a run *stalls* instead. It keeps its slot claims, its score, its chat room
+// and the game number it was about to deal, and it waits the same window a game
+// on the board waits for the same engine. Coming back inside that window is a
+// blip and costs nothing. Not coming back is the run ending, which is what it
+// always was.
+
+// seriesAwayGrace is how long a run waits for a missing engine.
+//
+// Deliberately the same window a seat on the board gets. Two numbers here would
+// be two things to explain and one of them would drift: an owner watching an
+// engine reconnect wants "it has fifteen seconds" to be true of everything it
+// was doing, not of its game but not its series.
+func (server *Server) seriesAwayGrace() time.Duration {
+	if server.seriesAwayOverride > 0 {
+		return server.seriesAwayOverride
+	}
+	return botReconnectGracePeriod
+}
+
+// seriesEngineAway names an engine of this run that is not connected, or empty
+// when both are here.
+//
+// Any handshaken slot counts, not the one the run was holding: an engine that
+// came back on a different slot is the same engine, and claimSeriesBot will
+// take whichever one is free.
+func (server *Server) seriesEngineAway(run *botSeries) string {
+	for _, botID := range []string{run.firstBot, run.secondBot} {
+		if server.readyBot(botID) == nil {
+			return botID
+		}
+	}
+	return ""
+}
+
+// noteSeriesEnginePresence records whether a run's engines are here, and hands
+// back which one is not and how long it has been gone.
+//
+// The clock starts when the *server* notices, which is the tick after the socket
+// dropped — not when the run next tries to deal a game. That distinction is the
+// difference between one window and two: an engine that vanishes mid-game has
+// its seat held for botReconnectGracePeriod and only then is the game called,
+// and a run that started counting at that point would sit through the whole
+// window a second time before admitting the engine is gone. Half a minute of an
+// empty lobby for a bot that stopped answering thirty seconds ago.
+func (server *Server) noteSeriesEnginePresence(
+	run *botSeries,
+	now time.Time,
+) (away string, waited time.Duration) {
+	away = server.seriesEngineAway(run)
+
+	run.step.Lock()
+	defer run.step.Unlock()
+	if away == "" {
+		// Back, and possibly never noticed to have gone. Clearing this is what
+		// makes the window per-absence rather than per-run: an engine that
+		// drops twice gets a whole window the second time.
+		if !run.awaySince.IsZero() {
+			run.awaySince = time.Time{}
+			log.Printf("bot series %s: engines are back", run.seriesID)
+		}
+		return "", 0
+	}
+	if run.awaySince.IsZero() {
+		run.awaySince = now
+		log.Printf(
+			"bot series %s: waiting up to %s for %s to reconnect",
+			run.seriesID, server.seriesAwayGrace(), away,
+		)
+		return away, 0
+	}
+	return away, now.Sub(run.awaySince)
+}
+
+// stallSeriesForAbsentEngine holds a run open for an engine that is missing,
+// and reports whether the caller should stand down.
+//
+// True means "not now": either the run is waiting, or it has just been ended
+// because the wait ran out. False is both engines present and the run free to
+// deal its next game.
+func (server *Server) stallSeriesForAbsentEngine(run *botSeries, now time.Time) bool {
+	run.step.Lock()
+	dropped := run.aborted
+	run.step.Unlock()
+	if dropped {
+		return true
+	}
+
+	away, waited := server.noteSeriesEnginePresence(run, now)
+	if away == "" {
+		return false
+	}
+	if waited < server.seriesAwayGrace() {
+		run.step.Lock()
+		run.stalled = true
+		run.step.Unlock()
+		return true
+	}
+
+	log.Printf(
+		"bot series %s: %s did not come back within %s; ending the run",
+		run.seriesID, away, server.seriesAwayGrace(),
+	)
+	server.finishBotSeries(run, persistence.BotSeriesAborted)
+	return true
+}
+
+// resumeStalledSeries is the other half of the stall: the thing that notices an
+// engine came back, or that it is not going to.
+//
+// On the existing lobby ticker, for the reason settleBotShutdowns gives — a
+// second scheduler is a second thing to reason about, and two seconds of
+// latency on a run that has been waiting anyway is nothing. Nothing else could
+// do it: a stalled run is between games, so no move, no result and no
+// disconnect will come along to poke it.
+//
+// Every run is looked at, not only the stalled ones, because the counting has
+// to start while the run still has a game on the board. What it will not do
+// while that game is being played is *act* on the count: the board is where the
+// same absence is already being timed, that sweep owns the result, and a run
+// torn down underneath a live game would drop the last game out of its own
+// tally. See noteSeriesEnginePresence.
+func (server *Server) resumeStalledSeries(now time.Time) {
+	server.botSeriesRuns.mu.Lock()
+	runs := make([]*botSeries, 0, len(server.botSeriesRuns.series))
+	for _, run := range server.botSeriesRuns.series {
+		runs = append(runs, run)
+	}
+	server.botSeriesRuns.mu.Unlock()
+	if len(runs) == 0 {
+		return
+	}
+	playing := server.seriesWithGamesInPlay()
+
+	for _, run := range runs {
+		away, waited := server.noteSeriesEnginePresence(run, now)
+		if playing[run.seriesID] {
+			continue
+		}
+		switch {
+		case away == "":
+			run.step.Lock()
+			resuming := run.stalled && !run.aborted
+			run.stalled = false
+			run.step.Unlock()
+			if !resuming {
+				continue
+			}
+			// Both engines are back and the run is where it stopped, so this
+			// deals the game it was about to deal — including, when the engine
+			// went away mid-pair, the swapped half that balances the pair it
+			// already played.
+			server.playNextSeriesGame(run)
+		case waited >= server.seriesAwayGrace():
+			log.Printf(
+				"bot series %s: %s did not come back within %s; ending the run",
+				run.seriesID, away, server.seriesAwayGrace(),
+			)
+			server.finishBotSeries(run, persistence.BotSeriesAborted)
+		}
+	}
+}
+
+// seriesWithGamesInPlay is the set of runs with a game on the board right now.
+func (server *Server) seriesWithGamesInPlay() map[string]bool {
+	server.mu.RLock()
+	defer server.mu.RUnlock()
+	playing := make(map[string]bool)
+	for _, session := range server.games {
+		if session.botMatch != nil {
+			playing[session.botMatch.seriesID] = true
+		}
+	}
+	return playing
+}
+
+// abortSeriesForBot ends any run an engine is part of, now, without waiting for
+// it to come back.
+//
+// The deliberate reason to leave, as against the accidental one above: a
+// moderator closing a misbehaving bot's sockets, and a recall pulling an engine
+// out for a tournament match it is entered in. Both have already decided the
+// run is the thing that gives way, so neither wants the fifteen seconds a blip
+// gets. A dropped socket does *not* come here — see unregisterBot.
 func (server *Server) abortSeriesForBot(botID string) {
 	server.botSeriesRuns.mu.Lock()
 	var affected []*botSeries
@@ -585,21 +903,66 @@ func (server *Server) seriesBotIsDraining(run *botSeries) bool {
 		botIsDraining(server.readyBot(run.secondBot))
 }
 
-// readyBot returns a connected, handshaken bot by id.
+// readyBot returns a connected, handshaken slot of a bot by id.
+//
+// Any of them: the callers here want the engine's record, handshake and drain,
+// which every slot of one bot agrees on. Seating a game is the other question,
+// and goes through claimSeriesBot.
 func (server *Server) readyBot(botID string) *Client {
-	server.mu.RLock()
-	client := server.bots[botID]
-	server.mu.RUnlock()
+	for _, client := range server.botConnections(botID) {
+		client.bot.mu.Lock()
+		ready := client.bot.ready
+		client.bot.mu.Unlock()
+		if ready {
+			return client
+		}
+	}
+	return nil
+}
+
+// claimSeriesBot takes a slot of an engine for a run, and keeps it.
+//
+// Held rather than found again each pair, because a series is a run of games
+// between the same two engines and the second or so between one game and the
+// next is not an invitation. On a bot with one slot the hold changes nothing —
+// nothing else could have taken it anyway. On a bot with three, it is what
+// keeps a challenge arriving in that gap from taking the seat out from under
+// the run.
+func (server *Server) claimSeriesBot(botID string, seriesID string) *Client {
+	for _, client := range server.botConnections(botID) {
+		client.bot.mu.Lock()
+		mine := client.bot.ready && client.bot.reservedBy == seriesID
+		client.bot.mu.Unlock()
+		if mine {
+			return client
+		}
+	}
+	client := server.freeBotConnection(botID)
 	if client == nil {
 		return nil
 	}
 	client.bot.mu.Lock()
-	ready := client.bot.ready
-	client.bot.mu.Unlock()
-	if !ready {
+	if client.bot.reservedBy != "" {
+		// Claimed by another run between the check and here.
+		client.bot.mu.Unlock()
 		return nil
 	}
+	client.bot.reservedBy = seriesID
+	client.bot.mu.Unlock()
 	return client
+}
+
+// releaseSeriesBots hands a run's slots back, whatever ended it.
+func (server *Server) releaseSeriesBots(run *botSeries) {
+	for _, botID := range []string{run.firstBot, run.secondBot} {
+		for _, client := range server.botConnections(botID) {
+			client.bot.mu.Lock()
+			if client.bot.reservedBy == run.seriesID {
+				client.bot.reservedBy = ""
+			}
+			client.bot.mu.Unlock()
+		}
+	}
 }
 
 func (server *Server) botSeriesDelay() time.Duration {
@@ -629,7 +992,10 @@ var (
 	errSeriesBotOffline   = errors.New("both bots must be online and ready")
 	errSeriesBotBusy      = errors.New("both bots must be idle")
 	errSeriesBotDraining  = errors.New("one of those bots is shutting down")
-	errSeriesNotRunning   = errors.New("no such running series")
+	errSeriesBotReserved  = errors.New(
+		"one of those bots is in reserve for a tournament it has entered",
+	)
+	errSeriesNotRunning = errors.New("no such running series")
 
 	// The public path's own refusals. Each says what the limit is rather than
 	// that there was one, because the form that hit it can be corrected.
@@ -648,5 +1014,8 @@ var (
 	errSeriesServerBusy = errors.New(
 		"the server is already running as many bot series as it allows; try again shortly",
 	)
-	errSeriesNotYours = errors.New("only the person who started a series can stop it")
+	errSeriesNotYours       = errors.New("only the person who started a series can stop it")
+	errSeriesServerUpdating = errors.New(
+		"the server is restarting for an update; try again in a minute",
+	)
 )

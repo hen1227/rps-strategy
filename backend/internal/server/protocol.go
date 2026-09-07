@@ -49,6 +49,18 @@ type ClientMessage struct {
 	PublicPlay       bool   `json:"publicPlay,omitempty"`
 	EnterTournaments bool   `json:"enterTournaments,omitempty"`
 	BotID            string `json:"botId,omitempty"`
+	// MaxGames is how many games at once the machine running this engine says
+	// it can afford, and SessionID and Slot are how its connections recognise
+	// each other. One process opens one socket per slot, each with its own
+	// engine subprocess, because a socket that plays one game at a time is the
+	// whole reason the client and the exchange bookkeeping are as small as they
+	// are — see registerBot.
+	//
+	// Absent on every client before 1.4, which means one slot, no session, and
+	// the displacing behaviour those clients have always had.
+	MaxGames  int    `json:"maxGames,omitempty"`
+	SessionID string `json:"sessionId,omitempty"`
+	Slot      int    `json:"slot,omitempty"`
 	// Icon is a base64 PNG, and a pointer because all three states mean
 	// something different. Absent is a client that predates icons: it must
 	// leave the stored one alone, or upgrading the server would erase the
@@ -247,9 +259,26 @@ type ServerMessage struct {
 	TimeControl        *game.TimeControl    `json:"timeControl,omitempty"`
 	// Setup accompanies a queue update, so a searching client can show what it
 	// is searching for without keeping its own copy of what it asked for.
-	Setup            *game.GameSetup     `json:"setup,omitempty"`
-	Color            game.PlayerColor    `json:"color,omitempty"`
-	GameState        *game.GameState     `json:"gameState,omitempty"`
+	Setup     *game.GameSetup  `json:"setup,omitempty"`
+	Color     game.PlayerColor `json:"color,omitempty"`
+	GameState *game.GameState  `json:"gameState,omitempty"`
+	// PGN is the game so far, written the same way a finished one is archived.
+	//
+	// A board snapshot says where the pieces are and nothing about how they got
+	// there, so a spectator who arrived at move twenty and a player who
+	// refreshed had no history: no move list, and nothing to step back through.
+	// This is that history, in the one form every screen here already replays.
+	//
+	// Carried on every message that hands over a live GameState, rather than
+	// sent once and then patched move by move, because a client that missed one
+	// patch would be silently wrong about the game for the rest of it. Written
+	// only when somebody is there to read it — see sessionAudience — since a
+	// bot-versus-bot game nobody is watching would otherwise re-encode itself
+	// on every move for no reader.
+	//
+	// Result is `*` until the game ends, which is what the writer already does
+	// for a game interrupted by a restart.
+	PGN              string              `json:"pgn,omitempty"`
 	From             *game.Position      `json:"from,omitempty"`
 	ValidMoves       []game.Position     `json:"validMoves,omitempty"`
 	SearchRange      int                 `json:"searchRange,omitempty"`
@@ -267,8 +296,12 @@ type ServerMessage struct {
 	// ChatRoomID accompanies a chat history, naming the conversation the
 	// client has just joined so it can tell which later messages are for it.
 	// Equal to the game id for an ordinary game; equal to the series id for
-	// every game of a bot series.
+	// every game of a bot series, and to the tournament id for every match of
+	// a bots-only event.
 	ChatRoomID string `json:"chatRoomId,omitempty"`
+	// ChatRoomScope says which of those the room is, so a client can name the
+	// conversation rather than guess from the id. See ChatScope.
+	ChatRoomScope ChatScope `json:"chatRoomScope,omitempty"`
 	// ChatOccupancy is how many people are in that conversation, sent with a
 	// history and again whenever somebody joins or leaves it. It counts the
 	// room rather than the game's spectator list, so it stays meaningful after
@@ -288,6 +321,31 @@ type ServerMessage struct {
 	// Drain is the graceful shutdown a bot is under, carried on bot_draining,
 	// bot_shutdown and bot_drain_update. See bot_shutdown.go.
 	Drain *BotDrainState `json:"drain,omitempty"`
+	// BotBench is the scheduled window in which no engine takes a game,
+	// carried on engine_bots and on connection_ready. See bot_bench.go.
+	//
+	// Sent whether or not one is running: when none is, it describes the next
+	// one, which is what lets the lobby warn people that the ladder closes at
+	// half past rather than only explain it once it has.
+	BotBench *BotBenchState `json:"botBench,omitempty"`
+	// Update is the graceful restart the whole server is under, carried on
+	// server_update and on connection_ready. The same idea as Drain one scale
+	// up, and deliberately a separate field: a bot can be draining on a server
+	// that is not, and the reverse is the ordinary case. See deploy_drain.go.
+	Update *ServerUpdateState `json:"update,omitempty"`
+	// Notice is the standing announcement, carried on server_notice and on
+	// connection_ready. A notice with no text means take the banner down. See
+	// announcements.go.
+	Notice *ServerNotice `json:"notice,omitempty"`
+	// Restrictions is what this account may not do, carried on `restrictions`
+	// and on connection_ready. Absent means nothing is in force, which is the
+	// case for almost everybody.
+	//
+	// Sent so a client can say why in advance rather than only after a refusal:
+	// a muted player should see a disabled chat box explaining itself, not
+	// discover the mute by typing into one that swallows their message. See
+	// moderation.go.
+	Restrictions []persistence.PublicRestriction `json:"restrictions,omitempty"`
 
 	// FirstMoveDeadlineUnixMs is when a game that has been opened but not begun
 	// gives up waiting. Zero for every game that is already being played, which

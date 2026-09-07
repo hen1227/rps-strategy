@@ -14,16 +14,9 @@ func TestTournamentSignupRoundRobinAndStandings(t *testing.T) {
 	}
 	defer store.Close()
 
-	tournament, err := store.CreateTournament(
-		t.Context(),
-		"summer-cup",
-		"Summer Cup",
-		game.ModeTotalWar,
-		"Total War",
+	tournament := openTournament(
+		t, store, "summer-cup", "Summer Cup", game.ModeTotalWar, "Total War",
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
 	if tournament.Status != TournamentRegistration || len(tournament.Players) != 0 {
 		t.Fatalf("unexpected new tournament: %#v", tournament)
 	}
@@ -39,6 +32,10 @@ func TestTournamentSignupRoundRobinAndStandings(t *testing.T) {
 		{"user-d", "Dirac", "dirac"},
 	}
 	for _, player := range players {
+		// Every entrant is a verified account now, and the handle stored on the
+		// signup is the verified one rather than the typed one — so the account
+		// is claimed under the same handle this test expects to read back.
+		registeredOwner(t, store, player.userID, player.discord)
 		if _, err := store.SignupForTournament(
 			t.Context(),
 			tournament.TournamentID,
@@ -150,12 +147,11 @@ func TestTournamentSignupValidationAndClosedRegistration(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	tournament, err := store.CreateTournament(
-		t.Context(), "validation-cup", "Validation Cup", game.ModeTotalWar, "Total War",
+	tournament := openTournament(
+		t, store, "validation-cup", "Validation Cup", game.ModeTotalWar, "Total War",
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
+	// Verified accounts, because this test is about the doors *after* that one.
+	verifiedField(t, store, "user-a", "user-b", "user-c")
 
 	if _, err := store.SignupForTournament(
 		t.Context(), tournament.TournamentID, "user-a", "Ada", "ada", false,

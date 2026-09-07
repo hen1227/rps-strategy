@@ -57,6 +57,40 @@ func startArchiveTestMatch(server *Server, red, blue *Client, modeID game.ModeID
 	)
 }
 
+// playOpeningMove plays whatever the side to move can play, from whichever of
+// the two clients holds that seat, and reports the move it played. The tests
+// below care that a move happened and was archived, not which move it was.
+func playOpeningMove(t *testing.T, server *Server, red, blue *Client) (from, to game.Position) {
+	t.Helper()
+	participant := server.participantFor(red)
+	if participant == nil {
+		t.Fatal("expected the red client to be in a game")
+	}
+	state := participant.session.game.Snapshot()
+	mover := red
+	if state.CurrentTurn == game.Blue {
+		mover = blue
+	}
+	for y := 0; y < state.Grid.Height(); y++ {
+		for x := 0; x < state.Grid.Width(); x++ {
+			if state.Grid[y][x].OccupantOwner != state.CurrentTurn {
+				continue
+			}
+			from := game.Position{X: x, Y: y}
+			moves := participant.session.game.ValidMoves(state.CurrentTurn, from)
+			if len(moves) == 0 {
+				continue
+			}
+			if !server.makeMove(mover, from, moves[0]) {
+				t.Fatalf("the opening move %v-%v was refused", from, moves[0])
+			}
+			return from, moves[0]
+		}
+	}
+	t.Fatal("the opening position has no legal move")
+	return game.Position{}, game.Position{}
+}
+
 func TestFinishedGameIsArchivedAsReplayablePGN(t *testing.T) {
 	server, data := archiveTestServer(t)
 	clients := archiveTestClients(t, data, "archive-red", "archive-blue")
@@ -70,22 +104,7 @@ func TestFinishedGameIsArchivedAsReplayablePGN(t *testing.T) {
 		t.Fatal("expected the red client to be in a game")
 	}
 	gameID := participant.session.gameID
-	state := participant.session.game.Snapshot()
-	from := game.Position{}
-	to := game.Position{}
-	for y := 0; y < game.BoardSize && to == (game.Position{}); y++ {
-		for x := 0; x < game.BoardSize; x++ {
-			if state.Grid[y][x].OccupantOwner != game.Red {
-				continue
-			}
-			candidate := game.Position{X: x, Y: y}
-			if moves := participant.session.game.ValidMoves(game.Red, candidate); len(moves) > 0 {
-				from, to = candidate, moves[0]
-				break
-			}
-		}
-	}
-	server.makeMove(redClient, from, to)
+	from, to := playOpeningMove(t, server, redClient, blueClient)
 	server.resign(blueClient)
 
 	archived, err := data.ArchivedGame(t.Context(), gameID)
@@ -264,26 +283,8 @@ func TestLiveGamesAreArchivedUnfinishedOnShutdown(t *testing.T) {
 	_ = readClientMessage(t, redClient)
 	_ = readClientMessage(t, blueClient)
 
-	participant := server.participantFor(redClient)
-	gameID := participant.session.gameID
-	state := participant.session.game.Snapshot()
-	for y := 0; y < game.BoardSize; y++ {
-		played := false
-		for x := 0; x < game.BoardSize; x++ {
-			if state.Grid[y][x].OccupantOwner != game.Red {
-				continue
-			}
-			from := game.Position{X: x, Y: y}
-			if moves := participant.session.game.ValidMoves(game.Red, from); len(moves) > 0 {
-				server.makeMove(redClient, from, moves[0])
-				played = true
-				break
-			}
-		}
-		if played {
-			break
-		}
-	}
+	gameID := server.participantFor(redClient).session.gameID
+	playOpeningMove(t, server, redClient, blueClient)
 
 	if archived := server.ArchiveLiveGames(t.Context()); archived != 1 {
 		t.Fatalf("expected one live game to be archived, got %d", archived)

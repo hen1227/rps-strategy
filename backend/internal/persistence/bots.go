@@ -298,7 +298,7 @@ VALUES (?, ?, ?, ?, ?)
 // send exactly the same thing. The distinction is a fact about the database,
 // not about the request.
 func (store *Store) ClaimBot(ctx context.Context, token string, settings BotSettings) (Bot, error) {
-	name, err := ValidateUsername(settings.Name)
+	name, err := ValidateBotUsername(settings.Name)
 	if err != nil {
 		return Bot{}, err
 	}

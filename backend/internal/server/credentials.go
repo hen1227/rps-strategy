@@ -159,3 +159,22 @@ func (server *Server) requireAnyIdentity(
 	}
 	return account, true
 }
+
+// optionalSession returns the signed-in account when there is one, and reports
+// nothing at all when there is not.
+//
+// For the routes anybody may use but a signed-in visitor should get credit
+// for. It writes no error and sets no header: a caller with no token is not
+// making a mistake, and an expired one is treated as absent rather than as a
+// reason to refuse the request.
+func (server *Server) optionalSession(request *http.Request) (persistence.Account, bool) {
+	token := sessionToken(request)
+	if token == "" {
+		return persistence.Account{}, false
+	}
+	account, err := server.data.SessionAccount(request.Context(), token)
+	if err != nil {
+		return persistence.Account{}, false
+	}
+	return account, true
+}

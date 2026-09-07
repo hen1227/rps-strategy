@@ -127,10 +127,135 @@ func addSeriesBot(t *testing.T, server *Server, name string) persistence.Bot {
 	}
 	server.hub.Register(client)
 	server.mu.Lock()
-	server.bots[bot.BotID] = client
+	server.bots[bot.BotID] = []*Client{client}
 	server.mu.Unlock()
 	startStubEngine(t, server, client)
 	return bot
+}
+
+// addRivalSeriesBot claims an engine under an owner of its own, for the tests
+// that need two engines the ladder will actually rate against each other.
+func addRivalSeriesBot(t *testing.T, server *Server, name string) persistence.Bot {
+	t.Helper()
+	owner := "owner-" + strings.ToLower(name)
+	if _, err := server.data.ClaimAccountWithDiscord(
+		t.Context(), owner, "Owner_"+name, "discord-"+owner, owner,
+	); err != nil {
+		t.Fatalf("register owner for %s: %v", name, err)
+	}
+	_, token, err := server.data.MintBotToken(t.Context(), owner)
+	if err != nil {
+		t.Fatalf("mint: %v", err)
+	}
+	bot, err := server.data.ClaimBot(t.Context(), token, persistence.BotSettings{Name: name})
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	client := &Client{
+		send:    make(chan []byte, 256),
+		done:    make(chan struct{}),
+		profile: game.PlayerProfile{UserID: bot.UserID, Username: bot.Name},
+		server:  server,
+		bot:     &botClient{botID: bot.BotID, record: bot, ready: true},
+	}
+	server.hub.Register(client)
+	server.mu.Lock()
+	server.bots[bot.BotID] = []*Client{client}
+	server.mu.Unlock()
+	startStubEngine(t, server, client)
+	return bot
+}
+
+// playOneSeries runs a single pair to completion and hands back the games it
+// filed, which is where the ranked flag it seated them with ends up.
+func playOneSeries(
+	t *testing.T,
+	server *Server,
+	first persistence.Bot,
+	second persistence.Bot,
+) []persistence.GameRecord {
+	t.Helper()
+	if _, err := server.StartBotSeries(
+		t.Context(), hostSeries(first, second, game.ModeTotalWar, 1, 4, 99),
+	); err != nil {
+		t.Fatalf("start series: %v", err)
+	}
+	deadline := time.Now().Add(60 * time.Second)
+	for time.Now().Before(deadline) {
+		series, err := server.data.BotSeries(t.Context(), latestSeriesID(t, server))
+		if err != nil {
+			t.Fatalf("read series: %v", err)
+		}
+		if series.Status != persistence.BotSeriesRunning {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	history, err := server.data.GameHistory(t.Context(), first.UserID, 10, 0)
+	if err != nil {
+		t.Fatalf("read history: %v", err)
+	}
+	if len(history) == 0 {
+		t.Fatal("the series filed no games")
+	}
+	return history
+}
+
+// Two of one person's engines may play — that is what the five-bot allowance is
+// for — but the game is casual, because a rating is the one thing a private
+// match between two accounts the same hand controls must not produce.
+func TestASeriesBetweenOneOwnersBotsIsCasual(t *testing.T) {
+	server, alpha, beta := seriesTestBots(t)
+
+	for _, played := range playOneSeries(t, server, alpha, beta) {
+		if played.Ranked {
+			t.Fatalf("game %s between one owner's bots was seated ranked", played.GameID)
+		}
+	}
+	// The run itself says so too, so a card drawn from it can. Derived from the
+	// two owners on read, which is why it does not need the games to have been
+	// flagged when they were played.
+	series, err := server.data.BotSeries(t.Context(), latestSeriesID(t, server))
+	if err != nil {
+		t.Fatalf("read series: %v", err)
+	}
+	if !series.Casual {
+		t.Fatal("a run between one owner's bots did not read as casual")
+	}
+
+	// And the ladder is where that has to show: neither engine has a rating,
+	// because neither has a game the record will count.
+	for _, bot := range []persistence.Bot{alpha, beta} {
+		ratings, err := server.data.BotModeRatings(t.Context(), game.ModeTotalWar)
+		if err != nil {
+			t.Fatalf("read ladder: %v", err)
+		}
+		if rating, rated := ratings[bot.UserID]; rated && rating != persistence.DefaultElo {
+			t.Fatalf("%s came out of a private series rated %d", bot.Name, rating)
+		}
+	}
+}
+
+// The other half of the same rule, which is the one a too-broad check would
+// break: two people's engines playing is exactly what the ladder is for.
+func TestASeriesBetweenRivalBotsStaysRanked(t *testing.T) {
+	server, _, _ := seriesTestBots(t)
+	first := addRivalSeriesBot(t, server, "Rival")
+	second := addRivalSeriesBot(t, server, "Challenger")
+
+	games := playOneSeries(t, server, first, second)
+	for _, played := range games {
+		if !played.Ranked {
+			t.Fatalf("game %s between rival owners' bots was seated casual", played.GameID)
+		}
+	}
+	series, err := server.data.BotSeries(t.Context(), latestSeriesID(t, server))
+	if err != nil {
+		t.Fatalf("read series: %v", err)
+	}
+	if series.Casual {
+		t.Fatal("a run between two owners' bots read as casual")
+	}
 }
 
 // hostSeries is a run asked for the way the host asks for one.
@@ -269,30 +394,10 @@ func TestASeriesRunsOneGameAtATime(t *testing.T) {
 	t.Fatal("series did not finish in time")
 }
 
-func TestASeriesIsAbandonedWhenABotLeaves(t *testing.T) {
-	server, alpha, beta := seriesTestBots(t)
-	if _, err := server.StartBotSeries(
-		t.Context(), hostSeries(alpha, beta, game.ModeTotalWar, 50, 2, 7),
-	); err != nil {
-		t.Fatalf("start series: %v", err)
-	}
-	seriesID := latestSeriesID(t, server)
-
-	server.mu.RLock()
-	leaving := server.bots[beta.BotID]
-	server.mu.RUnlock()
-	server.unregisterBot(leaving)
-
-	series, err := server.data.BotSeries(t.Context(), seriesID)
-	if err != nil {
-		t.Fatalf("read series: %v", err)
-	}
-	// A series with one engine in it is not a series, so it stops rather than
-	// grinding through 100 games one side cannot play.
-	if series.Status != persistence.BotSeriesAborted {
-		t.Fatalf("expected the run to be abandoned, got %q", series.Status)
-	}
-}
+// A series with one engine in it is not a series, so it stops rather than
+// grinding through 100 games one side cannot play — but not on the instant the
+// socket drops, which is what it used to do. See bot_absence_test.go for both
+// halves of that rule.
 
 func latestSeriesID(t *testing.T, server *Server) string {
 	t.Helper()
@@ -303,9 +408,76 @@ func latestSeriesID(t *testing.T, server *Server) string {
 	return list[0].SeriesID
 }
 
+// seriesWatcher keeps the first lobby row published for each game of a run.
+//
+// A stub engine answers instantly, so a series game can go live and be over
+// between two polls of the live-game list -- which makes "wait until game two
+// is on the board" a race the run usually wins. A lobby broadcast is not a
+// poll: one goes out on every change, so watching the stream keeps the rows a
+// run actually published rather than the ones it happened to still be showing
+// when somebody looked. Use this for a test that reads a row; use
+// waitForSeriesGame for one that has to catch a game while it is live.
+type seriesWatcher struct {
+	mu   sync.Mutex
+	rows map[int]LiveGameSummary
+}
+
+func watchSeriesRows(t *testing.T, server *Server) *seriesWatcher {
+	t.Helper()
+	// A far bigger queue than a real connection gets: this client exists to
+	// keep every broadcast a whole run produces, and a full queue closes a
+	// client rather than blocking the server.
+	observer := &Client{send: make(chan []byte, 8192), done: make(chan struct{})}
+	server.hub.Register(observer)
+	watcher := &seriesWatcher{rows: make(map[int]LiveGameSummary)}
+	go func() {
+		for {
+			select {
+			case <-observer.done:
+				return
+			case encoded := <-observer.send:
+				var message ServerMessage
+				if json.Unmarshal(encoded, &message) != nil {
+					continue
+				}
+				watcher.mu.Lock()
+				for _, live := range message.LiveGames {
+					if live.Series == nil {
+						continue
+					}
+					if _, seen := watcher.rows[live.Series.GameNumber]; !seen {
+						watcher.rows[live.Series.GameNumber] = live
+					}
+				}
+				watcher.mu.Unlock()
+			}
+		}
+	}()
+	t.Cleanup(func() { close(observer.done) })
+	return watcher
+}
+
+// row blocks until the numbered game of a run has been published, and answers
+// with the row it was published with.
+func (watcher *seriesWatcher) row(t *testing.T, number int) LiveGameSummary {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		watcher.mu.Lock()
+		row, seen := watcher.rows[number]
+		watcher.mu.Unlock()
+		if seen {
+			return row
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("game %d of the series was never published", number)
+	return LiveGameSummary{}
+}
+
 // waitForSeriesGame blocks until the numbered game of a run is on the board.
-// Series games are sequential and each one plays out at engine speed, so
-// polling is the only way to look at one while it is live.
+// For a test that has to interact with a game while it is live -- spectating
+// it, talking in its room -- which a recorded row cannot do.
 func waitForSeriesGame(t *testing.T, server *Server, number int) LiveGameSummary {
 	t.Helper()
 	deadline := time.Now().Add(60 * time.Second)
@@ -323,13 +495,14 @@ func waitForSeriesGame(t *testing.T, server *Server, number int) LiveGameSummary
 
 func TestALobbyRowCarriesTheSeriesItBelongsTo(t *testing.T) {
 	server, alpha, beta := seriesTestBots(t)
+	watcher := watchSeriesRows(t, server)
 	if _, err := server.StartBotSeries(
 		t.Context(), hostSeries(alpha, beta, game.ModeTotalWar, 2, 4, 4321),
 	); err != nil {
 		t.Fatalf("start series: %v", err)
 	}
 
-	first := waitForSeriesGame(t, server, 1)
+	first := watcher.row(t, 1)
 	if first.Series.TotalGames != 4 {
 		t.Fatalf("two pairs is four games, the row says %d", first.Series.TotalGames)
 	}
@@ -340,7 +513,7 @@ func TestALobbyRowCarriesTheSeriesItBelongsTo(t *testing.T) {
 		t.Fatalf("nothing has finished yet, the tally counts %d games", played)
 	}
 
-	second := waitForSeriesGame(t, server, 2)
+	second := watcher.row(t, 2)
 	if second.Series.SeriesID != first.Series.SeriesID {
 		t.Fatalf("the pair partner belongs to another run: %#v", second.Series)
 	}
@@ -754,7 +927,7 @@ func addStallingBot(t *testing.T, server *Server, name string, stalls int) persi
 	}
 	server.hub.Register(client)
 	server.mu.Lock()
-	server.bots[bot.BotID] = client
+	server.bots[bot.BotID] = []*Client{client}
 	server.mu.Unlock()
 	startStallingEngine(t, server, client, stalls)
 	return bot

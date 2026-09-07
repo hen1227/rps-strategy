@@ -297,9 +297,9 @@ func TestPresenceStillWorksAfterACancelledGameRequeue(t *testing.T) {
 	server.hub.Register(alice)
 	server.hub.Register(bob)
 	aliceSeek := queueUp(t, server, alice, game.ModeTotalWar)
-	// Alice takes Blue, so the game waits on Bob — who has gone — and it is
-	// Alice's seek that comes back to the board.
-	aliceSeek.Setup.PreferredColor = game.Blue
+	// Alice takes the seat that replies, so the game waits on Bob — who has
+	// gone — and it is Alice's seek that comes back to the board.
+	aliceSeek.Setup.PreferredColor = game.OtherColor(game.FirstToMove)
 	queueUp(t, server, bob, game.ModeTotalWar)
 
 	server.disconnect(bob)

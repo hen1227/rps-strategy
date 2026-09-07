@@ -22,3 +22,7 @@
 # Python bytecode cache (internal/botclient)
 __pycache__/
 *.pyc
+
+# Meaf's game export: public games, but his to publish. Kept on disk,
+# never tracked. The build reads it only under `-tags meaf`.
+internal/meafarchive/games_export.txt

@@ -19,22 +19,22 @@ import (
 // exported from here stay identifiable once they are mixed into a data set.
 const archiveSite = "RPS Strategy"
 
-// archiveGame stores the finished game as PGN. It runs for every game that
-// ends, ranked or not, and independently of the rating transaction: a game
-// whose Elo could not be committed is still a game that was played, and the
-// archive is the only place it survives.
-func (server *Server) archiveGame(
-	session *GameSession,
-	finishedAt time.Time,
-	update persistence.RatingUpdate,
-	rated bool,
-) {
-	record := session.game.Record()
+// sessionMetadata describes a session for the PGN writer: what the game was
+// for, and the run it belongs to.
+//
+// Shared by the archive below and by livePGN beside it, so a game read while it
+// is still being played carries the same tags it will be stored with. Written
+// twice, the live text and the archived one could disagree about which run a
+// game belonged to or how many of its opening moves were dealt, and a client
+// replaying both would have no way to tell which was lying.
+//
+// Ratings are the archive's own business: they do not exist until the game
+// ends, and are filled in there.
+func sessionMetadata(session *GameSession) notation.Metadata {
 	metadata := notation.Metadata{
 		Event:         "Casual",
 		Site:          archiveSite,
 		Ranked:        session.ranked,
-		FinishedAt:    finishedAt,
 		RedEloBefore:  session.redElo,
 		BlueEloBefore: session.blueElo,
 	}
@@ -49,13 +49,47 @@ func (server *Server) archiveGame(
 		metadata.BookPlies = session.bookPlies
 		metadata.OpeningSeed = session.openingSeed
 	}
-	tournamentID := ""
 	if session.tournament != nil {
 		metadata.Event = "Tournament"
-		tournamentID = session.tournament.tournamentID
 		// The match ID identifies the pairing; the round it belongs to lives
 		// in the tournament record this ID points at.
 		metadata.Round = "match-" + strconv.FormatInt(session.tournament.matchID, 10)
+	}
+	return metadata
+}
+
+// livePGN writes the game as it stands right now, for the move list and the
+// replay controls on a board somebody is watching or playing.
+//
+// The socket has never carried the moves of a game — only whole board
+// snapshots — so nobody who arrived late or reloaded the page had a history to
+// read. This is that history, and deliberately in the archive's own format
+// rather than a list of its own: the client turns it into positions with the
+// same replay a finished game's review uses, so a live board and the review of
+// the same game cannot disagree about what was played.
+//
+// FinishedAt is left zero, which the writer reads as "not over" and dates the
+// record from its first move instead. See ServerMessage.PGN.
+func livePGN(session *GameSession) string {
+	return notation.Encode(session.game.Record(), sessionMetadata(session))
+}
+
+// archiveGame stores the finished game as PGN. It runs for every game that
+// ends, ranked or not, and independently of the rating transaction: a game
+// whose Elo could not be committed is still a game that was played, and the
+// archive is the only place it survives.
+func (server *Server) archiveGame(
+	session *GameSession,
+	finishedAt time.Time,
+	update persistence.RatingUpdate,
+	rated bool,
+) {
+	record := session.game.Record()
+	metadata := sessionMetadata(session)
+	metadata.FinishedAt = finishedAt
+	tournamentID := ""
+	if session.tournament != nil {
+		tournamentID = session.tournament.tournamentID
 	}
 	if rated && update.Recorded {
 		metadata.RedEloBefore = update.RedEloBefore

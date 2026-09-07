@@ -540,10 +540,11 @@ func TestGameStateCarriesTheOpeningLineItIsPlaying(t *testing.T) {
 		t.Fatalf("a game with no moves announced the line %v", found.GameState.OpeningLine)
 	}
 
-	// d9 is Red's scissors in the Infiltration opening, and c8 is the empty
-	// square in front of it — the first move of the published book's main line.
-	from := game.Position{X: 3, Y: 8}
-	to := game.Position{X: 2, Y: 7}
+	// d1 is Blue's scissors in the Infiltration opening, and c2 is the empty
+	// square in front of it — the first move of the published book's main line,
+	// played by the challenger, who holds the seat that opens.
+	from := game.Position{X: 3, Y: 0}
+	to := game.Position{X: 2, Y: 1}
 	server.handleMessage(challenger, ClientMessage{Type: "make_move", From: from, To: to})
 
 	// Lobby broadcasts share the wire, so the board is whichever of the next
@@ -558,7 +559,7 @@ func TestGameStateCarriesTheOpeningLineItIsPlaying(t *testing.T) {
 	if state.GameState == nil {
 		t.Fatal("the move never came back as a board")
 	}
-	if strings.Join(state.GameState.OpeningLine, " ") != "d9-c8" {
+	if strings.Join(state.GameState.OpeningLine, " ") != "d1-c2" {
 		t.Fatalf("the move reached the client as %v", state.GameState.OpeningLine)
 	}
 
@@ -569,7 +570,7 @@ func TestGameStateCarriesTheOpeningLineItIsPlaying(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(encoded), `"openingLine":["d9-c8"]`) {
+	if !strings.Contains(string(encoded), `"openingLine":["d1-c2"]`) {
 		t.Fatalf("the wire form is missing the line: %s", encoded)
 	}
 }

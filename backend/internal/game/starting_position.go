@@ -10,7 +10,8 @@ import (
 var ErrInvalidStartingPosition = errors.New("invalid starting position")
 
 // StartingPosition is a compact, editable picture of a mode's opening board.
-// Rows are written from Blue's home boundary (y=0) to Red's:
+// Rows are written from Blue's home boundary (y=0, rank 1) to Red's, so the
+// first row printed is the one drawn nearest the side that moves first:
 //
 //	R/P/S = Blue rock/paper/scissors
 //	r/p/s = Red rock/paper/scissors
@@ -275,6 +276,35 @@ var (
 		"...rrr...",
 		"...ppp...",
 		"...sss...",
+	)
+
+	// Intransitive is a corner-to-corner race, so its armies are drawn as
+	// diagonal bands facing each other across a diagonal rather than as ranks
+	// facing across the middle. Each side is one wedge of rocks, papers and
+	// scissors, banked so the kind that beats an oncoming piece is the one
+	// standing in front of it.
+	//
+	// Rows are ranks, as everywhere else here: the first row printed is rank 1,
+	// which is Blue's home boundary and the edge the board is drawn from. So
+	// Blue's wedge is banked in front of a1 and Red's in front of i9, and each
+	// runs for the other's corner. Neither wedge stands *on* its own corner --
+	// the rocks sit on the diagonal that cuts it off, which is what they guard.
+	//
+	// The layout is symmetric under a half turn -- rotate the board and swap
+	// the colours and it is the same picture -- which is the corner goal's
+	// version of the balance the other two modes get from mirroring ranks. It
+	// is deliberately *not* file-symmetric: see MirrorsFiles, which is why the
+	// opening book will not fold an Intransitive line onto its mirror.
+	intransitiveStartingPosition = MustStartingPosition(
+		".........",
+		"...RP....",
+		"..RPS....",
+		".RPS.....",
+		".PS...sp.",
+		".....spr.",
+		"....spr..",
+		"....pr...",
+		".........",
 	)
 )
 

@@ -7,6 +7,17 @@ import (
 	"sync"
 )
 
+// rulesPublished is the day the rules every mode here shares last changed:
+// 3 September 2026, when the board's orientation and two win conditions moved
+// together. One constant while the three modes' answer is the same one, and a
+// literal on the mode that moves next — ModeDefinition.RulesPublished is per
+// mode for that reason.
+//
+// Written down rather than derived from a build date, because it is a fact
+// about the rules and not about this binary. A server rebuilt on Tuesday has
+// not republished anything.
+const rulesPublished = "2026-09-03"
+
 var (
 	ErrUnknownMode        = errors.New("unknown game mode")
 	ErrDuplicateMode      = errors.New("game mode is already registered")
@@ -24,24 +35,6 @@ type GameMode interface {
 }
 
 type ModeFactory func() GameMode
-
-// PositionValidator is a mode that can check a board somebody drew.
-//
-// Optional, and the reason it exists is the alphabet: a layout is symbols, and
-// only the mode knows which ones mean something. A mode that does not implement
-// this is checked against the standard R/P/S letters, which is right for every
-// hand-written mode. `internal/game/spec.Mode` implements it.
-type PositionValidator interface {
-	ValidateStartingPosition(position StartingPosition) error
-}
-
-// ValidatePositionFor checks a layout against whichever alphabet the mode uses.
-func ValidatePositionFor(mode GameMode, position StartingPosition) error {
-	if validator, ok := mode.(PositionValidator); ok {
-		return validator.ValidateStartingPosition(position)
-	}
-	return position.Validate()
-}
 
 type ModeRegistry struct {
 	mu        sync.RWMutex
@@ -69,6 +62,19 @@ func (registry *ModeRegistry) Register(factory ModeFactory) error {
 	// validator has already checked them against its own alphabet.
 	if err := definition.StartingPosition.ValidateShape(); err != nil {
 		return fmt.Errorf("%w: %s: %v", ErrInvalidModeFactory, definition.ID, err)
+	}
+	// A symmetry a mode does not have is worse than one it never claimed: the
+	// opening statistics fold two positions together on the strength of this,
+	// so a wrong declaration merges boards that are genuinely different and
+	// nothing downstream can notice. The layout half is checkable here and is
+	// checked; see ModeDefinition.Symmetries for the half that is not.
+	for _, symmetry := range definition.Symmetries {
+		if !symmetry.PreservesLayout(definition.StartingPosition) {
+			return fmt.Errorf(
+				"%w: %s: starting position is not unchanged by the %q symmetry",
+				ErrInvalidModeFactory, definition.ID, symmetry,
+			)
+		}
 	}
 
 	registry.mu.Lock()
@@ -132,20 +138,12 @@ func (registry *ModeRegistry) Definitions() []ModeDefinition {
 
 // CatalogueDefinitions is the modes a lobby lists.
 //
-// The built-in ones, and not the community's. That is not a slight: the
-// catalogue is broadcast to every socket on connect and walked on every tick,
-// and the set of modes people have written has no upper bound. A community mode
-// is found by id — which every lookup here already does — or through the library
-// route, which is paged.
+// Every registered mode, now that they are all built in. Kept as its own name
+// rather than folded into Definitions because the distinction is about what is
+// broadcast to every socket on connect, and a mode format that brings back an
+// unbounded community set would restore the filter here and nowhere else.
 func (registry *ModeRegistry) CatalogueDefinitions() []ModeDefinition {
-	all := registry.Definitions()
-	catalogue := make([]ModeDefinition, 0, len(all))
-	for _, definition := range all {
-		if definition.Origin == "" || definition.Origin == OriginBuiltin {
-			catalogue = append(catalogue, definition)
-		}
-	}
-	return catalogue
+	return registry.Definitions()
 }
 
 // CatalogueIDs is CatalogueDefinitions as ids, for the per-mode counters.

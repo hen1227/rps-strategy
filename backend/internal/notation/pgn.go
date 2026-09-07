@@ -13,7 +13,45 @@ import (
 
 // Generator identifies the dialect a stored game was written with, so a later
 // format change can be detected in an archive rather than guessed at.
-const Generator = "rps-strategy-pgn/1"
+const Generator = "rps-strategy-pgn/2"
+
+// The numbered dialects, which differ in one thing: what "12." means.
+//
+// dialectByColor numbered move pairs by colour, so "12." was always Red and
+// "12..." always Blue. That was the same thing as numbering them by who opened
+// right up until Blue became the side that opens, so dialectByOpener numbers
+// them by the opener instead and "1." is the first move of the game in every
+// file, the way it is in chess.
+//
+// Only a game that began with the non-opening side to move reads differently
+// under the two -- a board somebody set up, or an opening seeded to an odd
+// number of plies -- and that is exactly the archived game this has to keep
+// replaying, which is why the dialect is read off the file rather than assumed.
+const (
+	dialectByColor  = 1
+	dialectByOpener = 2
+)
+
+// The number in Generator is dialectByOpener; a mismatch would leave archived
+// files claiming a dialect nothing reads.
+var _ = [1]struct{}{}[dialectOf(Generator)-dialectByOpener]
+
+// dialectOf reads the format number out of a Generator tag.
+//
+// A file with no tag, or one whose tag this cannot read, is taken to be the
+// current dialect: every file this project has ever written carries the tag, so
+// one without it was written by hand and means what a reader would mean today.
+func dialectOf(generator string) int {
+	_, version, found := strings.Cut(strings.TrimSpace(generator), "/")
+	if !found {
+		return dialectByOpener
+	}
+	dialect, err := strconv.Atoi(version)
+	if err != nil {
+		return dialectByOpener
+	}
+	return dialect
+}
 
 const (
 	ResultRedWin     = "1-0"
@@ -399,15 +437,20 @@ func ParseMove(token string) (game.Event, error) {
 
 func movetextTokens(record game.Record) []string {
 	tokens := make([]string, 0, len(record.Events)*3+8)
+	// A move pair is the opener's move and the reply, so the opener takes the
+	// "12." and the other side the "12..." that closes the pair. Keyed off who
+	// actually opened rather than off a colour: the side that moves first is a
+	// rule, and an archived game replays under the rule it was played with.
+	opener := record.StartingTurn()
 	moveNumber := 1
 	for index, event := range record.Events {
 		switch event.Kind {
 		case game.EventMove:
-			if event.Player == game.Blue {
+			if event.Player == opener {
+				tokens = append(tokens, strconv.Itoa(moveNumber)+".")
+			} else {
 				tokens = append(tokens, strconv.Itoa(moveNumber)+"...")
 				moveNumber++
-			} else {
-				tokens = append(tokens, strconv.Itoa(moveNumber)+".")
 			}
 			endsGame := index+1 < len(record.Events) &&
 				record.Events[index+1].Kind == game.EventGameEnd &&
@@ -436,8 +479,8 @@ func movetextTokens(record game.Record) []string {
 func adjudicatedByAMove(reason game.GameEndReason) bool {
 	switch reason {
 	case game.EndReasonGameRule, game.EndReasonAnnihilation, game.EndReasonTerritory,
-		game.EndReasonInfiltration, game.EndReasonRepetition, game.EndReasonStalemate,
-		game.EndReasonMoveLimit:
+		game.EndReasonInfiltration, game.EndReasonCorner, game.EndReasonRepetition,
+		game.EndReasonStalemate, game.EndReasonNoCapture, game.EndReasonMoveLimit:
 		return true
 	default:
 		return false

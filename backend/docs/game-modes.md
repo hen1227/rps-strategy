@@ -1,41 +1,70 @@
 # Adding a game mode
 
-All modes inherit two automatic draw rules from the engine, and a new mode gets
+All modes inherit two automatic endings from the engine, and a new mode gets
 both without writing any code:
 
-1. **Repetition.** A game ends in a draw when the same board position,
-   including territory ownership and the side to move, occurs for the third
-   time.
-2. **Stalemate.** A game ends in a draw when the player to move has no legal
-   move. `Game` decides this by asking the active mode for its own legal moves,
-   so a mode with custom movement, blocking, or immobile pieces is covered
-   automatically. The resulting `endReason` is `stalemate` and the winner is
-   `Neutral`.
+1. **No capture.** A game ends in a draw after `game.QuietPlyLimit` plies — two
+   hundred, which is a hundred moves from each side — with nothing taken. The `endReason` is
+   `no_capture`. A capture is the only thing that restarts the count; claiming
+   territory does not, because that is progress Total War already ends the game
+   on when the board fills.
+2. **Stalemate.** A game ends when the player to move has no legal move.
+   `Game` decides this by asking the active mode for its own legal moves, so a
+   mode with custom movement, blocking, or immobile pieces is covered
+   automatically. The `endReason` is `stalemate` and the winner is `Neutral`.
 
-A custom game may switch those rules without a mode knowing about it.
+Rule 1 is what bounds a game's length, and it is adjudicated last of everything
+— after the mode's own win conditions and after rule 2 — because it is the
+weakest claim any ending makes. A move that wins or blockades has said something
+about the position, and "nothing has been taken for a while" must not overrule
+it. Without that ordering the hundredth quiet move would turn a blockade, which
+wins in a mode where being stuck loses, into half a point.
+
+**There is no repetition draw.** Repeating a position three times is play in
+every mode. The rule is not deleted — it is switched off at
+`game.RepetitionDrawEnabled`, with `FeatureNoRepetitionDraw` and
+`RuleFlags.NoRepetitionDraw` still underneath it and still tested — because it
+has been on and off before and the argument has two real sides: a repeated
+position is a claim to half a point in a game decided by what is left on the
+board, and a defensive resource in a race for one tile. What settles it for now
+is that neither reading has to bound a game's length any more. Rule 1 does that
+in every mode, and unlike repetition it cannot be shuffled around by an army
+with room to wander. `EndReasonRepetition` stays because archived games carry
+it.
+
+A mode may change what rule 2 is worth by declaring a feature on its
+`ModeDefinition`:
+
+- `FeatureStalemateLoses` makes rule 2 a loss for the side that cannot move.
+
+Intransitive declares it and no other built-in mode does. Features travel to the
+client inside the mode catalogue, so the browser's copy of the rules — which
+replays archived games and walks bot battles — follows the same answers without a
+second list to keep in step.
+
+A custom game may also switch a rule off without a mode knowing about it.
 `game.RuleFlags` travels with the `GameSetup` a game was created from and is
-enforced by `Game`, not by any mode: `NoRepetitionDraw` removes rule 1, and
-`NoDrawOffers` / `NoTimeExtensions` refuse the two mutual agreements. Every
-field is a deviation, so the zero value is the standard game and a mode that
-never mentions rule flags gets them right.
+enforced by `Game`, not by any mode: `NoDrawOffers` / `NoTimeExtensions` refuse
+the two mutual agreements, and `NoRepetitionDraw` removes a rule nothing has at
+the moment. Every field is a deviation, so the zero value is the standard game
+and a mode that never mentions rule flags gets them right. A flag can only take
+a rule away, so it cannot put a repetition draw back into a mode that has none —
+and it cannot lift rule 1, which has no flag at all.
 
-Because stalemate is a draw, a mode does not need an annihilation rule to
-handle a wiped-out army: a player with no pieces has no legal move, so the game
-ends in a draw rather than hanging. Infiltration relies on exactly this — it has
-no annihilation win condition, so losing every piece is a stalemate draw, not a
-loss. A mode that wants a wipeout to be a *loss* must say so in its own `Move`,
-as Total War does.
+Where stalemate is a draw, a mode does not need an annihilation rule to handle
+a wiped-out army: a player with no pieces has no legal move, so the game ends
+in a draw rather than hanging. Infiltration relies on exactly this — it has no
+annihilation win condition, so losing every piece is a stalemate draw. In
+Intransitive the same position is a loss, from the same absence of an
+annihilation rule plus `FeatureStalemateLoses`. A mode that wants a wipeout to
+be a loss for its own reasons must say so in its own `Move`, as Total War does.
+
+The side that opens is `game.FirstToMove`, and it is Blue. Rank 1 — row 0 of a
+starting position — is Blue's home boundary, and the board is drawn from that
+edge, so the first row of a layout is the one nearest the side that moves
+first.
 
 The engine, WebSocket layer, matchmaking queue, and lobby do not contain mode-specific switch statements. A mode is one Go type implementing `GameMode` in a self-registering file.
-
-**Or it is data.** A mode written by somebody who does not have commit access is a
-`RuleSpec` — one JSON document describing the board, the pieces, the movement, the
-effects and the win conditions — interpreted by `SpecMode`, which is itself just
-another `GameMode`. `docs/rulespec.md` at the repository root is the format's
-reference, and `internal/game/spec/builtin.go` holds Total War and Infiltration
-written in it, which is what a differential test uses to prove the interpreter
-agrees with the hand-written modes below. Write a Go type when a mode needs
-something the format cannot say; write a spec otherwise.
 
 ## Contract
 
@@ -141,12 +170,29 @@ arrangement of the same squares, because a mode's rules talk about *its* board �
 "reach the far rank" means something else on a board of another size.
 
 Two things are deliberately still nine by nine. **RPSFish** searches only the
-built-in modes: its boards are `u128` bitmaps over eighty-one squares and its
-pruning rests on the rock-paper-scissors three-cycle, so it refuses a mode it
-does not know rather than encoding onto the wrong board. And the **opening book**
-is an engine artifact in a five-character notation (`d8-c7`, files `a` to `i`),
-so a mode the notation cannot spell has no book and no mirror rule — see
-`openingBoardFor`.
+modes it has been taught: its boards are `u128` bitmaps over eighty-one squares
+and its pruning rests on the rock-paper-scissors three-cycle, so it refuses a
+mode it does not know rather than encoding onto the wrong board. Being built in
+is not enough — the list is `ENGINE_MODE_CODES` in
+`frontend/src/engine/rpsfish/protocol.ts` and `Mode` in `RPSFish/src/model.rs`,
+and both have to learn a mode together. Intransitive was the worked example of
+a mode that was built in and not searched, and it has since been taught: a goal
+is now a *shape* the rule table declares (`ModeRules::goal`), so a rank and a
+corner are two values of one field rather than two branches. The public engine
+is still withheld from the mode in the browser — see `engineUnavailableMessage`
+in that same file — but that is a tournament embargo rather than a limit of the
+engine.
+
+And the **opening book** is an engine artifact in a five-character notation
+(`d2-c3`, files `a` to `i`), so a mode the notation cannot spell has no book at
+all — see `openingBoardFor`.
+
+A mode also loses the book's **mirror rule** if its layout is not symmetric
+across the files. `d2-c3` and `f2-g3` are the same opening seen twice only when
+reversing the files leaves the opening position unchanged, which `MirrorsFiles`
+is the single test for. Intransitive is the first built-in mode that fails it on
+purpose: its two goal corners are different places, so its lines are not folded
+onto their mirrors.
 
 ## Starting positions
 

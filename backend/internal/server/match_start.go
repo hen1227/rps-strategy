@@ -68,11 +68,25 @@ type startSeat struct {
 // startPairedMatch is what the board calls when two seeks fit. It opens the
 // game there and then, whether or not either player is looking at the screen.
 func (server *Server) startPairedMatch(first, second *Seek) {
-	red, blue := seatOrder(first, second)
-	server.seatMatch(
-		&startSeat{seek: red, requeue: true},
-		&startSeat{seek: blue, requeue: true},
-	)
+	opener, replier := seatOrder(first, second)
+	server.seatMatch(seatColors(
+		&startSeat{seek: opener, requeue: true},
+		&startSeat{seek: replier, requeue: true},
+	))
+}
+
+// seatColors puts two seats in the order seatMatch wants them -- Red first,
+// because that is the order every seat, clock, and rating pair is written in --
+// given which of them holds the side that opens.
+//
+// One place asks which colour that is. Everything above here reasons about the
+// opener, which is what a seat preference and a challenge courtesy are actually
+// about, and nothing above here has to be edited if the answer ever moves.
+func seatColors(opener, replier *startSeat) (red, blue *startSeat) {
+	if game.FirstToMove == game.Red {
+		return opener, replier
+	}
+	return replier, opener
 }
 
 // startAcceptedChallenge seats a challenge somebody has just taken.
@@ -98,15 +112,15 @@ func (server *Server) startAcceptedChallenge(posted *Seek, taker *Client) {
 	takerSeek.bind(taker)
 
 	// The author's seat preference is honoured and the person taking the game
-	// gets the other one. With no preference the author plays Red, which is the
-	// side that moves first — the same courtesy a challenge has always carried.
+	// gets the other one. With no preference the author gets the side that
+	// moves first — the same courtesy a challenge has always carried.
 	postedSeat := &startSeat{seek: posted, requeue: false}
 	takerSeat := &startSeat{seek: takerSeek, requeue: false}
-	red, blue := postedSeat, takerSeat
-	if posted.Setup.PreferredColor == game.Blue {
-		red, blue = takerSeat, postedSeat
+	opener, replier := postedSeat, takerSeat
+	if posted.Setup.PreferredColor == game.OtherColor(game.FirstToMove) {
+		opener, replier = takerSeat, postedSeat
 	}
-	server.seatMatch(red, blue)
+	server.seatMatch(seatColors(opener, replier))
 }
 
 // seatMatch opens the board for two seeks and calls whoever is not looking at
@@ -253,21 +267,58 @@ type cancelReason int
 const (
 	cancelledByTimeout cancelReason = iota
 	cancelledByAbort
+	// cancelledByModerator is a host stopping a game that had not begun. It
+	// goes through this path rather than through the adjudication in
+	// admin_live.go for one reason: an unstarted game is holding both players'
+	// seeks in escrow, and only cancelUnstartedGame gives them back. Ending it
+	// any other way loses two people their place in the queue.
+	cancelledByModerator
+	// cancelledByRecall is an engine in the game being taken back for its own
+	// tournament match. Like a moderator's stop and unlike every other reason
+	// here, neither player did anything — so neither is the no-show, and both
+	// get their place in the queue back. See bot_recall.go.
+	cancelledByRecall
 )
 
 func (reason cancelReason) tellNoShow() string {
-	if reason == cancelledByAbort {
+	switch reason {
+	case cancelledByAbort:
 		return "You called the game off, so it does not count and neither does your place in the queue."
+	case cancelledByModerator:
+		return moderatorCancelNotice
+	case cancelledByRecall:
+		return recallCancelNotice
 	}
 	return "You were taken out of the queue because you did not play your first move in time."
 }
 
 func (reason cancelReason) tellWaiting() string {
-	if reason == cancelledByAbort {
+	switch reason {
+	case cancelledByAbort:
 		return "Your opponent called the game off before it started. Nothing was rated."
+	case cancelledByModerator:
+		return moderatorCancelNotice
+	case cancelledByRecall:
+		return recallCancelNotice
 	}
 	return "The game was called off: no first move was played. Nothing was rated."
 }
+
+// moderatorCancelNotice is what both sides are told, since neither of them did
+// anything: the same sentence to each, unlike every other cancellation here,
+// which has a no-show and somebody who was waiting.
+const moderatorCancelNotice = "A moderator stopped this game before it started. " +
+	"Nothing was rated, and your place in the queue is back."
+
+// recallCancelNotice is what both sides are told when the engine in a game that
+// had not begun is taken back for its own tournament match.
+//
+// One sentence for both of them, for the same reason the moderator's is: there
+// is no no-show here. It does not name the engine or the event, unlike the
+// notice a *started* game gets — this path is shared with the no-show sweep and
+// the abort button, which have nothing to name.
+const recallCancelNotice = "An engine in this game was called away to play its " +
+	"scheduled tournament match. Nothing was rated, and your place in the queue is back."
 
 // cancelUnstartedGame takes an unplayed game off the board as though it had
 // never happened: no result, no archive row, no rating.
@@ -308,7 +359,18 @@ func (server *Server) cancelUnstartedGame(
 		Message: reason.tellWaiting(),
 	})
 
-	if server.requeueOrRelease(waiting) {
+	// Only the player who was waiting gets their place back. Losing it is the
+	// consequence of not turning up, and it is what keeps the queue honest.
+	//
+	// The two exceptions are a moderator stopping the game and an engine being
+	// recalled to its own match: *neither* player did anything, so blaming one
+	// of them for a decision somebody else made would take a place in the queue
+	// away for no reason.
+	changed := server.requeueOrRelease(waiting)
+	if reason == cancelledByModerator || reason == cancelledByRecall {
+		changed = server.requeueOrRelease(noShow) || changed
+	}
+	if changed {
 		server.broadcastOpenChallenges()
 		server.broadcastModePlayerCounts()
 	}
@@ -327,10 +389,12 @@ func (server *Server) discardSession(session *GameSession) {
 		return
 	}
 	delete(server.games, session.gameID)
+	// Read under the lock, for the roster below.
+	redClient, blueClient := session.redClient, session.blueClient
 	for _, seat := range []struct {
 		client *Client
 		color  game.PlayerColor
-	}{{session.redClient, game.Red}, {session.blueClient, game.Blue}} {
+	}{{redClient, game.Red}, {blueClient, game.Blue}} {
 		if seat.client == nil {
 			continue
 		}
@@ -345,6 +409,10 @@ func (server *Server) discardSession(session *GameSession) {
 	}
 	session.chat.leave(session)
 	server.mu.Unlock()
+
+	// A game called off before it began still took a slot while it existed, so
+	// the engine in it is idle again and the lobby has to be told.
+	server.broadcastBotsForEngines(redClient, blueClient)
 }
 
 // requeueOrRelease decides one seat's fate when its game is called off, and

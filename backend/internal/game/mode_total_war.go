@@ -15,6 +15,8 @@ func (mode *TotalWarMode) Definition() ModeDefinition {
 		Playable:         true,
 		Features:         []ModeFeature{FeatureTerritory},
 		StartingPosition: totalWarStartingPosition,
+		Symmetries:       []BoardSymmetry{SymmetryMirrorFiles},
+		RulesPublished:   rulesPublished,
 	}
 }
 

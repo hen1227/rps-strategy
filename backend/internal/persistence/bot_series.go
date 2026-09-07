@@ -87,6 +87,16 @@ type BotSeries struct {
 	Games         []BotSeriesGame `json:"games,omitempty"`
 	CreatedAtMs   int64           `json:"createdAtUnixMs"`
 	CompletedAtMs *int64          `json:"completedAtUnixMs,omitempty"`
+	// Casual is a run between two engines one person registered, which does not
+	// move the ladder: bot_series.go seats those games casual, and the ladder
+	// drops the pair however they were flagged (botHeadToHeadTx).
+	//
+	// Derived from the two owners on every read rather than stored on the row,
+	// which is what makes it right about the runs that were played before the
+	// rule existed. Those games went down `ranked = 1` and the fit ignores them
+	// now, so the run did not move anything and saying "casual" is the true
+	// answer to the only question anybody is asking of the word here.
+	Casual bool `json:"casual"`
 }
 
 // BotSeriesGame is one game of a run.
@@ -275,7 +285,9 @@ SELECT s.series_id, s.mode_id, s.first_bot_id, s.second_bot_id,
        s.status, s.pairs, s.opening_plies, s.seed,
        s.initial_time_ms, s.increment_ms,
        s.first_wins, s.second_wins, s.draws,
-       s.created_at_unix_ms, s.completed_at_unix_ms
+       s.created_at_unix_ms, s.completed_at_unix_ms,
+       COALESCE(fb.owner_user_id IS NOT NULL
+                AND fb.owner_user_id = sb.owner_user_id, 0)
 FROM bot_series s
 LEFT JOIN bots fb ON fb.bot_id = s.first_bot_id
 LEFT JOIN accounts fa ON fa.user_id = fb.user_id
@@ -288,6 +300,7 @@ LEFT JOIN accounts ra ON ra.user_id = s.requested_by_user_id`
 func scanBotSeries(scanner interface{ Scan(...any) error }) (BotSeries, error) {
 	var series BotSeries
 	var completedAt sql.NullInt64
+	var casual int
 	err := scanner.Scan(
 		&series.SeriesID, &series.ModeID, &series.FirstBotID, &series.SecondBotID,
 		&series.FirstBotName, &series.SecondBotName,
@@ -297,7 +310,7 @@ func scanBotSeries(scanner interface{ Scan(...any) error }) (BotSeries, error) {
 		&series.Status, &series.Pairs, &series.OpeningPlies, &series.Seed,
 		&series.InitialTimeMs, &series.IncrementMs,
 		&series.FirstWins, &series.SecondWins, &series.Draws,
-		&series.CreatedAtMs, &completedAt,
+		&series.CreatedAtMs, &completedAt, &casual,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return BotSeries{}, ErrBotSeriesNotFound
@@ -308,6 +321,7 @@ func scanBotSeries(scanner interface{ Scan(...any) error }) (BotSeries, error) {
 	if completedAt.Valid {
 		series.CompletedAtMs = &completedAt.Int64
 	}
+	series.Casual = casual == 1
 	return series, nil
 }
 

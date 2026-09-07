@@ -4,40 +4,30 @@
     pip install websockets
     python3 rpsbot.py -- ./your-engine
 
-On connect this reports its version to the server. If a newer one exists you
-are told where to get it; if this one is too old to talk to the server, it
-says so and stops.
+The server sends protocol lines; this pipes them to your engine's stdin and
+sends back whatever it printed. There is no game logic here.
 
-Ctrl-C, or a SIGTERM from something like `systemctl stop`, asks the server
-for a graceful shutdown: no new games, finish what is already owed, then
-exit. Press it a second time to stop immediately, which abandons the game on
-the board. Your engine can ask for the same thing itself by printing
-`shutdown` on its own stdout.
+Ctrl-C asks the server for a graceful shutdown, which lets the games already on
+the board finish. A second Ctrl-C stops now and abandons them.
 
-The first run asks six questions and saves the answers to rpsbot.conf.
-Every run after that connects straight away.
+A bot may play more than one game at once (max_games in rpsbot.conf). Each
+concurrent game slot is its own connection and its own copy of your engine, so
+pick a number your machine can afford; 1 plays best in ranked games.
 
-This script contains no game logic. The server sends the engine protocol
-lines; this pipes them to your engine's stdin and pipes back what your engine
-printed. Before running it, four greps tell you everything it does:
+With no configuration file, this asks a few questions and writes one.
 
-    grep -n subprocess      one Popen, argv exactly what you typed after --
-    grep -n 'wss\\?://'      one destination, the `server` value below
-    grep -n "open("         two files: rpsbot.conf, and your icon read as bytes
-    grep -nE 'eval|exec|pickle|os.system|shell=True'      no matches
-
-The engine command is never saved, so the config file cannot contain
-anything that runs. The one path it does hold is your icon, which is read
-as bytes, size-checked, and sent. See docs/rpsi.md for the protocol your
-engine speaks.
+See https://rps.henhen1227.com/account/bots/protocol for the protocol your
+engine needs to speak.
 """
 
 import argparse
 import base64
+import collections
 import configparser
 import json
 import os
 import queue
+import secrets
 import signal
 import subprocess
 import sys
@@ -46,30 +36,29 @@ import time
 
 from websockets.sync.client import connect
 
-CLIENT_VERSION = "1.2"
+CLIENT_VERSION = "1.4"
 DEFAULT_SERVER = "wss://api-rps.henhen1227.com/ws"
 CONFIG_PATH = "rpsbot.conf"
 
-# What the website will accept as a bot's picture. Checked here as well as
-# there so a wrong file is named on your own terminal, next to its path,
-# rather than coming back as a remark from a server.
+# The most slots one bot may open. Each one costs a connection and an engine.
+MAX_GAMES = 5
+
+# How long a later slot waits for the first one to register before giving up on
+# it and connecting anyway.
+FIRST_SLOT_TIMEOUT = 30
+
+# What the website will accept as a bot's picture.
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 ICON_PIXELS = 128
 MAX_ICON_BYTES = 64 * 1024
 
 # The one line an engine can print to take itself out of play. Everything else
-# it writes is protocol or diagnostics; this is the only word this script acts
-# on rather than forwards. See docs/rpsi.md.
+# it writes is passed on.
 ENGINE_SHUTDOWN = "shutdown"
 
 
 class GracefulExit(Exception):
-    """The server has told us there is nothing left to finish.
-
-    Distinct from every other way out of serve(), because it is the one that
-    must not reconnect: the retry loop exists for a server that went away, and
-    coming back after a shutdown would undo the shutdown.
-    """
+    """The server has told us there is nothing left to finish."""
 
 
 def ask(prompt, default=None):
@@ -82,29 +71,49 @@ def ask_yes(prompt, default=True):
     return default if not answer else answer.startswith("y")
 
 
+def ask_count(prompt, default, highest):
+    """Ask for a number in 1..highest, until one arrives."""
+    while True:
+        answer = ask(prompt, str(default))
+        try:
+            chosen = int(answer)
+        except ValueError:
+            print(f"  {answer!r} is not a number.", flush=True)
+            continue
+        if 1 <= chosen <= highest:
+            return chosen
+        print(f"  choose a number between 1 and {highest}.", flush=True)
+
+
 def configure(path, server):
-    """Ask the six questions and write them down."""
+    """Ask the setup questions and write the answers down."""
     print("Setting up a new bot. Answers are saved to", path, flush=True)
     config = configparser.ConfigParser()
     config["bot"] = {
         "name": ask("Bot name"),
-        # Asked here, and checked here, because a path typed at a prompt is
-        # where a typo goes — better to hear about it now than to wonder later
-        # why the website is still showing two letters on a coloured square.
         "icon": ask("Icon: a square PNG up to 128x128, or blank for none", ""),
         "public_play": "yes" if ask_yes("Let other players challenge this bot?") else "no",
         "tournaments": "yes" if ask_yes("Enter tournaments automatically?") else "no",
+        "max_games": str(ask_count(
+            f"Games at once (1-{MAX_GAMES}; each one runs its own copy of your engine)",
+            1, MAX_GAMES,
+        )),
         "token": ask("Paste your bot token (from your account page)"),
-        # Asked rather than assumed: someone running a server of their own gets
-        # a baffling error otherwise, because the default is the public one.
-        "server": ask("Server", server),
+        # Written down rather than asked about: almost nobody wants a server
+        # other than the default, and `--server` is there for those who do.
+        "server": server,
     }
-    with open(path, "w", encoding="utf-8") as handle:
-        config.write(handle)
-    os.chmod(path, 0o600)
+    save(config, path)
     print(f"Saved {path}.", flush=True)
     read_icon(config["bot"]["icon"])
     return config["bot"]
+
+
+def save(config, path):
+    """Write the config file out, readable only by its owner."""
+    with open(path, "w", encoding="utf-8") as handle:
+        config.write(handle)
+    os.chmod(path, 0o600)
 
 
 def load(path, reconfigure, server):
@@ -114,15 +123,86 @@ def load(path, reconfigure, server):
     return config["bot"]
 
 
-def read_icon(path):
-    """The icon to send, base64, or None to leave the server's copy alone.
+def read_max_games(settings, override=None):
+    """How many games to play at once, as a number in 1..MAX_GAMES."""
+    raw = override if override is not None else settings.get("max_games", "1")
+    try:
+        chosen = int(str(raw).strip() or 1)
+    except ValueError:
+        print(f"max_games: {raw!r} is not a number; playing one game at a time",
+              file=sys.stderr, flush=True)
+        return 1
+    if chosen < 1 or chosen > MAX_GAMES:
+        corrected = min(max(chosen, 1), MAX_GAMES)
+        print(f"max_games: {chosen} is outside 1-{MAX_GAMES}; using {corrected}",
+              file=sys.stderr, flush=True)
+        return corrected
+    return chosen
 
-    Three answers, because the server distinguishes three cases. An empty
-    string means "no icon", which takes down whatever it is showing. None
-    means "do not touch it", which is what an unreadable file has to mean:
-    running from the wrong directory should not wipe your bot's picture off
-    the website until you notice.
+
+# One slot is one connection to the server plus one copy of the engine, playing
+# one game at a time. Playing several games at once means running several slots,
+# one thread each: `index` numbers them, `count` is how many there are, and
+# `session` is the same random id on all of them, so the server can tell this
+# process's slots apart from a second copy of the bot somebody left running
+# elsewhere (which it displaces).
+#
+# Slot 0 leads. It claims the bot's account, uploads the icon and reports the
+# rules; the others wait for it to register, then say nothing about any of that.
+# A shutdown belongs to the bot rather than to one of its connections, so every
+# slot shares one Stopping.
+Slot = collections.namedtuple("Slot", "index count session")
+
+def slot_printer(slot):
+    """Print with a slot label, when there is more than one slot to confuse."""
+    label = "" if slot.count == 1 else f"[{slot.index + 1}/{slot.count}] "
+
+    def note(text, error=False):
+        stream = sys.stderr if error else sys.stdout
+        for line in str(text).splitlines() or [""]:
+            print(label + line, file=stream, flush=True)
+
+    return note
+
+
+def report_rules(rules, settings, path, note):
+    """Print the rules each mode was last published under, and warn about any
+    that changed since this bot's last connect. The dates are remembered in the
+    config file.
     """
+    if not rules:
+        return
+    seen = dict(
+        pair.split(":", 1)
+        for pair in settings.get("rules_seen", "").split() if ":" in pair
+    )
+    changed = []
+    for mode in sorted(rules):
+        note(f"Using rules {mode} published {rules[mode]}")
+        if mode in seen and seen[mode] != rules[mode]:
+            changed.append(f"{mode} (this bot last played {seen[mode]})")
+    if changed:
+        note("  The rules changed since this bot last connected: "
+             + ", ".join(changed) + ".", error=True)
+
+    current = " ".join(f"{mode}:{rules[mode]}" for mode in sorted(rules))
+    if current == settings.get("rules_seen", ""):
+        return
+    settings["rules_seen"] = current
+
+    stored = configparser.ConfigParser()
+    if not stored.read(path) or "bot" not in stored:
+        return
+    stored["bot"]["rules_seen"] = current
+    try:
+        save(stored, path)
+    except OSError as error:
+        # Not worth refusing to play over.
+        note(f"could not record the rules date ({error})", error=True)
+
+
+def read_icon(path):
+    """The icon as base64, "" for none, or None when it could not be read."""
     path = (path or "").strip()
     if not path:
         return ""
@@ -155,7 +235,7 @@ def read_icon(path):
 class Engine:
     """The engine subprocess, and the only thing this script executes."""
 
-    def __init__(self, argv, on_shutdown=None):
+    def __init__(self, argv, on_shutdown=None, label=""):
         self.argv = argv
         self.on_shutdown = on_shutdown
         self.process = subprocess.Popen(
@@ -163,18 +243,17 @@ class Engine:
             stderr=subprocess.PIPE, text=True, bufsize=1,
         )
         self.lines = queue.Queue()
-        # Two drains. stdout feeds the queue; stderr goes to our own stderr so
-        # a chatty engine can never fill a pipe buffer and deadlock itself.
+        # stdout feeds the queue; stderr is copied to ours, labelled with the
+        # slot, so a chatty engine cannot fill a pipe buffer and deadlock.
         self._pump(self.process.stdout, self._read)
-        self._pump(self.process.stderr, lambda line: sys.stderr.write(f"[engine] {line}"))
+        self._pump(self.process.stderr,
+                   lambda line: sys.stderr.write(f"[engine{label}] {line}"))
 
     def _read(self, line):
         """Queue a line for the exchange, unless it is one meant for us.
 
-        Watched here rather than inside exchange() because an idle engine is
-        not in an exchange: nothing is asked of a bot with no game, so a
-        `shutdown` printed then would sit unread until somebody challenged it —
-        which is the one moment it was trying to avoid.
+        Watched here rather than in exchange(), so the word is not missed while
+        the engine is idle.
         """
         word = line.split()
         if word and word[0] == ENGINE_SHUTDOWN and self.on_shutdown:
@@ -198,8 +277,8 @@ class Engine:
             collected.append(line)
             if line.startswith(expect):
                 return collected
-            # Bound the memory an engine that prints forever can cost us. The
-            # newest lines are the interesting ones, so drop from the front.
+            # Keep only the newest lines, so an engine that prints forever
+            # cannot grow this without bound.
             del collected[:-64]
 
     def close(self):
@@ -210,45 +289,40 @@ class Engine:
             self.process.kill()
 
 
-def serve(settings, argv, stopping):
-    """One connection: hand every frame to the engine, send back its answer.
+def serve(settings, argv, stopping, slot, claimed, note, config_path):
+    """One slot's connection: hand every frame to the engine, send its answer.
 
-    The engine is not started until the server has accepted us, so an out-of-date
-    client says so and stops rather than launching a process it cannot use.
-
-    `stopping` is the shared flag the signal handler sets, so that a Ctrl-C
-    arriving between two connections is still remembered by the next one.
+    The engine is not started until the server sends the first frame for it.
+    `stopping` is the shared shutdown state, so a Ctrl-C between two
+    connections is still remembered by the next one; `claimed` is set once any
+    slot has registered. See Slot.
     """
     engine = None
     try:
         with connect(settings["server"], max_size=None) as socket:
 
-            def request_drain(reason):
+            def request_drain(reason, exit_when_done=True):
                 """Ask the server to take this bot out of play.
 
-                Sent rather than acted on locally, because only the server knows
-                what this bot still owes — a game on the board, half a pair of a
-                series, four matches of a round robin. It answers with
+                Only the server knows what the bot still owes — a game on the
+                board, half a pair of a series, four matches of a round robin —
+                so it is asked rather than decided here. It answers with
                 bot_draining now and bot_shutdown when there is nothing left.
 
-                Sends are safe from any thread: websockets' threading client
-                holds a mutex across one, which is what lets the engine watcher
-                and a signal handler both reach it.
+                Safe from any thread: websockets' threading client holds a mutex
+                across a send.
                 """
+                stopping.drain = (exit_when_done, reason)
                 try:
                     socket.send(json.dumps(
-                        {"type": "bot_drain", "exit": True, "reason": reason}
+                        {"type": "bot_drain", "exit": exit_when_done,
+                         "reason": reason}
                     ))
                 except Exception as error:
-                    print(f"could not ask the server to shut down: {error}",
-                          file=sys.stderr, flush=True)
+                    note(f"could not ask the server to shut down: {error}",
+                         error=True)
 
-            stopping.send = request_drain
-            if stopping.requested:
-                # A drain asked for on a socket that has since dropped. Ask
-                # again rather than quietly coming back as an available bot:
-                # the request lived on that connection and died with it.
-                request_drain("the client")
+            stopping.register(slot.index, request_drain)
             registration = {
                 "type": "authenticate_bot",
                 "clientVersion": CLIENT_VERSION,
@@ -256,30 +330,49 @@ def serve(settings, argv, stopping):
                 "name": settings["name"],
                 "publicPlay": settings.getboolean("public_play", True),
                 "enterTournaments": settings.getboolean("tournaments", True),
+                "maxGames": slot.count,
+                "sessionId": slot.session,
+                "slot": slot.index,
             }
             # Read every connect, so replacing the file and restarting is all
-            # it takes to change the picture. Omitted entirely when it could
-            # not be read: see read_icon.
-            icon = read_icon(settings.get("icon", ""))
-            if icon is not None:
-                registration["icon"] = icon
+            # it takes to change the picture. Omitted when it could not be read
+            # (see read_icon), and sent by slot 0 only.
+            if slot.index == 0:
+                icon = read_icon(settings.get("icon", ""))
+                if icon is not None:
+                    registration["icon"] = icon
             socket.send(json.dumps(registration))
             for raw in socket:
                 message = json.loads(raw)
                 kind = message.get("type")
                 if kind == "bot_ready":
-                    print(f"{message.get('name')} is online. Waiting for a game.", flush=True)
+                    # First: the other slots are waiting on this.
+                    claimed.set()
+                    note(f"{message.get('name')} is online. Waiting for a game.")
+                    # Slot 0 only: every slot plays the same rules, and saying
+                    # so five times buries the connect where they changed.
+                    if slot.index == 0:
+                        report_rules(message.get("rules"), settings, config_path, note)
                     warning = message.get("iconWarning")
                     if warning:
-                        print(f"  icon: {warning}", file=sys.stderr, flush=True)
+                        note(f"  icon: {warning}", error=True)
                     update = message.get("clientUpdate")
                     if update:
-                        print(
+                        note(
                             f"\n  A newer rpsbot.py is available (you have {CLIENT_VERSION},"
                             f" latest is {update.get('version')}).\n"
                             f"  Download it from {update.get('url')}\n",
-                            file=sys.stderr, flush=True,
+                            error=True,
                         )
+                    # The server keeps a drain on the connection, so that
+                    # restarting the bot puts it back in play — which leaves
+                    # this process the only thing able to tell a restart from a
+                    # dropped socket. Re-asked here, and not before the
+                    # registration above, because the server reads the first
+                    # frame of a connection as a registration.
+                    if stopping.drain:
+                        exit_when_done, source = stopping.drain
+                        request_drain(source, exit_when_done)
                     continue
                 if kind == "authentication_failed":
                     raise SystemExit(
@@ -291,7 +384,19 @@ def serve(settings, argv, stopping):
                 if kind == "bot_draining":
                     # Progress, not a verdict: the server has stopped offering
                     # this bot and is naming what it still has to finish.
-                    print(message.get("message", "shutting down"), flush=True)
+                    note(message.get("message", "shutting down"))
+                    # Written down because the next connection has to ask for
+                    # the drain again. A cancellation — from the website, say —
+                    # arrives the same way.
+                    state = message.get("drain") or {}
+                    if state.get("draining"):
+                        stopping.drain = (
+                            bool(state.get("exitWhenDone")),
+                            state.get("source") or "the website",
+                        )
+                    else:
+                        stopping.drain = None
+                        stopping.requested = False
                     continue
                 if kind == "bot_shutdown":
                     raise GracefulExit(message.get("message", "shutting down"))
@@ -301,9 +406,13 @@ def serve(settings, argv, stopping):
                     continue
                 # First frame the server sends is the engine handshake, so this
                 # is where the subprocess is actually needed.
-                engine = engine or Engine(argv, on_shutdown=lambda reason: request_drain(
-                    f"the engine ({reason})" if reason else "the engine"
-                ))
+                engine = engine or Engine(
+                    argv,
+                    on_shutdown=lambda reason: request_drain(
+                        f"the engine ({reason})" if reason else "the engine"
+                    ),
+                    label="" if slot.count == 1 else f" {slot.index + 1}",
+                )
 
                 reply = {"type": "engine_reply", "gameId": message.get("gameId"),
                          "seq": message.get("seq")}
@@ -314,62 +423,124 @@ def serve(settings, argv, stopping):
                     )
                 except (queue.Empty, BrokenPipeError, OSError) as error:
                     # A timed-out engine may still be about to print, which
-                    # would poison the next exchange. Restarting makes that
-                    # unrepresentable instead of something to reason about.
+                    # would poison the next exchange, so it is restarted.
                     reply = {"type": "engine_error", "gameId": message.get("gameId"),
                              "seq": message.get("seq"),
                              "reason": "timeout" if isinstance(error, queue.Empty) else "crashed"}
                     on_shutdown = engine.on_shutdown
+                    label = "" if slot.count == 1 else f" {slot.index + 1}"
                     engine.close()
-                    engine = Engine(argv, on_shutdown=on_shutdown)
+                    engine = Engine(argv, on_shutdown=on_shutdown, label=label)
                 socket.send(json.dumps(reply))
     finally:
-        stopping.send = None
+        stopping.unregister(slot.index)
         if engine:
             engine.close()
 
 
 class Stopping:
-    """Whether a graceful shutdown has been asked for on this machine.
+    """Whether this bot is on its way out of play, and how it was asked.
 
-    One object shared across reconnects, because a Ctrl-C is interesting in
-    both of the states this script has. Connected, it is a request to drain,
-    and `send` is how to make it. Between sockets there is nobody to ask, and
-    `requested` is what carries the intent to the connection after this one.
+    One object shared across reconnects and across slots, because a drain
+    belongs to the bot and outlives the socket it was asked on.
+
+    `drain` is "this bot is leaving", whoever said so, including the website,
+    and is what the next connection re-asserts. `requested` is "somebody at
+    this machine asked", which a second Ctrl-C reads as meaning *now*. `fatal`
+    is what ended the run for good, set on a slot's thread and printed by the
+    main one.
     """
 
     def __init__(self):
         self.requested = False
-        # The live connection's drain sender, or None between connections.
-        self.send = None
+        # (exit_when_done, source) for a drain in effect, or None.
+        self.drain = None
+        # The first thing that ended this run for good, or None.
+        self.fatal = None
+        # One drain sender per connected slot, keyed by slot index. Guarded,
+        # because slots add and drop theirs on their own threads while a signal
+        # handler on the main one is reading the lot.
+        self._mutex = threading.Lock()
+        self._senders = {}
+
+    def register(self, index, sender):
+        with self._mutex:
+            self._senders[index] = sender
+
+    def unregister(self, index):
+        with self._mutex:
+            self._senders.pop(index, None)
 
     def request(self):
-        """Ask for a graceful shutdown. False when there is nobody to ask."""
+        """Ask for a graceful shutdown. False when there is nobody to ask.
+
+        Every connected slot is told, rather than the first one that answers: a
+        slot that is offline right now picks it up from `drain` on its next
+        connection, and one that is up should not wait for that.
+        """
         self.requested = True
-        sender = self.send
-        if sender is None:
-            return False
-        sender("the client")
-        return True
+        # Recorded even with nobody to tell, which is what carries the intent
+        # to the connection after this one.
+        self.drain = (True, "the client")
+        with self._mutex:
+            senders = list(self._senders.values())
+        for sender in senders:
+            sender("the client")
+        return bool(senders)
+
+    def stop(self, reason):
+        """Record what ended the run, keeping the first thing that said so."""
+        with self._mutex:
+            if self.fatal is None:
+                self.fatal = reason
+
+
+def run_slot(slot, settings, argv, stopping, claimed, note, config_path):
+    """One slot's connect-play-reconnect loop, on its own thread.
+
+    Threads rather than processes because the work here is a socket and a pipe:
+    the thinking happens in the engine subprocess this starts.
+    """
+    # Later slots wait for the first one to register. See Slot.
+    if slot.index and not claimed.wait(FIRST_SLOT_TIMEOUT):
+        note("the first slot has not come up yet; connecting anyway", error=True)
+
+    delay = 1
+    while True:
+        try:
+            serve(settings, argv, stopping, slot, claimed, note, config_path)
+            delay = 1
+        except GracefulExit as done:
+            note(done)
+            return
+        except SystemExit as refused:
+            # Handed to main(), which is the thread that can exit with it;
+            # raising it again here would only end this thread silently.
+            stopping.stop(str(refused))
+            return
+        except Exception as error:
+            note(f"disconnected ({error}); retrying in {delay}s", error=True)
+        if stopping.fatal:
+            # Another slot heard something that applies to all of them: a token
+            # that is not recognised, a bot that has been retired, this process
+            # replaced by another one holding the same token.
+            return
+        time.sleep(delay)
+        delay = min(delay * 2, 30)
 
 
 def install_signal_handlers(stopping):
     """Turn Ctrl-C and SIGTERM into a graceful shutdown.
 
-    The first one asks and keeps playing; the second one goes now. That order
-    is the point: the default for both signals is to die immediately, which
-    abandons the game on the board and hands the opponent a win nobody played
-    for. Somebody who genuinely wants that can still have it by pressing again.
-
-    With no connection there is nothing to be graceful towards — the server
-    stopped hearing from this bot when the socket went — so a signal then is
-    simply a stop.
+    The first one asks and keeps playing; the second one goes now. The default
+    for both signals is to die immediately, which abandons the games on the
+    board and hands the opponents wins nobody played for.
     """
 
     def handle(signum, frame):
         if not stopping.requested and stopping.request():
             print("\n  Shutting down gracefully: no new games, finishing what is owed."
-                  "\n  Press Ctrl-C again to stop now and abandon the game on the board.\n",
+                  "\n  Press Ctrl-C again to stop now and abandon the games on the board.\n",
                   flush=True)
             return
         # Restore the default, so a third one gets through even if something
@@ -392,6 +563,8 @@ def main():
     parser.add_argument("--server", help="override the server URL")
     parser.add_argument("--name", help="override the bot name")
     parser.add_argument("--icon", help="override the icon PNG for this run")
+    parser.add_argument("--max-games", type=int, metavar="N",
+                        help=f"override how many games to play at once (1-{MAX_GAMES})")
     parser.add_argument("--reconfigure", action="store_true", help="ask the questions again")
     parser.add_argument("engine", nargs=argparse.REMAINDER,
                         help="-- followed by the command that runs your engine")
@@ -408,30 +581,47 @@ def main():
                        ("icon", options.icon)):
         if value:
             settings[key] = value
+    # A config file written before the wizard recorded the server has no line
+    # for it, and no destination is not a reason to refuse to play.
+    if not settings.get("server"):
+        settings["server"] = DEFAULT_SERVER
+
+    count = read_max_games(settings, options.max_games)
 
     stopping = Stopping()
     install_signal_handlers(stopping)
 
-    delay = 1
-    # The KeyboardInterrupt is caught out here rather than around serve(),
-    # because the reconnect backoff below is exactly where somebody gives up
-    # waiting and presses Ctrl-C, and a traceback is not an answer to that.
+    # One id for the whole process, shared by all of its slots. See Slot.
+    session = secrets.token_hex(8)
+    claimed = threading.Event()
+    if count > 1:
+        print(f"Playing up to {count} games at once, one engine each.", flush=True)
+
+    slots = []
+    for index in range(count):
+        slot = Slot(index=index, count=count, session=session)
+        worker = threading.Thread(
+            target=run_slot,
+            args=(slot, settings, argv, stopping, claimed, slot_printer(slot),
+                  options.config),
+            # Daemons, so the second Ctrl-C — the one that means *now* — is not
+            # held up by a slot waiting on a socket or a backoff.
+            daemon=True,
+            name=f"slot-{index + 1}",
+        )
+        worker.start()
+        slots.append(worker)
+
+    # Polled rather than joined, because a signal only reaches the main thread
+    # while it is running Python: a bare join can sit through the Ctrl-C that
+    # was meant to be the second one.
     try:
-        while True:
-            try:
-                serve(settings, argv, stopping)
-                delay = 1
-            except GracefulExit as done:
-                print(done, flush=True)
-                return
-            except SystemExit:
-                raise
-            except Exception as error:
-                print(f"disconnected ({error}); retrying in {delay}s", file=sys.stderr)
-            time.sleep(delay)
-            delay = min(delay * 2, 30)
+        while any(worker.is_alive() for worker in slots):
+            time.sleep(0.2)
     except KeyboardInterrupt:
         return
+    if stopping.fatal:
+        raise SystemExit(stopping.fatal)
 
 
 if __name__ == "__main__":

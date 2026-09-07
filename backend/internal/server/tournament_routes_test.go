@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 
 	"rps-strategy/backend/internal/game"
@@ -58,7 +59,50 @@ func TestTournamentHTTPFlowAndAdminAuthentication(t *testing.T) {
 	if tournament.Name != "Autumn Open" || tournament.ModeID != game.ModeTotalWar {
 		t.Fatalf("unexpected tournament: %#v", tournament)
 	}
+	// A new event is a draft, so it is not on the public board and takes no
+	// signups until it is published. Both halves are asserted here because this
+	// test is the one that walks the whole lifecycle.
+	if tournament.Status != persistence.TournamentDraft {
+		t.Fatalf("a new tournament should be a draft, got %q", tournament.Status)
+	}
+	board := tournamentRequest(t, handler, http.MethodGet, "/api/tournaments", nil, "")
+	if strings.Contains(board.Body.String(), tournament.TournamentID) {
+		t.Fatalf("a draft appeared on the public board: %s", board.Body)
+	}
+	early := tournamentRequest(
+		t,
+		handler,
+		http.MethodPost,
+		"/api/tournaments/"+tournament.TournamentID+"/signups",
+		map[string]any{
+			"userId": "eager", "ign": "Eager", "discord": "eager.discord",
+			"agreedToUnfilteredChat": true,
+		},
+		"",
+	)
+	if early.Code != http.StatusConflict {
+		t.Fatalf("expected a draft to refuse signups, got %d: %s", early.Code, early.Body)
+	}
 
+	published := tournamentRequest(
+		t,
+		handler,
+		http.MethodPost,
+		"/api/admin/tournaments/"+tournament.TournamentID+"/publish",
+		nil,
+		"test-secret",
+	)
+	if published.Code != http.StatusOK {
+		t.Fatalf("expected publication, got %d: %s", published.Code, published.Body)
+	}
+	if err := json.NewDecoder(published.Body).Decode(&tournament); err != nil {
+		t.Fatal(err)
+	}
+	if tournament.Status != persistence.TournamentRegistration {
+		t.Fatalf("expected registration after publishing, got %q", tournament.Status)
+	}
+
+	verifiedEntrants(t, data, "first-user", "second-user")
 	for _, signup := range []map[string]any{
 		{
 			"userId": "first-user", "ign": "First", "discord": "first.discord",
@@ -128,12 +172,10 @@ func TestTournamentSignupReservedIdentitiesRequireSpecialToken(t *testing.T) {
 	}
 	defer data.Close()
 	server := NewWithStoreAndAdminToken(data, nil, "special-secret")
-	tournament, err := data.CreateTournament(
-		t.Context(), "reserved-open", "Reserved Open", game.ModeTotalWar, "Total War",
+	tournament := openTournament(
+		t, data, "reserved-open", "Reserved Open", game.ModeTotalWar, "Total War",
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
+	verifiedEntrants(t, data, "reserved-user")
 	path := "/api/tournaments/" + tournament.TournamentID + "/signups"
 	body := map[string]any{
 		"userId": "reserved-user", "ign": "WEBGOATGUY", "discord": "someone",
@@ -174,12 +216,9 @@ func TestTournamentSignupRequiresChatAgreement(t *testing.T) {
 	data := mustTournamentStore(t)
 	defer data.Close()
 	server := NewWithStoreAndAdminToken(data, nil, "test-secret")
-	tournament, err := data.CreateTournament(
-		t.Context(), "consent-cup", "Consent Cup", game.ModeTotalWar, "Total War",
+	tournament := openTournament(
+		t, data, "consent-cup", "Consent Cup", game.ModeTotalWar, "Total War",
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
 	response := tournamentRequest(
 		t,
 		server.Routes(),
@@ -193,6 +232,66 @@ func TestTournamentSignupRequiresChatAgreement(t *testing.T) {
 	)
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("expected consent validation, got %d: %s", response.Code, response.Body)
+	}
+}
+
+// Verification is unconditional, and the refusal comes back as a forbidden
+// rather than as a validation failure — the caller has to be able to tell "link
+// your Discord" from "you typed something wrong".
+func TestAnUnverifiedSignupIsForbidden(t *testing.T) {
+	data := mustTournamentStore(t)
+	defer data.Close()
+	server := NewWithStoreAndAdminToken(data, nil, "test-secret")
+	handler := server.Routes()
+
+	created := tournamentRequest(
+		t, handler, http.MethodPost, "/api/admin/tournaments",
+		map[string]any{"name": "Autumn Open", "modeId": game.ModeTotalWar},
+		"test-secret",
+	)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("expected creation, got %d: %s", created.Code, created.Body)
+	}
+	var tournament persistence.Tournament
+	if err := json.NewDecoder(created.Body).Decode(&tournament); err != nil {
+		t.Fatal(err)
+	}
+	if published := tournamentRequest(
+		t, handler, http.MethodPost,
+		"/api/admin/tournaments/"+tournament.TournamentID+"/publish", nil, "test-secret",
+	); published.Code != http.StatusOK {
+		t.Fatalf("expected publication, got %d: %s", published.Code, published.Body)
+	}
+
+	signup := func(userID string, ign string) *httptest.ResponseRecorder {
+		return tournamentRequest(
+			t, handler, http.MethodPost,
+			"/api/tournaments/"+tournament.TournamentID+"/signups",
+			map[string]any{
+				"userId": userID, "ign": ign, "discord": "typed.handle",
+				"agreedToUnfilteredChat": true,
+			},
+			"",
+		)
+	}
+
+	if refused := signup("unverified", "Ada"); refused.Code != http.StatusForbidden {
+		t.Fatalf("expected an unverified signup to be forbidden, got %d: %s",
+			refused.Code, refused.Body)
+	}
+
+	registeredSession(t, data, "verified", "Babbage")
+	entered := signup("verified", "Babbage")
+	if entered.Code != http.StatusCreated {
+		t.Fatalf("expected a verified signup to be admitted, got %d: %s",
+			entered.Code, entered.Body)
+	}
+	// And the stored handle is the one Discord vouched for, not the typed one.
+	if err := json.NewDecoder(entered.Body).Decode(&tournament); err != nil {
+		t.Fatal(err)
+	}
+	if len(tournament.Players) != 1 || tournament.Players[0].Discord != "Babbage" {
+		t.Fatalf("expected the verified handle on the entry, got %#v", tournament.Players)
 	}
 }
 

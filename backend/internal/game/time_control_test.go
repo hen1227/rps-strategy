@@ -23,12 +23,12 @@ func TestNewGameUsesFivePlusThreeByDefault(t *testing.T) {
 	if state.TimeControl != DefaultTimeControl() {
 		t.Fatalf("expected default 5/+3 control, got %#v", state.TimeControl)
 	}
-	if state.Clock.RedRemainingMs != DefaultInitialTimeMs ||
-		state.Clock.BlueRemainingMs != DefaultInitialTimeMs {
+	if state.Clock.BlueRemainingMs != DefaultInitialTimeMs ||
+		state.Clock.RedRemainingMs != DefaultInitialTimeMs {
 		t.Fatalf("expected both clocks at %dms, got %#v", DefaultInitialTimeMs, state.Clock)
 	}
-	if state.Clock.ActiveColor != Red {
-		t.Fatalf("expected Red's clock to start first, got %s", state.Clock.ActiveColor)
+	if state.Clock.ActiveColor != Blue {
+		t.Fatalf("expected Blue's clock to start first, got %s", state.Clock.ActiveColor)
 	}
 }
 
@@ -37,8 +37,8 @@ func TestCustomClockChargesElapsedTimeAndAddsIncrement(t *testing.T) {
 	game, err := NewGameWithTimeControl(
 		"custom-clock",
 		ModeTotalWar,
-		PlayerProfile{UserID: "red"},
 		PlayerProfile{UserID: "blue"},
+		PlayerProfile{UserID: "red"},
 		control,
 	)
 	if err != nil {
@@ -48,29 +48,29 @@ func TestCustomClockChargesElapsedTimeAndAddsIncrement(t *testing.T) {
 	useFakeGameTime(game, &now)
 
 	now = now.Add(1500 * time.Millisecond)
-	redFrom, redTo := anyLegalMove(t, game)
-	state, err := game.Move(Red, redFrom, redTo)
+	blueFrom, blueTo := anyLegalMove(t, game)
+	state, err := game.Move(Blue, blueFrom, blueTo)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Clock.RedRemainingMs != 10_500 {
-		t.Fatalf("expected 10000-1500+2000ms for Red, got %d", state.Clock.RedRemainingMs)
+	if state.Clock.BlueRemainingMs != 10_500 {
+		t.Fatalf("expected 10000-1500+2000ms for Blue, got %d", state.Clock.BlueRemainingMs)
 	}
-	if state.Clock.BlueRemainingMs != 10_000 || state.Clock.ActiveColor != Blue {
-		t.Fatalf("expected untouched active Blue clock, got %#v", state.Clock)
+	if state.Clock.RedRemainingMs != 10_000 || state.Clock.ActiveColor != Red {
+		t.Fatalf("expected untouched active Red clock, got %#v", state.Clock)
 	}
 
 	now = now.Add(4 * time.Second)
-	blueFrom, blueTo := anyLegalMove(t, game)
-	state, err = game.Move(Blue, blueFrom, blueTo)
+	redFrom, redTo := anyLegalMove(t, game)
+	state, err = game.Move(Red, redFrom, redTo)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Clock.BlueRemainingMs != 8_000 {
-		t.Fatalf("expected 10000-4000+2000ms for Blue, got %d", state.Clock.BlueRemainingMs)
+	if state.Clock.RedRemainingMs != 8_000 {
+		t.Fatalf("expected 10000-4000+2000ms for Red, got %d", state.Clock.RedRemainingMs)
 	}
-	if state.Clock.ActiveColor != Red {
-		t.Fatalf("expected Red's clock to resume, got %s", state.Clock.ActiveColor)
+	if state.Clock.ActiveColor != Blue {
+		t.Fatalf("expected Blue's clock to resume, got %s", state.Clock.ActiveColor)
 	}
 }
 
@@ -79,8 +79,8 @@ func TestInvalidMoveConsumesTimeWithoutAddingIncrement(t *testing.T) {
 	game, err := NewGameWithTimeControl(
 		"invalid-move-clock",
 		ModeTotalWar,
-		PlayerProfile{UserID: "red"},
 		PlayerProfile{UserID: "blue"},
+		PlayerProfile{UserID: "red"},
 		control,
 	)
 	if err != nil {
@@ -90,16 +90,16 @@ func TestInvalidMoveConsumesTimeWithoutAddingIncrement(t *testing.T) {
 	useFakeGameTime(game, &now)
 
 	now = now.Add(2 * time.Second)
-	invalidFrom := firstPieceOf(t, game, Red, Rock)
-	state, err := game.Move(Red, invalidFrom, Position{X: invalidFrom.X - 2, Y: invalidFrom.Y})
+	invalidFrom := firstPieceOf(t, game, Blue, Rock)
+	state, err := game.Move(Blue, invalidFrom, Position{X: invalidFrom.X - 2, Y: invalidFrom.Y})
 	if !errors.Is(err, ErrInvalidMovement) {
 		t.Fatalf("expected invalid movement, got %v", err)
 	}
-	if state.Clock.RedRemainingMs != 8_000 {
-		t.Fatalf("expected elapsed time without increment, got %d", state.Clock.RedRemainingMs)
+	if state.Clock.BlueRemainingMs != 8_000 {
+		t.Fatalf("expected elapsed time without increment, got %d", state.Clock.BlueRemainingMs)
 	}
-	if state.Clock.ActiveColor != Red {
-		t.Fatalf("expected Red's clock to keep running, got %s", state.Clock.ActiveColor)
+	if state.Clock.ActiveColor != Blue {
+		t.Fatalf("expected Blue's clock to keep running, got %s", state.Clock.ActiveColor)
 	}
 }
 
@@ -108,8 +108,8 @@ func TestClockTimeoutFinishesGame(t *testing.T) {
 	game, err := NewGameWithTimeControl(
 		"timeout",
 		ModeTotalWar,
-		PlayerProfile{UserID: "red"},
 		PlayerProfile{UserID: "blue"},
+		PlayerProfile{UserID: "red"},
 		control,
 	)
 	if err != nil {
@@ -122,21 +122,21 @@ func TestClockTimeoutFinishesGame(t *testing.T) {
 	if !expired {
 		t.Fatal("expected the active clock to expire")
 	}
-	if state.Status != Finished || state.Winner != Blue || state.EndReason != EndReasonTimeout {
-		t.Fatalf("expected Blue to win on time, got %#v", state)
+	if state.Status != Finished || state.Winner != Red || state.EndReason != EndReasonTimeout {
+		t.Fatalf("expected Red to win on time, got %#v", state)
 	}
-	if state.Clock.RedRemainingMs != 0 || state.Clock.ActiveColor != Neutral {
-		t.Fatalf("expected a stopped, exhausted Red clock, got %#v", state.Clock)
+	if state.Clock.BlueRemainingMs != 0 || state.Clock.ActiveColor != Neutral {
+		t.Fatalf("expected a stopped, exhausted Blue clock, got %#v", state.Clock)
 	}
 }
 
-func TestClockTimeoutMakesBlueLoseAfterRedMoves(t *testing.T) {
+func TestClockTimeoutMakesRedLoseAfterBlueMoves(t *testing.T) {
 	control := TimeControl{InitialTimeMs: 1_000, IncrementMs: 0}
 	game, err := NewGameWithTimeControl(
-		"blue-timeout",
+		"red-timeout",
 		ModeTotalWar,
-		PlayerProfile{UserID: "red"},
 		PlayerProfile{UserID: "blue"},
+		PlayerProfile{UserID: "red"},
 		control,
 	)
 	if err != nil {
@@ -148,23 +148,23 @@ func TestClockTimeoutMakesBlueLoseAfterRedMoves(t *testing.T) {
 
 	now = now.Add(100 * time.Millisecond)
 	from, to := anyLegalMove(t, game)
-	state, err := game.Move(Red, from, to)
+	state, err := game.Move(Blue, from, to)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.CurrentTurn != Blue {
-		t.Fatalf("expected Blue's turn after Red moved, got %s", state.CurrentTurn)
+	if state.CurrentTurn != Red {
+		t.Fatalf("expected Red's turn after Blue moved, got %s", state.CurrentTurn)
 	}
 
 	state, expired := game.Tick(now.Add(time.Second))
 	if !expired {
-		t.Fatal("expected Blue's clock to expire")
+		t.Fatal("expected Red's clock to expire")
 	}
-	if state.Status != Finished || state.Winner != Red || state.EndReason != EndReasonTimeout {
-		t.Fatalf("expected Red to win when Blue ran out of time, got %#v", state)
+	if state.Status != Finished || state.Winner != Blue || state.EndReason != EndReasonTimeout {
+		t.Fatalf("expected Blue to win when Red ran out of time, got %#v", state)
 	}
-	if state.Clock.BlueRemainingMs != 0 || state.Clock.ActiveColor != Neutral {
-		t.Fatalf("expected a stopped, exhausted Blue clock, got %#v", state.Clock)
+	if state.Clock.RedRemainingMs != 0 || state.Clock.ActiveColor != Neutral {
+		t.Fatalf("expected a stopped, exhausted Red clock, got %#v", state.Clock)
 	}
 }
 
@@ -173,8 +173,8 @@ func TestTickReportsTimeoutObservedByValidMoveRequest(t *testing.T) {
 	game, err := NewGameWithTimeControl(
 		"valid-moves-timeout",
 		ModeTotalWar,
-		PlayerProfile{UserID: "red"},
 		PlayerProfile{UserID: "blue"},
+		PlayerProfile{UserID: "red"},
 		control,
 	)
 	if err != nil {
@@ -184,7 +184,7 @@ func TestTickReportsTimeoutObservedByValidMoveRequest(t *testing.T) {
 	useFakeGameTime(game, &now)
 
 	now = now.Add(time.Second)
-	if moves := game.ValidMoves(Red, Position{X: 0, Y: 8}); len(moves) != 0 {
+	if moves := game.ValidMoves(Blue, Position{X: 0, Y: 8}); len(moves) != 0 {
 		t.Fatalf("expected no moves after timeout, got %#v", moves)
 	}
 	state, expired := game.Tick(now)
@@ -198,8 +198,8 @@ func TestTickContinuesReportingTimeoutUntilServerHandlesIt(t *testing.T) {
 	game, err := NewGameWithTimeControl(
 		"repeated-timeout-report",
 		ModeTotalWar,
-		PlayerProfile{UserID: "red"},
 		PlayerProfile{UserID: "blue"},
+		PlayerProfile{UserID: "red"},
 		control,
 	)
 	if err != nil {
@@ -212,7 +212,7 @@ func TestTickContinuesReportingTimeoutUntilServerHandlesIt(t *testing.T) {
 	if _, expired := game.Tick(expiredAt); !expired {
 		t.Fatal("expected the first tick to report timeout")
 	}
-	if state, expired := game.Tick(expiredAt.Add(time.Second)); !expired || state.Winner != Blue {
+	if state, expired := game.Tick(expiredAt.Add(time.Second)); !expired || state.Winner != Red {
 		t.Fatalf("expected timeout loss to remain reportable, got expired=%t state=%#v", expired, state)
 	}
 }

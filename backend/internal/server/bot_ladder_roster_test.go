@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -24,9 +25,19 @@ func ladderTestServer(t *testing.T) *Server {
 // connectLadderBot claims an engine and seats it the way acceptBotConnection
 // does — with the account read once, at connect time, which is the copy the
 // roster is published from.
+//
+// Each engine gets an owner of its own, because the ladder does not count games
+// between two bots one person registered and a roster of one owner's engines
+// would never move at all.
 func connectLadderBot(t *testing.T, server *Server, name string) (persistence.Bot, *Client) {
 	t.Helper()
-	_, token, err := server.data.MintBotToken(t.Context(), "owner")
+	owner := "owner-" + strings.ToLower(name)
+	if _, err := server.data.ClaimAccountWithDiscord(
+		t.Context(), owner, "Owner_"+name, "discord-"+owner, owner,
+	); err != nil {
+		t.Fatalf("register owner for %s: %v", name, err)
+	}
+	_, token, err := server.data.MintBotToken(t.Context(), owner)
 	if err != nil {
 		t.Fatalf("mint %s: %v", name, err)
 	}
@@ -49,7 +60,7 @@ func connectLadderBot(t *testing.T, server *Server, name string) (persistence.Bo
 	server.hub.Register(client)
 	t.Cleanup(func() { server.hub.Unregister(client) })
 	server.mu.Lock()
-	server.bots[bot.BotID] = client
+	server.bots[bot.BotID] = []*Client{client}
 	server.mu.Unlock()
 	return bot, client
 }
@@ -153,6 +164,33 @@ func TestAFinishedBotGameRestatesEveryConnectedEngine(t *testing.T) {
 			t.Errorf("%s: the roster publishes %d, the ladder says %d",
 				bot.Name, published, stored)
 		}
+	}
+}
+
+// The roster carries the account each engine is registered to, because the one
+// thing the lobby has to work out from it is whether two of them are the same
+// person's — the form that starts a series says the run will be casual before it
+// is pressed, and it cannot know that without this.
+func TestTheRosterPublishesWhoOwnsEachEngine(t *testing.T) {
+	server := ladderTestServer(t)
+	alpha, _ := connectLadderBot(t, server, "Alpha")
+	beta, _ := connectLadderBot(t, server, "Beta")
+
+	owners := make(map[string]string)
+	for _, presence := range server.botRoster() {
+		owners[presence.Name] = presence.OwnerUserID
+	}
+	if owners["Alpha"] == "" || owners["Beta"] == "" {
+		t.Fatalf("the roster published no owner: %#v", owners)
+	}
+	if owners["Alpha"] != alpha.OwnerUserID || owners["Beta"] != beta.OwnerUserID {
+		t.Fatalf("the roster published the wrong owners: %#v", owners)
+	}
+	// These two were minted under owners of their own, so the lobby must not
+	// read them as a pair — an empty field compared against another empty field
+	// is exactly how it would.
+	if owners["Alpha"] == owners["Beta"] {
+		t.Fatal("two separately owned engines came back sharing an owner")
 	}
 }
 

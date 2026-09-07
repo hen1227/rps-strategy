@@ -9,7 +9,7 @@ import (
 // can accidentally pass because 9 was hard-coded somewhere.
 //
 // Standard movement and capture, and Total War's annihilation rule, over five
-// files and seven ranks. Red starts on rank 1 and Blue on rank 7, both pushed
+// files and seven ranks. Blue starts on rank 1 and Red on rank 7, both pushed
 // left of centre, so the layout does not mirror either — which is the other
 // thing an assumption about the board could get away with on a symmetric one.
 const rectangleModeID ModeID = "rectangle-test"
@@ -111,14 +111,15 @@ func TestAModeMayBeAnyRectangle(t *testing.T) {
 // Movement must stop at the real edges, not at file i or rank 9.
 func TestLegalMovesRespectTheBoardsOwnEdges(t *testing.T) {
 	game := rectangleGame(t)
-	// Rank 1 is Blue's home boundary, so Red's corner rock stands on a7.
-	corner := game.ValidMoves(Red, Position{X: 0, Y: 6})
+	// Rank 1 is Blue's home boundary, so Blue's corner rock stands on a1 — and
+	// Blue is the side to move, which is what makes the question answerable.
+	corner := game.ValidMoves(Blue, Position{X: 0, Y: 0})
 	for _, to := range corner {
 		if !game.Snapshot().Grid.Contains(to) {
-			t.Fatalf("a7 may move to %v, which is off a 5 by 7 board", to)
+			t.Fatalf("a1 may move to %v, which is off a 5 by 7 board", to)
 		}
 	}
-	// a7 is a corner: three neighbours, one of them holding a friendly paper.
+	// a1 is a corner: three neighbours, one of them holding a friendly paper.
 	if len(corner) != 2 {
 		t.Fatalf("the corner rock has %d moves, expected 2: %v", len(corner), corner)
 	}
@@ -135,36 +136,40 @@ func TestLegalMovesRespectTheBoardsOwnEdges(t *testing.T) {
 	}
 }
 
-// The stalemate and repetition rules the engine gives every mode have to work
-// off the board's own shape too: both walk every tile.
+// The endings the engine gives every mode have to work off the board's own
+// shape too: the stalemate scan walks every tile, and the no-capture draw has
+// to arrive on a board that is not nine by nine.
+//
+// The same shuffle used to end this game by repetition. It no longer ends it at
+// all -- see game.RepetitionDrawEnabled -- so the shuffle is now what carries
+// the game to the hundredth quiet move, which is the ending that does arrive.
 func TestEngineRulesFollowTheBoardShape(t *testing.T) {
 	game := rectangleGame(t)
 	if !game.HasLegalMove() {
 		t.Fatal("the opening position of a 5 by 7 board has moves")
 	}
-	// Shuffling one rock back and forth reaches the same position three times.
-	for range 2 {
-		if _, err := game.Move(Red, Position{X: 0, Y: 6}, Position{X: 0, Y: 5}); err != nil {
-			t.Fatal(err)
+	// Blue opens, so Blue's rock is the one that starts the shuffle.
+	cycle := []plannedMove{
+		{Blue, Position{X: 0, Y: 0}, Position{X: 0, Y: 1}},
+		{Red, Position{X: 0, Y: 6}, Position{X: 0, Y: 5}},
+		{Blue, Position{X: 0, Y: 1}, Position{X: 0, Y: 0}},
+		{Red, Position{X: 0, Y: 5}, Position{X: 0, Y: 6}},
+	}
+	var state GameState
+	for ply := 0; ply < QuietPlyLimit; ply++ {
+		if state.Status == Finished {
+			t.Fatalf("the shuffle ended the game after %d moves: %s", ply, state.EndReason)
 		}
-		if _, err := game.Move(Blue, Position{X: 0, Y: 0}, Position{X: 0, Y: 1}); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := game.Move(Red, Position{X: 0, Y: 5}, Position{X: 0, Y: 6}); err != nil {
-			t.Fatal(err)
-		}
-		state, err := game.Move(Blue, Position{X: 0, Y: 1}, Position{X: 0, Y: 0})
+		move := cycle[ply%len(cycle)]
+		var err error
+		state, err = game.Move(move.player, move.from, move.to)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if state.Status == Finished {
-			if state.EndReason != EndReasonRepetition {
-				t.Fatalf("game ended as %s, expected repetition", state.EndReason)
-			}
-			return
-		}
 	}
-	t.Fatal("the third repetition of a position did not end the game")
+	if state.Status != Finished || state.EndReason != EndReasonNoCapture {
+		t.Fatalf("game ended as %q, expected %q", state.EndReason, EndReasonNoCapture)
+	}
 }
 
 // A snapshot has to survive the next move. The fixed array this replaced gave
@@ -172,13 +177,13 @@ func TestEngineRulesFollowTheBoardShape(t *testing.T) {
 func TestASnapshotIsNotTheLiveBoard(t *testing.T) {
 	game := rectangleGame(t)
 	before := game.Snapshot()
-	if _, err := game.Move(Red, Position{X: 0, Y: 6}, Position{X: 0, Y: 5}); err != nil {
+	if _, err := game.Move(Blue, Position{X: 0, Y: 0}, Position{X: 0, Y: 1}); err != nil {
 		t.Fatal(err)
 	}
-	if before.Grid.At(Position{X: 0, Y: 6}).Occupant != Rock {
+	if before.Grid.At(Position{X: 0, Y: 0}).Occupant != Rock {
 		t.Fatal("playing a move rewrote a snapshot taken before it")
 	}
-	if before.Grid.At(Position{X: 0, Y: 5}).Occupant != Empty {
+	if before.Grid.At(Position{X: 0, Y: 1}).Occupant != Empty {
 		t.Fatal("playing a move rewrote a snapshot taken before it")
 	}
 }

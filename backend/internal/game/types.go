@@ -1,11 +1,9 @@
 package game
 
-import "encoding/json"
-
-// BoardSize is the side of the standard board, and the size of every built-in
-// mode. It is a default rather than a rule: a spec-defined mode may be any
-// rectangle ValidateBoardSize accepts, so nothing may bound a coordinate
-// against this. Use Grid.Contains.
+// BoardSize is the side of the standard board, and the size of every mode.
+// It is still a default rather than a rule — ValidateBoardSize accepts other
+// rectangles — so nothing may bound a coordinate against this. Use
+// Grid.Contains.
 const BoardSize = 9
 
 const (
@@ -36,6 +34,16 @@ const (
 	Blue    PlayerColor = "Blue"
 )
 
+// FirstToMove is the side that opens a game, and so the side that is written
+// like White: it takes the "1." in a PGN, it is drawn at the bottom of the
+// board for a spectator, and it is the seat matchmaking hands to the player who
+// asked for the game.
+//
+// Named rather than spelled Blue at each of those places because they are all
+// the same fact, and a game that seated its opener at the top of the board or
+// numbered its moves from the other colour would be three separate bugs.
+const FirstToMove = Blue
+
 // ModeID is deliberately opaque to the engine and matchmaking layers.
 // A newly registered GameMode can use any stable, unique ID.
 type ModeID string
@@ -43,25 +51,35 @@ type ModeID string
 const (
 	ModeTotalWar     ModeID = "V5"
 	ModeInfiltration ModeID = "V3"
+	ModeIntransitive ModeID = "V6"
 )
 
 type ModeFeature string
 
 const (
 	FeatureTerritory ModeFeature = "territory"
-)
-
-// ModeOrigin separates the modes this build ships from the modes people wrote.
-//
-// It exists because the lobby catalogue cannot be everything: the built-in modes
-// are a handful and the community's are unbounded, and broadcasting the second
-// set to every socket on connect would grow without limit. Catalogue callers ask
-// for builtins; the library is a paged route.
-type ModeOrigin string
-
-const (
-	OriginBuiltin   ModeOrigin = "builtin"
-	OriginCommunity ModeOrigin = "community"
+	// FeatureNoRepetitionDraw removes the engine's threefold-repetition draw
+	// for a mode that does not want one. The same rule RuleFlags lets a single
+	// game switch off, declared by the mode instead.
+	//
+	// No built-in mode declares it, and none needs to: RepetitionDrawEnabled is
+	// off, so no mode has the draw to remove. Intransitive used to declare it,
+	// when the rule was on elsewhere -- a race for one tile reads a repeated
+	// position as a defensive resource rather than half a point.
+	//
+	// Kept because it is still the door a mode declares the rule through, and
+	// because it is the answer that travels to the client in the catalogue.
+	// What keeps a game finite is EndReasonNoCapture, which no mode and no rule
+	// flag can take away.
+	FeatureNoRepetitionDraw ModeFeature = "no_repetition_draw"
+	// FeatureStalemateLoses turns the engine's stalemate draw into a loss for
+	// the side that cannot move.
+	//
+	// A mode-level answer to the same position, because "no legal move" means
+	// different things in different rule sets: in a mode decided by what is
+	// left on the board, being unable to move is nobody's fault, and in a race
+	// it is a blockade the stuck side walked into.
+	FeatureStalemateLoses ModeFeature = "stalemate_loses"
 )
 
 // ModeDefinition is shared with the frontend, allowing the lobby to render
@@ -78,19 +96,30 @@ type ModeDefinition struct {
 	Playable         bool             `json:"playable"`
 	Features         []ModeFeature    `json:"features"`
 	StartingPosition StartingPosition `json:"startingPosition"`
-	// Spec is the rules, for a mode nobody wrote code for.
+	// Symmetries are the colour-preserving relabellings of the board this mode
+	// is unchanged by, and so the ones under which two positions are the same
+	// position. Empty means "none known", which is the safe answer: nothing is
+	// folded and every board counts for itself.
 	//
-	// Held as raw JSON on purpose. This package must not know what a rule spec
-	// is — `internal/game/spec` reads it and imports this package, and the
-	// dependency has to stay one-way — and carrying it opaquely is enough,
-	// because the only thing done with it here is handing it to whoever asked
-	// for the game. That is what lets a client who has never heard of a mode
-	// play it: the rules arrive inside the position.
+	// Declared rather than derived because the answer is half layout and half
+	// win condition. Registration checks the layout half against the symmetry's
+	// own definition and refuses a mode that claims one it does not have; the
+	// win-condition half is Go, and TestBuiltInSymmetriesPlayTheSameGame is
+	// what holds it honest. See symmetry.go.
+	Symmetries []BoardSymmetry `json:"symmetries,omitempty"`
+	// RulesPublished is the day this mode's rules last changed, as YYYY-MM-DD.
 	//
-	// Absent for the built-in modes, whose rules are hand-written on both sides.
-	Spec json.RawMessage `json:"spec,omitempty"`
-	// Origin is where the mode came from. Absent means built-in.
-	Origin ModeOrigin `json:"origin,omitempty"`
+	// Here because an engine cannot notice. A person reads a rules page and a
+	// changelog; a program plays whatever it was written against, and a board
+	// that flipped or a win condition that moved does not read as a rule change
+	// from inside a search — it reads as a lost game. So the date travels to
+	// the bot client, which prints it on every connect and says so when it is
+	// not the one that machine last saw. See bot_ready in bot_client.go.
+	//
+	// Per mode rather than one number for the server, so that changing what it
+	// takes to win Intransitive does not tell every Total War author to go and
+	// re-read something that did not move.
+	RulesPublished string `json:"rulesPublished,omitempty"`
 }
 
 func (definition ModeDefinition) HasFeature(feature ModeFeature) bool {
@@ -116,12 +145,29 @@ const (
 	EndReasonAnnihilation  GameEndReason = "annihilation"
 	EndReasonTerritory     GameEndReason = "territory"
 	EndReasonInfiltration  GameEndReason = "infiltration"
+	EndReasonCorner        GameEndReason = "corner"
 	EndReasonTimeout       GameEndReason = "timeout"
 	EndReasonResignation   GameEndReason = "resignation"
 	EndReasonDrawAgreement GameEndReason = "draw_agreement"
 	EndReasonRepetition    GameEndReason = "repetition"
 	EndReasonStalemate     GameEndReason = "stalemate"
 	EndReasonAbandonment   GameEndReason = "abandonment"
+	// EndReasonAdjudication is a result declared from outside the game: a host
+	// stopping a match. Its own reason rather than borrowing resignation or
+	// abandonment, because neither is true — nobody resigned and nobody left —
+	// and the archive should say what actually happened to a game somebody
+	// looks up in six months.
+	EndReasonAdjudication GameEndReason = "adjudication"
+	// EndReasonNoCapture is the engine's draw for a game that has stopped
+	// getting anywhere: QuietPlyLimit plies in a row with nothing taken, which
+	// is a hundred moves from each side.
+	//
+	// The other bound on a game's length, alongside repetition. Repetition
+	// catches a position that comes back; this catches an army that shuffles
+	// around the board without ever repeating one. Every mode has it and no
+	// mode or rule flag can remove it, because "this game is over and neither
+	// side will admit it" is not a rule a mode gets an opinion about.
+	EndReasonNoCapture GameEndReason = "no_capture"
 	// Kept for records written before custom move caps were retired.
 	EndReasonMoveLimit GameEndReason = "move_limit"
 )

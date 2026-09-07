@@ -152,10 +152,11 @@ func oppositeOf(color game.PlayerColor) game.PlayerColor {
 
 func TestPGNIsReadable(t *testing.T) {
 	played := newTestGame(t, game.ModeInfiltration)
-	// d7-d6 is a quiet rook-file advance from Red's opening rank.
-	from := game.Position{X: 3, Y: 6}
-	to := game.Position{X: 3, Y: 5}
-	if _, err := played.Move(game.Red, from, to); err != nil {
+	// d3-d4 is a quiet rock-file advance off Blue's opening rank, and Blue is
+	// the side that opens.
+	from := game.Position{X: 3, Y: 2}
+	to := game.Position{X: 3, Y: 3}
+	if _, err := played.Move(game.Blue, from, to); err != nil {
 		t.Fatal(err)
 	}
 	text := Encode(played.Record(), Metadata{Event: "Ranked", Ranked: true, Site: "RPS Strategy"})
@@ -167,8 +168,8 @@ func TestPGNIsReadable(t *testing.T) {
 		`[Variant "Infiltration"]`,
 		`[ModeId "V3"]`,
 		`[TimeControl "300+3"]`,
-		`[FEN "3SSS3/3PPP3/3RRR3/9/9/9/3rrr3/3ppp3/3sss3 r 3bbb3/3bbb3/3bbb3/9/9/9/3rrr3/3rrr3/3rrr3"]`,
-		"1. Rd7-d6 ",
+		`[FEN "3SSS3/3PPP3/3RRR3/9/9/9/3rrr3/3ppp3/3sss3 b 3bbb3/3bbb3/3bbb3/9/9/9/3rrr3/3rrr3/3rrr3"]`,
+		"1. Rd3-d4 ",
 		"[%clk ",
 	} {
 		if !strings.Contains(text, fragment) {
@@ -312,7 +313,7 @@ func TestPGNRoundTripsAFullCustomStartingPosition(t *testing.T) {
 		`[FinalFEN "` + finalFEN + `"]`,
 		`[MoveNumber "1"]`,
 		"",
-		`1... Se1-e2 {[%emt 1] [%clk 0:05:00.000 0:04:59.000]} *`,
+		`1. Se1-e2 {[%emt 1] [%clk 0:05:00.000 0:04:59.000]} *`,
 	}, "\n")
 
 	parsed, err := Parse(pgn)
@@ -349,4 +350,73 @@ func TestTimeControlFormatting(t *testing.T) {
 			t.Fatalf("%s parsed to %+v (%v)", testCase.text, parsed, err)
 		}
 	}
+}
+
+// The archive holds games written when "12." meant Red rather than the opener,
+// and the two only disagree about a game the non-opening side began. One such
+// game, in each dialect, replaying into the same record.
+func TestBothDialectsReadAGameTheNonOpenerBegan(t *testing.T) {
+	// Red to move on a board somebody set up: a Red rock on e1 with one Blue
+	// scissors out of its way on e5, so Red's move is the first of the game and
+	// Red is not the side that opens a normal one.
+	const startingFEN = "4r4/9/9/9/4S4/9/9/9/9 r 4r4/9/9/9/4b4/9/9/9/9"
+	const finalFEN = "9/4r4/9/9/4S4/9/9/9/9 b 4r4/9/9/9/4b4/9/9/9/9"
+	fixture := func(generator, numbering string) string {
+		return strings.Join([]string{
+			`[Event "Dialects"]`,
+			`[Red "Alice"]`,
+			`[Blue "Bob"]`,
+			`[Result "*"]`,
+			`[GameId "dialect-fixture"]`,
+			`[Variant "Infiltration"]`,
+			`[ModeId "V3"]`,
+			`[TimeControl "300+0"]`,
+			`[SetUp "1"]`,
+			`[FEN "` + startingFEN + `"]`,
+			`[FinalFEN "` + finalFEN + `"]`,
+			`[MoveNumber "1"]`,
+			`[Generator "` + generator + `"]`,
+			"",
+			numbering + ` Re1-e2 {[%emt 1] [%clk 0:04:59.000 0:05:00.000]} *`,
+		}, "\n")
+	}
+	// Dialect 1 wrote Red's move as "1." because it was Red's; dialect 2 writes
+	// it as "1." because it is the first move of this game. The same file read
+	// two ways, which is what makes the second dialect safe to adopt.
+	legacy := fixture("rps-strategy-pgn/1", "1.")
+	current := fixture(Generator, "1.")
+
+	for name, text := range map[string]string{"dialect 1": legacy, "dialect 2": current} {
+		parsed, err := Parse(text)
+		if err != nil {
+			t.Fatalf("%s did not parse: %v", name, err)
+		}
+		if err := game.Verify(parsed.Record); err != nil {
+			t.Fatalf("%s does not replay: %v", name, err)
+		}
+		moves := parsed.Record.Moves()
+		if len(moves) != 1 || moves[0].Player != game.Red {
+			t.Fatalf("%s read the move as %#v", name, moves)
+		}
+	}
+
+	// And written back out, the move keeps its number: a record round-trips
+	// through the dialect it is written in rather than picking up whichever
+	// number the colour would have had.
+	replayed, err := game.Replay(mustParse(t, current).Record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if encoded := Encode(replayed.Record(), Metadata{}); !strings.Contains(encoded, "1. Re1-e2") {
+		t.Fatalf("a re-encoded record renumbered the opening move:\n%s", encoded)
+	}
+}
+
+func mustParse(t *testing.T, text string) ParsedGame {
+	t.Helper()
+	parsed, err := Parse(text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return parsed
 }

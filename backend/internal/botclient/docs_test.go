@@ -12,7 +12,7 @@ import (
 //
 // If it fails, copy the files across:
 //
-//	cp docs/bots.md docs/rpsi.md backend/internal/botclient/
+//	cp docs/bots.md docs/rpsi.md docs/notation.md backend/internal/botclient/
 func TestEmbeddedDocsMatchTheRepositoryCopies(t *testing.T) {
 	for _, testCase := range []struct {
 		name     string
@@ -21,6 +21,7 @@ func TestEmbeddedDocsMatchTheRepositoryCopies(t *testing.T) {
 	}{
 		{"bots.md", Guide(), filepath.Join("..", "..", "..", "docs", "bots.md")},
 		{"rpsi.md", Protocol(), filepath.Join("..", "..", "..", "docs", "rpsi.md")},
+		{"notation.md", Notation(), filepath.Join("..", "..", "..", "docs", "notation.md")},
 	} {
 		canonical, err := os.ReadFile(testCase.source)
 		if err != nil {
@@ -29,7 +30,7 @@ func TestEmbeddedDocsMatchTheRepositoryCopies(t *testing.T) {
 		if string(canonical) != testCase.embedded {
 			t.Errorf(
 				"backend/internal/botclient/%s has drifted from %s.\n"+
-					"Run: cp docs/bots.md docs/rpsi.md backend/internal/botclient/",
+					"Run: cp docs/bots.md docs/rpsi.md docs/notation.md backend/internal/botclient/",
 				testCase.name, testCase.source,
 			)
 		}

@@ -168,7 +168,7 @@ func TestDeleteGameHandlesAnArchiveOnlyGameAndAnUnknownID(t *testing.T) {
 		t.Fatalf("new game: %v", err)
 	}
 	moves := played.LegalMoves()
-	if _, err := played.Move(game.Red, moves[0].From, moves[0].To); err != nil {
+	if _, err := played.Move(game.FirstToMove, moves[0].From, moves[0].To); err != nil {
 		t.Fatalf("play a move: %v", err)
 	}
 	if _, err := store.ArchiveGame(

@@ -23,17 +23,18 @@ func finishedTestGame(t *testing.T, gameID string, modeID game.ModeID) *game.Gam
 		t.Fatal(err)
 	}
 	state := played.Snapshot()
+	mover := state.CurrentTurn
 	for y := 0; y < game.BoardSize && state.Status == game.InProgress; y++ {
 		for x := 0; x < game.BoardSize; x++ {
-			if state.Grid[y][x].OccupantOwner != game.Red {
+			if state.Grid[y][x].OccupantOwner != mover {
 				continue
 			}
 			from := game.Position{X: x, Y: y}
-			moves := played.ValidMoves(game.Red, from)
+			moves := played.ValidMoves(mover, from)
 			if len(moves) == 0 {
 				continue
 			}
-			if _, err := played.Move(game.Red, from, moves[0]); err != nil {
+			if _, err := played.Move(mover, from, moves[0]); err != nil {
 				t.Fatal(err)
 			}
 			state = played.Snapshot()

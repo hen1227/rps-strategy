@@ -204,13 +204,14 @@ func TestAnAnonymousPlayerMayAcceptACasualChallenge(t *testing.T) {
 // ranked bot-versus-bot series casual — which is why the gate lives at these
 // two entry points and asks isBot as well.
 func TestRankedIsStillAllowedForBots(t *testing.T) {
+	server := New(nil)
 	engine := challengeTestClient("bot-account", "MyBot")
 	engine.account = persistence.Account{
 		UserID: "bot-account", Kind: persistence.AccountKindBot, Registered: false,
 	}
 	engine.bot = &botClient{}
 
-	if !rankedAllowed(engine) {
+	if !server.rankedAllowed(engine) {
 		t.Fatal("a bot was refused ranked play")
 	}
 }

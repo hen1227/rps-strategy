@@ -35,7 +35,7 @@ func TestPositionCommandCarriesTheBoardPlayedFromAndEveryMove(t *testing.T) {
 	}
 
 	moves := instance.LegalMoves()
-	if _, err := instance.Move(game.Red, moves[0].From, moves[0].To); err != nil {
+	if _, err := instance.Move(game.FirstToMove, moves[0].From, moves[0].To); err != nil {
 		t.Fatalf("play a move: %v", err)
 	}
 	command = PositionCommand(instance.Record())

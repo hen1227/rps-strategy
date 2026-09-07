@@ -69,11 +69,13 @@ func (server *Server) listMyBots(writer http.ResponseWriter, request *http.Reque
 
 	entries := make([]ownedBot, 0, len(bots))
 	for _, bot := range bots {
-		server.mu.RLock()
-		client := server.bots[bot.BotID]
-		server.mu.RUnlock()
+		client := server.botConnection(bot.BotID)
 		entry := ownedBot{Bot: bot, Online: client != nil}
-		if client != nil && botIsDraining(client) {
+		// botHasOwnDrain rather than botIsDraining: this is the owner's own
+		// page, and a scheduled bench is not something they asked for or can
+		// call off. Showing it here as a drain would offer them a Resume button
+		// that could not work.
+		if client != nil && botHasOwnDrain(client) {
 			state := server.botDrainState(client)
 			entry.Drain = &state
 		}
@@ -229,27 +231,21 @@ func (server *Server) requireBotOwner(
 // refreshBotRecord pushes a settings change to a connected bot's session, so a
 // toggle on the website takes effect without waiting for a restart.
 func (server *Server) refreshBotRecord(bot persistence.Bot) {
-	server.mu.RLock()
-	client := server.bots[bot.BotID]
-	server.mu.RUnlock()
-	if client == nil {
-		return
+	// Every slot, because each holds its own copy of the row and any of them
+	// may be the one a later reader asks.
+	for _, client := range server.botConnections(bot.BotID) {
+		client.bot.mu.Lock()
+		client.bot.record = bot
+		client.bot.mu.Unlock()
 	}
-	client.bot.mu.Lock()
-	client.bot.record = bot
-	client.bot.mu.Unlock()
 	server.broadcastBots()
 }
 
 func (server *Server) disconnectBot(botID string, reason string) {
-	server.mu.RLock()
-	client := server.bots[botID]
-	server.mu.RUnlock()
-	if client == nil {
-		return
+	for _, client := range server.botConnections(botID) {
+		client.Send(ServerMessage{Type: "bot_rejected", Message: reason})
+		client.close()
 	}
-	client.Send(ServerMessage{Type: "bot_rejected", Message: reason})
-	client.close()
 }
 
 func writeBotError(writer http.ResponseWriter, err error) {
@@ -329,6 +325,7 @@ func (server *Server) getBotGuide(writer http.ResponseWriter, request *http.Requ
 		"exampleSha256":  exampleSum,
 		"guide":          botclient.Guide(),
 		"protocol":       botclient.Protocol(),
+		"notation":       botclient.Notation(),
 	})
 }
 

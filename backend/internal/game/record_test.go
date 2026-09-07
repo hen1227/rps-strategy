@@ -86,10 +86,10 @@ func TestRecordCapturesMoveDetail(t *testing.T) {
 	now := time.Date(2026, time.August, 21, 12, 0, 0, 0, time.UTC)
 	useFakeGameTime(game, &now)
 
-	from := firstPieceOf(t, game, Red, Rock)
-	to := Position{X: from.X, Y: from.Y - 1}
+	from := firstPieceOf(t, game, Blue, Rock)
+	to := Position{X: from.X, Y: from.Y + 1}
 	now = now.Add(1500 * time.Millisecond)
-	if _, err := game.Move(Red, from, to); err != nil {
+	if _, err := game.Move(Blue, from, to); err != nil {
 		t.Fatal(err)
 	}
 
@@ -98,7 +98,7 @@ func TestRecordCapturesMoveDetail(t *testing.T) {
 		t.Fatalf("expected one event, got %d", len(record.Events))
 	}
 	event := record.Events[0]
-	if event.Kind != EventMove || event.Player != Red || event.Piece != Rock {
+	if event.Kind != EventMove || event.Player != Blue || event.Piece != Rock {
 		t.Fatalf("unexpected move event: %+v", event)
 	}
 	if event.From != from || event.To != to {
@@ -111,8 +111,8 @@ func TestRecordCapturesMoveDetail(t *testing.T) {
 		t.Fatalf("expected 1500ms elapsed, got %d", event.ElapsedMs)
 	}
 	// The increment is paid after the move, so the record shows 5:00 - 1.5s + 3s.
-	if event.RedRemainingMs != 300000-1500+3000 {
-		t.Fatalf("unexpected red clock: %d", event.RedRemainingMs)
+	if event.BlueRemainingMs != 300000-1500+3000 {
+		t.Fatalf("unexpected blue clock: %d", event.BlueRemainingMs)
 	}
 	if event.Ply != 1 {
 		t.Fatalf("expected ply 1, got %d", event.Ply)
@@ -124,23 +124,23 @@ func TestRecordCapturesProposalsAndResignation(t *testing.T) {
 	now := time.Date(2026, time.August, 21, 12, 0, 0, 0, time.UTC)
 	useFakeGameTime(game, &now)
 
-	if _, err := game.OfferDraw(Red); err != nil {
+	if _, err := game.OfferDraw(Blue); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := game.DeclineDraw(Blue); err != nil {
+	if _, err := game.DeclineDraw(Red); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := game.OfferTimeExtension(Red); err != nil {
+	if _, err := game.OfferTimeExtension(Blue); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := game.AcceptTimeExtension(Blue); err != nil {
+	if _, err := game.AcceptTimeExtension(Red); err != nil {
 		t.Fatal(err)
 	}
 	from, to := anyLegalMove(t, game)
-	if _, err := game.Move(Red, from, to); err != nil {
+	if _, err := game.Move(Blue, from, to); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := game.Resign(Blue); err != nil {
+	if _, err := game.Resign(Red); err != nil {
 		t.Fatal(err)
 	}
 
@@ -166,7 +166,7 @@ func TestRecordCapturesProposalsAndResignation(t *testing.T) {
 		t.Fatalf("time extension recorded %dms, expected %d", accepted.BonusMs, TimeExtensionMs)
 	}
 	ending := record.Events[len(record.Events)-1]
-	if ending.Player != Blue || ending.Winner != Red || ending.EndReason != EndReasonResignation {
+	if ending.Player != Red || ending.Winner != Blue || ending.EndReason != EndReasonResignation {
 		t.Fatalf("unexpected ending: %+v", ending)
 	}
 	if err := Verify(record); err != nil {
@@ -178,8 +178,8 @@ func TestRecordReplaysTimeout(t *testing.T) {
 	game, err := NewGameWithTimeControl(
 		"timeout",
 		ModeTotalWar,
-		PlayerProfile{UserID: "red"},
 		PlayerProfile{UserID: "blue"},
+		PlayerProfile{UserID: "red"},
 		TimeControl{InitialTimeMs: 5000, IncrementMs: 0},
 	)
 	if err != nil {
@@ -190,18 +190,18 @@ func TestRecordReplaysTimeout(t *testing.T) {
 
 	from, to := anyLegalMove(t, game)
 	now = now.Add(time.Second)
-	if _, err := game.Move(Red, from, to); err != nil {
+	if _, err := game.Move(Blue, from, to); err != nil {
 		t.Fatal(err)
 	}
 	now = now.Add(30 * time.Second)
 	state, expired := game.Tick(now)
-	if !expired || state.EndReason != EndReasonTimeout || state.Winner != Red {
-		t.Fatalf("expected Blue to flag, got %+v", state)
+	if !expired || state.EndReason != EndReasonTimeout || state.Winner != Blue {
+		t.Fatalf("expected Red to flag, got %+v", state)
 	}
 
 	record := game.Record()
 	ending := record.Events[len(record.Events)-1]
-	if ending.Kind != EventGameEnd || ending.EndReason != EndReasonTimeout || ending.Player != Blue {
+	if ending.Kind != EventGameEnd || ending.EndReason != EndReasonTimeout || ending.Player != Red {
 		t.Fatalf("unexpected ending: %+v", ending)
 	}
 	if ending.ElapsedMs != 5000 {
@@ -256,5 +256,38 @@ func TestVerifyRejectsATamperedRecord(t *testing.T) {
 
 	if err := Verify(record); err == nil || !errors.Is(err, ErrRecordMismatch) {
 		t.Fatalf("expected a mismatch, got %v", err)
+	}
+}
+
+// A game the engine drew on the hundredth quiet move has to replay into the
+// same draw.
+//
+// The archive's central invariant is that a record describes one game and no
+// other, and replay reproduces an adjudicated ending by playing the moves and
+// insisting the engine agrees — so a new ending that the record wrote but the
+// replay does not reach is a record that can never be verified again. Neither
+// the resignation path nor the random-game sweep covers this one: random play
+// captures far too often to ever reach the limit.
+func TestRecordReplaysAGameDrawnWithNoCapture(t *testing.T) {
+	created := testGame(t, ModeTotalWar)
+	shuffle := quietShuffle(t, created)
+	var state GameState
+	for ply := 0; ply < QuietPlyLimit; ply++ {
+		var err error
+		move := shuffle[ply%len(shuffle)]
+		state, err = created.Move(move.player, move.from, move.to)
+		if err != nil {
+			t.Fatalf("quiet move %d failed: %v", ply, err)
+		}
+	}
+	if state.EndReason != EndReasonNoCapture {
+		t.Fatalf("expected a no-capture draw, got %#v", state)
+	}
+	record := created.Record()
+	if record.PlyCount() != QuietPlyLimit {
+		t.Fatalf("recorded %d moves, played %d", record.PlyCount(), QuietPlyLimit)
+	}
+	if err := Verify(record); err != nil {
+		t.Fatal(err)
 	}
 }

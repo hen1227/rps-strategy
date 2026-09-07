@@ -26,6 +26,12 @@ const (
 	// MinimumUsernameLength is short enough for a real handle and long enough
 	// that single characters cannot be hoarded.
 	MinimumUsernameLength = 3
+	// MinimumBotUsernameLength is one shorter, for bots only. A bot's name is
+	// its engine's name and those are often two letters, and the hoarding this
+	// guards against is a person's problem rather than a bot's: a bot slot
+	// costs an account, is capped per owner, and its name is only held while
+	// the slot exists.
+	MinimumBotUsernameLength = 2
 	// MaximumUsernameLength is 32 because a bot's username is also its
 	// tournament IGN, and `tournament_players.ign` stops there. A name that
 	// could be registered but not entered into an event would be a trap.
@@ -73,6 +79,10 @@ func ReservedNames() []string {
 // UsernamePattern describes the rule for humans and for a `pattern` attribute.
 const UsernamePattern = `^[A-Za-z0-9][A-Za-z0-9_.-]{2,31}$`
 
+// BotUsernamePattern is the same rule one character shorter. Bots do not type
+// their name into a field, so this exists to be published rather than applied.
+const BotUsernamePattern = `^[A-Za-z0-9][A-Za-z0-9_.-]{1,31}$`
+
 // IsReservedUsername reports whether a name may only be claimed with the host
 // token.
 //
@@ -118,12 +128,28 @@ func IsReservedContact(discord string) bool {
 // "Аlice" with a Cyrillic А sit next to "Alice" as a distinct name and pass
 // every uniqueness check we have.
 func ValidateUsername(username string) (string, error) {
+	return validateUsername(username, MinimumUsernameLength)
+}
+
+// ValidateBotUsername is ValidateUsername with the shorter minimum, for a name
+// a bot client is claiming for itself.
+//
+// Only the length differs, and it differs in one direction: every name a person
+// may claim a bot may claim too. So this is the same function with the bound
+// passed in rather than a second copy of the character rule — the character set
+// is the part that uniqueness depends on, and two copies of it would be two
+// answers to what "the same name" means.
+func ValidateBotUsername(username string) (string, error) {
+	return validateUsername(username, MinimumBotUsernameLength)
+}
+
+func validateUsername(username string, minimumLength int) (string, error) {
 	username = strings.TrimSpace(username)
-	if len(username) < MinimumUsernameLength || len(username) > MaximumUsernameLength {
+	if len(username) < minimumLength || len(username) > MaximumUsernameLength {
 		return "", fmt.Errorf(
 			"%w: must be between %d and %d characters",
 			ErrInvalidUsername,
-			MinimumUsernameLength,
+			minimumLength,
 			MaximumUsernameLength,
 		)
 	}
@@ -236,6 +262,12 @@ type UsernamePolicy struct {
 	MaxLength     int      `json:"maxLength"`
 	Pattern       string   `json:"pattern"`
 	ReservedNames []string `json:"reservedNames"`
+	// BotMinLength and BotPattern are the same rule as it applies to a bot,
+	// which may be one character shorter. Published so a page that lists bot
+	// names, or documents how to configure one, does not have to restate the
+	// exception — and so a client never reports a legal bot name as too short.
+	BotMinLength int    `json:"botMinLength"`
+	BotPattern   string `json:"botPattern"`
 }
 
 // Policy returns the published rule.
@@ -245,5 +277,7 @@ func Policy() UsernamePolicy {
 		MaxLength:     MaximumUsernameLength,
 		Pattern:       UsernamePattern,
 		ReservedNames: ReservedNames(),
+		BotMinLength:  MinimumBotUsernameLength,
+		BotPattern:    BotUsernamePattern,
 	}
 }

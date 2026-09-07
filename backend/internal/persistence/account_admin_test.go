@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"rps-strategy/backend/internal/game"
+	"time"
+
 	"rps-strategy/backend/internal/notation"
 )
 
@@ -17,30 +19,103 @@ func TestSearchAccountsFindsByNameAndUserID(t *testing.T) {
 		t.Fatalf("create account: %v", err)
 	}
 
-	all, err := store.SearchAccounts(ctx, "", 50, 0)
+	all, err := store.SearchAccounts(ctx, AccountFilter{})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	if len(all) != 2 {
-		t.Fatalf("expected both accounts, got %d", len(all))
+	// The zero filter is the unfiltered list, which is the property every
+	// widening default below depends on.
+	if len(all.Accounts) != 2 || all.Total != 2 {
+		t.Fatalf("expected both accounts, got %d of %d", len(all.Accounts), all.Total)
 	}
 
-	byName, err := store.SearchAccounts(ctx, "ad", 50, 0)
+	byName, err := store.SearchAccounts(ctx, AccountFilter{Query: "ad"})
 	if err != nil {
 		t.Fatalf("search: %v", err)
 	}
-	if len(byName) != 1 || byName[0].Username != "Ada" {
+	if len(byName.Accounts) != 1 || byName.Accounts[0].Username != "Ada" {
 		t.Fatalf("substring search: %#v", byName)
 	}
-	byID, err := store.SearchAccounts(ctx, "anon", 50, 0)
+	byID, err := store.SearchAccounts(ctx, AccountFilter{Query: "anon"})
 	if err != nil {
 		t.Fatalf("search: %v", err)
 	}
-	if len(byID) != 1 || byID[0].UserID != "anon" {
+	if len(byID.Accounts) != 1 || byID.Accounts[0].UserID != "anon" {
 		t.Fatalf("user id search: %#v", byID)
 	}
-	if !byName[0].Registered || byID[0].Registered {
+	if !byName.Accounts[0].Registered || byID.Accounts[0].Registered {
 		t.Fatal("registration state should distinguish the two")
+	}
+}
+
+// The filter this whole struct exists for: hiding the Guests.
+func TestSearchAccountsFilters(t *testing.T) {
+	store := authTestStore(t)
+	ctx := t.Context()
+	registeredOwner(t, store, "owner", "Ada")
+	for _, id := range []string{"anon-1", "anon-2", "anon-3"} {
+		if _, err := store.EnsureAccountWithProfileKey(
+			ctx, id, "Guest", testProfileKey,
+		); err != nil {
+			t.Fatalf("create account: %v", err)
+		}
+	}
+
+	yes, no := true, false
+	registered, err := store.SearchAccounts(ctx, AccountFilter{Registered: &yes})
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if len(registered.Accounts) != 1 || registered.Accounts[0].Username != "Ada" {
+		t.Fatalf("expected only the registered account: %#v", registered.Accounts)
+	}
+	// The count is of what matched, which is what makes "1 of 4" readable.
+	if registered.Total != 1 {
+		t.Fatalf("expected a total of 1, got %d", registered.Total)
+	}
+
+	guests, err := store.SearchAccounts(ctx, AccountFilter{Registered: &no})
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if len(guests.Accounts) != 3 {
+		t.Fatalf("expected the three guests, got %d", len(guests.Accounts))
+	}
+
+	// Nil is a third answer, and has to stay distinct from false.
+	either, err := store.SearchAccounts(ctx, AccountFilter{Registered: nil})
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if len(either.Accounts) != 4 {
+		t.Fatalf("nil should not filter, got %d", len(either.Accounts))
+	}
+
+	// Nobody has played, so an activity filter empties the list rather than
+	// falling back to everybody — which is the mistake a widening default
+	// invites if it is applied to the wrong field.
+	active, err := store.SearchAccounts(ctx, AccountFilter{
+		ActiveSinceUnixMs: time.Now().Add(-time.Hour).UnixMilli(),
+	})
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if len(active.Accounts) != 0 {
+		t.Fatalf("expected nobody active, got %#v", active.Accounts)
+	}
+
+	if _, err := store.SearchAccounts(ctx, AccountFilter{MinGames: 1}); err != nil {
+		t.Fatalf("min games: %v", err)
+	}
+
+	// Every sort has to produce valid SQL, including one nobody asked for.
+	for _, sort := range []AccountSort{
+		SortAccountsNewest, SortAccountsActive, SortAccountsRating,
+		SortAccountsGames, SortAccountsName, AccountSort("nonsense"),
+	} {
+		if _, err := store.SearchAccounts(ctx, AccountFilter{Sort: sort}); err != nil {
+			t.Fatalf("sort %q: %v", sort, err)
+		}
 	}
 }
 
@@ -116,7 +191,7 @@ func TestAnonymizeStripsTheNameFromTheStoredRecordToo(t *testing.T) {
 		t.Fatalf("new game: %v", err)
 	}
 	moves := played.LegalMoves()
-	if _, err := played.Move(game.Red, moves[0].From, moves[0].To); err != nil {
+	if _, err := played.Move(game.FirstToMove, moves[0].From, moves[0].To); err != nil {
 		t.Fatalf("play a move: %v", err)
 	}
 	if _, err := played.Resign(game.Blue); err != nil {

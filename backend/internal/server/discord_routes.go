@@ -378,6 +378,11 @@ func (server *Server) finishDiscordSignIn(
 		writeAPIError(writer, http.StatusInternalServerError, "could not start a session")
 		return
 	}
+	// The link that has just been written is itself worth a title, so the
+	// rulebook runs before the account is handed back rather than at the next
+	// connection: this reply is what the account page renders from, and a tag
+	// that appears on the following reload reads as something that went wrong.
+	account = server.titledAccount(request.Context(), account)
 	writeJSON(writer, http.StatusOK, discordExchangeReply{Account: &account, Token: token})
 }
 

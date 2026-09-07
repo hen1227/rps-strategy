@@ -366,6 +366,12 @@ CREATE INDEX IF NOT EXISTS tournament_matches_tournament_idx
 	if err := store.ensureTournamentMatchColumns(ctx); err != nil {
 		return err
 	}
+	// After the match columns, and before anything reads a tournament: this is
+	// what adds the configuration the builder writes and backfills publication
+	// onto the events that predate it.
+	if err := store.ensureTournamentConfigSchema(ctx); err != nil {
+		return err
+	}
 	if err := store.ensureArchiveSchema(ctx); err != nil {
 		return err
 	}
@@ -376,6 +382,9 @@ CREATE INDEX IF NOT EXISTS tournament_matches_tournament_idx
 		return err
 	}
 	if err := store.ensureOpeningGraphSchema(ctx); err != nil {
+		return err
+	}
+	if err := store.ensureOpeningStatsSchema(ctx); err != nil {
 		return err
 	}
 	if err := store.ensurePushSchema(ctx); err != nil {
@@ -389,18 +398,17 @@ CREATE INDEX IF NOT EXISTS tournament_matches_tournament_idx
 	if err := store.ensureBotSeriesSchema(ctx); err != nil {
 		return err
 	}
-	// The mode library. Independent of everything above — it references accounts
-	// only by id, for the reason lab.go states — so its place in the order is
-	// arbitrary, and last keeps it out of the way of the sequence that is not.
-	if err := store.ensureLabSchema(ctx); err != nil {
-		return err
-	}
-	// The pictures a mode carries, which reference the modes above only by id.
-	if err := store.ensureLabArtSchema(ctx); err != nil {
+	// After the tournament config migration, which is what adds the `kind`
+	// column the weekend arena writes into.
+	if err := store.ensureWeekendSchema(ctx); err != nil {
 		return err
 	}
 	// After the auth migration, which is what creates `is_admin`.
 	if err := store.ensureOwnerIsAdmin(ctx); err != nil {
+		return err
+	}
+	// Anywhere after `accounts` exists, which is the only table it references.
+	if err := store.ensureModerationSchema(ctx); err != nil {
 		return err
 	}
 	store.reportPasswordAccountsRemaining(ctx)
@@ -602,7 +610,22 @@ func (store *Store) RecordCompletedGame(
 		if err != nil {
 			return RatingUpdate{}, err
 		}
+		sameOwner := false
 		if bothBots {
+			sameOwner, err = sameBotOwnerTx(ctx, transaction, redID, blueID)
+			if err != nil {
+				return RatingUpdate{}, err
+			}
+		}
+		switch {
+		case bothBots && sameOwner:
+			// One person's two engines. The ladder does not hear about this
+			// game — botHeadToHeadTx drops the pair — so folding it in here
+			// would move both ratings until the next refit quietly took them
+			// back. A series between two of an owner's own bots is seated
+			// casual and never arrives here at all; this branch is what keeps
+			// the invariant true for any path that forgets to.
+		case bothBots:
 			pairs, err := botHeadToHeadTx(ctx, transaction, state.Mode.ID)
 			if err != nil {
 				return RatingUpdate{}, err
@@ -613,7 +636,7 @@ func (store *Store) RecordCompletedGame(
 			// record cannot place them, and a missing key would read as a
 			// rating of zero rather than as an unrated bot.
 			redAfter, blueAfter = botRatingOr(botLadder, redID), botRatingOr(botLadder, blueID)
-		} else {
+		default:
 			redAfter, blueAfter = calculateElo(redElo, blueElo, redScore)
 		}
 	}

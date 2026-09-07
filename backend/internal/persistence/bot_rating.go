@@ -3,6 +3,7 @@ package persistence
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"math"
 	"sort"
@@ -157,6 +158,24 @@ const (
 var (
 	strengthFloor   = 1e-9
 	strengthCeiling = 1e9
+
+	// botRatingVarianceCeiling is how uncertain the ladder will admit to being
+	// about one bot, in the squared natural-log units the fit works in. It is
+	// the distance from DefaultElo to botRatingFloor, squared: the published
+	// number is clamped to that range anyway, so an error bar wider than the
+	// whole publishable board says nothing a bar exactly that wide does not.
+	//
+	// It is here because a bot that has lost every game it has played against
+	// the core has no finite Bradley-Terry strength, so it has no finite
+	// variance either — the fit pins it to strengthFloor and the information
+	// matrix reports it as known to within about a billion. That is a true
+	// statement about an unidentified parameter and a catastrophic one to leave
+	// in a weighted average: unbounded, it dominates every sum it appears in,
+	// and the shrinkage in fitBotRatings is a comparison between two such sums.
+	// One hopeless record on the board was enough to make the whole ladder read
+	// as noise and publish fourteen bots at DefaultElo.
+	botRatingVarianceCeiling = math.Pow(
+		math.Ln10*float64(DefaultElo-botRatingFloor)/400, 2)
 )
 
 // botPairKey names one pair of bots, lower user id first, so that the two
@@ -205,6 +224,13 @@ func botHeadToHeadTx(
 	// MIN and MAX of two arguments are SQLite's scalar functions, not the
 	// aggregates of the same name, so this groups the two seatings together and
 	// scores each row from the low-id bot's side.
+	//
+	// The two LEFT JOINs onto `bots` are the same-owner rule: a pair of engines
+	// registered to one account is dropped, however their games were flagged
+	// when they were played. LEFT rather than inner because the join is asking a
+	// question, not filtering — a bot whose registry row is gone still has an
+	// account and still has games, and an unknown owner is not a shared one.
+	// `bots.user_id` is UNIQUE, so neither join can multiply a game row.
 	const query = `
 SELECT MIN(h.red_player_id, h.blue_player_id) AS low_id,
        MAX(h.red_player_id, h.blue_player_id) AS high_id,
@@ -217,7 +243,12 @@ SELECT MIN(h.red_player_id, h.blue_player_id) AS low_id,
 FROM game_history h
 JOIN accounts red ON red.user_id = h.red_player_id AND red.kind = ?
 JOIN accounts blue ON blue.user_id = h.blue_player_id AND blue.kind = ?
+LEFT JOIN bots red_bot ON red_bot.user_id = h.red_player_id
+LEFT JOIN bots blue_bot ON blue_bot.user_id = h.blue_player_id
 WHERE h.mode_id = ? AND h.ranked = 1
+  AND (red_bot.owner_user_id IS NULL
+       OR blue_bot.owner_user_id IS NULL
+       OR red_bot.owner_user_id <> blue_bot.owner_user_id)
 GROUP BY low_id, high_id
 `
 	rows, err := transaction.QueryContext(ctx, query, AccountKindBot, AccountKindBot, modeID)
@@ -517,7 +548,7 @@ func fitBotStrengths(edges []botPairEdge, count int) []float64 {
 				updated[index] = strength[index]
 			}
 		}
-		middle := medianStrength(updated)
+		middle := middleOf(updated)
 		change := 0.0
 		for index := range updated {
 			next := min(max(updated[index]/middle, strengthFloor), strengthCeiling)
@@ -563,14 +594,21 @@ func normalizeWeights(weights []float64) {
 	}
 }
 
-// medianStrength is the middle of a fit, used to keep the iteration's numbers in
-// range. The median rather than the mean, because a ladder can carry a tail of
-// bots the fit is driving towards zero, and the mean would follow them down.
-func medianStrength(strengths []float64) float64 {
-	if len(strengths) == 0 {
+// middleOf is the median of a set of the fit's numbers, or one if that is not a
+// usable answer.
+//
+// The median rather than the mean, and both callers need it for the same
+// reason: a real ladder carries a tail of bots the fit is driving to the
+// strength floor, whose strengths go to zero and whose variances go to
+// infinity, and a mean would follow them in either direction. Used to keep the
+// iteration's numbers in range, and to set the floor under the inverse-variance
+// weights in botStrengthVariance — a floor taken from the mean would be set by
+// the very bots it exists to hold down.
+func middleOf(values []float64) float64 {
+	if len(values) == 0 {
 		return 1
 	}
-	sorted := append([]float64(nil), strengths...)
+	sorted := append([]float64(nil), values...)
 	sort.Float64s(sorted)
 	middle := sorted[len(sorted)/2]
 	if len(sorted)%2 == 0 {
@@ -580,6 +618,19 @@ func medianStrength(strengths []float64) float64 {
 		return 1
 	}
 	return middle
+}
+
+// capVariances holds each error bar to botRatingVarianceCeiling, in place.
+//
+// Applied at every point botStrengthVariance returns from, for the reason
+// normalizeWeights is: an uncapped variance from one of its fallback branches
+// would be the same bug in a rarer shape.
+func capVariances(variance []float64) {
+	for index := range variance {
+		if variance[index] > botRatingVarianceCeiling || math.IsInf(variance[index], 1) {
+			variance[index] = botRatingVarianceCeiling
+		}
+	}
 }
 
 // botStrengthVariance is how uncertain each fitted rating is relative to the
@@ -604,13 +655,18 @@ func medianStrength(strengths []float64) float64 {
 // the ladder sits, so this takes three steps.
 //
 // Dropping the best-established bot's row and column removes the singularity and
-// leaves a covariance written in gaps from that one bot. Contrasting against a
-// flat average of the board then turns those gaps into distances from a middle,
-// which is reference-free and rough enough to say which bots the record barely
-// places. Contrasting again, this time against a middle weighted towards the
-// bots it does place, is the answer: a poorly placed bot no longer gets an equal
-// vote on where the middle is, so it cannot make everybody else look uncertain
-// by association.
+// leaves a covariance written in gaps from that one bot. Contrasting against an
+// average of the board weighted by how much evidence there is about each bot
+// then turns those gaps into distances from a middle, which is reference-free
+// and rough enough to say which bots the record barely places. Contrasting again,
+// this time against a middle weighted by the answer to that, is the answer: a
+// poorly placed bot no longer gets a say in where the middle is, so it cannot
+// make everybody else look uncertain by association.
+//
+// A flat average is the obvious choice for that first pass and is the one that
+// does not work, because a bot with no finite variance would put its own
+// uncertainty into the middle every other bot is measured from. The note on the
+// two passes below is the whole of it.
 func botStrengthVariance(edges []botPairEdge, strength []float64) ([]float64, []float64) {
 	count := len(strength)
 	variance := make([]float64, count)
@@ -652,6 +708,7 @@ func botStrengthVariance(edges []botPairEdge, strength []float64) ([]float64, []
 			variance[index] = 1 / information[index][index]
 			weights[index] = information[index][index]
 		}
+		capVariances(variance)
 		normalizeWeights(weights)
 		return variance, weights
 	}
@@ -695,6 +752,7 @@ func botStrengthVariance(edges []botPairEdge, strength []float64) ([]float64, []
 			variance[index] = 1 / information[index][index]
 			weights[index] = information[index][index]
 		}
+		capVariances(variance)
 		normalizeWeights(weights)
 		return variance, weights
 	}
@@ -743,28 +801,45 @@ func botStrengthVariance(edges []botPairEdge, strength []float64) ([]float64, []
 	}
 
 	// Twice, because the weights want to be inverse-variance and the variance
-	// depends on the weights. The first pass gives every bot an equal say, which
-	// is enough to find out which of them the record barely places; the second
-	// takes their say away in proportion.
-	uniform := make([]float64, count)
-	for index := range uniform {
-		uniform[index] = 1 / float64(count)
+	// depends on the weights.
+	//
+	// The first pass weights each bot by its own diagonal of the information
+	// matrix — how much evidence the record holds about that bot, and nothing
+	// about anybody else — which is enough to find out which of them the record
+	// barely places. The second pass then takes their say away in proportion to
+	// what it learns.
+	//
+	// Flat weights were the obvious thing here and are the one shape that
+	// cannot work. Every number `contrast` returns carries the same weighted
+	// `middle` term, so a bot with an unidentified strength and therefore an
+	// unbounded variance does not merely come back uncertain itself: with an
+	// equal vote it puts its own uncertainty into the middle, and every bot on
+	// the board comes back uncertain by the same enormous amount. That is fatal
+	// twice over — the shrinkage reads the board as pure noise, and the second
+	// pass, whose whole job is to strip such a bot of its vote, can no longer
+	// tell it apart from the bots it is drowning out. The information diagonal
+	// is immune: it is a sum over one bot's own matchups, it is finite whatever
+	// the fit did with that bot, and it is ~0 for exactly the bots that must not
+	// vote. It is also what the two fallback branches above already weight by.
+	evidence := make([]float64, count)
+	for index := range evidence {
+		evidence[index] = information[index][index]
 	}
-	rough := contrast(uniform)
+	normalizeWeights(evidence)
+	rough := contrast(evidence)
 
-	typical := 0.0
-	for index := range rough {
-		typical += rough[index]
-	}
-	typical /= float64(count)
-	if typical <= 0 || math.IsNaN(typical) {
-		typical = 1
-	}
+	// Deliberately the uncapped `rough`: the cap is what the ladder will admit
+	// to publicly, and applying it here would flatten a billion and a thousand
+	// onto the same number and leave the weights below unable to separate them.
+	typical := middleOf(rough)
 	for index := range weights {
 		weights[index] = 1 / (rough[index] + typical)
 	}
 	normalizeWeights(weights)
-	return contrast(weights), weights
+
+	variance = contrast(weights)
+	capVariances(variance)
+	return variance, weights
 }
 
 // inverseOf inverts a symmetric, positive-definite matrix, or returns nil if it
@@ -991,6 +1066,45 @@ JOIN accounts a ON a.user_id = r.user_id AND a.kind = ?
 		}
 	}
 	return nil
+}
+
+// sameBotOwnerTx reports whether two accounts are engines registered to one
+// person: the pair botHeadToHeadTx refuses to count.
+//
+// Read as two owners rather than as a COUNT(DISTINCT owner_user_id) over both,
+// because that count is one for "both belong to Alice" and also one for "we have
+// never heard of either", and those mean opposite things.
+func sameBotOwnerTx(
+	ctx context.Context,
+	transaction *sql.Tx,
+	redID string,
+	blueID string,
+) (bool, error) {
+	owner := func(userID string) (string, error) {
+		var ownerID string
+		err := transaction.QueryRowContext(ctx, `
+SELECT owner_user_id FROM bots WHERE user_id = ?
+`, userID).Scan(&ownerID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", nil
+		}
+		if err != nil {
+			return "", fmt.Errorf("bot ladder: read bot owner: %w", err)
+		}
+		return ownerID, nil
+	}
+	red, err := owner(redID)
+	if err != nil {
+		return false, err
+	}
+	if red == "" {
+		return false, nil
+	}
+	blue, err := owner(blueID)
+	if err != nil {
+		return false, err
+	}
+	return red == blue, nil
 }
 
 // bothBotsTx reports whether a game was between two engines, which is the only

@@ -123,11 +123,11 @@ func TestNoFirstMoveCancelsTheGameWithoutARating(t *testing.T) {
 	bobSeek := queueUp(t, server, bob, game.ModeTotalWar)
 
 	// Alice has been waiting a long time, so her rating band has widened well
-	// past where a fresh search would start. She also gets the Blue seat, so
-	// the no-show is Bob whichever way the seats fell.
+	// past where a fresh search would start. She also asks for the seat that
+	// replies, so the no-show is Bob whichever way the seats fell.
 	joined := time.Now().Add(-90 * time.Second)
 	aliceSeek.JoinedAt = joined
-	aliceSeek.Setup.PreferredColor = game.Blue
+	aliceSeek.Setup.PreferredColor = game.OtherColor(game.FirstToMove)
 	widened := aliceSeek.SearchRange(time.Now())
 	if widened <= matchmakingInitialEloRange {
 		t.Fatalf("test setup: expected a widened search range, got %d", widened)
@@ -313,16 +313,23 @@ func TestTheFirstMoveReanchorsTheAbsentPlayersGrace(t *testing.T) {
 	server.hub.Register(alice)
 	server.hub.Register(bob)
 	aliceSeek := queueUp(t, server, alice, game.ModeTotalWar)
-	// Alice takes Red, so she is the one who can move while Bob is away.
-	aliceSeek.Setup.PreferredColor = game.Red
+	// Alice takes the opening seat, so she is the one who can move while Bob is
+	// away.
+	aliceSeek.Setup.PreferredColor = game.FirstToMove
 	queueUp(t, server, bob, game.ModeTotalWar)
 	server.disconnect(bob)
 	server.seeks.pair()
 
 	session := theOnlyGame(t, server)
+	// Bob holds whichever seat Alice did not ask for, and it is his clock the
+	// grace period is measured on.
+	awayAt := &session.redDisconnectedAt
+	if game.FirstToMove == game.Red {
+		awayAt = &session.blueDisconnectedAt
+	}
 	server.mu.Lock()
 	// Bob has been gone almost the whole window.
-	session.blueDisconnectedAt = time.Now().Add(-firstMoveWindow + time.Second)
+	*awayAt = time.Now().Add(-firstMoveWindow + time.Second)
 	server.mu.Unlock()
 
 	state := session.game.Snapshot()
@@ -330,7 +337,11 @@ func TestTheFirstMoveReanchorsTheAbsentPlayersGrace(t *testing.T) {
 	server.handleMessage(alice, ClientMessage{Type: "make_move", From: from, To: to})
 
 	server.mu.RLock()
-	grace := disconnectDeadline(session.blueDisconnectedAt).Sub(time.Now())
+	away := game.Red
+	if awayAt == &session.blueDisconnectedAt {
+		away = game.Blue
+	}
+	grace := session.reconnectDeadline(away, session.game.Snapshot()).Sub(time.Now())
 	server.mu.RUnlock()
 	if grace < firstMoveWindow-time.Second {
 		t.Fatalf("the absent player should get a whole grace period, got %s", grace)
@@ -431,7 +442,7 @@ func TestTournamentAndBotGamesRunTheClockFromTheStart(t *testing.T) {
 	if session.game.AwaitingFirstMove() {
 		t.Fatal("a game seated without an escrow should be live from the first tick")
 	}
-	if got := session.game.Snapshot().Clock.ActiveColor; got != game.Red {
+	if got := session.game.Snapshot().Clock.ActiveColor; got != game.FirstToMove {
 		t.Fatalf("the clock should already be running, got %q", got)
 	}
 }

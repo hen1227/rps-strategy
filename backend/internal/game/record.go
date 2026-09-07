@@ -142,6 +142,19 @@ func (record Record) StartingPosition() StartingPosition {
 	return record.Mode.StartingPosition
 }
 
+// StartingTurn is the side that had the move on the board this game began
+// from: the mode's opener, unless the record carries a position somebody set
+// up and handed to the other side.
+//
+// The one fact a PGN's move numbering needs, because "1." is the opener's move
+// and not a particular colour's.
+func (record Record) StartingTurn() PlayerColor {
+	if record.InitialPosition != nil && record.InitialPosition.CurrentTurn != Neutral {
+		return record.InitialPosition.CurrentTurn
+	}
+	return FirstToMove
+}
+
 // PlyCount is the number of moves played.
 func (record Record) PlyCount() int {
 	count := 0
@@ -187,7 +200,12 @@ func (game *Game) Record() Record {
 		StartedAtUnixMs: game.startedAt.UnixMilli(),
 		InitialPosition: initialPosition,
 		Events:          events,
-		Final:           game.state,
+		// Cloned, not assigned. GameState carries the board as a slice, so the
+		// struct copy hands out a live reference to the grid this game is still
+		// playing on — and the readers of a Record are the PGN encoder and the
+		// engine prompt, both of which walk that grid outside this lock while
+		// the next move is being written into it.
+		Final: game.stateCopyLocked(),
 	}
 }
 

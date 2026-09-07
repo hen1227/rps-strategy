@@ -114,6 +114,30 @@ func TestPublicSeriesAreBoundedInLengthAndClock(t *testing.T) {
 	}
 }
 
+// The clock ceiling is a ceiling and nothing else. 0.1+1 — six seconds each with
+// a second back per move — is the shortest clock the website's form offers, and
+// it is a real way to ask two engines a question: a run of it is over while
+// somebody watches, and neither player is going to fumble a mouse.
+func TestAVisitorMayRunABulletClock(t *testing.T) {
+	server, alpha, beta := seriesTestBots(t)
+	openToPlay(t, server, alpha)
+	openToPlay(t, server, beta)
+
+	quick := visitorSeries(alpha, beta, "owner")
+	quick.Control = game.TimeControl{InitialTimeMs: 6_000, IncrementMs: 1_000}
+	series, err := server.StartBotSeries(t.Context(), quick)
+	if err != nil {
+		t.Fatalf("a six-second clock is inside the public ceiling: %v", err)
+	}
+	if series.InitialTimeMs != 6_000 || series.IncrementMs != 1_000 {
+		t.Fatalf("the run should be played at the clock asked for: %#v", series)
+	}
+
+	if err := server.AbortBotSeries(series.SeriesID, "owner", false); err != nil {
+		t.Fatalf("stop the run: %v", err)
+	}
+}
+
 func TestOneAccountHoldsOneSeriesSlot(t *testing.T) {
 	server, alpha, beta := seriesTestBots(t)
 	gamma := addSeriesBot(t, server, "Gamma")

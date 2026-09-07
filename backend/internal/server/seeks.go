@@ -295,6 +295,12 @@ type seekBoard struct {
 	byOwner map[string]*Seek
 	onPair  func(first, second *Seek)
 	now     func() time.Time
+	// paused stops pairing without emptying the board. Set while the server is
+	// draining for an update: the seeks stay exactly where they are, keeping the
+	// wait they have already served, and start pairing again by themselves if
+	// the drain is called off. Nil means never paused, which is every test and
+	// every server that is not mid-deploy.
+	paused func() bool
 }
 
 func newSeekBoard(onPair func(first, second *Seek)) *seekBoard {
@@ -568,6 +574,12 @@ func (board *seekBoard) Run(ctx context.Context) {
 // with nothing customized is picked up by matchmaking exactly as if its author
 // had pressed play.
 func (board *seekBoard) pair() {
+	// Checked before the lock rather than inside it. Nothing here needs the
+	// board to answer, and a drain that has to queue behind a pairing round is
+	// a drain that can still seat a game after it began.
+	if board.paused != nil && board.paused() {
+		return
+	}
 	board.mu.Lock()
 	now := board.now()
 	seeks := make([]*Seek, 0, len(board.byID))
@@ -628,14 +640,16 @@ func (board *seekBoard) pair() {
 	}
 }
 
-// seatOrder decides who plays Red, which is also who moves first.
+// seatOrder decides who plays game.FirstToMove, which is the seat that opens.
 //
 // A seat preference is honoured when there is one; pairing already refused two
 // seeks that want the same colour, so at most one of these can be asking. With
-// neither asking the older seek plays Red, the same deterministic rule
-// matchmaking has always used.
-func seatOrder(first, second *Seek) (*Seek, *Seek) {
-	if first.Setup.PreferredColor == game.Blue || second.Setup.PreferredColor == game.Red {
+// neither asking the older seek gets the opening seat, the same deterministic
+// rule matchmaking has always used.
+func seatOrder(first, second *Seek) (opener, replier *Seek) {
+	replying := game.OtherColor(game.FirstToMove)
+	if first.Setup.PreferredColor == replying ||
+		second.Setup.PreferredColor == game.FirstToMove {
 		return second, first
 	}
 	return first, second

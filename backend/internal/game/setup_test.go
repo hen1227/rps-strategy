@@ -150,10 +150,10 @@ func TestRepetitionDrawCanBeSwitchedOff(t *testing.T) {
 		player   PlayerColor
 		from, to Position
 	}{
-		{Red, Position{X: 3, Y: 6}, Position{X: 2, Y: 5}},
 		{Blue, Position{X: 3, Y: 2}, Position{X: 2, Y: 3}},
-		{Red, Position{X: 2, Y: 5}, Position{X: 3, Y: 6}},
+		{Red, Position{X: 3, Y: 6}, Position{X: 2, Y: 5}},
 		{Blue, Position{X: 2, Y: 3}, Position{X: 3, Y: 2}},
+		{Red, Position{X: 2, Y: 5}, Position{X: 3, Y: 6}},
 	}
 	created := setupGame(t, RuleFlags{NoRepetitionDraw: true})
 	var state GameState

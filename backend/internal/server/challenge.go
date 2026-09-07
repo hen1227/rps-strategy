@@ -81,23 +81,27 @@ func (server *Server) sendChallenge(client *Client, username string, requested g
 // rated game offered to the room *is* a matchmaking search, however it was
 // requested, so filling the custom form in and changing nothing puts somebody
 // in the queue rather than posting a row that duplicates it.
-// rankedAllowed reports whether this connection may play for a rating.
-//
-// Bots always may. No bot path reaches either gate today — engine matches and
-// bot-versus-bot series build their entries and seat them directly — but an
-// engine that did arrive here must not be silently downgraded, because every
-// bot account has no password and would otherwise read as unregistered and
-// have its ranked series quietly turned casual.
-func rankedAllowed(client *Client) bool {
-	return client.isBot() || client.account.Registered
-}
-
 func (server *Server) postSeek(
 	client *Client,
 	username string,
 	requested game.GameSetup,
 	fromQueue bool,
 ) {
+	// First, because a seek posted during a drain is a row that can never pair:
+	// the board stops matching for the duration. Letting it be posted anyway
+	// would leave somebody watching a search that was never going to end, and
+	// then losing it to the restart without ever being told why.
+	if server.isUpdating() {
+		refuseSeek(client, fromQueue, server.updateRefusalMessage())
+		return
+	}
+	// The other half of a mute. A challenge carries a username somebody typed
+	// and lands in that person's inbox, which is the second way to put words in
+	// front of somebody who does not want them — see persistence.RestrictMute.
+	if refusal := server.muteRefusal(client, "send challenges"); refusal != "" {
+		refuseSeek(client, fromQueue, refusal)
+		return
+	}
 	// No target means the game is offered to the lobby. Every check below that
 	// asks *who* it is for is therefore skipped; every check about what the
 	// game is stays exactly as it was.
@@ -154,7 +158,7 @@ func (server *Server) postSeek(
 	// make an anonymous player's standard challenge stop looking standard, and
 	// their "play now" would silently become an expiring board posting instead
 	// of a place in the queue.
-	downgraded := setup.Ranked() && !rankedAllowed(client)
+	downgraded := setup.Ranked() && !server.rankedAllowed(client)
 	if downgraded {
 		setup.Casual = true
 	}
@@ -229,7 +233,7 @@ func (server *Server) postSeek(
 		// notice, which is why it is also said in words.
 		client.Send(ServerMessage{
 			Type:    "ranked_unavailable",
-			Message: "sign in with Discord to play ranked; this game is casual",
+			Message: server.rankedRefusal(client),
 		})
 	}
 	if open {
@@ -262,10 +266,10 @@ func (server *Server) acceptChallenge(client *Client, challengeID string) {
 	// It must also come before anything that calls seeks.Claim below — three
 	// later branches do, and a refusal landing after one of them would destroy
 	// a third party's open challenge on the way out.
-	if seek.Setup.Ranked() && !rankedAllowed(client) {
+	if seek.Setup.Ranked() && !server.rankedAllowed(client) {
 		client.Send(ServerMessage{
 			Type:    "challenge_rejected",
-			Message: "that game is ranked; sign in with Discord to accept it",
+			Message: server.rankedAcceptRefusal(client),
 		})
 		return
 	}

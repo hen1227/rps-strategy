@@ -51,54 +51,252 @@ type AccountSummary struct {
 	GamesPlayed int   `json:"gamesPlayed"`
 	BotCount    int   `json:"botCount"`
 	CreatedAtMs int64 `json:"createdAtUnixMs"`
+	// DiscordVerified is whether Discord vouched for this account, which is a
+	// narrower thing than Registered: that also admits the password accounts
+	// still on the books. It is here because it is one of the filters, and a
+	// filtered list should show the property it was filtered on.
+	DiscordVerified bool `json:"discordVerified"`
+	// LastPlayedAtMs is when they last finished a game, and nil for an account
+	// that never has — which is the great majority of them. The honest version
+	// of "last seen" on a site whose whole purpose is playing, and what makes
+	// the activity filters readable rather than mysterious.
+	LastPlayedAtMs *int64 `json:"lastPlayedAtUnixMs,omitempty"`
 }
 
-// SearchAccounts lists accounts, newest first, optionally filtered by a
-// substring of the username or an exact user id.
+// AccountFilter narrows the account browser.
+//
+// The browser needs this because of a fact about how identity works here: every
+// browser that has ever loaded the site owns an account, called Guest, created
+// the moment it arrived. They vastly outnumber everybody else, they are
+// indistinguishable from one another, and the list used to be ordered
+// newest-first — so "search accounts" reliably returned fifty Guests and
+// nothing a host was looking for.
+//
+// Every field is a *widening* zero: an unset filter matches everything, so the
+// zero value is the old unfiltered behaviour. That is what lets the caller
+// express "registered only" and "any" without a sentinel for each, and the
+// tri-state pointers below are the same idea — nil for "do not care", which is
+// genuinely different from false.
+type AccountFilter struct {
+	// Query matches a substring of the username or an exact user id.
+	Query string
+	// Registered restricts to accounts that can sign in, or to the ones that
+	// cannot. Nil for either. This is the one that hides the Guests.
+	Registered *bool
+	// DiscordLinked restricts to accounts Discord has vouched for. Narrower than
+	// Registered, which also admits the remaining password accounts.
+	DiscordLinked *bool
+	Disabled      *bool
+	IsAdmin       *bool
+	// Kind is AccountKindHuman or AccountKindBot; empty for both.
+	Kind string
+	// ActiveSinceUnixMs restricts to accounts that finished a game since an
+	// instant. Zero for any.
+	//
+	// An instant rather than a duration, so the caller decides what "the last
+	// hour" means and the same filter can be replayed. See the note in the
+	// query about why this is two EXISTS rather than a comparison on the
+	// last-played column it sits beside.
+	ActiveSinceUnixMs int64
+	// MinGames restricts to accounts that have played at least this many. Cheap,
+	// indexless, and on its own enough to clear out most of the Guests — which
+	// is why it is applied before anything that touches game_history.
+	MinGames int
+	Sort     AccountSort
+	Limit    int
+	Offset   int
+}
+
+// AccountSort is the order the browser lists accounts in.
+type AccountSort string
+
+const (
+	// SortAccountsNewest is by signup, newest first. The original behaviour, and
+	// the only one that is actively unhelpful when Guests are included.
+	SortAccountsNewest AccountSort = "newest"
+	// SortAccountsActive is by when they last finished a game, most recent
+	// first. Accounts that have never played come last.
+	SortAccountsActive AccountSort = "active"
+	// SortAccountsRating is strongest first.
+	SortAccountsRating AccountSort = "rating"
+	// SortAccountsGames is busiest first.
+	SortAccountsGames AccountSort = "games"
+	// SortAccountsName is alphabetical, for finding somebody whose name you know
+	// but cannot spell well enough to search for.
+	SortAccountsName AccountSort = "name"
+)
+
+// orderClause is the SQL for a sort. Never interpolates anything the caller
+// supplied: an unrecognised sort falls back rather than reaching the query.
+func (sort AccountSort) orderClause() string {
+	switch sort {
+	case SortAccountsActive:
+		// NULLs last, so the accounts that have never played do not head a list
+		// ordered by when people were last here.
+		return "last_played_at IS NULL, last_played_at DESC, created_at_unix_ms DESC"
+	case SortAccountsRating:
+		return "elo DESC, games_played DESC"
+	case SortAccountsGames:
+		return "games_played DESC, elo DESC"
+	case SortAccountsName:
+		return "username COLLATE NOCASE ASC"
+	default:
+		return "created_at_unix_ms DESC"
+	}
+}
+
+// AccountPage is a page of the browser, plus how many rows the filter matched.
+//
+// The count is what makes a filter honest: "24 accounts" is a different thing
+// to read than "24 of 8,431", and a host who has just hidden the Guests wants
+// to see how much was hidden.
+type AccountPage struct {
+	Accounts []AccountSummary `json:"accounts"`
+	Total    int              `json:"total"`
+}
+
+// SearchAccounts lists accounts matching a filter.
 func (store *Store) SearchAccounts(
 	ctx context.Context,
-	query string,
-	limit int,
-	offset int,
-) ([]AccountSummary, error) {
+	filter AccountFilter,
+) (AccountPage, error) {
+	limit := filter.Limit
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
+	offset := filter.Offset
 	if offset < 0 {
 		offset = 0
 	}
-	pattern := "%" + strings.ToLower(strings.TrimSpace(query)) + "%"
-	rows, err := store.db.QueryContext(ctx, `
-SELECT a.user_id, a.kind, a.username, a.discord, a.title, `+registeredSQL("a")+`,
-       a.is_admin, a.disabled,
-       COALESCE((SELECT MAX(r.elo) FROM account_mode_ratings r
-                  WHERE r.user_id = a.user_id), a.elo),
-       a.games_played, a.created_at_unix_ms,
-       (SELECT COUNT(*) FROM bots b
-         WHERE b.owner_user_id = a.user_id AND b.retired_at_unix_ms IS NULL)
-FROM accounts a
-WHERE ? = '%%' OR LOWER(a.username) LIKE ? OR a.user_id = ?
-ORDER BY a.created_at_unix_ms DESC
+
+	where, arguments := filter.conditions()
+	var page AccountPage
+	if err := store.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM accounts a WHERE `+where, arguments...,
+	).Scan(&page.Total); err != nil {
+		return AccountPage{}, fmt.Errorf("count accounts: %w", err)
+	}
+
+	// The last-played column is computed in an inner select so it can be
+	// ordered by. It is not *filtered* on there — see conditions() for why the
+	// activity filter is a pair of EXISTS instead.
+	query := `
+SELECT user_id, kind, username, discord, title, registered, is_admin, disabled,
+       elo, games_played, created_at_unix_ms, bot_count, discord_verified,
+       last_played_at
+FROM (
+    SELECT a.user_id, a.kind, a.username, a.discord, a.title,
+           ` + registeredSQL("a") + ` AS registered,
+           a.is_admin, a.disabled,
+           COALESCE((SELECT MAX(r.elo) FROM account_mode_ratings r
+                      WHERE r.user_id = a.user_id), a.elo) AS elo,
+           a.games_played, a.created_at_unix_ms,
+           (SELECT COUNT(*) FROM bots b
+             WHERE b.owner_user_id = a.user_id AND b.retired_at_unix_ms IS NULL)
+             AS bot_count,
+           a.discord_user_id <> '' AS discord_verified,
+           (SELECT MAX(played) FROM (
+               SELECT MAX(g.finished_at_unix_ms) AS played FROM game_history g
+                WHERE g.red_player_id = a.user_id
+               UNION ALL
+               SELECT MAX(g.finished_at_unix_ms) FROM game_history g
+                WHERE g.blue_player_id = a.user_id
+           )) AS last_played_at
+    FROM accounts a
+    WHERE ` + where + `
+)
+ORDER BY ` + filter.Sort.orderClause() + `
 LIMIT ? OFFSET ?
-`, pattern, pattern, strings.TrimSpace(query), limit, offset)
+`
+	rows, err := store.db.QueryContext(ctx, query, append(arguments, limit, offset)...)
 	if err != nil {
-		return nil, fmt.Errorf("search accounts: %w", err)
+		return AccountPage{}, fmt.Errorf("search accounts: %w", err)
 	}
 	defer rows.Close()
 
-	summaries := make([]AccountSummary, 0, limit)
+	page.Accounts = make([]AccountSummary, 0, limit)
 	for rows.Next() {
 		var summary AccountSummary
+		var lastPlayed sql.NullInt64
 		if err := rows.Scan(
 			&summary.UserID, &summary.Kind, &summary.Username, &summary.Discord,
 			&summary.Title, &summary.Registered, &summary.IsAdmin, &summary.Disabled,
 			&summary.Elo, &summary.GamesPlayed, &summary.CreatedAtMs, &summary.BotCount,
+			&summary.DiscordVerified, &lastPlayed,
 		); err != nil {
-			return nil, fmt.Errorf("read account row: %w", err)
+			return AccountPage{}, fmt.Errorf("read account row: %w", err)
 		}
-		summaries = append(summaries, summary)
+		if lastPlayed.Valid {
+			summary.LastPlayedAtMs = &lastPlayed.Int64
+		}
+		page.Accounts = append(page.Accounts, summary)
 	}
-	return summaries, rows.Err()
+	return page, rows.Err()
+}
+
+// conditions builds the WHERE for a filter, and the arguments for it.
+//
+// One function for the count and the page, because two copies of a filter is
+// how a browser ends up reporting a total that does not match the rows under
+// it.
+func (filter AccountFilter) conditions() (string, []any) {
+	clauses := []string{"1 = 1"}
+	arguments := make([]any, 0, 8)
+
+	if query := strings.TrimSpace(filter.Query); query != "" {
+		pattern := "%" + strings.ToLower(query) + "%"
+		clauses = append(clauses, "(LOWER(a.username) LIKE ? OR a.user_id = ?)")
+		arguments = append(arguments, pattern, query)
+	}
+	if filter.Registered != nil {
+		if *filter.Registered {
+			clauses = append(clauses, registeredSQL("a"))
+		} else {
+			clauses = append(clauses, "NOT "+registeredSQL("a"))
+		}
+	}
+	if filter.DiscordLinked != nil {
+		if *filter.DiscordLinked {
+			clauses = append(clauses, "a.discord_user_id <> ''")
+		} else {
+			clauses = append(clauses, "a.discord_user_id = ''")
+		}
+	}
+	if filter.Disabled != nil {
+		clauses = append(clauses, "a.disabled = ?")
+		arguments = append(arguments, boolToInt(*filter.Disabled))
+	}
+	if filter.IsAdmin != nil {
+		clauses = append(clauses, "a.is_admin = ?")
+		arguments = append(arguments, boolToInt(*filter.IsAdmin))
+	}
+	if filter.Kind != "" {
+		clauses = append(clauses, "a.kind = ?")
+		arguments = append(arguments, filter.Kind)
+	}
+	if filter.MinGames > 0 {
+		clauses = append(clauses, "a.games_played >= ?")
+		arguments = append(arguments, filter.MinGames)
+	}
+	if filter.ActiveSinceUnixMs > 0 {
+		// Two EXISTS rather than a comparison against the last_played_at column
+		// beside it, and rather than one EXISTS with an OR inside. Both of the
+		// alternatives lose the indexes: `game_history` is indexed on
+		// (red_player_id, finished_at_unix_ms DESC) and on the blue pair, and an
+		// OR across two columns cannot use either. This way each half is an
+		// index seek, which is what keeps "played in the last hour" cheap on a
+		// table of every game ever played.
+		clauses = append(clauses, `(
+            EXISTS (SELECT 1 FROM game_history g
+                     WHERE g.red_player_id = a.user_id
+                       AND g.finished_at_unix_ms >= ?)
+         OR EXISTS (SELECT 1 FROM game_history g
+                     WHERE g.blue_player_id = a.user_id
+                       AND g.finished_at_unix_ms >= ?)
+        )`)
+		arguments = append(arguments, filter.ActiveSinceUnixMs, filter.ActiveSinceUnixMs)
+	}
+	return strings.Join(clauses, " AND "), arguments
 }
 
 // SetAccountDisabled switches an account off or back on.

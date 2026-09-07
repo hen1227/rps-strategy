@@ -23,10 +23,11 @@ var script string
 //go:embed example_engine.py
 var exampleEngine string
 
-// The bot guide, served so the website can show exactly what the repository
+// The documents the website serves, so it can show exactly what the repository
 // documents. go:embed cannot reach outside this directory, so these are copies
-// of docs/bots.md and docs/rpsi.md — and `docs_test.go` fails the build if they
-// stop matching, which is what keeps "a copy" from becoming "a different one".
+// of docs/bots.md, docs/rpsi.md and docs/notation.md — and `docs_test.go` fails
+// the build if they stop matching, which is what keeps "a copy" from becoming
+// "a different one".
 //
 //go:embed bots.md
 var guideMarkdown string
@@ -34,12 +35,24 @@ var guideMarkdown string
 //go:embed rpsi.md
 var protocolMarkdown string
 
+//go:embed notation.md
+var notationMarkdown string
+
 // MinimumVersion is the oldest client this server will talk to.
 //
 // Kept separate from the current version so that a release which only adds
 // something optional does not lock out everyone who has not re-downloaded. It
-// moves only when a change makes older clients genuinely unable to play.
-const MinimumVersion = "1.0"
+// moves when a change makes an older client genuinely unable to play, and 1.4
+// is the first move it has made.
+//
+// What makes 1.4 that kind of change is the rules underneath the notation: the
+// board's orientation and two win conditions moved on 3 September 2026, and 1.4
+// is the client that prints which rules its engine is playing under and says
+// when they are not the ones that machine last saw. An engine written against
+// the old board does not fail on connect — it plays legal moves into a position
+// it has misread, and loses games its author then diagnoses from the outside.
+// Refusing the older clients is how that is said once, at the door, instead.
+const MinimumVersion = "1.4"
 
 // versionPattern reads the version out of the script itself.
 //
@@ -72,9 +85,11 @@ func ExampleEngine() (string, string) {
 	return exampleEngine, digest(exampleEngine)
 }
 
-// Guide is the bot-author README; Protocol is the full RPSI reference.
+// Guide is the bot-author README, Protocol the full RPSI reference, and
+// Notation how a stored game is written down.
 func Guide() string    { return guideMarkdown }
 func Protocol() string { return protocolMarkdown }
+func Notation() string { return notationMarkdown }
 
 // CompareVersions orders two dotted numeric versions, returning -1, 0, or 1.
 //

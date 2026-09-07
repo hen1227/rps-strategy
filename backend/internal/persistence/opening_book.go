@@ -14,7 +14,15 @@ import (
 var (
 	ErrOpeningBookNotFound = errors.New("opening book not found")
 	ErrOpeningNameNotFound = errors.New("opening name suggestion not found")
-	ErrInvalidOpeningName  = errors.New("invalid opening name")
+	// ErrOpeningLineNamed means somebody got there first. A player name is
+	// published on the spot rather than queued, so the second person to name a
+	// line is told it has one instead of quietly overwriting it -- a name that
+	// changes under the people already using it is worse than a name they
+	// disagree with, and disagreeing is what suggestions are for.
+	ErrOpeningLineNamed = errors.New("opening line already named")
+	// ErrOpeningLineTooLong means the line runs past PlayerOpeningNameLimit.
+	ErrOpeningLineTooLong = errors.New("opening line too long to name")
+	ErrInvalidOpeningName = errors.New("invalid opening name")
 )
 
 // OpeningBookDocument is the engine-produced artifact plus its import time.
@@ -31,7 +39,35 @@ type OpeningName struct {
 	Line            []string `json:"line"`
 	Name            string   `json:"name"`
 	UpdatedAtUnixMs int64    `json:"updatedAtUnixMs"`
+	// Source is OpeningNameCurator or OpeningNamePlayer.
+	Source string `json:"source"`
+	// Author is who published it, when a signed-in player did. Empty for a
+	// curator name and for a name published before authorship was recorded.
+	AuthorUserID   string `json:"authorUserId,omitempty"`
+	AuthorUsername string `json:"authorUsername,omitempty"`
 }
+
+// Who named a line.
+//
+// The distinction is not decoration: a curator name is the book's own, shipped
+// with the page and shown by default, while a player name is remembered and
+// found by looking for it. Storing the source is what lets one screen show
+// both without implying the engine vouched for either.
+const (
+	// OpeningNameCurator is a name published from the curator screen.
+	OpeningNameCurator = "curator"
+	// OpeningNamePlayer is a name a player published themselves.
+	OpeningNamePlayer = "player"
+)
+
+// PlayerOpeningNameLimit is how many plies of a line a player may name.
+//
+// Where "book" ends is genuinely unclear -- there is no ply at which a game
+// stops being an opening -- so this does not try to find that line. It picks a
+// length at which a name is still describing an idea rather than a game: three
+// moves each. Past it the honest answer is that the position has no name,
+// which is what the screen says.
+const PlayerOpeningNameLimit = 6
 
 type OpeningNameSuggestion struct {
 	SuggestionID    int64    `json:"suggestionId"`
@@ -55,6 +91,12 @@ CREATE TABLE IF NOT EXISTS opening_names (
     line_json TEXT NOT NULL,
     name TEXT NOT NULL,
     updated_at_unix_ms INTEGER NOT NULL,
+    -- No CHECK on source: ADD COLUMN cannot carry one, so a database migrated
+    -- into these columns could not satisfy it and the two would disagree
+    -- about what the schema is.
+    source TEXT NOT NULL DEFAULT 'curator',
+    author_user_id TEXT NOT NULL DEFAULT '',
+    author_username TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (mode_id, line_key)
 );
 
@@ -72,9 +114,36 @@ CREATE INDEX IF NOT EXISTS opening_names_mode_idx
     ON opening_names(mode_id, line_key);
 CREATE INDEX IF NOT EXISTS opening_suggestions_mode_idx
     ON opening_name_suggestions(mode_id, created_at_unix_ms, suggestion_id);
+-- The browse index is ordered by recency within a mode, because "what have
+-- people been naming" is the question that screen exists to answer.
+CREATE INDEX IF NOT EXISTS opening_names_recent_idx
+    ON opening_names(mode_id, updated_at_unix_ms DESC);
 `
 	if _, err := store.db.ExecContext(ctx, schema); err != nil {
 		return fmt.Errorf("migrate opening books: %w", err)
+	}
+	// CREATE TABLE IF NOT EXISTS does nothing to a table that already exists,
+	// so a database from before players could name lines needs the columns
+	// adding. Every name already in it was published by a curator, which is
+	// what the default says.
+	columns, err := tableColumns(ctx, store.db, "opening_names")
+	if err != nil {
+		return fmt.Errorf("inspect opening names schema: %w", err)
+	}
+	for _, migration := range []struct{ name, definition string }{
+		{"source", "TEXT NOT NULL DEFAULT 'curator'"},
+		{"author_user_id", "TEXT NOT NULL DEFAULT ''"},
+		{"author_username", "TEXT NOT NULL DEFAULT ''"},
+	} {
+		if columns[migration.name] {
+			continue
+		}
+		if _, err := store.db.ExecContext(ctx, fmt.Sprintf(
+			"ALTER TABLE opening_names ADD COLUMN %s %s",
+			migration.name, migration.definition,
+		)); err != nil {
+			return fmt.Errorf("add opening_names.%s: %w", migration.name, err)
+		}
 	}
 	return nil
 }
@@ -188,13 +257,92 @@ func (store *Store) SetOpeningName(
 		return OpeningName{}, fmt.Errorf("set opening name: %w", err)
 	}
 	defer tx.Rollback()
-	if err := publishOpeningName(ctx, tx, modeID, key, encoded, name, now); err != nil {
+	if err := publishOpeningName(
+		ctx, tx, modeID, key, encoded, name, now, OpeningNameCurator, "", "",
+	); err != nil {
 		return OpeningName{}, err
 	}
 	if err := tx.Commit(); err != nil {
 		return OpeningName{}, fmt.Errorf("commit opening name: %w", err)
 	}
-	return OpeningName{ModeID: modeID, Line: normalized, Name: name, UpdatedAtUnixMs: now}, nil
+	return OpeningName{
+		ModeID: modeID, Line: normalized, Name: name,
+		UpdatedAtUnixMs: now, Source: OpeningNameCurator,
+	}, nil
+}
+
+// PublishPlayerOpeningName is a player naming a line, published on the spot.
+//
+// No queue, deliberately. A line nobody has named shows "suggest a name", and
+// the honest answer to somebody who then types one is to use it -- a proposal
+// that sits invisible until a curator happens to look is a question the site
+// asked and then ignored. What that costs is a name nobody vetted, which is
+// why the source travels with it, the author is recorded, and a curator can
+// take it off again.
+//
+// Two rules keep this from swallowing the book. The line may not run past
+// PlayerOpeningNameLimit, and a line that already has a name is refused rather
+// than overwritten: first to name it wins, and everybody after them is
+// offering an alternative, which is what a suggestion is.
+func (store *Store) PublishPlayerOpeningName(
+	ctx context.Context,
+	modeID string,
+	line []string,
+	name string,
+	authorUserID string,
+	authorUsername string,
+) (OpeningName, error) {
+	normalized, key, encoded, err := normalizeOpeningLine(line)
+	if err != nil {
+		return OpeningName{}, err
+	}
+	if len(normalized) > PlayerOpeningNameLimit {
+		return OpeningName{}, fmt.Errorf(
+			"%w: name the first %d moves or fewer",
+			ErrOpeningLineTooLong, PlayerOpeningNameLimit,
+		)
+	}
+	name, err = normalizeOpeningName(name)
+	if err != nil {
+		return OpeningName{}, err
+	}
+	modeID = strings.TrimSpace(modeID)
+	now := time.Now().UnixMilli()
+
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return OpeningName{}, fmt.Errorf("name opening: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Inside the transaction, so two people naming the same line in the same
+	// second cannot both be told they were first.
+	var existing string
+	err = tx.QueryRowContext(ctx, `
+SELECT name FROM opening_names WHERE mode_id = ? AND line_key = ?
+`, modeID, key).Scan(&existing)
+	switch {
+	case err == nil:
+		return OpeningName{}, fmt.Errorf("%w: it is called %q", ErrOpeningLineNamed, existing)
+	case !errors.Is(err, sql.ErrNoRows):
+		return OpeningName{}, fmt.Errorf("name opening: %w", err)
+	}
+
+	if err := publishOpeningName(
+		ctx, tx, modeID, key, encoded, name, now,
+		OpeningNamePlayer, strings.TrimSpace(authorUserID), strings.TrimSpace(authorUsername),
+	); err != nil {
+		return OpeningName{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return OpeningName{}, fmt.Errorf("commit opening name: %w", err)
+	}
+	return OpeningName{
+		ModeID: modeID, Line: normalized, Name: name, UpdatedAtUnixMs: now,
+		Source:         OpeningNamePlayer,
+		AuthorUserID:   strings.TrimSpace(authorUserID),
+		AuthorUsername: strings.TrimSpace(authorUsername),
+	}, nil
 }
 
 // publishOpeningName is the one place a name becomes published, shared by
@@ -204,15 +352,22 @@ func publishOpeningName(
 	tx *sql.Tx,
 	modeID, key, encoded, name string,
 	now int64,
+	source, authorUserID, authorUsername string,
 ) error {
 	if _, err := tx.ExecContext(ctx, `
-INSERT INTO opening_names (mode_id, line_key, line_json, name, updated_at_unix_ms)
-VALUES (?, ?, ?, ?, ?)
+INSERT INTO opening_names (
+    mode_id, line_key, line_json, name, updated_at_unix_ms,
+    source, author_user_id, author_username
+)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(mode_id, line_key) DO UPDATE SET
     line_json = excluded.line_json,
     name = excluded.name,
-    updated_at_unix_ms = excluded.updated_at_unix_ms
-`, modeID, key, encoded, name, now); err != nil {
+    updated_at_unix_ms = excluded.updated_at_unix_ms,
+    source = excluded.source,
+    author_user_id = excluded.author_user_id,
+    author_username = excluded.author_username
+`, modeID, key, encoded, name, now, source, authorUserID, authorUsername); err != nil {
 		return fmt.Errorf("publish opening name: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `
@@ -265,7 +420,7 @@ DELETE FROM opening_name_suggestions WHERE mode_id = ? AND suggestion_id = ?
 
 func (store *Store) OpeningNames(ctx context.Context, modeID string) ([]OpeningName, error) {
 	rows, err := store.db.QueryContext(ctx, `
-SELECT line_json, name, updated_at_unix_ms
+SELECT line_json, name, updated_at_unix_ms, source, author_user_id, author_username
 FROM opening_names
 WHERE mode_id = ?
 ORDER BY length(line_key), line_key
@@ -279,7 +434,10 @@ ORDER BY length(line_key), line_key
 		var encoded string
 		var opening OpeningName
 		opening.ModeID = strings.TrimSpace(modeID)
-		if err := rows.Scan(&encoded, &opening.Name, &opening.UpdatedAtUnixMs); err != nil {
+		if err := rows.Scan(
+			&encoded, &opening.Name, &opening.UpdatedAtUnixMs,
+			&opening.Source, &opening.AuthorUserID, &opening.AuthorUsername,
+		); err != nil {
 			return nil, fmt.Errorf("scan opening name: %w", err)
 		}
 		if err := json.Unmarshal([]byte(encoded), &opening.Line); err != nil {
@@ -401,15 +559,21 @@ WHERE mode_id = ? AND suggestion_id = ?
 		return OpeningName{}, err
 	}
 	now := time.Now().UnixMilli()
+	// A curator source, even though somebody else wrote the words: the source
+	// records who vouched for the name, and approving is exactly that act.
 	if err := publishOpeningName(
 		ctx, tx, strings.TrimSpace(modeID), key, normalizedJSON, name, now,
+		OpeningNameCurator, "", "",
 	); err != nil {
 		return OpeningName{}, err
 	}
 	if err := tx.Commit(); err != nil {
 		return OpeningName{}, fmt.Errorf("commit opening name: %w", err)
 	}
-	return OpeningName{ModeID: strings.TrimSpace(modeID), Line: line, Name: name, UpdatedAtUnixMs: now}, nil
+	return OpeningName{
+		ModeID: strings.TrimSpace(modeID), Line: line, Name: name,
+		UpdatedAtUnixMs: now, Source: OpeningNameCurator,
+	}, nil
 }
 
 // RekeyOpeningLines rewrites stored lines into the caller's canonical form.
@@ -458,14 +622,26 @@ WHERE mode_id = ? ORDER BY updated_at_unix_ms DESC, line_key
 		// having been named back when the two looked like two openings. Only
 		// one of them can survive that, and the guard below says which -- the
 		// decision somebody made most recently.
+		// Every column travels, provenance included. Leaving source and author
+		// off the select does not blank them -- it takes their *defaults*, so
+		// a player's name silently became the book's own and lost its author
+		// the first time the server started after they wrote it.
 		if _, err := tx.ExecContext(ctx, `
-INSERT INTO opening_names (mode_id, line_key, line_json, name, updated_at_unix_ms)
-SELECT mode_id, ?, ?, name, updated_at_unix_ms FROM opening_names
+INSERT INTO opening_names (
+    mode_id, line_key, line_json, name, updated_at_unix_ms,
+    source, author_user_id, author_username
+)
+SELECT mode_id, ?, ?, name, updated_at_unix_ms,
+       source, author_user_id, author_username
+FROM opening_names
 WHERE mode_id = ? AND line_key = ?
 ON CONFLICT(mode_id, line_key) DO UPDATE SET
     line_json = excluded.line_json,
     name = excluded.name,
-    updated_at_unix_ms = excluded.updated_at_unix_ms
+    updated_at_unix_ms = excluded.updated_at_unix_ms,
+    source = excluded.source,
+    author_user_id = excluded.author_user_id,
+    author_username = excluded.author_username
 WHERE excluded.updated_at_unix_ms > opening_names.updated_at_unix_ms
 `, key, encoded, modeID, row.key); err != nil {
 			return 0, fmt.Errorf("rekey opening name: %w", err)
@@ -574,4 +750,139 @@ func canonicalOpeningKey(
 		return "", "", false
 	}
 	return key, encoded, true
+}
+
+// OpeningNameFilter narrows the browse index.
+type OpeningNameFilter struct {
+	ModeID string
+	// Source restricts to OpeningNameCurator or OpeningNamePlayer. Empty means
+	// both, which is what "every named opening" asks for.
+	Source string
+	// Query matches the name, case-insensitively, anywhere in it. It
+	// deliberately does not match the line: somebody searching "stone" wants
+	// the openings called that, and somebody who knows the moves has the
+	// explorer.
+	Query  string
+	Limit  int
+	Offset int
+}
+
+// OpeningNamePage is one screen of the browse index, with the total behind it.
+type OpeningNamePage struct {
+	Names []OpeningName `json:"names"`
+	// Total is how many names match the filter, not how many are on this page,
+	// so a reader can be told what they are paging through.
+	Total int `json:"total"`
+	// Curator and Player count the whole mode regardless of the filter. They
+	// are what lets a screen say "42 book names, 380 named by players" while
+	// showing one of the two.
+	Curator int `json:"curator"`
+	Player  int `json:"player"`
+}
+
+// BrowseOpeningNames pages the naming layer, newest first.
+//
+// This is the screen that makes a player name findable. The openings page
+// leads with the engine's certified lines and does not list player names
+// beside them -- an unvetted name shown next to a certified opening reads as
+// though the engine had something to do with it. But a name nobody can find
+// is a name nobody will use, so every one of them is here.
+func (store *Store) BrowseOpeningNames(
+	ctx context.Context,
+	filter OpeningNameFilter,
+) (OpeningNamePage, error) {
+	modeID := strings.TrimSpace(filter.ModeID)
+	page := OpeningNamePage{Names: make([]OpeningName, 0)}
+
+	// The two totals are the whole mode, so they do not move as somebody types
+	// in the search box.
+	rows, err := store.db.QueryContext(ctx, `
+SELECT source, COUNT(*) FROM opening_names WHERE mode_id = ? GROUP BY source
+`, modeID)
+	if err != nil {
+		return OpeningNamePage{}, fmt.Errorf("count opening names: %w", err)
+	}
+	for rows.Next() {
+		var source string
+		var count int
+		if err := rows.Scan(&source, &count); err != nil {
+			rows.Close()
+			return OpeningNamePage{}, fmt.Errorf("scan opening name count: %w", err)
+		}
+		if source == OpeningNamePlayer {
+			page.Player = count
+		} else {
+			page.Curator = count
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return OpeningNamePage{}, fmt.Errorf("count opening names: %w", err)
+	}
+
+	// LIKE with an escaped pattern rather than a bare one: a name may contain
+	// `%` or `_`, and a search for it should find that name rather than
+	// everything.
+	where := []string{"mode_id = ?"}
+	arguments := []any{modeID}
+	if filter.Source == OpeningNameCurator || filter.Source == OpeningNamePlayer {
+		where = append(where, "source = ?")
+		arguments = append(arguments, filter.Source)
+	}
+	if query := strings.TrimSpace(filter.Query); query != "" {
+		where = append(where, `name LIKE ? ESCAPE '\'`)
+		arguments = append(arguments, "%"+escapeLikePattern(query)+"%")
+	}
+	condition := strings.Join(where, " AND ")
+
+	if err := store.db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM opening_names WHERE "+condition, arguments...,
+	).Scan(&page.Total); err != nil {
+		return OpeningNamePage{}, fmt.Errorf("count matching opening names: %w", err)
+	}
+
+	limit := filter.Limit
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	offset := filter.Offset
+	if offset < 0 {
+		offset = 0
+	}
+	listed, err := store.db.QueryContext(ctx,
+		`SELECT line_json, name, updated_at_unix_ms, source, author_user_id, author_username
+FROM opening_names WHERE `+condition+`
+ORDER BY updated_at_unix_ms DESC, line_key
+LIMIT ? OFFSET ?`,
+		append(arguments, limit, offset)...,
+	)
+	if err != nil {
+		return OpeningNamePage{}, fmt.Errorf("browse opening names: %w", err)
+	}
+	defer listed.Close()
+	for listed.Next() {
+		var encoded string
+		opening := OpeningName{ModeID: modeID}
+		if err := listed.Scan(
+			&encoded, &opening.Name, &opening.UpdatedAtUnixMs,
+			&opening.Source, &opening.AuthorUserID, &opening.AuthorUsername,
+		); err != nil {
+			return OpeningNamePage{}, fmt.Errorf("scan opening name: %w", err)
+		}
+		if err := json.Unmarshal([]byte(encoded), &opening.Line); err != nil {
+			return OpeningNamePage{}, fmt.Errorf("decode opening line: %w", err)
+		}
+		page.Names = append(page.Names, opening)
+	}
+	if err := listed.Err(); err != nil {
+		return OpeningNamePage{}, fmt.Errorf("browse opening names: %w", err)
+	}
+	return page, nil
+}
+
+// escapeLikePattern makes a user's text safe to drop inside a LIKE pattern.
+func escapeLikePattern(text string) string {
+	replaced := strings.ReplaceAll(text, `\`, `\\`)
+	replaced = strings.ReplaceAll(replaced, "%", `\%`)
+	return strings.ReplaceAll(replaced, "_", `\_`)
 }

@@ -126,7 +126,7 @@ func (setup GameSetup) ValidateForMode(mode GameMode) error {
 	if err := setup.Validate(); err != nil {
 		return err
 	}
-	if err := ValidatePositionFor(mode, setup.StartingPosition); err != nil {
+	if err := setup.StartingPosition.Validate(); err != nil {
 		return err
 	}
 	definition := mode.Definition()

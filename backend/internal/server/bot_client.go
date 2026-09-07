@@ -37,6 +37,11 @@ const (
 	// declared faulty when it is merely about to lose on time. Losing on time
 	// is a game result; being declared faulty is not.
 	botMinimumMoveTimeout = 10 * time.Second
+	// botMaxConcurrentGames is the most slots one bot may open, whatever its
+	// config file says. A ceiling rather than a guess at what a machine can do:
+	// the point of the setting is that its owner knows, and the point of the
+	// ceiling is that a bot cannot take an unbounded share of the lobby.
+	botMaxConcurrentGames = 5
 )
 
 // botClient is the engine session hanging off one connection.
@@ -73,8 +78,55 @@ type botClient struct {
 	iconWarning string
 	// drain is the graceful shutdown this connection is under, or nil. Held
 	// here rather than in the registry because it lasts exactly as long as the
-	// socket does — see bot_shutdown.go.
+	// socket does — see bot_shutdown.go. Set on every connection of a bot at
+	// once: a drain is something the bot is doing, not something one of its
+	// sockets is doing.
 	drain *botDrain
+	// sessionID is the process on the far end, and slot is which of its
+	// connections this is. One rpsbot.py opens `maxGames` sockets sharing a
+	// session id; a socket arriving with a different one is a second process
+	// holding the same token, which displaces the first. See registerBot.
+	sessionID string
+	slot      int
+	maxGames  int
+	// reservedBy is a bot-versus-bot series holding this connection between its
+	// pairs, or empty. A series is a run of games with the same two engines, so
+	// the slot it is using has to stay its own across the second or so between
+	// one game ending and the next starting — otherwise a challenge arriving in
+	// that gap takes the slot and the series aborts mid-run.
+	reservedBy string
+}
+
+// sessionSeat is whoever is holding one colour of a game right now, and nil for
+// a seat standing empty.
+//
+// Read under the lock, which is not a formality here. The three places an
+// engine is spoken to about a game all resolve their seat through this or
+// through sessionSeats, and the write they race is the one this whole file is
+// about: a socket dropping mid-game sets the seat to nil under server.mu, and a
+// reconnect fills it in again. Read unsynchronised, promptBot could hand the
+// position to a socket that has just gone — and then wait out the whole move
+// timeout before calling the engine faulty, turning a reconnect that would have
+// worked into a lost game.
+func (server *Server) sessionSeat(session *GameSession, color game.PlayerColor) *Client {
+	server.mu.RLock()
+	defer server.mu.RUnlock()
+	switch color {
+	case game.Red:
+		return session.redClient
+	case game.Blue:
+		return session.blueClient
+	default:
+		return nil
+	}
+}
+
+// sessionSeats is both seats of a game, for the callers that speak to whichever
+// of them is an engine.
+func (server *Server) sessionSeats(session *GameSession) []*Client {
+	server.mu.RLock()
+	defer server.mu.RUnlock()
+	return []*Client{session.redClient, session.blueClient}
 }
 
 // botExchange is one outstanding question to an engine.
@@ -117,6 +169,11 @@ type botReadyMessage struct {
 	// IconWarning says why the icon that arrived was not used. A bot with an
 	// unreadable picture is still a bot, so this is printed rather than fatal.
 	IconWarning string `json:"iconWarning,omitempty"`
+	// Rules is the day each mode this engine plays was last republished, keyed
+	// by mode. The client prints it on every connect and says so when it is not
+	// the date that machine last saw — see game.ModeDefinition.RulesPublished
+	// for why an engine has to be told rather than left to notice.
+	Rules map[game.ModeID]string `json:"rules,omitempty"`
 }
 
 type clientUpdate struct {
@@ -129,26 +186,61 @@ type clientUpdate struct {
 // Distinct from the long-standing botPlayerCount, which counts *people*
 // practising against browser bots — nearly the opposite thing.
 type BotPresence struct {
-	BotID         string              `json:"botId"`
-	UserID        string              `json:"userId"`
-	Name          string              `json:"name"`
-	OwnerUsername string              `json:"ownerUsername,omitempty"`
-	Description   string              `json:"description,omitempty"`
-	EngineName    string              `json:"engineName,omitempty"`
-	EngineAuthor  string              `json:"engineAuthor,omitempty"`
-	Modes         []game.ModeID       `json:"modes,omitempty"`
-	Elo           int                 `json:"elo"`
-	ModeRatings   map[game.ModeID]int `json:"modeRatings,omitempty"`
+	BotID  string `json:"botId"`
+	UserID string `json:"userId"`
+	Name   string `json:"name"`
+	// OwnerUserID is the account an engine is registered to, which the lobby
+	// needs for one question: whether two engines belong to the same person. A
+	// series between two of one owner's bots is casual (see sameBotOwner in
+	// bot_series.go), and the form that starts one should be able to say so
+	// before it is pressed rather than after.
+	//
+	// Published as the id rather than as something derived, because it is
+	// already public: `GET /api/bots` has always served ownerUserId on every
+	// registered engine, unauthenticated. A grouping key or a per-viewer
+	// "yours" flag would be hiding, from this one route, something the route
+	// next to it hands out — and a per-viewer field cannot work here anyway,
+	// since the roster is one payload broadcast to every connected client.
+	OwnerUserID  string              `json:"ownerUserId,omitempty"`
+	Description  string              `json:"description,omitempty"`
+	EngineName   string              `json:"engineName,omitempty"`
+	EngineAuthor string              `json:"engineAuthor,omitempty"`
+	Modes        []game.ModeID       `json:"modes,omitempty"`
+	Elo          int                 `json:"elo"`
+	ModeRatings  map[game.ModeID]int `json:"modeRatings,omitempty"`
 	// IconSHA256 is empty for a bot with no picture, which is every bot whose
 	// owner has not given it one. See persistence.Bot.IconSHA256.
-	IconSHA256      string `json:"iconSha256,omitempty"`
-	Busy            bool   `json:"busy"`
+	IconSHA256 string `json:"iconSha256,omitempty"`
+	// ReservedFor names the tournament holding this engine, and is empty for
+	// the great majority of them. Published rather than merely enforced, for
+	// the reason BotBenchState gives: a bot that is unavailable and healthy
+	// needs words that say so, or the lobby ends up describing a working engine
+	// as broken. See bot_reserve.go.
+	ReservedFor string `json:"reservedFor,omitempty"`
+	// Busy is the question every caller actually has: is there anywhere to put
+	// a game. A bot allowed more than one at a time is busy only once all of
+	// its slots are taken — which is why ActiveGames and Slots are published
+	// beside it, so the lobby can say "playing 2 of 3" rather than choosing
+	// between "playing" and "free" for a bot that is both.
+	Busy        bool `json:"busy"`
+	ActiveGames int  `json:"activeGames"`
+	Slots       int  `json:"slots"`
+
 	AllowPublicPlay bool   `json:"allowPublicPlay"`
 	ClientVersion   string `json:"clientVersion,omitempty"`
 	// Draining is an engine on its way out: it is playing what it already owes
 	// and will take nothing new. Published rather than merely enforced, so the
 	// lobby says "shutting down" instead of offering a button that refuses.
 	Draining bool `json:"draining,omitempty"`
+	// Benched is the same unavailability for a completely different reason: a
+	// scheduled window in which no engine takes a game, which nobody asked for
+	// and which ends by itself. See bot_bench.go.
+	//
+	// A separate field rather than Draining, because the two need different
+	// words: an engine that is shutting down is going away, and one that is
+	// benched is coming back at six. Every offer path treats them alike; only
+	// the lobby tells them apart.
+	Benched bool `json:"benched,omitempty"`
 }
 
 // acceptBotConnection claims or recognises a bot from its token and seats the
@@ -175,6 +267,12 @@ func (server *Server) acceptBotConnection(
 	upgradeAvailable, mustUpgrade := botclient.Outdated(message.ClientVersion)
 	if mustUpgrade {
 		reject(botclient.UpgradeMessage(botClientDownloadURL(publicBase)))
+		return
+	}
+
+	maxGames, refusal := botSlotRequest(message)
+	if refusal != "" {
+		reject(refusal)
 		return
 	}
 
@@ -233,6 +331,9 @@ func (server *Server) acceptBotConnection(
 			upgradeAvailable: upgradeAvailable,
 			publicBase:       publicBase,
 			iconWarning:      iconWarning,
+			sessionID:        message.SessionID,
+			slot:             message.Slot,
+			maxGames:         maxGames,
 		},
 	}
 	server.hub.Register(client)
@@ -246,6 +347,30 @@ func (server *Server) acceptBotConnection(
 	// sits in the buffer until something else wakes it.
 	server.beginBotHandshake(client)
 	client.readPump()
+}
+
+// botSlotRequest reads how many games at once a client says its machine can
+// afford, and checks that this connection is one of that many slots.
+//
+// Absent on every client before 1.4, which means the single slot they have
+// always had. Out of range is refused rather than quietly capped: a client that
+// asked for seven slots opens seven sockets, and five of them working is a
+// stranger thing to debug than being told the number is wrong.
+func botSlotRequest(message ClientMessage) (maxGames int, refusal string) {
+	maxGames = message.MaxGames
+	if maxGames < 1 {
+		maxGames = 1
+	}
+	if maxGames > botMaxConcurrentGames {
+		return 0, "this bot asked to play " + strconv.Itoa(maxGames) +
+			" games at once; the most any bot may play is " +
+			strconv.Itoa(botMaxConcurrentGames)
+	}
+	if message.Slot < 0 || message.Slot >= maxGames {
+		return 0, "this bot opened slot " + strconv.Itoa(message.Slot+1) +
+			" of " + strconv.Itoa(maxGames)
+	}
+	return maxGames, ""
 }
 
 // applyBotIcon stores or removes the icon a client asserted, updating the
@@ -301,85 +426,263 @@ func (server *Server) applyBotIcon(
 	return ""
 }
 
-// registerBot puts a connected bot in the directory, displacing any earlier
-// connection holding the same bot id.
+// registerBot puts a connected bot in the directory, displacing whatever was
+// holding the slot it claims.
 //
-// Two processes running one token is a configuration mistake, usually a
-// forgotten terminal. Displacing follows what a reconnecting player already
-// does and beats the alternative, which is two engines answering for one bot.
+// A bot is a set of connections rather than one, because its owner may have
+// said it can play up to five games at once: rpsbot.py then opens one socket
+// per slot, each with its own engine subprocess, and each still playing one
+// game at a time. Everything downstream of here is unchanged by that — a slot
+// is exactly the bot connection the server has always had.
+//
+// Which is why the key is (session, slot) rather than the bot id. The server
+// has to tell one process's third socket, which is welcome, from a second
+// process holding the same token, which is a configuration mistake — usually a
+// forgotten terminal. The second case displaces, following what a reconnecting
+// player already does and beating the alternative, which is two engines
+// answering for one bot. A client that sends no session id at all — every one
+// before 1.4 — has one slot and displaces, exactly as it always did.
 func (server *Server) registerBot(client *Client) {
+	bot := client.bot
 	server.mu.Lock()
-	previous := server.bots[client.bot.botID]
-	server.bots[client.bot.botID] = client
+	existing := server.bots[bot.botID]
+	kept := make([]*Client, 0, len(existing)+1)
+	displaced := make([]*Client, 0, len(existing))
+	for _, other := range existing {
+		switch {
+		case other == client:
+			continue
+		case other.bot.sessionID != bot.sessionID:
+			// Another process, holding this token from somewhere else.
+			displaced = append(displaced, other)
+		case other.bot.slot == bot.slot:
+			// This process, reconnecting a slot whose old socket the server has
+			// not noticed is gone.
+			displaced = append(displaced, other)
+		default:
+			kept = append(kept, other)
+		}
+	}
+	server.bots[bot.botID] = insertBotConnection(kept, client)
 	server.mu.Unlock()
 
-	if previous != nil && previous != client {
-		previous.Send(ServerMessage{
+	for _, other := range displaced {
+		other.Send(ServerMessage{
 			Type:    "bot_rejected",
 			Message: "this bot connected from somewhere else",
 		})
-		previous.close()
+		other.close()
 	}
 	server.broadcastBots()
+}
+
+// insertBotConnection returns the slice with one connection added, in slot
+// order — so the roster, and anything else that walks a bot's sockets, sees
+// them in the order their owner would number them.
+func insertBotConnection(connections []*Client, client *Client) []*Client {
+	at := len(connections)
+	for index, other := range connections {
+		if other.bot.slot > client.bot.slot {
+			at = index
+			break
+		}
+	}
+	connections = append(connections, nil)
+	copy(connections[at+1:], connections[at:])
+	connections[at] = client
+	return connections
 }
 
 func (server *Server) unregisterBot(client *Client) {
 	if !client.isBot() {
 		return
 	}
-	// A series with one engine left in it is not a series.
-	server.abortSeriesForBot(client.bot.botID)
+	// Nothing here ends a run, and that is the change worth stating. A dropped
+	// socket used to abort every series the *bot* was in, immediately, which
+	// was wrong three ways over: it killed a run because a spare slot with no
+	// game on it hiccuped, it killed a run halfway through a pair — the one
+	// place the pairing rule exists to stop it stopping — and, worst, it killed
+	// a run on the way *back*, because a reconnecting slot displaces its own
+	// stale socket and the close that follows landed here.
+	//
+	// An engine that is really gone is still not a series, and it still ends
+	// one. It just ends it from playNextSeriesGame, after the same window a
+	// game on the board gives it to come back. See seriesEngineAway.
 	server.mu.Lock()
-	if server.bots[client.bot.botID] == client {
+	remaining := make([]*Client, 0, len(server.bots[client.bot.botID]))
+	for _, other := range server.bots[client.bot.botID] {
+		if other != client {
+			remaining = append(remaining, other)
+		}
+	}
+	if len(remaining) == 0 {
 		delete(server.bots, client.bot.botID)
+	} else {
+		server.bots[client.bot.botID] = remaining
 	}
 	server.mu.Unlock()
 	server.broadcastBots()
 }
 
+// botConnections is every live socket for one bot, in slot order.
+func (server *Server) botConnections(botID string) []*Client {
+	server.mu.RLock()
+	defer server.mu.RUnlock()
+	if len(server.bots[botID]) == 0 {
+		return nil
+	}
+	return append([]*Client(nil), server.bots[botID]...)
+}
+
+// botConnection is any one socket of a bot, for reading what every socket of it
+// agrees on: the registry record, the engine handshake, the drain. Nil when the
+// bot is not connected.
+func (server *Server) botConnection(botID string) *Client {
+	server.mu.RLock()
+	defer server.mu.RUnlock()
+	if len(server.bots[botID]) == 0 {
+		return nil
+	}
+	return server.bots[botID][0]
+}
+
+// allBotConnections is every socket of every connected bot, which is what the
+// per-connection housekeeping — expiring exchanges, settling drains — walks.
+func (server *Server) allBotConnections() []*Client {
+	server.mu.RLock()
+	defer server.mu.RUnlock()
+	clients := make([]*Client, 0, len(server.bots))
+	for _, connections := range server.bots {
+		clients = append(clients, connections...)
+	}
+	return clients
+}
+
+// botConnectionIsFree reports whether a slot could take a game right now:
+// handshaken, not playing, and not held between the pairs of a series.
+//
+// Says nothing about whether the bot *should* be given one — a drain, a bench,
+// and a mode it does not play are all questions about the bot rather than the
+// slot, and each offer path asks them in its own words.
+func (server *Server) botConnectionIsFree(client *Client) bool {
+	if client == nil || !client.isBot() {
+		return false
+	}
+	client.bot.mu.Lock()
+	free := client.bot.ready && client.bot.reservedBy == ""
+	client.bot.mu.Unlock()
+	return free && server.participantFor(client) == nil
+}
+
+// freeBotConnection is the slot to hand the next game to, or nil when every one
+// of this bot's slots is taken.
+func (server *Server) freeBotConnection(botID string) *Client {
+	for _, client := range server.botConnections(botID) {
+		if server.botConnectionIsFree(client) {
+			return client
+		}
+	}
+	return nil
+}
+
+// botActiveGames is how many games a bot is in across all of its slots.
+func (server *Server) botActiveGames(botID string) int {
+	playing := 0
+	for _, client := range server.botConnections(botID) {
+		if server.participantFor(client) != nil {
+			playing++
+		}
+	}
+	return playing
+}
+
 // botRoster is the published list of engines available right now.
+//
+// One row per bot, not per connection: a bot with three slots is one engine
+// that can play three games, and publishing it three times would put three
+// challenge buttons in the lobby for one opponent.
 func (server *Server) botRoster() []BotPresence {
 	server.mu.RLock()
-	clients := make([]*Client, 0, len(server.bots))
-	for _, client := range server.bots {
-		clients = append(clients, client)
+	bots := make([][]*Client, 0, len(server.bots))
+	for _, connections := range server.bots {
+		bots = append(bots, append([]*Client(nil), connections...))
 	}
-	busy := make(map[*Client]bool, len(clients))
-	for _, client := range clients {
-		_, playing := server.participants[client]
-		busy[client] = playing
+	playing := make(map[*Client]bool)
+	for _, connections := range bots {
+		for _, client := range connections {
+			_, inGame := server.participants[client]
+			playing[client] = inGame
+		}
 	}
 	server.mu.RUnlock()
 
-	draining := make(map[*Client]bool, len(clients))
-	for _, client := range clients {
-		draining[client] = botIsDraining(client)
-	}
+	// The two halves of botIsDraining, read apart: a bench applies to every
+	// engine at once and is not something any of them asked for, so it is
+	// published as itself rather than as a shutdown each of them is having.
+	benched := botsAreBenched(time.Now())
 
-	roster := make([]BotPresence, 0, len(clients))
-	for _, client := range clients {
+	roster := make([]BotPresence, 0, len(bots))
+	for _, connections := range bots {
+		// The first handshaken slot speaks for the bot. One that has not
+		// finished its handshake cannot be challenged yet, so a bot with none
+		// is left out entirely: listing it would only produce failures.
+		var client *Client
+		slots, active, free := 0, 0, false
+		for _, candidate := range connections {
+			candidate.bot.mu.Lock()
+			ready := candidate.bot.ready
+			declared := candidate.bot.maxGames
+			held := candidate.bot.reservedBy != ""
+			candidate.bot.mu.Unlock()
+			if declared > slots {
+				slots = declared
+			}
+			if !ready {
+				continue
+			}
+			if client == nil {
+				client = candidate
+			}
+			if playing[candidate] {
+				active++
+			} else if !held {
+				free = true
+			}
+		}
+		if client == nil {
+			continue
+		}
+		if slots < len(connections) {
+			// A bot whose client is too old to say how many slots it has. It
+			// has at least as many as are connected.
+			slots = len(connections)
+		}
+		// Slots the client has not opened yet are counted in `slots`, so the
+		// lobby can say what the engine is for, but they are not somewhere to
+		// put a game: `free` is only ever about a socket that exists.
+
 		client.bot.mu.Lock()
 		record := client.bot.record
 		handshake := client.bot.handshake
-		ready := client.bot.ready
 		clientVersion := client.bot.clientVersion
 		client.bot.mu.Unlock()
-		if !ready {
-			// A bot that has not finished its handshake cannot be challenged
-			// yet, so listing it would only produce failures.
-			continue
-		}
+
 		presence := BotPresence{
 			BotID:           record.BotID,
 			UserID:          record.UserID,
 			Name:            record.Name,
+			OwnerUserID:     record.OwnerUserID,
 			Description:     record.Description,
 			EngineName:      handshake.Name,
 			EngineAuthor:    handshake.Author,
 			Modes:           handshake.Modes,
 			Elo:             client.account.Elo,
-			Busy:            busy[client],
-			Draining:        draining[client],
+			Busy:            !free,
+			ActiveGames:     active,
+			Slots:           slots,
+			Draining:        botHasOwnDrain(client),
+			Benched:         benched,
+			ReservedFor:     server.botReservation(record.UserID),
 			AllowPublicPlay: record.AllowPublicPlay,
 			ClientVersion:   clientVersion,
 			IconSHA256:      record.IconSHA256,
@@ -396,16 +699,45 @@ func (server *Server) botRoster() []BotPresence {
 }
 
 func (server *Server) broadcastBots() {
-	server.broadcastToClients(ServerMessage{Type: "engine_bots", EngineBots: server.botRoster()})
+	bench := botBenchState(time.Now())
+	server.broadcastToClients(ServerMessage{
+		Type:       "engine_bots",
+		EngineBots: server.botRoster(),
+		BotBench:   &bench,
+	})
 }
 
-// botClientFor returns the connected client for a bot account, if any.
+// broadcastBotsForEngines restates the roster when a game has just taken or
+// freed a slot, and does nothing when neither seat is an engine.
+//
+// `Busy` and `ActiveGames` are read off `server.participants`, so every path
+// that seats or clears a game changes what the roster says without touching the
+// roster itself. Left unpublished, the lobby keeps the badge it was last sent —
+// PLAYING on an engine that finished ten minutes ago — until something else
+// happens to any bot on the server, which is why the state looked like it
+// needed a reload to come right.
+//
+// Filtered rather than published from the game paths unconditionally: this is
+// the whole list of engines, and the great majority of games have no engine in
+// them at all.
+func (server *Server) broadcastBotsForEngines(red *Client, blue *Client) {
+	if !red.isBot() && !blue.isBot() {
+		return
+	}
+	server.broadcastBots()
+}
+
+// botClientFor returns a connected slot of a bot account, if any. Any of them:
+// the callers want the bot, and use botConnections or freeBotConnection when
+// they want a particular socket.
 func (server *Server) botClientFor(userID string) *Client {
 	server.mu.RLock()
 	defer server.mu.RUnlock()
-	for _, client := range server.bots {
-		if client.profile.UserID == userID {
-			return client
+	for _, connections := range server.bots {
+		for _, client := range connections {
+			if client.profile.UserID == userID {
+				return client
+			}
 		}
 	}
 	return nil
@@ -529,10 +861,36 @@ func (server *Server) beginBotHandshake(client *Client) {
 					}
 				}
 				ready.IconWarning = client.bot.iconWarning
+				ready.Rules = server.rulesPublishedFor(handshake.Modes)
 				client.Send(ready)
 				server.broadcastBots()
+				// After bot_ready, never before: the first thing this may do is
+				// put a position to the engine, and a `go` arriving ahead of
+				// the line that says the handshake finished is a frame the
+				// client has no state to handle. See bot_resume.go.
+				server.resumeBotGames(client)
 			})
 	})
+}
+
+// rulesPublishedFor dates the rules of the modes an engine says it plays.
+//
+// Only those modes: a bot told about a rule change in a mode it does not play
+// has been given something to check that cannot affect it, and the next real
+// one is that much easier to skim past.
+func (server *Server) rulesPublishedFor(modes []game.ModeID) map[game.ModeID]string {
+	published := make(map[game.ModeID]string, len(modes))
+	for _, definition := range server.registry.Definitions() {
+		for _, modeID := range modes {
+			if definition.ID == modeID && definition.RulesPublished != "" {
+				published[modeID] = definition.RulesPublished
+			}
+		}
+	}
+	if len(published) == 0 {
+		return nil
+	}
+	return published
 }
 
 // beginBotGame tells every engine in a session that a new game has started,
@@ -543,7 +901,7 @@ func (server *Server) beginBotHandshake(client *Client) {
 // is the difference between a fair first move and one searched while the
 // transposition table was still being allocated.
 func (server *Server) beginBotGame(session *GameSession) {
-	for _, client := range []*Client{session.redClient, session.blueClient} {
+	for _, client := range server.sessionSeats(session) {
 		if !client.isBot() {
 			continue
 		}
@@ -598,9 +956,7 @@ func (server *Server) challengeBot(
 		return
 	}
 
-	server.mu.RLock()
-	botClientConn := server.bots[botID]
-	server.mu.RUnlock()
+	botClientConn := server.botConnection(botID)
 	if botClientConn == nil {
 		refuse("that bot is not online")
 		return
@@ -612,6 +968,13 @@ func (server *Server) challengeBot(
 	ready := botClientConn.bot.ready
 	botClientConn.bot.mu.Unlock()
 
+	// Before anything about the bot: this is the server refusing, not the
+	// engine, and saying "that bot is not taking games" would send its owner
+	// looking at a bot that is perfectly fine.
+	if server.isUpdating() {
+		refuse(server.updateRefusalMessage())
+		return
+	}
 	if !ready {
 		refuse("that bot is still starting up")
 		return
@@ -620,16 +983,34 @@ func (server *Server) challengeBot(
 		refuse("that bot is not open to challenges")
 		return
 	}
+	// The bench first, because it is the reason that is true of every engine
+	// at once: "Fishy is shutting down" is a plainly wrong thing to say about a
+	// bot whose owner has not touched it and which is back in play at six.
+	if window := botBenchAt(time.Now()); window != nil {
+		refuse(botBenchRefusal(window))
+		return
+	}
 	if botIsDraining(botClientConn) {
 		refuse(record.Name + " is shutting down and is not taking new games")
+		return
+	}
+	// After the two that are about the engine being unavailable, because this
+	// one is not: a reserved engine is healthy, connected and busy with
+	// something. See bot_reserve.go.
+	if event := server.botReservation(record.UserID); event != "" {
+		refuse(botReserveRefusal(record.Name, event))
 		return
 	}
 	if !handshake.Supports(modeID) {
 		refuse(record.Name + " does not play that mode")
 		return
 	}
-	if server.participantFor(botClientConn) != nil {
-		refuse(record.Name + " is already playing a game")
+	// Which socket of the bot, rather than whether the bot is free: an engine
+	// its owner allowed three games at once has three of them, and the game
+	// goes to whichever is empty.
+	seat := server.freeBotConnection(botID)
+	if seat == nil {
+		refuse(botFullRefusal(record.Name, server.botActiveGames(botID)))
 		return
 	}
 
@@ -645,9 +1026,9 @@ func (server *Server) challengeBot(
 		JoinedAt: time.Now(),
 	}
 	engine := QueueEntry{
-		Client:   botClientConn,
+		Client:   seat,
 		Setup:    setup,
-		Elo:      matchmakingElo(botClientConn, modeID),
+		Elo:      matchmakingElo(seat, modeID),
 		JoinedAt: time.Now(),
 	}
 	// startConfiguredMatch seats its first entry Red, so the seat the player
@@ -658,11 +1039,27 @@ func (server *Server) challengeBot(
 	if preferredColor == game.Blue {
 		first, second = engine, human
 	}
-	session := server.startConfiguredMatch(first, second, matchSetup{})
-	if session == nil {
-		return
+	// Nothing to do with the session here: it says what it needs to on its own,
+	// and the roster this game changes is restated by startConfiguredMatch —
+	// which every other seating path goes through too.
+	server.startConfiguredMatch(first, second, matchSetup{})
+}
+
+// botFullRefusal is what a bot with nowhere to put a game says. The count is
+// the wording's whole job: "already playing a game" is a plainly wrong thing to
+// tell somebody who can see the engine is in three of them.
+func botFullRefusal(name string, active int) string {
+	switch {
+	case active == 0:
+		// Nothing on any board, and no room either: every slot is held by a
+		// series, between one of its games and the next.
+		return name + " is in the middle of a series"
+	case active == 1:
+		return name + " is already playing a game"
+	default:
+		return name + " is already playing " + strconv.Itoa(active) +
+			" games, which is as many as it takes at once"
 	}
-	server.broadcastBots()
 }
 
 // promptBot asks the engine for a move, if it is its turn and nothing is
@@ -675,15 +1072,7 @@ func (server *Server) promptBot(session *GameSession, state game.GameState) {
 	if state.Status != game.InProgress {
 		return
 	}
-	var client *Client
-	switch state.CurrentTurn {
-	case game.Red:
-		client = session.redClient
-	case game.Blue:
-		client = session.blueClient
-	default:
-		return
-	}
+	client := server.sessionSeat(session, state.CurrentTurn)
 	if !client.isBot() {
 		return
 	}
@@ -861,7 +1250,7 @@ func (server *Server) notifyBotOwner(client *Client, gameID string, reason strin
 // the only one: those keep a leftover question from doing damage, and this
 // keeps the engine from going silent for a whole game first.
 func (server *Server) retireBotExchanges(session *GameSession) {
-	for _, client := range []*Client{session.redClient, session.blueClient} {
+	for _, client := range server.sessionSeats(session) {
 		if !client.isBot() {
 			continue
 		}
@@ -881,14 +1270,7 @@ func (server *Server) retireBotExchanges(session *GameSession) {
 // handful of bots at a two-second granularity is plenty, and it avoids a
 // goroutine per move.
 func (server *Server) expireBotExchanges(now time.Time) {
-	server.mu.RLock()
-	clients := make([]*Client, 0, len(server.bots))
-	for _, client := range server.bots {
-		clients = append(clients, client)
-	}
-	server.mu.RUnlock()
-
-	for _, client := range clients {
+	for _, client := range server.allBotConnections() {
 		client.bot.mu.Lock()
 		pending := client.bot.pending
 		expired := pending != nil && now.After(pending.deadline)

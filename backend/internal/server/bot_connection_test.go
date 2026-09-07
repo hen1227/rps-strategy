@@ -27,7 +27,7 @@ func fakeClient(t *testing.T, server *Server, userID string, bot bool) *Client {
 			ready:  true,
 		}
 		server.mu.Lock()
-		server.bots[client.bot.botID] = client
+		server.bots[client.bot.botID] = []*Client{client}
 		server.mu.Unlock()
 	}
 	server.hub.Register(client)
@@ -213,6 +213,16 @@ func testEntry(client *Client) QueueEntry {
 		Elo:      1200,
 		JoinedAt: time.Now(),
 	}
+}
+
+// openingSeat is a startConfiguredMatch call for a test that cares which of two
+// entries is on move: it seats Red first, so the entry that should open goes in
+// whichever position holds the opening colour.
+func openingSeat(opener, replier QueueEntry) (QueueEntry, QueueEntry, matchSetup) {
+	if game.FirstToMove == game.Red {
+		return opener, replier, matchSetup{}
+	}
+	return replier, opener, matchSetup{}
 }
 
 // The soft path: a client that still works but is not the current one is told

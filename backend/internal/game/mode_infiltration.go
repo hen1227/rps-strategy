@@ -15,6 +15,8 @@ func (mode *InfiltrationMode) Definition() ModeDefinition {
 		Playable:         true,
 		Features:         []ModeFeature{},
 		StartingPosition: infiltrationStartingPosition,
+		Symmetries:       []BoardSymmetry{SymmetryMirrorFiles},
+		RulesPublished:   rulesPublished,
 	}
 }
 

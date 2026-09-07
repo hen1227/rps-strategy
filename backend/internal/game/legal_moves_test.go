@@ -86,11 +86,11 @@ func TestLegalMovesForTheIdleSideDoesNotPanic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new game: %v", err)
 	}
-	// Red moves first; asking about Blue is a question a caller may reasonably
+	// Blue moves first; asking about Red is a question a caller may reasonably
 	// ask and must not be a crash.
-	_ = instance.LegalMovesFor(Blue)
-	if len(instance.LegalMovesFor(Red)) == 0 {
-		t.Fatal("Red has moves in the opening position")
+	_ = instance.LegalMovesFor(Red)
+	if len(instance.LegalMovesFor(Blue)) == 0 {
+		t.Fatal("Blue has moves in the opening position")
 	}
 }
 

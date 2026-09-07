@@ -173,9 +173,58 @@ The process listens only on this Unix socket, so no backend TCP port is exposed:
 /var/www/production/henhen1227/rps-henhen1227-backend.sock
 ```
 
+### Deploying an update without ending anybody's game
+
+`./deploy-backend.sh` from the repository root does all of this, and does it in
+an order that matters: it installs the new binary **while the old one is still
+serving**, then asks the server to drain.
+
+A drain stops the server taking new games, lets the ones already on the board
+finish, and then exits — so systemd's `Restart=always` brings up the binary that
+was installed in step one. Nothing runs `systemctl restart`, which is why there
+is no gap between the last move of the last game and the new build answering.
+Everybody connected gets a banner explaining why the play button is refusing,
+and the script prints what the drain is still waiting on while it waits.
+
+```sh
+./deploy-backend.sh --say "Back in about a minute."
+./deploy-backend.sh --now --say "Sorry — restarting to fix the clock bug."
+```
+
+`--now` skips the waiting and restarts immediately, posting the message as an
+announcement first. That is the escape hatch, and it costs whatever is on the
+board: those games are archived unfinished, exactly as every restart used to do.
+
+The same two controls are on the admin screen, for the deploy that has to be
+called off and the apology that is owed after one. The routes behind them:
+
+```text
+POST   /api/admin/drain    {"note":"Back in about a minute."}
+GET    /api/admin/drain    what it is still waiting on
+DELETE /api/admin/drain    put the server back in play
+POST   /api/admin/notice   {"text":"…","tone":"notice"|"warning"}
+DELETE /api/admin/notice
+GET    /api/notice         public: the standing announcement, if any
+```
+
+`GET /healthz` carries a `build` stamp — set with
+`-ldflags "-X rps-strategy/backend/internal/server.build=…"`, which the deploy
+script does — so a deploy can tell the new process from the old one rather than
+sleeping and hoping. It also reports `"status":"draining"` while a restart is
+pending, which is still healthy: the server is serving games, just not starting
+new ones.
+
+A drain waits at most twelve minutes. A bot series finishes its current pair and
+stops; a tournament keeps its pairings, and both players ready up again after
+the restart. `SIGTERM` is deliberately unchanged — `systemctl restart` still
+stops the server at once and archives what was on the board as `Interrupted`.
+
+See `internal/server/deploy_drain.go` and `internal/server/announcements.go`.
+
 ### 1. Build and upload the ARM64 binary
 
-On the development machine:
+The steps below are what the script automates, for a first install or a manual
+one. On the development machine:
 
 ```sh
 CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath \
@@ -408,12 +457,124 @@ own) is the soft version: the bot leaves play and frees its name while its games
 stay. `DELETE /api/admin/bots/{botId}` is the hard one, for a bot whose record
 is itself the problem.
 
+### The weekend bot arena
+
+A tournament a weekend, built from whatever engines are online, with its own
+page and its own settings. It is an ordinary tournament underneath — same
+pairing, boards, standings and archive — plus the two things a *recurring* event
+needs that a one-off does not: a schedule that survives a restart, and a way for
+the people watching to decide what it plays.
+
+```text
+GET    /api/weekend              the whole page in one read
+POST   /api/weekend/votes        cast or change a clock vote (session)
+PUT    /api/weekend/availability which slots you can play (session)
+GET    /api/admin/weekend        the host's settings
+PUT    /api/admin/weekend        save them
+POST   /api/admin/weekend/open   open this weekend's doors now, for testing
+```
+
+This ran every night for a year, on the theory that engines do not get tired.
+They do not, but they also do not change much between a Tuesday and a Wednesday,
+and a table that reads the same three nights running is a table nobody opens. A
+week is long enough that authors ship something between one event and the next.
+
+An event is two moments. At **doors** (default 30 minutes before) the event is
+created and published, so the page has a countdown, a ballot and a field to
+watch fill up. At the **start** the clock is locked in from the ballot, every
+eligible engine online is enrolled through the host door, and the event either
+begins or is called off for want of a field — with the reason on the
+announcement banner rather than in a log.
+
+The format follows the field: a round robin up to `roundRobinMax` engines, and
+a Swiss above it. That is the answer to a big turnout — the right tool for the
+size, not a round robin with rounds cut off it.
+
+Two things the community decides, deliberately different in kind.
+
+**The clock** is a ballot with a deadline: it opens when the previous event
+ends, closes `pollClosesMinutes` before the start, and a thin turnout or a tie
+falls back to the host's default, because neither is the field choosing
+something. The floor is published to the client (`minimumVotes` on the poll) so
+the page can say *why* a vote is not carrying — a fallback nobody explains reads
+as the site ignoring you.
+
+The default game is **Intransitive**. It is corrected onto rows seeded during
+the single day this defaulted to Total War, once, behind the
+`mode_default_corrected` flag: re-running that on every boot would undo a host
+who deliberately picks something else.
+
+**The slot** is not a ballot at all — it is approval voting over a 36-hour
+window (`PUT /api/weekend/availability`, the whole set each time). The field is
+worldwide, and asking each person for their one favourite slot splits thirty-six
+ways and picks whichever continent happened to answer; asking which slots they
+*can make* is a question everybody can answer and has a fullest one. Whatever
+leads when an event begins becomes the next weekend's slot, so the schedule
+moves at most once a week and always a week ahead. A tie or a turnout below
+`minimumVotes` holds it where it is. The host's minutes survive a move: a 20:30
+schedule whose grid picks slot 8 becomes 17:30, because the half past was never
+what the grid was asked about.
+
+A **slot** rather than an hour, and that is what weekly scheduling forced. An
+hour of the day was enough for a nightly: the event came round again tomorrow,
+so "20:00" meant the next 20:00 and everybody's evening was the same evening.
+Weekly on a weekend breaks it — Saturday 21:00 in New York is already Sunday in
+Berlin, so a grid of twenty-four bare hours would have half the world voting for
+a day it did not mean. The ballot is instead `WeekendSlots` consecutive hours
+laid end to end from `windowOpensDay`/`windowOpensHour`, each a fixed
+weekday-and-hour in the host's zone.
+
+Thirty-six of them, and the number is a compromise rather than a law. No
+thirty-six hours are fair to everybody: wherever the window sits, some zone
+loses one of its two evenings, which is why its opening is a host setting rather
+than a constant. The default — Saturday 09:00 through Sunday 20:00 in the host's
+zone — holds both of the evenings the schedule would ever be set to by hand, and
+reaches far enough east that Europe gets both of its own.
+
+Slots are stored as offsets into the host's window, and **clients never see them
+in those terms**. Every slot is handed out with `atUnixMs`, the instant it next
+falls on, so a page formats one timestamp — weekday and hour together — in its
+reader's own locale and is correct by construction, rather than thirty-six
+clients each getting both daylight saving and the date line right on their own.
+The page groups the grid under the reader's *own* day names: the same slot is
+Saturday evening for one reader and Sunday morning for another, and both
+headings are true. A start time no slot can name is dragged to the nearer end of
+the window on both read and save, because the grid is the only thing that can
+move the schedule.
+
+The schedule is a wall clock plus an IANA zone, not a UTC instant: "eight
+o'clock" has to mean eight in November as well as in July. `cmd/server` imports
+`time/tzdata` so the zone resolves from the binary rather than from the host's
+`/usr/share/zoneinfo`, which a slim image does not have. The scheduler rides the
+existing lobby ticker, does real work at most once a minute, and is idempotent
+on a stored local date so a restart at one minute past eight cannot open a
+second event. It declines to open or start while a deploy is draining, and it
+waits for the hour the *event* published rather than the one in the settings —
+the two differ whenever a host opens one by hand, and the page counts down
+to the published one.
+
+An engine that goes missing mid-event starts a grace clock (`graceSeconds`) from
+when it went away; when that runs out its unplayed games are forfeited, and an
+engine that has already burned grace gets none on its next match. Other matches
+run on — only the round boundary waits.
+
+Weekend events carry `kind = "nightly"` and a `nightlyNumber`. Both spellings
+are the stored vocabulary of a year of nightly events, and renaming them would
+rewrite an archive that `titles.go` and the rolling crown read; everything the
+code calls itself, and everything a reader sees, says "weekend". They ride the
+same broadcast as every other tournament, which is what gives the weekend page
+live boards for free, and the frontend filters them off the tournaments board
+and the home screen. They are excluded from the Tournament Champion title, which
+would otherwise be awarded 52 times a year; the weekend arena has a rolling crown
+instead, held by whoever has won the most weekends in the last ninety days.
+
 Tournament APIs:
 
 ```text
-GET  /api/tournaments
-GET  /api/tournaments/{tournamentId}
-POST /api/tournaments/{tournamentId}/signups
+GET    /api/tournaments
+GET    /api/tournaments/{tournamentId}
+POST   /api/tournaments/{tournamentId}/signups
+DELETE /api/tournaments/{tournamentId}/signups
 
 GET   /api/admin/session
 POST  /api/admin/tournaments
@@ -428,6 +589,64 @@ reporting each match as a player-one win, player-two win, or draw updates the
 public standings. Wins are worth three points and draws one. A signup includes
 the local account ID, IGN, Discord username, and explicit unfiltered-chat
 agreement.
+
+An entrant may enter **themselves or exactly one of their bots**, never both.
+`POST .../signups` with a `botId` and a session token enters that engine
+instead: ownership is checked, the bot's own account and name go into the field,
+and the Discord handle stored beside it is the *owner's*, because a host chasing
+a missing engine has to reach a person. The route refuses an engine that has
+never connected, is disabled, is set `enterTournaments = false`, or whose last
+handshake did not report the event's mode; it also refuses a bot account named
+directly in `userId`, so the only way an engine enters is through its owner.
+There is no bulk enrolment — the host button that swept every online bot into
+the field is gone.
+
+The one-entry rule is enforced in persistence, over the *party* an entry belongs
+to: a bot's owner, or the account itself. `DELETE .../signups` is the entrant's
+own withdrawal, session-authenticated, and removes whichever of the two the
+caller is answerable for — which is how an owner swaps engines. Registration
+stage only, like the host's `DELETE .../players/{playerId}`: once the pairings
+exist they are built around the names in them.
+
+Starting an event puts every engine in it **into reserve** — connected and idle
+but unavailable for challenges or series until the event finishes, so its
+scheduled matches are not lost to passers-by. Registration is not a reservation:
+before the start an entered engine plays anything it likes. See
+`internal/server/bot_reserve.go`.
+
+Every entrant in every event must have verified their account with Discord;
+there is no per-event switch. A signup from an unverified account is refused
+with 403, and the stored handle is the one Discord vouched for rather than the
+one typed into the form — so the handles a host contacts the field on are known
+to resolve.
+
+The question is asked of the **party**, not of the account playing, which is
+what lets it apply to engines. A program has no Discord account and never will,
+so what is checked for a bot is its owner: the same person the one-place rule is
+about and the same person a host has to reach when the engine stops turning up.
+That is also how a bot entry ends up carrying its author's handle instead of a
+synthetic `bot.name` that reaches nobody. The `require_discord` column is
+retained on existing rows and no longer read.
+
+Tournament games are **rated**, like any other competitive game on the site. A
+pairing where either side may not play for a rating — an unregistered account,
+or one under a ranked-play sanction — is downgraded to casual for that game
+rather than refused, the same move `challenge.go` makes, so a mixed field can
+produce some rated games and some casual ones and the PGN says which. This
+matters most for engines: the bot ladder is fitted from ranked bot-versus-bot
+games, so a casual tournament was invisible to the ladder its games were best
+placed to inform.
+
+A pairing can be more than one game. `gamesPerMatch` (1 by default, 10 at most)
+makes each scheduled match a short series: the games are recorded in
+`tournament_match_games`, the match resolves on the aggregate once all of them
+are played, and **the colours swap every game**. That last part is the reason
+the setting exists — one side always moves first, so an even number of games is
+what stops a close pairing being decided by which entrant drew the opening seat.
+It also halves the single-game noise, which is what makes a bot event's table
+worth reading. The aggregate is played out in full rather than stopped once a
+side cannot be caught, because cutting a 4-game match at 3–0 would leave an odd
+number of games played and hand one side that extra opening turn back.
 
 Scheduled matches are played in the app, so the host normally never reports a
 result. Each player readies up for one of their pending matches over the

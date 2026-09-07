@@ -45,6 +45,56 @@ type OpeningGraphMeta struct {
 	Featured        [][]string `json:"featured"`
 	PositionCount   int        `json:"positionCount"`
 	UpdatedAtUnixMs int64      `json:"updatedAtUnixMs"`
+
+	// Certified is the short list the website leads with: the openings the
+	// engine is prepared to stand behind, each cut at the ply where that stops
+	// being true. Empty is a real answer -- it means this scan has not
+	// separated the mode's openings from each other yet -- and is why this is
+	// stored rather than derived on the way out.
+	Certified []CertifiedOpening `json:"certified"`
+	// Certainty is the bar Certified was measured against, so a reader can see
+	// what "certified" meant for this scan rather than trusting the word.
+	Certainty OpeningCertainty `json:"certainty"`
+}
+
+// CertifiedOpening is one opening the engine vouches for, and how far.
+//
+// The engine decides this, not the server: see RPSFish's
+// `Book::certified_openings`. The server stores the verdict and the bar it was
+// measured against, because a claim without its evidence is just an adjective.
+type CertifiedOpening struct {
+	Line []string `json:"line"`
+	// Rank among the book's distinct first moves, counting a mirror pair once.
+	// 1 is the book's best opening.
+	Rank int `json:"rank"`
+	// Value of the first move to the side that plays it, in the engine's units.
+	Value int `json:"value"`
+	// Stop is why the line ends here: "plies", "indifferent", "shallow",
+	// "frontier", "decisive" or "repetition".
+	Stop string `json:"stop"`
+	// Alternatives is how many continuations tied at the stopping position,
+	// and is zero unless Stop is "indifferent".
+	Alternatives int `json:"alternatives"`
+	// Depth is the shallowest search along the line: the floor under every
+	// claim the line makes.
+	Depth int `json:"depth"`
+}
+
+// OpeningCertainty is the bar an opening had to clear to be certified.
+//
+// Deliberately all counts and no score thresholds. A margin in score units
+// would need recalibrating every time the evaluation is re-tuned, because
+// re-tuning moves every score in a mode at once; "strictly better than the
+// best alternative" survives any rescaling.
+type OpeningCertainty struct {
+	// Depth a position must have been searched to for its best move to count.
+	Depth int `json:"depth"`
+	// Plies is the longest line the scan would certify.
+	Plies int `json:"plies"`
+	// MinimumPlies is the shortest line it would list as an opening.
+	MinimumPlies int `json:"minimumPlies"`
+	// Openings is the most it would list.
+	Openings int `json:"openings"`
 }
 
 // OpeningPosition is one board the engine analyzed, with its ranked moves.
@@ -117,11 +167,35 @@ CREATE TABLE IF NOT EXISTS opening_graph_meta (
     main_line_json     TEXT NOT NULL,
     featured_json      TEXT NOT NULL,
     position_count     INTEGER NOT NULL,
-    updated_at_unix_ms INTEGER NOT NULL
+    updated_at_unix_ms INTEGER NOT NULL,
+    certified_json     TEXT NOT NULL DEFAULT '[]',
+    certainty_json     TEXT NOT NULL DEFAULT '{}'
 );
 `
 	if _, err := store.db.ExecContext(ctx, schema); err != nil {
 		return fmt.Errorf("migrate opening graph: %w", err)
+	}
+	// CREATE TABLE IF NOT EXISTS does nothing to a table that already exists,
+	// so a database from before openings were certified needs the columns
+	// adding. An old row then reads as "nothing certified", which is the
+	// correct account of a scan that never measured it.
+	columns, err := tableColumns(ctx, store.db, "opening_graph_meta")
+	if err != nil {
+		return fmt.Errorf("inspect opening graph schema: %w", err)
+	}
+	for _, migration := range []struct{ name, definition string }{
+		{"certified_json", "TEXT NOT NULL DEFAULT '[]'"},
+		{"certainty_json", "TEXT NOT NULL DEFAULT '{}'"},
+	} {
+		if columns[migration.name] {
+			continue
+		}
+		if _, err := store.db.ExecContext(ctx, fmt.Sprintf(
+			"ALTER TABLE opening_graph_meta ADD COLUMN %s %s",
+			migration.name, migration.definition,
+		)); err != nil {
+			return fmt.Errorf("add opening_graph_meta.%s: %w", migration.name, err)
+		}
 	}
 	return nil
 }
@@ -150,6 +224,14 @@ func (store *Store) ReplaceOpeningGraph(
 	featured, err := json.Marshal(nonNilFeatured(meta.Featured))
 	if err != nil {
 		return OpeningGraphMeta{}, fmt.Errorf("encode featured lines: %w", err)
+	}
+	certified, err := json.Marshal(nonNilCertified(meta.Certified))
+	if err != nil {
+		return OpeningGraphMeta{}, fmt.Errorf("encode certified openings: %w", err)
+	}
+	certainty, err := json.Marshal(meta.Certainty)
+	if err != nil {
+		return OpeningGraphMeta{}, fmt.Errorf("encode certainty limits: %w", err)
 	}
 
 	tx, err := store.db.BeginTx(ctx, nil)
@@ -215,8 +297,8 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 INSERT INTO opening_graph_meta (
     mode_id, mode_name, engine_version, rules_version, weights, symmetry,
     max_ply, root_key, main_line_json, featured_json, position_count,
-    updated_at_unix_ms
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    updated_at_unix_ms, certified_json, certainty_json
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(mode_id) DO UPDATE SET
     mode_name = excluded.mode_name,
     engine_version = excluded.engine_version,
@@ -228,11 +310,13 @@ ON CONFLICT(mode_id) DO UPDATE SET
     main_line_json = excluded.main_line_json,
     featured_json = excluded.featured_json,
     position_count = excluded.position_count,
-    updated_at_unix_ms = excluded.updated_at_unix_ms
+    updated_at_unix_ms = excluded.updated_at_unix_ms,
+    certified_json = excluded.certified_json,
+    certainty_json = excluded.certainty_json
 `,
 		modeID, meta.ModeName, meta.EngineVersion, meta.RulesVersion, meta.Weights,
 		meta.Symmetry, meta.MaxPly, meta.RootKey, string(mainLine), string(featured),
-		len(positions), now,
+		len(positions), now, string(certified), string(certainty),
 	); err != nil {
 		return OpeningGraphMeta{}, fmt.Errorf("write opening graph meta: %w", err)
 	}
@@ -249,16 +333,17 @@ ON CONFLICT(mode_id) DO UPDATE SET
 // OpeningGraph returns a mode's book metadata, without any of its positions.
 func (store *Store) OpeningGraph(ctx context.Context, modeID string) (OpeningGraphMeta, error) {
 	var meta OpeningGraphMeta
-	var mainLine, featured string
+	var mainLine, featured, certified, certainty string
 	err := store.db.QueryRowContext(ctx, `
 SELECT mode_name, engine_version, rules_version, weights, symmetry, max_ply,
-       root_key, main_line_json, featured_json, position_count, updated_at_unix_ms
+       root_key, main_line_json, featured_json, position_count,
+       updated_at_unix_ms, certified_json, certainty_json
 FROM opening_graph_meta
 WHERE mode_id = ?
 `, strings.TrimSpace(modeID)).Scan(
 		&meta.ModeName, &meta.EngineVersion, &meta.RulesVersion, &meta.Weights,
 		&meta.Symmetry, &meta.MaxPly, &meta.RootKey, &mainLine, &featured,
-		&meta.PositionCount, &meta.UpdatedAtUnixMs,
+		&meta.PositionCount, &meta.UpdatedAtUnixMs, &certified, &certainty,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return OpeningGraphMeta{}, ErrOpeningBookNotFound
@@ -273,6 +358,13 @@ WHERE mode_id = ?
 	if err := json.Unmarshal([]byte(featured), &meta.Featured); err != nil {
 		return OpeningGraphMeta{}, fmt.Errorf("decode featured lines: %w", err)
 	}
+	if err := json.Unmarshal([]byte(certified), &meta.Certified); err != nil {
+		return OpeningGraphMeta{}, fmt.Errorf("decode certified openings: %w", err)
+	}
+	if err := json.Unmarshal([]byte(certainty), &meta.Certainty); err != nil {
+		return OpeningGraphMeta{}, fmt.Errorf("decode certainty limits: %w", err)
+	}
+	meta.Certified = nonNilCertified(meta.Certified)
 	return meta, nil
 }
 
@@ -407,6 +499,19 @@ func nonNilLines(line []string) []string {
 		return []string{}
 	}
 	return line
+}
+
+// A JSON null decodes into a nil slice, and the website reads `certified` as
+// "the openings we stand behind" -- an absent list and an empty one mean the
+// same thing there, so both leave as `[]`.
+func nonNilCertified(certified []CertifiedOpening) []CertifiedOpening {
+	if certified == nil {
+		return []CertifiedOpening{}
+	}
+	for index := range certified {
+		certified[index].Line = nonNilLines(certified[index].Line)
+	}
+	return certified
 }
 
 func nonNilFeatured(featured [][]string) [][]string {

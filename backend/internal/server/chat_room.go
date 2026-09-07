@@ -3,7 +3,8 @@ package server
 // chatRoom is a conversation, which is not the same thing as a game. A
 // standalone game has a room of its own and the two end together; every game
 // of a bot series shares one room, so a run is one conversation rather than a
-// new one each time two engines sit down.
+// new one each time two engines sit down, and every match of a bots-only
+// tournament shares one, so an event is one crowd rather than one per board.
 //
 // The alternative — copying a finished game's transcript into the next game —
 // produces two rooms that both look like the series chat and cannot hear each
@@ -14,8 +15,14 @@ package server
 type chatRoom struct {
 	// id names the conversation on the wire. For a standalone game it is the
 	// game id, so a client that only knows about games still sees what it
-	// expects; for a series it is the series id.
-	id       string
+	// expects; for a series it is the series id, and for a bots-only event the
+	// tournament id.
+	id string
+	// scope is what kind of thing the room covers, sent alongside the id so a
+	// client can name the conversation it is showing. Set once and never
+	// changed: a room that spans a run, or an event, does so from its first
+	// message.
+	scope    ChatScope
 	messages []ChatMessage
 	// sessions are the games pointing at this room right now: the one being
 	// played, and any finished one whose post-game room somebody is still
@@ -24,8 +31,32 @@ type chatRoom struct {
 	sessions map[*GameSession]struct{}
 }
 
+// ChatScope is how much of the site one conversation covers.
+//
+// A client needs this to say what it is showing. The room id alone cannot: a
+// room that is not the game on screen is either a run or an event, and "SERIES
+// CHAT" over a tournament match is the sort of wrong that makes a reader
+// distrust the rest of the page.
+type ChatScope string
+
+const (
+	// ChatScopeGame is one game and the room that outlives it, which is nearly
+	// every conversation on the site.
+	ChatScopeGame ChatScope = "game"
+	// ChatScopeSeries is every game of one bot-versus-bot run.
+	ChatScopeSeries ChatScope = "series"
+	// ChatScopeTournament is every match of one bots-only event, played at the
+	// same time as each other rather than one after another.
+	ChatScopeTournament ChatScope = "tournament"
+)
+
 func newChatRoom(id string) *chatRoom {
-	return &chatRoom{id: id, sessions: make(map[*GameSession]struct{})}
+	return newScopedChatRoom(id, ChatScopeGame)
+}
+
+// newScopedChatRoom opens a conversation that outlasts any one game.
+func newScopedChatRoom(id string, scope ChatScope) *chatRoom {
+	return &chatRoom{id: id, scope: scope, sessions: make(map[*GameSession]struct{})}
 }
 
 // join adds a game to the conversation. Called under Server.mu.

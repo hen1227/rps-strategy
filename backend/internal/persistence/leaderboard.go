@@ -58,6 +58,17 @@ type LeaderboardEntry struct {
 	// ranks rather than their initials. Always empty on the human board: people
 	// have no portrait here. See persistence.Bot.IconSHA256.
 	IconSHA256 string `json:"iconSha256,omitempty"`
+	// OwnerUsername is the person who entered this engine, and EngineName is what
+	// the engine calls itself when it connects. Both empty on the human board,
+	// which has no bot row to read them from.
+	//
+	// Neither is a disclosure. The public bot directory already serves every
+	// field of persistence.Bot, owner id included, and a person's own profile
+	// page lists the engines they wrote — so the owner of a given bot is already
+	// public, one lookup away. Carrying it here is the same join done once for a
+	// page of fifty rather than fifty times by the client.
+	OwnerUsername string `json:"ownerUsername,omitempty"`
+	EngineName    string `json:"engineName,omitempty"`
 }
 
 // LeaderboardFilter is a page of one ladder.
@@ -116,13 +127,21 @@ func (store *Store) Leaderboard(
 		registered = " AND " + registeredSQL("a")
 	}
 
-	// A correlated subquery rather than a join: the icon is per *account* and
+	// Correlated subqueries rather than a join: all three are per *account* and
 	// both boards below already group by one, so joining would mean saying so
-	// twice in two different shapes.
-	const iconColumn = `,
+	// twice in two different shapes. They resolve to the empty string on the
+	// human board, where no account has a bot row — which is the right answer
+	// rather than a special case, so neither board has to ask for its own
+	// columns.
+	const botColumns = `,
        COALESCE((SELECT i.sha256 FROM bot_icons i
                    JOIN bots b ON b.bot_id = i.bot_id
-                  WHERE b.user_id = a.user_id), '') AS icon_sha256`
+                  WHERE b.user_id = a.user_id), '') AS icon_sha256,
+       COALESCE((SELECT o.username FROM bots b
+                   JOIN accounts o ON o.user_id = b.owner_user_id
+                  WHERE b.user_id = a.user_id), '') AS owner_username,
+       COALESCE((SELECT b.engine_name FROM bots b
+                  WHERE b.user_id = a.user_id), '') AS engine_name`
 
 	// Two shapes, because there are two questions.
 	//
@@ -150,7 +169,7 @@ JOIN account_mode_ratings r ON r.user_id = a.user_id AND r.mode_id = ?
 WHERE a.kind = ? AND a.disabled = 0%s AND r.games_played >= ?
 ORDER BY rating DESC, played DESC, a.username ASC
 LIMIT ? OFFSET ?
-`, iconColumn, registered)
+`, botColumns, registered)
 		arguments = append(arguments, filter.ModeID, filter.Kind, filter.MinimumGames)
 	} else {
 		query = fmt.Sprintf(`
@@ -166,7 +185,7 @@ SELECT * FROM (
 WHERE rating IS NOT NULL AND played >= ?
 ORDER BY rating DESC, played DESC, username ASC
 LIMIT ? OFFSET ?
-`, iconColumn, registered)
+`, botColumns, registered)
 		arguments = append(arguments, filter.Kind, filter.MinimumGames)
 	}
 	arguments = append(arguments, filter.Limit, filter.Offset)
@@ -183,7 +202,7 @@ LIMIT ? OFFSET ?
 		if err := rows.Scan(
 			&entry.UserID, &entry.Kind, &entry.Username, &entry.Discord, &entry.Title,
 			&entry.Elo, &entry.Wins, &entry.Losses, &entry.Draws, &entry.GamesPlayed,
-			&entry.ModeID, &entry.IconSHA256,
+			&entry.ModeID, &entry.IconSHA256, &entry.OwnerUsername, &entry.EngineName,
 		); err != nil {
 			return nil, fmt.Errorf("read leaderboard row: %w", err)
 		}

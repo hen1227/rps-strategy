@@ -62,10 +62,12 @@ func TestConnectedPlayerCanAcceptChallenge(t *testing.T) {
 
 	challengerMatch := readChallengeTestMessage(t, challenger)
 	targetMatch := readChallengeTestMessage(t, target)
-	if challengerMatch.Type != "match_found" || challengerMatch.Color != game.Red {
+	// The author of a challenge gets the side that moves first.
+	if challengerMatch.Type != "match_found" || challengerMatch.Color != game.FirstToMove {
 		t.Fatalf("unexpected challenger match message: %#v", challengerMatch)
 	}
-	if targetMatch.Type != "match_found" || targetMatch.Color != game.Blue {
+	if targetMatch.Type != "match_found" ||
+		targetMatch.Color != game.OtherColor(game.FirstToMove) {
 		t.Fatalf("unexpected target match message: %#v", targetMatch)
 	}
 	participant := server.participantFor(challenger)

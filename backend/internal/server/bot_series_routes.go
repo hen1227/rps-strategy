@@ -211,9 +211,14 @@ func writeSeriesError(writer http.ResponseWriter, err error) {
 	case errors.Is(err, errSeriesBotOffline),
 		errors.Is(err, errSeriesBotBusy),
 		errors.Is(err, errSeriesBotDraining),
+		errors.Is(err, errSeriesBotReserved),
 		errors.Is(err, errSeriesAlreadyYours),
 		errors.Is(err, errSeriesServerBusy):
 		writeAPIError(writer, http.StatusConflict, err.Error())
+	case errors.Is(err, errSeriesServerUpdating):
+		// 503 rather than the 409 its neighbours get: this one is about the
+		// server, not about the request, and it will succeed unchanged shortly.
+		writeAPIError(writer, http.StatusServiceUnavailable, err.Error())
 	default:
 		writeAPIError(writer, http.StatusInternalServerError, "could not start the series")
 	}

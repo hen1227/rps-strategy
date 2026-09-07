@@ -97,15 +97,21 @@ func TestADiscordOnlyAccountCountsAsRegisteredEverywhere(t *testing.T) {
 		t.Error("Account.DiscordVerified is false for a linked account")
 	}
 
-	summaries, err := store.SearchAccounts(ctx, username, 10, 0)
+	page, err := store.SearchAccounts(ctx, AccountFilter{Query: username})
 	if err != nil {
 		t.Fatalf("search accounts: %v", err)
 	}
-	if len(summaries) != 1 {
-		t.Fatalf("search returned %d accounts, want 1", len(summaries))
+	if len(page.Accounts) != 1 {
+		t.Fatalf("search returned %d accounts, want 1", len(page.Accounts))
 	}
-	if !summaries[0].Registered {
+	if !page.Accounts[0].Registered {
 		t.Error("the admin list calls a Discord account unregistered; SearchAccounts keeps its own copy of the rule")
+	}
+	// The narrower of the two flags, and the one the browser filters on: a
+	// linked account is registered *and* verified, and a password account is
+	// only the first.
+	if !page.Accounts[0].DiscordVerified {
+		t.Error("AccountSummary.DiscordVerified is false for a linked account")
 	}
 
 	entries, err := store.Leaderboard(ctx, LeaderboardFilter{Kind: LeaderboardKindHuman})

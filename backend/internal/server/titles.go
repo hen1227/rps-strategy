@@ -84,14 +84,16 @@ func (server *Server) publishAccount(ctx context.Context, userID string) {
 	}
 }
 
-// titledAccount runs the rulebook for an account that has just connected and
-// returns it with anything new already on it.
+// titledAccount runs the rulebook for an account about to be handed to its
+// owner, and returns it with anything new already on it.
 //
-// Synchronous, and before the connection is registered, for two reasons that
-// both come down to the handshake: `connection_ready` carries this account, and
-// the profile every other player sees is built from it. Doing the work
-// afterwards would mean a player who earned a title yesterday — or before this
-// feature existed — connects once without it.
+// Synchronous, and on the connect path before the connection is registered, for
+// two reasons that both come down to the handshake: `connection_ready` carries
+// this account, and the profile every other player sees is built from it. Doing
+// the work afterwards would mean a player who earned a title yesterday — or
+// before this feature existed — connects once without it. The Discord sign-in
+// path uses it for the same reason: its reply is the account, and the link it
+// has just written is worth a title.
 //
 // The evaluation is a handful of indexed queries against rows the connect path
 // is already touching, run once per connection rather than per message.
@@ -101,7 +103,7 @@ func (server *Server) titledAccount(
 ) persistence.Account {
 	awarded, err := server.data.EvaluateTitlesFor(ctx, account.UserID)
 	if err != nil {
-		log.Printf("evaluate titles on connect for %s: %v", account.UserID, err)
+		log.Printf("evaluate titles for %s: %v", account.UserID, err)
 		return account
 	}
 	if len(awarded) == 0 {

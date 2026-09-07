@@ -10,6 +10,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"rps-strategy/backend/internal/game"
+	"rps-strategy/backend/internal/notation"
 	"rps-strategy/backend/internal/persistence"
 )
 
@@ -106,8 +107,9 @@ func TestWebSocketCanJoinQueue(t *testing.T) {
 	if ready.Type != "connection_ready" {
 		t.Fatalf("expected connection_ready, got %q", ready.Type)
 	}
-	if len(ready.Modes) != 2 {
-		t.Fatalf("expected two registered base modes, got %d", len(ready.Modes))
+	registered := len(game.DefaultModeRegistry.CatalogueDefinitions())
+	if len(ready.Modes) != registered {
+		t.Fatalf("expected every registered mode (%d), got %d", registered, len(ready.Modes))
 	}
 	if ready.DefaultTimeControl == nil || *ready.DefaultTimeControl != game.DefaultTimeControl() {
 		t.Fatalf("expected connection default 5/+3, got %#v", ready.DefaultTimeControl)
@@ -115,7 +117,7 @@ func TestWebSocketCanJoinQueue(t *testing.T) {
 	if ready.Account == nil || ready.Account.Elo != persistence.DefaultElo {
 		t.Fatalf("expected a persisted default account, got %#v", ready.Account)
 	}
-	if len(ready.ModePlayerCounts) != 2 {
+	if len(ready.ModePlayerCounts) != registered {
 		t.Fatalf("expected a player count for every mode, got %#v", ready.ModePlayerCounts)
 	}
 	for _, modeID := range game.DefaultModeRegistry.IDs() {
@@ -685,7 +687,7 @@ func TestLiveGamesExposeNamesRatingsAndSpectatorCount(t *testing.T) {
 	}
 	if liveGame.Position.Rows[0] != "...SSS..." ||
 		liveGame.Position.Owners[0] != "...bbb..." ||
-		liveGame.CurrentTurn != game.Red || liveGame.MoveNumber != 0 {
+		liveGame.CurrentTurn != game.FirstToMove || liveGame.MoveNumber != 0 {
 		t.Fatalf("live game omitted its compact board position: %#v", liveGame)
 	}
 
@@ -743,7 +745,8 @@ func TestLiveGameBoardBroadcastsAfterEveryMove(t *testing.T) {
 		t.Fatalf("expected the opening board in the lobby, got %#v", started.LiveGames)
 	}
 
-	if !server.makeMove(redClient, game.Position{X: 3, Y: 6}, game.Position{X: 3, Y: 5}) {
+	// Blue opens, and advances up the ranks: d3-d4 off its own rock rank.
+	if !server.makeMove(blueClient, game.Position{X: 3, Y: 2}, game.Position{X: 3, Y: 3}) {
 		t.Fatal("expected the opening move to be accepted")
 	}
 	updated := awaitMessageOfType(t, observer, "live_games")
@@ -751,9 +754,9 @@ func TestLiveGameBoardBroadcastsAfterEveryMove(t *testing.T) {
 		t.Fatalf("expected one updated board, got %#v", updated.LiveGames)
 	}
 	live := updated.LiveGames[0]
-	if live.MoveNumber != 1 || live.CurrentTurn != game.Blue ||
-		live.Position.Rows[5][3] != 'r' || live.Position.Rows[6][3] != '.' ||
-		live.Position.Owners[5][3] != 'r' || live.Position.Owners[6][3] != 'r' {
+	if live.MoveNumber != 1 || live.CurrentTurn != game.Red ||
+		live.Position.Rows[3][3] != 'R' || live.Position.Rows[2][3] != '.' ||
+		live.Position.Owners[3][3] != 'b' || live.Position.Owners[2][3] != 'b' {
 		t.Fatalf("lobby board did not follow the move: %#v", live)
 	}
 }
@@ -1058,5 +1061,80 @@ func TestAgreedTimeExtensionAddsThreeMinutesForBothPlayers(t *testing.T) {
 	if clock.RedRemainingMs <= timeControl.InitialTimeMs ||
 		clock.RedRemainingMs > timeControl.InitialTimeMs+game.TimeExtensionMs {
 		t.Fatalf("expected Red to gain roughly three minutes, got %dms", clock.RedRemainingMs)
+	}
+}
+
+// A spectator arriving at a game in progress is handed the moves that made the
+// position, not just the position. Everything the board screens do with a
+// history — the move list, stepping back through it — depends on this being on
+// the join message rather than accumulated from what happens next, because
+// somebody who joins at move twenty never sees the first nineteen.
+func TestSpectatorJoiningMidGameReceivesTheMovesSoFar(t *testing.T) {
+	server := New(nil)
+	redClient := &Client{
+		send:    make(chan []byte, 8),
+		done:    make(chan struct{}),
+		profile: game.PlayerProfile{UserID: "pgn-red", Username: "Alice"},
+	}
+	blueClient := &Client{
+		send:    make(chan []byte, 8),
+		done:    make(chan struct{}),
+		profile: game.PlayerProfile{UserID: "pgn-blue", Username: "Bob"},
+	}
+	server.startConfiguredMatch(
+		QueueEntry{Client: redClient, Setup: game.GameSetup{ModeID: game.ModeTotalWar}},
+		QueueEntry{Client: blueClient, Setup: game.GameSetup{ModeID: game.ModeTotalWar}},
+		matchSetup{},
+	)
+	match := readClientMessage(t, redClient)
+	_ = readClientMessage(t, blueClient)
+
+	// Blue opens; Red replies. Two moves are enough to tell a history apart
+	// from an empty one, and to check the movetext replays.
+	if !server.makeMove(blueClient, game.Position{X: 3, Y: 2}, game.Position{X: 3, Y: 3}) {
+		t.Fatal("expected Blue's opening move to be accepted")
+	}
+	if !server.makeMove(redClient, game.Position{X: 3, Y: 6}, game.Position{X: 3, Y: 5}) {
+		t.Fatal("expected Red's reply to be accepted")
+	}
+
+	spectator := &Client{
+		send:    make(chan []byte, 8),
+		done:    make(chan struct{}),
+		profile: game.PlayerProfile{UserID: "pgn-watcher", Username: "Casey"},
+	}
+	server.spectateGame(spectator, match.GameState.GameID)
+	joined := awaitMessageOfType(t, spectator, "spectator_joined")
+	if joined.PGN == "" {
+		t.Fatal("spectator joined a game in progress with no history to read")
+	}
+
+	parsed, err := notation.Parse(joined.PGN)
+	if err != nil {
+		t.Fatalf("the history handed to a spectator does not parse: %v", err)
+	}
+	if got := parsed.Record.PlyCount(); got != 2 {
+		t.Fatalf("expected the two moves already played, got %d", got)
+	}
+	// Unfinished, and saying so: a client reading this must not think it is
+	// looking at a result.
+	if parsed.Result != notation.ResultUnfinished {
+		t.Fatalf("a game in progress was written as %q", parsed.Result)
+	}
+	if parsed.Tag("GameId") != match.GameState.GameID {
+		t.Fatalf("history names game %q, not the one being watched", parsed.Tag("GameId"))
+	}
+
+	// And it keeps up: the next move reaches the spectator with the move on it.
+	if !server.makeMove(blueClient, game.Position{X: 4, Y: 2}, game.Position{X: 4, Y: 3}) {
+		t.Fatal("expected Blue's second move to be accepted")
+	}
+	updated := awaitMessageOfType(t, spectator, "game_state")
+	followed, err := notation.Parse(updated.PGN)
+	if err != nil {
+		t.Fatalf("the history on a state update does not parse: %v", err)
+	}
+	if got := followed.Record.PlyCount(); got != 3 {
+		t.Fatalf("expected three moves after the third was played, got %d", got)
 	}
 }

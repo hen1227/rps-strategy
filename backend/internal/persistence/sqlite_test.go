@@ -140,10 +140,10 @@ func TestDrawIsRecordedWithoutChangingEqualRatings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := newGame.OfferDraw(game.Red); err != nil {
+	if _, err := newGame.OfferDraw(game.FirstToMove); err != nil {
 		t.Fatal(err)
 	}
-	state, err := newGame.AcceptDraw(game.Blue)
+	state, err := newGame.AcceptDraw(game.OtherColor(game.FirstToMove))
 	if err != nil {
 		t.Fatal(err)
 	}

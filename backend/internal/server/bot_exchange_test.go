@@ -100,9 +100,9 @@ func TestAMoveChosenForAFinishedGameIsNotPlayedIntoTheNextOne(t *testing.T) {
 	human := fakeClient(t, server, "human", false)
 	bot := fakeClient(t, server, "engine", true)
 
-	// The bot takes the first seat in both games, so it is on move in game two
-	// and the leftover move would in fact be legal there.
-	first := server.startConfiguredMatch(testEntry(bot), testEntry(human), matchSetup{})
+	// The bot takes the opening seat in both games, so it is on move in game
+	// two and the leftover move would in fact be legal there.
+	first := server.startConfiguredMatch(openingSeat(testEntry(bot), testEntry(human)))
 	if first == nil {
 		t.Fatal("expected a first session")
 	}
@@ -113,11 +113,11 @@ func TestAMoveChosenForAFinishedGameIsNotPlayedIntoTheNextOne(t *testing.T) {
 	chosen := moves[0]
 	server.resign(human)
 
-	second := server.startConfiguredMatch(testEntry(bot), testEntry(human), matchSetup{})
+	second := server.startConfiguredMatch(openingSeat(testEntry(bot), testEntry(human)))
 	if second == nil {
 		t.Fatal("expected a second session")
 	}
-	if state := second.game.Snapshot(); state.CurrentTurn != game.Red {
+	if state := second.game.Snapshot(); state.CurrentTurn != game.FirstToMove {
 		t.Fatalf("expected the bot to be on move in game two, turn is %v", state.CurrentTurn)
 	}
 	before := len(second.game.Record().Moves())

@@ -80,7 +80,15 @@ func parseGame(text string) (ParsedGame, error) {
 		lookup[tag.Name] = tag.Value
 	}
 
-	events, result, err := parseMovetext(movetext)
+	// The FEN settles who opened before a single move is read, because that is
+	// what "1." names in the current dialect. A file with no FEN is a standard
+	// game; a file written in the first dialect numbered by colour instead.
+	opener := openingSideFromFEN(lookup["FEN"])
+	numbered := opener
+	if dialectOf(lookup["Generator"]) <= dialectByColor {
+		numbered = game.Red
+	}
+	events, result, err := parseMovetext(movetext, opener, numbered)
 	if err != nil {
 		return ParsedGame{}, err
 	}
@@ -163,14 +171,25 @@ func tokenizeMovetext(movetext string) ([]string, error) {
 }
 
 type movetextReader struct {
-	events      []game.Event
-	pending     *game.Event
-	result      string
+	events  []game.Event
+	pending *game.Event
+	result  string
+	// opener is the side that had the move on the board this game began from,
+	// taken from the file's own FEN. It seeds the alternation, so the first
+	// move of a file that numbers nothing still gets the right colour.
+	opener game.PlayerColor
+	// numbered is the side a bare "12." names, which is the opener in the
+	// current dialect and was always Red in the first one. See dialectOf.
+	numbered    game.PlayerColor
 	forcedColor game.PlayerColor
 	lastMover   game.PlayerColor
 }
 
-func parseMovetext(movetext string) ([]game.Event, string, error) {
+func parseMovetext(
+	movetext string,
+	opener game.PlayerColor,
+	numbered game.PlayerColor,
+) ([]game.Event, string, error) {
 	tokens, err := tokenizeMovetext(movetext)
 	if err != nil {
 		return nil, "", err
@@ -178,6 +197,8 @@ func parseMovetext(movetext string) ([]game.Event, string, error) {
 	reader := &movetextReader{
 		events:      make([]game.Event, 0, len(tokens)/2),
 		result:      ResultUnfinished,
+		opener:      opener,
+		numbered:    numbered,
 		forcedColor: game.Neutral,
 		lastMover:   game.Neutral,
 	}
@@ -208,12 +229,13 @@ func (reader *movetextReader) consume(token string) error {
 		reader.result = token
 		return nil
 	case numberPattern.MatchString(token):
-		// "12." announces Red, "12..." announces Blue, which keeps colors
-		// explicit even for a mode that does not strictly alternate.
+		// "12." announces one side and "12..." the other, the way a chess PGN
+		// announces White and Black, which keeps colors explicit even for a
+		// mode that does not strictly alternate.
 		if strings.HasSuffix(token, "...") {
-			reader.forcedColor = game.Blue
+			reader.forcedColor = game.OtherColor(reader.numbered)
 		} else {
-			reader.forcedColor = game.Red
+			reader.forcedColor = reader.numbered
 		}
 		return nil
 	default:
@@ -238,10 +260,10 @@ func (reader *movetextReader) nextColor() game.PlayerColor {
 	if reader.forcedColor != game.Neutral {
 		return reader.forcedColor
 	}
-	if reader.lastMover == game.Red {
-		return game.Blue
+	if reader.lastMover == game.Neutral {
+		return reader.opener
 	}
-	return game.Red
+	return game.OtherColor(reader.lastMover)
 }
 
 func (reader *movetextReader) consumeComment(token string) error {
@@ -394,7 +416,7 @@ func buildRecord(tags map[string]string, events []game.Event, result string) (ga
 	// historically replayed with Red first, so keep that compatibility while
 	// preserving an explicit Blue turn when the FEN supplies one.
 	if startingTurn == game.Neutral {
-		startingTurn = game.Red
+		startingTurn = game.FirstToMove
 	}
 	grid, turn, err := DecodePosition(tags["FinalFEN"])
 	if err != nil {
@@ -512,4 +534,19 @@ func parseInt(text string) int {
 func parseInt64(text string) int64 {
 	value, _ := strconv.ParseInt(strings.TrimSpace(text), 10, 64)
 	return value
+}
+
+// openingSideFromFEN reads the side to move out of a starting position, falling
+// back to the standard opener when there is no FEN to read or it cannot be
+// parsed. A malformed FEN is not diagnosed here: buildRecord decodes the same
+// field properly and reports it.
+func openingSideFromFEN(text string) game.PlayerColor {
+	if strings.TrimSpace(text) == "" {
+		return game.FirstToMove
+	}
+	_, turn, err := DecodePosition(text)
+	if err != nil || turn == game.Neutral {
+		return game.FirstToMove
+	}
+	return turn
 }

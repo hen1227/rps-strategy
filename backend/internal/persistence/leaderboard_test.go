@@ -214,3 +214,59 @@ func TestLeaderboardKeepsBotsOnTheirOwnBoard(t *testing.T) {
 		t.Fatalf("row should say what it is: %#v", bots[0])
 	}
 }
+
+// The bot board names whoever entered the engine, so a row on the ladder says
+// who is answering for it without a second request per row. The human board
+// leaves both fields empty rather than inventing an owner for a person.
+func TestLeaderboardNamesTheOwnerOfABot(t *testing.T) {
+	store := authTestStore(t)
+	ctx := t.Context()
+
+	registeredOwner(t, store, "owner", "Owner")
+	seedRecord(t, store, "owner", 1500, 10)
+
+	_, token, err := store.MintBotToken(ctx, "owner")
+	if err != nil {
+		t.Fatalf("mint: %v", err)
+	}
+	bot, err := store.ClaimBot(ctx, token, BotSettings{Name: "Chomper", AllowPublicPlay: true})
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if err := store.RecordBotEngineIdentity(ctx, bot.BotID, BotEngineIdentity{
+		Name:   "Chomper 2.1",
+		Author: "Owner",
+	}); err != nil {
+		t.Fatalf("engine identity: %v", err)
+	}
+	seedRecord(t, store, bot.UserID, 1750, 30)
+
+	// Both boards, and both shapes of the query: a mode board and the combined
+	// one are two different SELECTs and the columns have to arrive on both.
+	for _, filter := range []LeaderboardFilter{
+		{Kind: LeaderboardKindBot},
+		{Kind: LeaderboardKindBot, ModeID: string(game.ModeTotalWar)},
+	} {
+		bots, err := store.Leaderboard(ctx, filter)
+		if err != nil {
+			t.Fatalf("bot board %+v: %v", filter, err)
+		}
+		if len(bots) != 1 {
+			t.Fatalf("bot board %+v: expected one row, got %d", filter, len(bots))
+		}
+		if bots[0].OwnerUsername != "Owner" {
+			t.Fatalf("row should name its owner: %#v", bots[0])
+		}
+		if bots[0].EngineName != "Chomper 2.1" {
+			t.Fatalf("row should name the engine: %#v", bots[0])
+		}
+	}
+
+	humans, err := store.Leaderboard(ctx, LeaderboardFilter{})
+	if err != nil {
+		t.Fatalf("human board: %v", err)
+	}
+	if len(humans) != 1 || humans[0].OwnerUsername != "" || humans[0].EngineName != "" {
+		t.Fatalf("a person has no owner and no engine: %#v", humans)
+	}
+}

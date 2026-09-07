@@ -38,10 +38,18 @@ type GameSession struct {
 	chat               *chatRoom
 	redDisconnectedAt  time.Time
 	blueDisconnectedAt time.Time
-	startedAt          time.Time
-	ranked             bool
-	tournament         *tournamentMatchRef
-	botMatch           *botMatchRef
+	// redIsEngine and blueIsEngine say whether each seat belongs to a bot,
+	// which is the one thing that decides how long an empty seat is held open.
+	// Recorded on the session rather than read off the client, because the
+	// client is exactly what is missing at the moment the question is asked —
+	// an empty seat has no connection to ask, and the account that owns it
+	// cannot change hands mid-game. See botReconnectGracePeriod.
+	redIsEngine  bool
+	blueIsEngine bool
+	startedAt    time.Time
+	ranked       bool
+	tournament   *tournamentMatchRef
+	botMatch     *botMatchRef
 	// bookPlies and openingSeed describe the dealt opening a series game
 	// started from, so the archive can mark which moves nobody chose.
 	bookPlies   int
@@ -61,13 +69,28 @@ type CompletedGame struct {
 }
 
 const (
-	reconnectGracePeriod   = 30 * time.Second
-	completedGameRetention = 30 * time.Second
-	authenticationTimeout  = 10 * time.Second
-	maximumChatRunes       = 300
-	maximumChatHistory     = 100
-	challengeLifetime      = 10 * time.Minute
-	maximumPendingPerName  = 10
+	reconnectGracePeriod = 30 * time.Second
+	// botReconnectGracePeriod is the same window for a seat an engine holds,
+	// and it is half the length because the two are waiting on different
+	// things. A person is finding their phone, changing trains, reopening a
+	// tab they closed by accident — half a minute is barely enough. An engine
+	// is a supervised process with a reconnect loop in it: rpsbot.py comes
+	// back on a one-second backoff, so a socket that is still gone fifteen
+	// seconds later has hit something its owner has to fix, and every second
+	// after that is one the opponent spends looking at a board nobody is
+	// playing.
+	//
+	// Whichever comes first, this or the clock: an engine that drops on its
+	// own move still flags at zero, and expireGames reads the clock before it
+	// reads this, so the record says the game was lost on time rather than
+	// abandoned. See reconnectDeadline.
+	botReconnectGracePeriod = 15 * time.Second
+	completedGameRetention  = 30 * time.Second
+	authenticationTimeout   = 10 * time.Second
+	maximumChatRunes        = 300
+	maximumChatHistory      = 100
+	challengeLifetime       = 10 * time.Minute
+	maximumPendingPerName   = 10
 )
 
 type Participant struct {
@@ -100,6 +123,9 @@ type Server struct {
 	// in an ordinary game session.
 	tournamentReady map[tournamentMatchKey]map[string]struct{}
 	tournamentGames map[tournamentMatchKey]*GameSession
+	// The one conversation a bots-only event's matches all join, keyed by
+	// tournament id. See tournament_chat.go.
+	tournamentChats map[string]*chatRoom
 	// Players practising against a client-side bot. The board itself never
 	// reaches the server; this is presence only, so the lobby can say how many
 	// people are busy with bots and a bot player can still be told that a real
@@ -107,7 +133,9 @@ type Server struct {
 	botSessions map[*Client]botSession
 	// Connected engine bots, keyed by bot id. Distinct from botSessions above,
 	// which tracks *people* practising against a browser bot.
-	bots map[string]*Client
+	// One entry per bot, holding one connection per concurrent game its owner
+	// allowed it. See registerBot.
+	bots map[string][]*Client
 	// authLimiter throttles the routes that verify a password. Nothing else in
 	// the backend is rate limited, because nothing else takes a guessable
 	// secret and half a second of CPU to check one.
@@ -117,21 +145,6 @@ type Server struct {
 	seriesLimiter *rateLimiter
 	// openingNameLimiter throttles proposing a name for an opening line.
 	openingNameLimiter *rateLimiter
-	// modePublishLimiter throttles publishing to the mode library. A published
-	// mode is a row and a registered factory, both of which outlive the request.
-	modePublishLimiter *rateLimiter
-	// artUploadLimiter and artFetchLimiter throttle the two doors a picture
-	// comes in by. Separate, because only one of them makes this server reach
-	// out to somewhere it was told to.
-	artUploadLimiter *rateLimiter
-	artFetchLimiter  *rateLimiter
-	// artFetcher is how a picture named by a URL is collected. It holds the one
-	// outbound HTTP client in this server that talks to an address a stranger
-	// chose, which is why it is a type of its own rather than a method.
-	artFetcher *artFetcher
-	// lastArtSweep is when unpinned pictures were last reclaimed. Only the
-	// lobby goroutine touches it, which is why it needs no lock.
-	lastArtSweep time.Time
 	// botSeriesRuns holds the in-flight bot-versus-bot runs.
 	botSeriesRuns *botSeriesRunner
 	// push is the only way this server reaches somebody who is not connected,
@@ -141,9 +154,7 @@ type Server struct {
 	// Discord sign-in, and the two short-lived maps it needs: one for a flow
 	// that is out at Discord's consent screen, one for a finished conversation
 	// waiting to be redeemed. Both are in memory on purpose — see ttlStore.
-	discord *discordAuth
-	// agent relays the Lab's chat to OpenAI when this server holds a key.
-	agent          *agentRelay
+	discord        *discordAuth
 	discordFlows   *ttlStore[discordFlow]
 	discordTickets *ttlStore[discordTicket]
 	// Pairs that have been made but not seated: the thirty seconds in which a
@@ -158,6 +169,31 @@ type Server struct {
 	// default; tests set it so a four-game series does not take three seconds
 	// of wall clock to prove a pairing rule.
 	seriesDelay time.Duration
+	// seriesAwayOverride overrides how long a run waits for an engine that has
+	// gone offline before writing the run off. Zero means the default; tests
+	// set it so proving the rule does not cost fifteen seconds of wall clock.
+	// Read through seriesAwayGrace.
+	seriesAwayOverride time.Duration
+	// update is the graceful restart, if one is under way: no new games, and
+	// the process exits when the last one on the board finishes. See
+	// deploy_drain.go. Its own lock rather than mu, because every path that
+	// opens a game asks it a question while holding mu.
+	update updateDrainFields
+	// notices is the one standing announcement an administrator may put in
+	// front of everybody. See announcements.go.
+	notices noticeBoard
+	// restrictions is every account sanction in force, held in memory because
+	// chat and challenges ask about it constantly. Its own lock, like the two
+	// above, because the gates that consult it are called from inside mu. See
+	// moderation.go.
+	restrictions moderationBoard
+	// reservations is which engines are being held for a tournament they have
+	// entered, for the same reason and with the same locking. See
+	// bot_reserve.go.
+	reservations reservationBoard
+	// weekend is the recurring bot event's scheduler state: when it last looked
+	// at the clock, and which matches it is waiting on. See weekend.go.
+	weekend *weekendState
 }
 
 // botSession is what the server knows about a bot game: who is playing one,
@@ -217,24 +253,26 @@ func NewWithRegistryAndStore(
 
 		tournamentReady: make(map[tournamentMatchKey]map[string]struct{}),
 		tournamentGames: make(map[tournamentMatchKey]*GameSession),
+		tournamentChats: make(map[string]*chatRoom),
+		weekend:         newWeekendState(),
 
 		botSessions:        make(map[*Client]botSession),
-		bots:               make(map[string]*Client),
+		bots:               make(map[string][]*Client),
 		authLimiter:        newRateLimiter(authAttemptBurst, authAttemptWindow),
 		seriesLimiter:      newRateLimiter(seriesAttemptBurst, seriesAttemptWindow),
 		openingNameLimiter: newRateLimiter(openingNameBurst, openingNameWindow),
-		modePublishLimiter: newRateLimiter(modePublishBurst, modePublishWindow),
-		artUploadLimiter:   newRateLimiter(artUploadBurst, artUploadWindow),
-		artFetchLimiter:    newRateLimiter(artFetchBurst, artFetchWindow),
-		artFetcher:         newArtFetcher(),
-		agent:              newAgentRelay(),
 		botSeriesRuns:      newBotSeriesRunner(),
 		push:               newPushSender(data),
 		discord:            newDiscordAuth(),
 		discordFlows:       newTTLStore[discordFlow](discordFlowLifetime, discordMaximumPending),
 		discordTickets:     newTTLStore[discordTicket](discordTicketLifetime, discordMaximumPending),
 	}
+	server.update.exit = make(chan struct{})
+	// The board stops pairing while the server is being replaced. Asked as a
+	// predicate rather than set as a flag so there is one answer to "is this
+	// server taking new games", and it lives in deploy_drain.go.
 	server.seeks = newSeekBoard(server.startPairedMatch)
+	server.seeks.paused = server.isUpdating
 	// A subscription pruned for being dead is the moment somebody stops being
 	// reachable, and therefore the moment any wait they left behind stops being
 	// honest.
@@ -245,15 +283,17 @@ func NewWithRegistryAndStore(
 		CheckOrigin:     originAllowed,
 	}
 	server.canonicalizeOpeningNames()
-	// Before anything can be seated: a mode has to be in the registry before a
-	// challenge naming it can be accepted, and the library is the only place the
-	// community's modes live.
-	server.loadPublishedModes(context.Background())
+	// Read once, here, for the reason moderation.go explains at length: the
+	// paths that ask about a sanction are the hottest paths in the server.
+	server.loadRestrictions(context.Background())
 	return server
 }
 
 func (server *Server) Run(ctx context.Context) {
 	go server.seeks.Run(ctx)
+	// Its own goroutine, not the lobby ticker: a compile replays every archived
+	// game in the mode. See opening_stats.go.
+	go server.runOpeningStats(ctx)
 	lobbyTicker := time.NewTicker(matchmakingTick)
 	clockTicker := time.NewTicker(100 * time.Millisecond)
 	defer lobbyTicker.Stop()
@@ -267,16 +307,27 @@ func (server *Server) Run(ctx context.Context) {
 			server.expireChallenges(now)
 			server.expireBotExchanges(now)
 			server.expireUnstartedGames(now)
+			// Before autoReadyBotMatches, which is the one path that *wants*
+			// a reserved engine: the pairing it does is the reservation being
+			// honoured rather than broken.
+			server.refreshBotReservations()
 			server.autoReadyBotMatches()
+			server.pruneTournamentChats()
+			// Before the shutdowns, because a run resuming or being written off
+			// is a drain's list of commitments changing, and settling a drain
+			// against last tick's list is how a bot gets told to stop while it
+			// still owes half a pair.
+			server.resumeStalledSeries(now)
 			server.settleBotShutdowns()
+			// The recurring bot event. Guarded to do real work at most once a
+			// minute; the rest of the time it is one config read. See weekend.go.
+			server.runWeekend(now)
+			server.settleWeekendForfeits(now)
+			server.settleUpdateDrain()
 			server.authLimiter.sweep()
 			server.seriesLimiter.sweep()
 			server.openingNameLimiter.sweep()
-			server.modePublishLimiter.sweep()
-			server.artUploadLimiter.sweep()
-			server.artFetchLimiter.sweep()
-			server.reclaimArt(ctx, now)
-			server.agent.limiter.sweep()
+			server.pruneRestrictions(now)
 			server.discordFlows.sweep()
 			server.discordTickets.sweep()
 		case now := <-clockTicker.C:
@@ -289,8 +340,22 @@ func (server *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(writer).Encode(map[string]string{"status": "ok"})
+		// `build` is how a deploy tells the process it just started from the one
+		// it replaced. Both answer "ok" and both are healthy; only the stamp
+		// says which binary is answering. See buildStamp.
+		status := "ok"
+		if server.isUpdating() {
+			// Still serving — games are being played on it — but not taking new
+			// ones, which is the distinction anything in front of this server
+			// wants to make.
+			status = "draining"
+		}
+		_ = json.NewEncoder(writer).Encode(map[string]string{
+			"status": status,
+			"build":  buildStamp(),
+		})
 	})
+	mux.HandleFunc("GET /api/notice", server.getNotice)
 	mux.HandleFunc("GET /api/modes", func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(writer).Encode(server.registry.CatalogueDefinitions())
@@ -307,6 +372,11 @@ func (server *Server) Routes() http.Handler {
 		server.getHeadToHeadRecord,
 	)
 	mux.HandleFunc("GET /api/leaderboard", server.getLeaderboard)
+	// The public player pages. Addressed by username or by user id — see
+	// profile_routes.go — and open to anybody, like the ladder they hang off.
+	mux.HandleFunc("GET /api/players", server.listPlayerProfiles)
+	mux.HandleFunc("GET /api/players/{handle}", server.getPlayerProfile)
+	mux.HandleFunc("GET /api/players/{handle}/games", server.getPlayerGames)
 	mux.HandleFunc("GET /api/titles", server.getTitles)
 	mux.HandleFunc("PUT /api/accounts/{userID}/title", server.setAccountTitle)
 	mux.HandleFunc("GET /api/tournaments", server.getTournaments)
@@ -315,6 +385,21 @@ func (server *Server) Routes() http.Handler {
 		"POST /api/tournaments/{tournamentID}/signups",
 		server.signupForTournament,
 	)
+	// The entrant's own withdrawal, as against the host's in the admin block
+	// below. Signed in, and registration only. See withdrawFromTournament.
+	mux.HandleFunc(
+		"DELETE /api/tournaments/{tournamentID}/signups",
+		server.withdrawFromTournament,
+	)
+	// The weekend bot arena. One read for the whole page; one write per vote.
+	mux.HandleFunc("GET /api/weekend", server.getWeekend)
+	mux.HandleFunc("POST /api/weekend/votes", server.castWeekendVote)
+	// When you can play, as a whole set. See setWeekendAvailability for why it
+	// is a set rather than a choice.
+	mux.HandleFunc("PUT /api/weekend/availability", server.setWeekendAvailability)
+	mux.HandleFunc("GET /api/admin/weekend", server.adminOnly(server.getWeekendConfig))
+	mux.HandleFunc("PUT /api/admin/weekend", server.adminOnly(server.saveWeekendConfig))
+	mux.HandleFunc("POST /api/admin/weekend/open", server.adminOnly(server.runWeekendNow))
 	mux.HandleFunc("GET /api/identity/policy", server.identityPolicy)
 	mux.HandleFunc("GET /api/push/key", server.getPushKey)
 	mux.HandleFunc("POST /api/push/subscriptions", server.subscribeToPush)
@@ -344,6 +429,8 @@ func (server *Server) Routes() http.Handler {
 	// Answers to a bot id or to a bot's account id, so every list that shows a
 	// bot can build this URL from whichever of the two it already carries.
 	mux.HandleFunc("GET /api/bots/{botID}/icon.png", server.getBotIcon)
+	// The host's way to fill a bots-only field from whatever is online. The
+	// owner-facing door is POST /api/tournaments/{id}/signups with a botId.
 	mux.HandleFunc(
 		"POST /api/admin/tournaments/{tournamentID}/enroll-bots",
 		server.adminOnly(server.enrollBots),
@@ -360,41 +447,20 @@ func (server *Server) Routes() http.Handler {
 		"POST /api/admin/bot-series/{seriesID}/abort",
 		server.adminOnly(server.abortAdminBotSeries),
 	)
-	// The mode library. `language` is what the Lab's agent reads to learn the
-	// rule format; the rest is browsing, publishing and private drafts.
-	mux.HandleFunc("GET /api/lab/language", server.getLabLanguage)
-	mux.HandleFunc("GET /api/lab/modes", server.listLabModes)
-	mux.HandleFunc("GET /api/lab/modes/{modeID}", server.getLabMode)
-	mux.HandleFunc("POST /api/lab/modes", server.publishLabMode)
-	mux.HandleFunc("DELETE /api/lab/modes/{modeID}", server.retireLabMode)
-	mux.HandleFunc("GET /api/lab/parts", server.listLabParts)
-	mux.HandleFunc("GET /api/lab/parts/{partID}", server.getLabPart)
-	mux.HandleFunc("POST /api/lab/parts", server.publishLabPart)
-	mux.HandleFunc("GET /api/lab/drafts", server.listLabDrafts)
-	mux.HandleFunc("PUT /api/lab/drafts", server.saveLabDraft)
-	mux.HandleFunc("DELETE /api/lab/drafts/{draftID}", server.deleteLabDraft)
-	// A mode's pictures. Storing one needs a registered account; serving one is
-	// public, like a bot icon, because it is drawn by everybody watching a game
-	// in that mode.
-	mux.HandleFunc("GET /api/lab/art", server.listLabArt)
-	mux.HandleFunc("POST /api/lab/art", server.postLabArt)
-	mux.HandleFunc("GET /api/lab/art/{artID}", server.getLabArt)
-	mux.HandleFunc("POST /api/lab/art/{artID}/reports", server.reportLabArt)
-	mux.HandleFunc("GET /api/admin/lab/art/reports", server.adminOnly(server.listArtReports))
-	mux.HandleFunc("POST /api/admin/lab/art/{artID}/takedown",
-		server.adminOnly(server.takeLabArtDown))
-	mux.HandleFunc("POST /api/admin/lab/art/{artID}/keep", server.adminOnly(server.keepLabArt))
-	// The Lab's chat. `status` says whether this server holds a key at all; the
-	// page falls back to one the visitor brings when it does not.
-	mux.HandleFunc("GET /api/lab/agent/status", server.getAgentStatus)
-	mux.HandleFunc("POST /api/lab/agent/stream", server.relayAgentStream)
-
 	mux.HandleFunc("GET /api/bot/version", server.getBotClientVersion)
 	mux.HandleFunc("GET /api/bot/guide", server.getBotGuide)
 	mux.HandleFunc("GET /api/bot/rpsbot.py", server.getBotClientScript)
 	mux.HandleFunc("GET /api/bot/example_engine.py", server.getExampleEngine)
 
 	mux.HandleFunc("GET /api/admin/session", server.adminOnly(server.getAdminSession))
+	// The graceful restart: stop taking games, wait out the ones being played,
+	// then exit for systemd to bring the new binary up. deploy-backend.sh drives
+	// all three, and the admin screen offers the same buttons.
+	mux.HandleFunc("POST /api/admin/drain", server.adminOnly(server.beginUpdateDrain))
+	mux.HandleFunc("DELETE /api/admin/drain", server.adminOnly(server.cancelUpdateDrain))
+	mux.HandleFunc("GET /api/admin/drain", server.adminOnly(server.getUpdateDrain))
+	mux.HandleFunc("POST /api/admin/notice", server.adminOnly(server.postNotice))
+	mux.HandleFunc("DELETE /api/admin/notice", server.adminOnly(server.clearNotice))
 	mux.HandleFunc("GET /api/openings/{modeID}", server.getOpeningBook)
 	// One position, resolved from `?line=d9-c8,d2-c3`. The book is a graph the
 	// server owns; a visitor walks it a layer at a time rather than downloading
@@ -403,9 +469,29 @@ func (server *Server) Routes() http.Handler {
 	// Just the names, for the board: every live game asks what the opening it
 	// is playing is called, and none of them wants the book to answer it.
 	mux.HandleFunc("GET /api/openings/{modeID}/names", server.getOpeningNames)
+	// Naming a line, published on the spot. Checked against the rules rather
+	// than against the book, so an opening RPSFish never analyzed can be named
+	// -- which is most of the interesting ones.
+	mux.HandleFunc("POST /api/openings/{modeID}/names", server.nameOpeningLine)
+	// The searchable index of every name. The openings page leads with the
+	// engine's certified lines and does not list player names beside them; this
+	// is how they stay findable rather than merely stored.
+	mux.HandleFunc("GET /api/openings/{modeID}/names/browse", server.browseOpeningNames)
+	// What people actually play, recompiled from the archive daily. With no
+	// `line` this is the whole condensed dataset for a mode in one response.
+	mux.HandleFunc("GET /api/openings/{modeID}/stats", server.getOpeningStats)
+	// The explorer's question, and the one the line-keyed statistics cannot
+	// answer: how many games reached this *board*, by any move order, and what
+	// did they play from it. The caller sends the line it walked and this
+	// replays it, because the rules live here.
+	mux.HandleFunc("GET /api/openings/{modeID}/explore", server.exploreOpeningPosition)
 	mux.HandleFunc(
 		"POST /api/openings/{modeID}/suggestions",
 		server.suggestOpeningName,
+	)
+	mux.HandleFunc(
+		"POST /api/admin/openings/{modeID}/stats",
+		server.adminOnly(server.recompileOpeningStats),
 	)
 	mux.HandleFunc(
 		"PUT /api/admin/openings/{modeID}",
@@ -459,12 +545,81 @@ func (server *Server) Routes() http.Handler {
 		server.adminOnly(server.purgeAccount),
 	)
 	mux.HandleFunc("DELETE /api/admin/bots/{botID}", server.adminOnly(server.deleteAdminBot))
+	mux.HandleFunc(
+		"GET /api/admin/accounts/{userID}/restrictions",
+		server.adminOnly(server.listAccountRestrictions),
+	)
+	mux.HandleFunc(
+		"POST /api/admin/accounts/{userID}/restrictions",
+		server.adminOnly(server.restrictAccount),
+	)
+	mux.HandleFunc(
+		"DELETE /api/admin/accounts/{userID}/restrictions/{kind}",
+		server.adminOnly(server.liftAccountRestriction),
+	)
+	mux.HandleFunc("GET /api/admin/analytics", server.adminOnly(server.getAdminAnalytics))
+	mux.HandleFunc("GET /api/admin/live-games", server.adminOnly(server.listAdminLiveGames))
+	mux.HandleFunc(
+		"POST /api/admin/live-games/{gameID}/stop",
+		server.adminOnly(server.stopGame),
+	)
+	mux.HandleFunc("GET /api/admin/bots", server.adminOnly(server.listAdminBots))
+	mux.HandleFunc(
+		"POST /api/admin/bots/{botID}/disconnect",
+		server.adminOnly(server.disconnectBotSockets),
+	)
 	mux.HandleFunc("GET /api/admin/games", server.adminOnly(server.listAdminGames))
 	mux.HandleFunc("DELETE /api/admin/games/{gameID}", server.adminOnly(server.deleteAdminGame))
 	mux.HandleFunc("GET /api/admin/games/pgn", server.adminOnly(server.exportGamePGNs))
+	// The tournament builder. Create and start keep their addresses; the rest
+	// of the lifecycle — editing a draft, publishing it, calling it off — is
+	// new, and so is reading the board with drafts on it.
 	mux.HandleFunc(
 		"POST /api/admin/tournaments",
 		server.adminOnly(server.createTournament),
+	)
+	mux.HandleFunc(
+		"GET /api/admin/tournaments",
+		server.adminOnly(server.listAdminTournaments),
+	)
+	mux.HandleFunc(
+		"PATCH /api/admin/tournaments/{tournamentID}",
+		server.adminOnly(server.updateTournament),
+	)
+	mux.HandleFunc(
+		"DELETE /api/admin/tournaments/{tournamentID}",
+		server.adminOnly(server.deleteTournament),
+	)
+	mux.HandleFunc(
+		"POST /api/admin/tournaments/{tournamentID}/publish",
+		server.adminOnly(server.publishTournament),
+	)
+	mux.HandleFunc(
+		"DELETE /api/admin/tournaments/{tournamentID}/publish",
+		server.adminOnly(server.unpublishTournament),
+	)
+	mux.HandleFunc(
+		"POST /api/admin/tournaments/{tournamentID}/cancel",
+		server.adminOnly(server.cancelTournament),
+	)
+	// Taking a finished event off the board, and putting it back. Distinct from
+	// cancelling, which is about the event, and from deleting, which destroys
+	// it: this only changes what is listed. See SetTournamentHidden.
+	mux.HandleFunc(
+		"POST /api/admin/tournaments/{tournamentID}/hide",
+		server.adminOnly(server.hideTournament),
+	)
+	mux.HandleFunc(
+		"DELETE /api/admin/tournaments/{tournamentID}/hide",
+		server.adminOnly(server.showTournament),
+	)
+	mux.HandleFunc(
+		"POST /api/admin/tournaments/{tournamentID}/advance",
+		server.adminOnly(server.advanceTournament),
+	)
+	mux.HandleFunc(
+		"DELETE /api/admin/tournaments/{tournamentID}/players/{playerID}",
+		server.adminOnly(server.withdrawTournamentPlayer),
 	)
 	mux.HandleFunc(
 		"POST /api/admin/tournaments/{tournamentID}/start",
@@ -647,8 +802,22 @@ func (server *Server) handleWebSocket(writer http.ResponseWriter, request *http.
 	liveGameID := server.liveGameFor(account.UserID)
 	defaultTimeControl := game.DefaultTimeControl()
 	transports := server.push.transports()
+	// Both of these are why they are held on the server rather than only
+	// broadcast: somebody reloading the page mid-deploy, or arriving a minute
+	// after the announcement went out, is exactly the person who needs to be
+	// told. Sent unconditionally — an update that is not happening is an
+	// `updating: false` the client hides the banner for.
+	updateState := server.UpdateDrainState()
+	notice := server.notices.current()
+	// The same reasoning one more time: somebody arriving in the middle of a
+	// scheduled bench needs to be told why the whole bot ladder is unavailable,
+	// and somebody arriving an hour before one needs to be told it is coming.
+	botBench := botBenchState(time.Now())
 	client.Send(ServerMessage{
 		Type:               "connection_ready",
+		Update:             &updateState,
+		Notice:             notice,
+		BotBench:           &botBench,
 		Modes:              server.registry.CatalogueDefinitions(),
 		ModePlayerCounts:   server.modePlayerCounts(),
 		ModeQueueCounts:    server.seeks.CountsByMode(),
@@ -666,6 +835,7 @@ func (server *Server) handleWebSocket(writer http.ResponseWriter, request *http.
 		GameID:             liveGameID,
 		PushEnabled:        server.push.enabled(),
 		PushTransports:     &transports,
+		Restrictions:       server.activeRestrictions(account.UserID),
 	})
 	go client.writePump()
 	client.readPump()
@@ -800,11 +970,16 @@ func (server *Server) spectateGame(client *Client, gameID string) {
 	// could beat the message that is supposed to introduce the room. Send is
 	// a non-blocking buffered write, so the lock is not held on anything slow.
 	client.Send(ServerMessage{
-		Type:          "spectator_joined",
-		Color:         game.Neutral,
-		GameState:     &state,
+		Type:      "spectator_joined",
+		Color:     game.Neutral,
+		GameState: &state,
+		// The moves that made the position above. Somebody who joins at move
+		// twenty has seen none of them, and they are the reader this exists
+		// for. See ServerMessage.PGN.
+		PGN:           livePGN(session),
 		ChatMessages:  history,
 		ChatRoomID:    session.chat.id,
+		ChatRoomScope: session.chat.scope,
 		ChatOccupancy: session.chat.occupancy(),
 	})
 	server.mu.Unlock()
@@ -908,6 +1083,7 @@ func (server *Server) announceRoomOccupancy(room *chatRoom) {
 	message := ServerMessage{
 		Type:          "chat_presence",
 		ChatRoomID:    room.id,
+		ChatRoomScope: room.scope,
 		ChatOccupancy: len(listeners),
 	}
 	for _, listener := range listeners {
@@ -944,6 +1120,12 @@ func (server *Server) chatSeatLocked(
 }
 
 func (server *Server) sendChat(client *Client, text string) {
+	// First, before the message is even validated: a muted player should be
+	// told they are muted rather than told their message was too long.
+	if refusal := server.muteRefusal(client, "send chat messages"); refusal != "" {
+		client.Send(ServerMessage{Type: "chat_rejected", Message: refusal})
+		return
+	}
 	text = strings.TrimSpace(text)
 	if text == "" {
 		client.Send(ServerMessage{Type: "chat_rejected", Message: "chat messages cannot be empty"})
@@ -1052,14 +1234,17 @@ func (server *Server) rejoinGame(client *Client, gameID string) {
 				replaced, left := server.takeRoomSeatLocked(client, room, color)
 				history := room.chat.history()
 				roomID := room.chat.id
+				roomScope := room.chat.scope
 				occupancy := room.chat.occupancy()
 				server.mu.Unlock()
 				client.Send(ServerMessage{
 					Type:          "game_rejoined",
 					Color:         color,
 					GameState:     &state,
+					PGN:           livePGN(room),
 					ChatMessages:  history,
 					ChatRoomID:    roomID,
+					ChatRoomScope: roomScope,
 					ChatOccupancy: occupancy,
 				})
 				if replaced != nil && replaced != client {
@@ -1096,6 +1281,7 @@ func (server *Server) rejoinGame(client *Client, gameID string) {
 	rejoinState = session.game.Snapshot()
 	chatHistory = session.chat.history()
 	chatRoomID := session.chat.id
+	chatRoomScope := session.chat.scope
 	firstMoveDeadline := session.start.deadlineUnixMs()
 	playerColor := colorForUser(rejoinState, client.profile.UserID)
 	if playerColor == game.Neutral {
@@ -1112,8 +1298,10 @@ func (server *Server) rejoinGame(client *Client, gameID string) {
 			Type:          "game_rejoined",
 			Color:         playerColor,
 			GameState:     &rejoinState,
+			PGN:           livePGN(session),
 			ChatMessages:  chatHistory,
 			ChatRoomID:    chatRoomID,
+			ChatRoomScope: chatRoomScope,
 			ChatOccupancy: session.chat.occupancy(),
 		})
 		server.mu.Unlock()
@@ -1123,7 +1311,7 @@ func (server *Server) rejoinGame(client *Client, gameID string) {
 
 	switch playerColor {
 	case game.Red:
-		if deadline := disconnectDeadline(session.redDisconnectedAt); !deadline.IsZero() &&
+		if deadline := session.reconnectDeadline(game.Red, rejoinState); !deadline.IsZero() &&
 			!now.Before(deadline) {
 			expiredColor = game.Red
 		} else {
@@ -1131,10 +1319,10 @@ func (server *Server) rejoinGame(client *Client, gameID string) {
 			oldClient = session.redClient
 			session.redClient = client
 			session.redDisconnectedAt = time.Time{}
-			opponentDeadline = disconnectDeadline(session.blueDisconnectedAt)
+			opponentDeadline = session.reconnectDeadline(game.Blue, rejoinState)
 		}
 	case game.Blue:
-		if deadline := disconnectDeadline(session.blueDisconnectedAt); !deadline.IsZero() &&
+		if deadline := session.reconnectDeadline(game.Blue, rejoinState); !deadline.IsZero() &&
 			!now.Before(deadline) {
 			expiredColor = game.Blue
 		} else {
@@ -1142,7 +1330,7 @@ func (server *Server) rejoinGame(client *Client, gameID string) {
 			oldClient = session.blueClient
 			session.blueClient = client
 			session.blueDisconnectedAt = time.Time{}
-			opponentDeadline = disconnectDeadline(session.redDisconnectedAt)
+			opponentDeadline = session.reconnectDeadline(game.Red, rejoinState)
 		}
 	}
 	if expiredColor == game.Neutral {
@@ -1154,11 +1342,15 @@ func (server *Server) rejoinGame(client *Client, gameID string) {
 		// empty seat counts themselves.
 		rejoinedRoom = session.chat
 		client.Send(ServerMessage{
-			Type:                    "game_rejoined",
-			Color:                   participant.color,
-			GameState:               &rejoinState,
+			Type:      "game_rejoined",
+			Color:     participant.color,
+			GameState: &rejoinState,
+			// The game so far, so a player who reloaded mid-match gets their
+			// move list back rather than a board with no history behind it.
+			PGN:                     livePGN(session),
 			ChatMessages:            chatHistory,
 			ChatRoomID:              chatRoomID,
+			ChatRoomScope:           chatRoomScope,
 			ChatOccupancy:           rejoinedRoom.occupancy(),
 			ReconnectDeadlineUnixMs: deadlineUnixMilli(opponentDeadline),
 			FirstMoveDeadlineUnixMs: firstMoveDeadline,
@@ -1365,9 +1557,11 @@ type matchSetup struct {
 	// already prove somebody is there.
 	start *matchStart
 	// chat puts the new game into a conversation that already exists rather
-	// than opening one of its own. Only a bot series uses this: every game of
-	// a run shares the room, so the talk carries across the boards and the
-	// people who have not followed to the new one yet are still in it.
+	// than opening one of its own. Two things use it. Every game of a bot
+	// series shares the run's room, so the talk carries across the boards and
+	// the people who have not followed to the new one yet are still in it;
+	// every match of a bots-only tournament shares the event's, so the crowd
+	// watching one board can hear the crowd watching the next.
 	chat *chatRoom
 }
 
@@ -1386,6 +1580,25 @@ func (server *Server) startConfiguredMatch(
 		if second.Client != nil {
 			second.Client.Send(message)
 		}
+	}
+	// The backstop for a server on its way out, and the reason this function is
+	// worth having as a single choke point: matchmaking, an accepted challenge,
+	// a tournament round and a challenge to an engine all pass through here,
+	// and each of them already treats a nil session as "could not be arranged"
+	// and puts back whatever it was holding. Every one of those paths also
+	// refuses earlier, where it can say something more useful than this; a game
+	// that reaches here during a drain is a race, not a route.
+	//
+	// The exception is the next game of a bot series, and it is not a loophole:
+	// a run in progress is a commitment the drain is already *waiting on*, and
+	// playNextSeriesGame has already applied the only policy a drain has about
+	// series — finish the pair, then stop. Refusing here instead would abort the
+	// run halfway through a pair, which is the exact outcome that rule exists to
+	// prevent. Nothing else can arrive with a botMatch set: a new series is
+	// refused in StartBotSeries.
+	if server.isUpdating() && setup.botMatch == nil {
+		tell(ServerMessage{Type: "error", Message: server.updateRefusalMessage()})
+		return nil
 	}
 	gameID, err := randomID()
 	if err != nil {
@@ -1450,6 +1663,8 @@ func (server *Server) startConfiguredMatch(
 		blueClient:         second.Client,
 		redDisconnectedAt:  redAbsentSince,
 		blueDisconnectedAt: blueAbsentSince,
+		redIsEngine:        first.Client.isBot(),
+		blueIsEngine:       second.Client.isBot(),
 		redElo:             first.Elo,
 		blueElo:            second.Elo,
 		spectators:         make(map[*Client]struct{}),
@@ -1484,17 +1699,28 @@ func (server *Server) startConfiguredMatch(
 			continue
 		}
 		seat.client.Send(ServerMessage{
-			Type:                    "match_found",
-			Color:                   seat.color,
-			GameState:               &state,
+			Type:      "match_found",
+			Color:     seat.color,
+			GameState: &state,
+			// Almost always an empty movetext, and not always: a bot series
+			// deals each pair its opening before either engine is asked to
+			// move, so the first board a spectator or an owner sees can
+			// already have moves behind it.
+			PGN:                     livePGN(session),
 			ChatMessages:            chatHistory,
 			ChatRoomID:              room.id,
+			ChatRoomScope:           room.scope,
 			ChatOccupancy:           roomOccupancy,
 			FirstMoveDeadlineUnixMs: setup.start.deadlineUnixMs(),
 		})
 	}
 	server.broadcastModePlayerCounts()
 	server.broadcastLiveGames()
+	// The roster is derived from the participants written just above, so an
+	// engine that has just been seated is only PLAYING in the lobby once this
+	// has gone out. Here rather than at each caller: matchmaking, a challenge,
+	// a tournament round and the next game of a series all seat engines.
+	server.broadcastBotsForEngines(first.Client, second.Client)
 	// A series changeover seats a new board in a room people are already in,
 	// so the count they are looking at is this game's to restate.
 	server.announceRoomOccupancy(room)
@@ -1824,14 +2050,31 @@ func (server *Server) disconnect(client *Client) {
 	}
 
 	if disconnected != nil {
+		// Read from the session rather than added up here, so the countdown on
+		// the opponent's screen is the deadline the sweep will actually act on
+		// — including the two things that shorten it, an engine's seat and a
+		// clock about to run out. See reconnectDeadline.
+		//
+		// Under the lock, because the timestamp it reads is one matchBegan and
+		// a rejoin also write, and the snapshot comes first: server.mu before
+		// the game lock is the order rejoinGame already takes them in.
+		state := disconnected.session.game.Snapshot()
+		server.mu.RLock()
+		deadline := disconnected.session.reconnectDeadline(disconnected.color, state)
+		server.mu.RUnlock()
 		server.sendToColor(
 			disconnected.session,
 			game.OtherColor(disconnected.color),
 			ServerMessage{
 				Type:                    "opponent_disconnected",
-				ReconnectDeadlineUnixMs: now.Add(reconnectGracePeriod).UnixMilli(),
+				ReconnectDeadlineUnixMs: deadlineUnixMilli(deadline),
 			},
 		)
+		// An engine that dropped mid-game has a seat being held for it, and it
+		// is the one kind of player that cannot ask for it back: a bot has no
+		// rejoin_game to send. The next connection it makes is what claims it.
+		// See bot_resume.go.
+		server.logEngineLeftGame(client, disconnected, deadline)
 	}
 }
 
@@ -1863,12 +2106,15 @@ func (server *Server) retireSession(session *GameSession) {
 		delete(server.spectating, spectator)
 		seat(spectator, game.Neutral)
 	}
+	// Read under the lock, for the roster below: after the unlock these fields
+	// belong to whoever holds it next.
+	redClient, blueClient := session.redClient, session.blueClient
 	for _, player := range []struct {
 		client *Client
 		color  game.PlayerColor
 	}{
-		{session.redClient, game.Red},
-		{session.blueClient, game.Blue},
+		{redClient, game.Red},
+		{blueClient, game.Blue},
 	} {
 		if player.client == nil ||
 			server.participants[player.client].session != session {
@@ -1889,6 +2135,10 @@ func (server *Server) retireSession(session *GameSession) {
 
 	server.broadcastModePlayerCounts()
 	server.broadcastLiveGames()
+	// An engine that was in this game has a slot back, and the badge beside its
+	// name is the roster's to correct. Every finished, expired and abandoned
+	// game funnels through here.
+	server.broadcastBotsForEngines(redClient, blueClient)
 	// The room is the same room and the people in it are the same people, but
 	// the lobby row this game had is gone. Restating the count here is what
 	// keeps a client that was reading it off that row from losing it at the
@@ -1917,7 +2167,7 @@ func (server *Server) expireGames(now time.Time) {
 			server.finishSession(session, state)
 			continue
 		}
-		if abandoned := server.abandonedPlayer(session, now); abandoned != game.Neutral {
+		if abandoned := server.abandonedPlayer(session, state, now); abandoned != game.Neutral {
 			state, err := session.game.Abandon(abandoned)
 			if err == nil {
 				server.finishSession(session, state)
@@ -1938,7 +2188,21 @@ func (server *Server) removeExpiredCompletedGames(now time.Time) {
 }
 
 func (server *Server) broadcastGameState(session *GameSession, state game.GameState) {
-	server.broadcastToSession(session, ServerMessage{Type: "game_state", GameState: &state})
+	// Written once for the whole audience, and only when there is one. A
+	// bot-versus-bot game with nobody watching is most of what the series
+	// runner plays, and encoding the entire game again on every move of it
+	// would be work for no reader. See ServerMessage.PGN.
+	audience := server.sessionAudience(session)
+	if len(audience) > 0 {
+		message := ServerMessage{
+			Type:      "game_state",
+			GameState: &state,
+			PGN:       livePGN(session),
+		}
+		for _, client := range audience {
+			client.Send(message)
+		}
+	}
 	// Every change to a game funnels through here, which makes it the one
 	// place a bot needs to be asked for its move. Prompting is idempotent:
 	// it does nothing when it is the other side's turn, and nothing when the
@@ -1950,28 +2214,36 @@ func (server *Server) broadcastGameState(session *GameSession, state game.GameSt
 	server.broadcastLiveGames()
 }
 
-func (server *Server) broadcastToSession(session *GameSession, message ServerMessage) {
+// sessionAudience is everybody attached to this game who reads board
+// snapshots: whoever is playing it, and whoever is watching.
+//
+// A bot is sent RPSI lines instead, so it is left out. That keeps the largest
+// message in the protocol — a 9x9 grid with territory, several kilobytes of
+// JSON — off connections that would only discard it, and it is what lets the
+// caller ask whether writing the message is worth doing at all.
+func (server *Server) sessionAudience(session *GameSession) []*Client {
 	server.mu.RLock()
+	defer server.mu.RUnlock()
 	redClient := session.redClient
 	blueClient := session.blueClient
-	spectators := make([]*Client, 0, len(session.spectators))
-	for spectator := range session.spectators {
-		spectators = append(spectators, spectator)
-	}
-	server.mu.RUnlock()
-	// A bot is sent RPSI lines instead of board snapshots. Skipping it here
-	// keeps the largest message in the protocol — a 9x9 grid with territory,
-	// several kilobytes of JSON — off connections that would only discard it.
+	audience := make([]*Client, 0, len(session.spectators)+2)
 	if redClient != nil && !redClient.isBot() {
-		redClient.Send(message)
+		audience = append(audience, redClient)
 	}
 	if blueClient != nil && blueClient != redClient && !blueClient.isBot() {
-		blueClient.Send(message)
+		audience = append(audience, blueClient)
 	}
-	for _, spectator := range spectators {
+	for spectator := range session.spectators {
 		if spectator != redClient && spectator != blueClient {
-			spectator.Send(message)
+			audience = append(audience, spectator)
 		}
+	}
+	return audience
+}
+
+func (server *Server) broadcastToSession(session *GameSession, message ServerMessage) {
+	for _, client := range server.sessionAudience(session) {
+		client.Send(message)
 	}
 }
 
@@ -1993,14 +2265,18 @@ func (server *Server) sendToColor(
 	}
 }
 
-func (server *Server) abandonedPlayer(session *GameSession, now time.Time) game.PlayerColor {
+func (server *Server) abandonedPlayer(
+	session *GameSession,
+	state game.GameState,
+	now time.Time,
+) game.PlayerColor {
 	server.mu.RLock()
 	defer server.mu.RUnlock()
 	if current, ok := server.games[session.gameID]; !ok || current != session {
 		return game.Neutral
 	}
-	redDeadline := disconnectDeadline(session.redDisconnectedAt)
-	blueDeadline := disconnectDeadline(session.blueDisconnectedAt)
+	redDeadline := session.reconnectDeadline(game.Red, state)
+	blueDeadline := session.reconnectDeadline(game.Blue, state)
 	redExpired := !redDeadline.IsZero() && !now.Before(redDeadline)
 	blueExpired := !blueDeadline.IsZero() && !now.Before(blueDeadline)
 	switch {
@@ -2021,11 +2297,59 @@ func (server *Server) abandonedPlayer(session *GameSession, now time.Time) game.
 	}
 }
 
-func disconnectDeadline(disconnectedAt time.Time) time.Time {
+// reconnectDeadline is the moment an empty seat stops being held.
+//
+// Two things shorten it. Whose seat it is: an engine gets
+// botReconnectGracePeriod rather than the half minute a person gets. And the
+// clock: a side that walked away on its own move is spending time it does not
+// have, so waiting past the flag would be holding a seat in a game that is
+// already decided. Which of the two ends it is not this function's business —
+// expireGames reads the clock first, so a game that reaches zero is recorded
+// as a loss on time and never as an abandonment.
+//
+// state is the position as of now, and is only read for the clock. Passing it
+// in rather than snapshotting here keeps the sweep to one read of the game per
+// tick, which is also the read that advanced the clock in the first place.
+func (session *GameSession) reconnectDeadline(
+	color game.PlayerColor,
+	state game.GameState,
+) time.Time {
+	disconnectedAt := session.redDisconnectedAt
+	isEngine := session.redIsEngine
+	if color == game.Blue {
+		disconnectedAt = session.blueDisconnectedAt
+		isEngine = session.blueIsEngine
+	}
 	if disconnectedAt.IsZero() {
 		return time.Time{}
 	}
-	return disconnectedAt.Add(reconnectGracePeriod)
+	grace := reconnectGracePeriod
+	if isEngine {
+		grace = botReconnectGracePeriod
+	}
+	deadline := disconnectedAt.Add(grace)
+
+	// Only the side to move is spending anything, so only that side has an end
+	// of time to run into. A game still waiting for its first move has a clock
+	// that is not running yet, and expireGames does not look at those at all.
+	if state.Status != game.InProgress || state.CurrentTurn != color {
+		return deadline
+	}
+	remaining := state.Clock.RedRemainingMs
+	if color == game.Blue {
+		remaining = state.Clock.BlueRemainingMs
+	}
+	flagsAt := clockUpdatedAt(state).Add(time.Duration(remaining) * time.Millisecond)
+	if flagsAt.Before(deadline) {
+		return flagsAt
+	}
+	return deadline
+}
+
+// clockUpdatedAt is the instant the published clock was last advanced to,
+// which is what the remaining milliseconds beside it are measured from.
+func clockUpdatedAt(state game.GameState) time.Time {
+	return time.UnixMilli(state.Clock.UpdatedAtUnixMs)
 }
 
 func deadlineUnixMilli(deadline time.Time) int64 {
@@ -2072,7 +2396,15 @@ func (server *Server) finishSession(session *GameSession, state game.GameState) 
 			expiresAt: finishedAt.Add(completedGameRetention),
 		}
 		server.mu.Unlock()
-		message := ServerMessage{Type: "game_state", GameState: &state}
+		message := ServerMessage{
+			Type:      "game_state",
+			GameState: &state,
+			// The whole game, on the message that says it is over. This is
+			// what the result card and the move list read from, and the last
+			// chance to send it: the session is retired a few lines below and
+			// its record goes with it.
+			PGN: livePGN(session),
+		}
 		if err == nil {
 			message.RatingUpdate = &ratingUpdate
 		}
@@ -2088,6 +2420,12 @@ func (server *Server) finishSession(session *GameSession, state game.GameState) 
 			state.RedPlayer.UserID,
 			state.BluePlayer.UserID,
 		)
+		// Last of all, and only ever a no-op unless a deploy is waiting on this
+		// game. The lobby ticker would find it within two seconds; asking here
+		// is what makes the restart follow the final move rather than the next
+		// tick. Note the ordering: recordBotMatchResult above has already
+		// marked the series as advancing, so a run mid-pair is still counted.
+		server.settleUpdateDrain()
 	})
 }
 
@@ -2131,16 +2469,19 @@ func (server *Server) republishBotLadder(ctx context.Context, modes ...game.Mode
 			continue
 		}
 		server.mu.Lock()
-		for _, client := range server.bots {
-			rating, found := ratings[client.account.UserID]
-			if !found {
-				// A bot with no rating row in this mode has never finished a
-				// ranked game in it, so there is nothing to correct. Writing
-				// DefaultElo here would invent a mode rating the database does
-				// not have, and ModeElo already answers for a mode with none.
-				continue
+		for _, connections := range server.bots {
+			for _, client := range connections {
+				rating, found := ratings[client.account.UserID]
+				if !found {
+					// A bot with no rating row in this mode has never finished
+					// a ranked game in it, so there is nothing to correct.
+					// Writing DefaultElo here would invent a mode rating the
+					// database does not have, and ModeElo already answers for a
+					// mode with none.
+					continue
+				}
+				client.account.SetModeElo(modeID, rating)
 			}
-			client.account.SetModeElo(modeID, rating)
 		}
 		server.mu.Unlock()
 	}

@@ -43,23 +43,6 @@ const (
 	openingNameBurst  = 20
 	openingNameWindow = 10 * time.Minute
 
-	// Publishing is cheap to do and permanent once done — a row, and a factory
-	// registered for the life of the process — so the budget is small and the
-	// window long. Iterating on a mode happens in the Lab, where nothing is
-	// published; ten in an hour is more than designing needs.
-	modePublishBurst  = 10
-	modePublishWindow = time.Hour
-	// Uploading a picture is heavier than publishing a mode — a decode, a
-	// re-encode and a blob write on the one connection the game loop shares —
-	// but a fully illustrated mode is fourteen pictures in one sitting, so the
-	// burst has to clear that comfortably or the Lab stalls mid-design.
-	artUploadBurst  = 60
-	artUploadWindow = time.Hour
-	// Fetching is throttled harder, and separately, because it is the only
-	// thing here that makes this server do outbound work whose shape somebody
-	// else chooses.
-	artFetchBurst  = 20
-	artFetchWindow = time.Hour
 	// rateLimiterCapacity bounds memory. An attacker rotating through a /64 of
 	// IPv6 could otherwise make the map itself the attack.
 	rateLimiterCapacity = 4096
@@ -205,73 +188,6 @@ func (server *Server) allowSeriesRequest(
 				writer,
 				http.StatusTooManyRequests,
 				"too many series requests; try again shortly",
-			)
-			return false
-		}
-	}
-	return true
-}
-
-// allowArtUpload and allowArtFetch throttle the two doors artwork comes in by.
-//
-// Bucketed on the account as well as the IP, and unlike publishing both buckets
-// matter here: uploading needs a registered account, so the account bucket is
-// not free to make.
-func (server *Server) allowArtUpload(
-	writer http.ResponseWriter,
-	request *http.Request,
-	userID string,
-) bool {
-	return server.allowArt(writer, request, userID, server.artUploadLimiter, "art-upload",
-		"too many pictures; try again shortly")
-}
-
-func (server *Server) allowArtFetch(
-	writer http.ResponseWriter,
-	request *http.Request,
-	userID string,
-) bool {
-	return server.allowArt(writer, request, userID, server.artFetchLimiter, "art-fetch",
-		"too many picture fetches; try again shortly")
-}
-
-func (server *Server) allowArt(
-	writer http.ResponseWriter,
-	request *http.Request,
-	userID string,
-	limiter *rateLimiter,
-	prefix, message string,
-) bool {
-	for _, key := range []string{prefix + "-ip:" + clientIP(request), prefix + "-user:" + userID} {
-		allowed, wait := limiter.Allow(key)
-		if !allowed {
-			writer.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds())+1))
-			writeAPIError(writer, http.StatusTooManyRequests, message)
-			return false
-		}
-	}
-	return true
-}
-
-// allowModePublish throttles publishing to the mode library, writing the 429
-// itself.
-//
-// Bucketed on the account as well as the IP, like the other two that need an
-// identity. Publishing is deliberately open to guests, so the IP bucket is the
-// one that has to hold: an account is free to make.
-func (server *Server) allowModePublish(
-	writer http.ResponseWriter,
-	request *http.Request,
-	userID string,
-) bool {
-	for _, key := range []string{"publish-ip:" + clientIP(request), "publish-user:" + userID} {
-		allowed, wait := server.modePublishLimiter.Allow(key)
-		if !allowed {
-			writer.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds())+1))
-			writeAPIError(
-				writer,
-				http.StatusTooManyRequests,
-				"too many publishes; try again shortly",
 			)
 			return false
 		}

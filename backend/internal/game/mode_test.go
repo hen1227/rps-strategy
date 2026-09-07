@@ -3,6 +3,7 @@ package game
 import (
 	"errors"
 	"testing"
+	"time"
 )
 
 const customModeID ModeID = "teleport-test"
@@ -97,13 +98,32 @@ func TestGameDelegatesAllRulesToRegisteredMode(t *testing.T) {
 
 func TestDefaultRegistryContainsOnlyBaseModes(t *testing.T) {
 	definitions := DefaultModeRegistry.Definitions()
-	if len(definitions) != 2 {
-		t.Fatalf("expected only two base modes, got %d", len(definitions))
+	expected := []ModeID{ModeIntransitive, ModeTotalWar, ModeInfiltration}
+	if len(definitions) != len(expected) {
+		t.Fatalf("expected only the %d base modes, got %d", len(expected), len(definitions))
 	}
-	expected := []ModeID{ModeTotalWar, ModeInfiltration}
 	for index, modeID := range expected {
 		if definitions[index].ID != modeID {
 			t.Fatalf("mode %d: expected %s, got %s", index, modeID, definitions[index].ID)
+		}
+	}
+}
+
+// A mode with no publication date tells every bot author nothing, silently:
+// the client prints the line it was given, and a mode that skipped the field is
+// simply absent from it. Cheaper to fail here than to find out from an engine
+// that kept playing the old rules.
+func TestEveryRegisteredModeDatesItsRules(t *testing.T) {
+	for _, definition := range DefaultModeRegistry.Definitions() {
+		published := definition.RulesPublished
+		if len(published) != len("2006-01-02") {
+			t.Errorf("%s: rulesPublished is %q, want a YYYY-MM-DD date",
+				definition.ID, published)
+			continue
+		}
+		if _, err := time.Parse("2006-01-02", published); err != nil {
+			t.Errorf("%s: rulesPublished %q does not parse: %v",
+				definition.ID, published, err)
 		}
 	}
 }

@@ -10,6 +10,11 @@ self-sufficient, which is what makes the archive usable as a training set.
 The format follows chess PGN's shape so ordinary tooling and ordinary eyes can
 read it, and departs from it exactly where the game differs.
 
+This is the full account, including how records are stored and exported.
+[`../../docs/notation.md`](../../docs/notation.md) is the short public version
+of the notation itself, served to the website beside the bot guide — a change to
+how a move, a tag or a FEN is written belongs in both.
+
 ## Reading a record
 
 ```text
@@ -26,7 +31,7 @@ read it, and departs from it exactly where the game differs.
 [BoardSize "9"]
 [TimeControl "300+3"]
 [SetUp "1"]
-[FEN "3SSS3/3PPP3/3RRR3/9/9/9/3rrr3/3ppp3/3sss3 r 3bbb3/3bbb3/3bbb3/9/9/9/3rrr3/3rrr3/3rrr3"]
+[FEN "3SSS3/3PPP3/3RRR3/9/9/9/3rrr3/3ppp3/3sss3 b 3bbb3/3bbb3/3bbb3/9/9/9/3rrr3/3rrr3/3rrr3"]
 [RedId "8b1f…"]
 [BlueId "2c7a…"]
 [RedElo "1200"]
@@ -45,13 +50,13 @@ read it, and departs from it exactly where the game differs.
 [StartTimeUnixMs "1787329796329"]
 [EndTimeUnixMs "1787329912480"]
 [FinalFEN "3SSS3/3PPP3/3R5/6R2/2R6/3r1r3/3p5/2rp2p2/2s1ss3 r 3bbb3/…"]
-[Generator "rps-strategy-pgn/1"]
+[Generator "rps-strategy-pgn/2"]
 
-1. Sd9-c9 {[%emt 2.104] [%clk 0:05:00.896 0:05:00.000]} 1... Pf2-g1
-{[%emt 1.550] [%clk 0:05:00.896 0:05:01.450]} 2. Rf7xf6
-{[%emt 0.981] [%clk 0:05:02.915 0:05:01.450]}
-{[%act draw_offer Blue] [%emt 4.002] [%clk 0:05:02.915 0:04:57.448]}
-{[%end resignation Red] [%emt 1.204] [%clk 0:05:01.711 0:04:57.448]} 0-1
+1. Sd1-c1 {[%emt 2.104] [%clk 0:05:00.000 0:05:00.896]} 1... Pf8-g9
+{[%emt 1.550] [%clk 0:05:01.450 0:05:00.896]} 2. Rf3xf4
+{[%emt 0.981] [%clk 0:05:01.450 0:05:02.915]}
+{[%act draw_offer Red] [%emt 4.002] [%clk 0:04:57.448 0:05:02.915]}
+{[%end resignation Blue] [%emt 1.204] [%clk 0:04:57.448 0:05:01.711]} 1-0
 ```
 
 ### Squares
@@ -74,7 +79,7 @@ wide empty rank is `11` rather than `9` followed by `2`.
 ### Moves
 
 A move names the piece, the square it left, `-` or `x`, and the square it
-entered: `Rd7-d6`, `Rd7xd6`. Red moves first and is written like White.
+entered: `Rd3-d4`, `Rd3xd4`. Blue moves first and is written like White.
 
 The captured piece is not written because the rules fix it: rock takes only
 scissors, scissors only paper, paper only rock. A capture of anything else — a
@@ -82,11 +87,21 @@ future mode with different rules — spells the victim out between the `x` and
 the destination (`Rd7xPd6`) so the format cannot lose information.
 
 `#` marks a move that ended the game by a rule (annihilation, territory,
-infiltration, repetition, or stalemate). Resigning, agreeing a draw, timing
-out, and walking away are not caused by a move and are never marked.
+infiltration, repetition, no capture, or stalemate). Resigning, agreeing a
+draw, timing out, and walking away are not caused by a move and are never
+marked.
 
-`12.` announces a Red move and `12...` a Blue move, so colors stay explicit
-even for a mode that does not strictly alternate.
+`12.` announces a move by the side that *opened this game* and `12...` a move
+by the other, the way a chess PGN announces White and Black, so colors stay
+explicit even for a mode that does not strictly alternate. The opener is read
+off the file's own `FEN` tag, which every generated record carries.
+
+That is dialect 2, and the `Generator` tag is how a reader tells. Dialect 1
+numbered pairs by colour — `12.` was always Red — which was the same thing
+until Blue became the side that opens. The two disagree only about a game the
+*non-opening* side began, which is a board somebody set up or an opening seeded
+to an odd number of plies, so an archived record from either dialect replays
+correctly and a file with no `Generator` tag is read as the current one.
 
 ### Annotations
 
@@ -110,7 +125,10 @@ next recorded event, so the elapsed times always sum to time actually spent.
 ### Positions
 
 `FEN` and `FinalFEN` hold three space-separated fields: pieces, the side to
-move (`r`, `b`, or `-`), and territory ownership. Rows run from rank 1 to rank
+move (`r`, `b`, or `-`), and territory ownership. A generated record always
+writes all three, but `DecodePosition` reads a position with the territory field
+left off — ownership then follows the pieces — so a board written by hand for a
+mode where ownership decides nothing need not spell it out. Rows run from rank 1 to rank
 9 separated by `/`, digits count consecutive empty (or unowned) tiles,
 uppercase letters are Blue pieces and lowercase are Red — the same convention a
 mode's `StartingPosition` uses. Territory is a separate field because a tile

@@ -2,6 +2,7 @@ package persistence
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -337,13 +338,157 @@ func TestFittingAnEmptyRecordIsEmpty(t *testing.T) {
 	}
 }
 
-// botLadderStore builds a store with two registered owners, so a test can mint
+// A bot that has lost every game it has played is an ordinary thing to find on
+// a real ladder and it used to take the whole board down with it.
+//
+// Such a bot has no finite Bradley-Terry strength: the fit drives it to
+// strengthFloor and the information matrix reports its variance as about a
+// billion, which is a true statement about an unidentified parameter. The
+// shrinkage in fitBotRatings is a comparison between the board's spread and its
+// noise, both weighted averages, and an unbounded term in either of them wins.
+// One such bot among fourteen was enough to make the fit conclude that none of
+// the board's spread was real and publish every engine, including a 131-21
+// leader, at DefaultElo.
+//
+// The synthetic ladders elsewhere in this file all have every bot winning
+// something, which is why they never caught it.
+func TestOneHopelessRecordDoesNotFlattenTheBoard(t *testing.T) {
+	// A graded field that the fit can certainly separate, plus one bot that has
+	// never scored against any of it.
+	field := []string{"field-1", "field-2", "field-3", "field-4"}
+	entries := []record{}
+	for first := range field {
+		for second := first + 1; second < len(field); second++ {
+			entries = append(entries, record{
+				first: field[first], second: field[second], games: 20, firstScore: 15,
+			})
+		}
+	}
+	graded := fitBotRatings(headToHead(entries...))
+
+	for _, opponent := range field {
+		entries = append(entries, record{
+			first: "hopeless", second: opponent, games: 12, firstScore: 0,
+		})
+	}
+	ratings := fitBotRatings(headToHead(entries...))
+
+	if len(ratings) != len(field)+1 {
+		t.Fatalf("expected the field and the hopeless bot to be ranked, got %#v", ratings)
+	}
+	if ratings["field-1"] == ratings["field-4"] {
+		t.Fatalf("one unrateable bot flattened the board onto %d: %#v",
+			ratings["field-1"], ratings)
+	}
+	if !(ratings["field-1"] > ratings["field-2"] &&
+		ratings["field-2"] > ratings["field-3"] &&
+		ratings["field-3"] > ratings["field-4"]) {
+		t.Fatalf("the graded field did not come out in order: %#v", ratings)
+	}
+	// And the field's own ratings are barely disturbed by its arrival: the games
+	// against it carry almost no information about anybody, so they should not
+	// be reordering or rescaling the bots that do have records.
+	for _, bot := range field {
+		if moved := ratings[bot] - graded[bot]; moved > 60 || moved < -60 {
+			t.Fatalf("%s moved %d points because a hopeless bot joined the board",
+				bot, moved)
+		}
+	}
+	// Below average, and below every bot the record places above average — but
+	// deliberately *not* below the bottom of the field, and that is worth being
+	// explicit about because it looks wrong on a board.
+	//
+	// This bot's strength is unidentified: an all-loss record is consistent with
+	// any strength below the field's, so what it has earned is a one-sided bound
+	// and not a rating. The constants above choose what to publish for such a
+	// bot, and they choose the middle: pushing uncertainty *down* was considered
+	// and rejected there, because it drives the bots nobody has placed to the
+	// floor and leaves whoever the arithmetic favoured on top. So a bot with no
+	// record to speak of sits near DefaultElo, and a bot the record measures as
+	// weak — field-4, which has played twelve games against each of three
+	// opponents and lost most of them — can sit below it. That is the ladder
+	// declining to rank by accident, not the flattening this test is about.
+	if ratings["hopeless"] >= DefaultElo {
+		t.Fatalf("a bot that has never won rated at or above average: %#v", ratings)
+	}
+	if ratings["hopeless"] >= ratings["field-2"] {
+		t.Fatalf("a bot that has never won outranked a measured winning record: %#v", ratings)
+	}
+	if ratings["hopeless"] == botRatingFloor {
+		t.Fatalf("an unidentified strength was published as the floor: %#v", ratings)
+	}
+}
+
+// The same pathology at the other end of the board, and the reason a bot with
+// no finite strength is pulled towards the middle rather than clamped to
+// botRatingCeiling: an unbeaten record over two opponents is unidentified in
+// exactly the way an all-loss record is, and publishing the ceiling for it
+// would hand the top of the ladder to whoever played two games and won them.
+func TestAnUnbeatenNewcomerDoesNotTakeTheBoard(t *testing.T) {
+	field := []string{"field-1", "field-2", "field-3", "field-4", "field-5"}
+	entries := []record{}
+	for first := range field {
+		for second := first + 1; second < len(field); second++ {
+			entries = append(entries, record{
+				first: field[first], second: field[second], games: 20, firstScore: 15,
+			})
+		}
+	}
+	entries = append(entries,
+		record{first: "newcomer", second: "field-4", games: 2, firstScore: 2},
+		record{first: "newcomer", second: "field-5", games: 2, firstScore: 2},
+	)
+
+	ratings := fitBotRatings(headToHead(entries...))
+	if _, found := ratings["newcomer"]; !found {
+		t.Fatalf("two opponents is enough to be ranked: %#v", ratings)
+	}
+	if ratings["newcomer"] >= ratings["field-1"] {
+		t.Fatalf("four wins over the bottom of the board took the top of it: %#v", ratings)
+	}
+	if ratings["newcomer"] == botRatingCeiling {
+		t.Fatalf("an unidentified strength was published as the ceiling: %#v", ratings)
+	}
+}
+
+// The shrinkage has to be able to say "this board establishes nothing" — that is
+// what it is for — and a record of nothing but coin flips is that board. It is
+// the property the fix for the flattening above must not have thrown away.
+func TestABoardThatEstablishesNothingCollapsesToTheDefault(t *testing.T) {
+	// Two games per pair, split down the middle: connected, past the opponent
+	// bar, and carrying no evidence that anybody is better than anybody.
+	ratings := fitBotRatings(headToHead(roundRobin(2, "a", "b", "c", "d", "e")...))
+	if len(ratings) != 5 {
+		t.Fatalf("expected the whole round robin to be ranked, got %#v", ratings)
+	}
+	for bot, rating := range ratings {
+		if rating != DefaultElo {
+			t.Fatalf("a board with no evidence in it should sit at %d: %s is %d",
+				DefaultElo, bot, rating)
+		}
+	}
+}
+
+// botLadderStore builds a store with a registered owner, so a test can mint
 // bots without repeating the setup.
 func botLadderStore(t *testing.T) *Store {
 	t.Helper()
 	store := authTestStore(t)
 	registeredOwner(t, store, "owner", "Owner")
 	return store
+}
+
+// rivalBot claims an engine under an owner of its own.
+//
+// Separate owners on purpose. The ladder does not count a pair of engines one
+// person registered — see botHeadToHeadTx — so a board minted under a single
+// owner fits to nothing at all, and every test that wants a graded board wants
+// rivals. The one test that wants the other thing says so by name.
+func rivalBot(t *testing.T, store *Store, name string) Bot {
+	t.Helper()
+	owner := "owner-" + strings.ToLower(name)
+	registeredOwner(t, store, owner, "Owner_"+name)
+	return claimedBot(t, store, owner, name)
 }
 
 // seedBotGame files a finished bot-versus-bot game straight into the history,
@@ -444,10 +589,143 @@ func seedBotRoundRobin(
 // threeBots mints a rateable board: three engines, every pair played.
 func threeBots(t *testing.T, store *Store) (Account, Account, Account) {
 	t.Helper()
-	first := account(t, store, claimedBot(t, store, "owner", "First").UserID)
-	second := account(t, store, claimedBot(t, store, "owner", "Second").UserID)
-	third := account(t, store, claimedBot(t, store, "owner", "Third").UserID)
+	first := account(t, store, rivalBot(t, store, "First").UserID)
+	second := account(t, store, rivalBot(t, store, "Second").UserID)
+	third := account(t, store, rivalBot(t, store, "Third").UserID)
 	return first, second, third
+}
+
+// seedMatchup files one pair's games under a tag of its own, for a test that
+// builds a board out of several matchups rather than one round robin —
+// seedBotRoundRobin numbers its games from zero every time it is called.
+func seedMatchup(
+	t *testing.T,
+	store *Store,
+	tag string,
+	red Account,
+	blue Account,
+	games int,
+	redWins int,
+) {
+	t.Helper()
+	for index := range games {
+		outcome := "blue_win"
+		if index < redWins {
+			outcome = "red_win"
+		}
+		seedBotGame(t, store, fmt.Sprintf("%s-%d", tag, index), red, blue, outcome)
+	}
+}
+
+// stablemate claims an engine under the same owner as one already minted: the
+// pair the ladder will not count.
+func stablemate(t *testing.T, store *Store, sibling Bot, name string) Bot {
+	t.Helper()
+	return claimedBot(t, store, sibling.OwnerUserID, name)
+}
+
+// Two engines one person registered do not rate each other, however their games
+// were flagged when they were played.
+//
+// New games are seated casual (bot_series.go), so what this is really about is
+// the rows written before that rule existed — they say ranked = 1, and the
+// record still has to drop them. That is what deriving the head-to-head from
+// game_history buys: one refit and the ladder is the one the honest games
+// describe, with nothing to unwind.
+//
+// The board is built so the prune cannot be what does the work. The stablemate
+// has three distinct opponents and would sit comfortably on the ladder if the
+// only rules were the ones that came before this one; the assertion is that a
+// lopsided run against its own sibling still moves nothing.
+func TestOneOwnersBotsDoNotRateEachOther(t *testing.T) {
+	// Same board, same games, twice. The stores differ in one thing — whether
+	// the pair playing the lopsided run shares an owner — so anything that
+	// comes out different is that rule and cannot be anything else.
+	fit := func(t *testing.T, shareAnOwner bool) map[string]int {
+		t.Helper()
+		store := botLadderStore(t)
+		firstBot := rivalBot(t, store, "First")
+		secondBot := rivalBot(t, store, "Second")
+		thirdBot := rivalBot(t, store, "Third")
+		var fourthBot Bot
+		if shareAnOwner {
+			fourthBot = stablemate(t, store, firstBot, "Fourth")
+		} else {
+			fourthBot = rivalBot(t, store, "Fourth")
+		}
+		first := account(t, store, firstBot.UserID)
+		second := account(t, store, secondBot.UserID)
+		third := account(t, store, thirdBot.UserID)
+		fourth := account(t, store, fourthBot.UserID)
+
+		// A graded board of rivals, and a fourth engine with a real schedule
+		// against two of them.
+		seedBotRoundRobin(t, store, []Account{first, second, third}, 8, 6)
+		seedMatchup(t, store, "second-fourth", second, fourth, 8, 4)
+		seedMatchup(t, store, "third-fourth", third, fourth, 8, 4)
+
+		// The run that is only worth something if the ladder counts it: First
+		// beats Fourth twenty times without reply.
+		seedMatchup(t, store, "private", first, fourth, 20, 20)
+
+		if err := store.RefitBotLadders(t.Context()); err != nil {
+			t.Fatalf("refit: %v", err)
+		}
+		return map[string]int{
+			"First":  botRating(t, store, first.UserID),
+			"Second": botRating(t, store, second.UserID),
+			"Third":  botRating(t, store, third.UserID),
+			"Fourth": botRating(t, store, fourth.UserID),
+		}
+	}
+
+	rivals := fit(t, false)
+	stable := fit(t, true)
+
+	// The control: between rivals that run is worth something, or the test
+	// below is comparing two ladders that were never going to differ.
+	if rivals["First"] <= stable["First"] {
+		t.Fatalf("beating a rival twenty times should pay: rival fit %d, stablemate fit %d",
+			rivals["First"], stable["First"])
+	}
+	if rivals["Fourth"] >= stable["Fourth"] {
+		t.Fatalf("losing twenty to a rival should cost: rival fit %d, stablemate fit %d",
+			rivals["Fourth"], stable["Fourth"])
+	}
+
+	// And the rule: with one owner behind both, the ladder is the one the other
+	// games describe on their own.
+	clean := func(t *testing.T) map[string]int {
+		t.Helper()
+		store := botLadderStore(t)
+		firstBot := rivalBot(t, store, "First")
+		secondBot := rivalBot(t, store, "Second")
+		thirdBot := rivalBot(t, store, "Third")
+		fourthBot := rivalBot(t, store, "Fourth")
+		first := account(t, store, firstBot.UserID)
+		second := account(t, store, secondBot.UserID)
+		third := account(t, store, thirdBot.UserID)
+		fourth := account(t, store, fourthBot.UserID)
+		seedBotRoundRobin(t, store, []Account{first, second, third}, 8, 6)
+		seedMatchup(t, store, "second-fourth", second, fourth, 8, 4)
+		seedMatchup(t, store, "third-fourth", third, fourth, 8, 4)
+		if err := store.RefitBotLadders(t.Context()); err != nil {
+			t.Fatalf("refit: %v", err)
+		}
+		return map[string]int{
+			"First":  botRating(t, store, first.UserID),
+			"Second": botRating(t, store, second.UserID),
+			"Third":  botRating(t, store, third.UserID),
+			"Fourth": botRating(t, store, fourth.UserID),
+		}
+	}
+	without := clean(t)
+	for _, name := range []string{"First", "Second", "Third", "Fourth"} {
+		if stable[name] != without[name] {
+			t.Errorf("%s: a private run against a stablemate moved the ladder, %d with it and %d without",
+				name, stable[name], without[name])
+		}
+	}
 }
 
 // The ladder is derived, so a refit has to be able to rebuild it from nothing
@@ -488,7 +766,7 @@ func TestRefitRebuildsTheLadderFromTheGamesOnRecord(t *testing.T) {
 // games were deleted, would sit there claiming evidence that is gone.
 func TestABotWithNoRankedGamesGoesBackToDefault(t *testing.T) {
 	store := botLadderStore(t)
-	lonely := account(t, store, claimedBot(t, store, "owner", "Lonely").UserID)
+	lonely := account(t, store, rivalBot(t, store, "Lonely").UserID)
 	if _, err := store.db.ExecContext(t.Context(), `
 INSERT INTO account_mode_ratings (user_id, mode_id, elo, created_at_unix_ms, updated_at_unix_ms)
 VALUES (?, ?, 1900, 1000, 1000)
@@ -674,9 +952,9 @@ func TestDeletingABotGameRefitsEvenWhenRatingsAreNotReverted(t *testing.T) {
 // worst.
 func TestDeletingABotRefitsEveryLadderItPlayedIn(t *testing.T) {
 	store := botLadderStore(t)
-	keptBot := claimedBot(t, store, "owner", "Kept")
-	otherBot := claimedBot(t, store, "owner", "Other")
-	doomedBot := claimedBot(t, store, "owner", "Doomed")
+	keptBot := rivalBot(t, store, "Kept")
+	otherBot := rivalBot(t, store, "Other")
+	doomedBot := rivalBot(t, store, "Doomed")
 	kept := account(t, store, keptBot.UserID)
 	other := account(t, store, otherBot.UserID)
 	doomed := account(t, store, doomedBot.UserID)
@@ -708,9 +986,9 @@ func TestDeletingABotRefitsEveryLadderItPlayedIn(t *testing.T) {
 // column reports every engine at DefaultElo however it has been playing.
 func TestABotsRegistryRowCarriesItsLadderRating(t *testing.T) {
 	store := botLadderStore(t)
-	strongBot := claimedBot(t, store, "owner", "Strong")
-	middleBot := claimedBot(t, store, "owner", "Middle")
-	weakBot := claimedBot(t, store, "owner", "Weak")
+	strongBot := rivalBot(t, store, "Strong")
+	middleBot := rivalBot(t, store, "Middle")
+	weakBot := rivalBot(t, store, "Weak")
 	strong := account(t, store, strongBot.UserID)
 	middle := account(t, store, middleBot.UserID)
 	weak := account(t, store, weakBot.UserID)
@@ -745,7 +1023,7 @@ func TestABotsRegistryRowCarriesItsLadderRating(t *testing.T) {
 // Account.ModeElo gives for a mode with no row.
 func TestAnUnplayedBotsRegistryRowIsTheSeed(t *testing.T) {
 	store := botLadderStore(t)
-	fresh := claimedBot(t, store, "owner", "Fresh")
+	fresh := rivalBot(t, store, "Fresh")
 	listed, err := store.Bot(t.Context(), fresh.BotID)
 	if err != nil {
 		t.Fatalf("read bot: %v", err)
@@ -759,9 +1037,9 @@ func TestAnUnplayedBotsRegistryRowIsTheSeed(t *testing.T) {
 // account row, and it has the same reason not to read `accounts.elo`.
 func TestTheAdminAccountListShowsABotsLadderRating(t *testing.T) {
 	store := botLadderStore(t)
-	strongBot := claimedBot(t, store, "owner", "Strong")
-	middleBot := claimedBot(t, store, "owner", "Middle")
-	weakBot := claimedBot(t, store, "owner", "Weak")
+	strongBot := rivalBot(t, store, "Strong")
+	middleBot := rivalBot(t, store, "Middle")
+	weakBot := rivalBot(t, store, "Weak")
 	strong := account(t, store, strongBot.UserID)
 	middle := account(t, store, middleBot.UserID)
 	weak := account(t, store, weakBot.UserID)
@@ -770,12 +1048,12 @@ func TestTheAdminAccountListShowsABotsLadderRating(t *testing.T) {
 		t.Fatalf("refit: %v", err)
 	}
 
-	summaries, err := store.SearchAccounts(t.Context(), "", 50, 0)
+	page, err := store.SearchAccounts(t.Context(), AccountFilter{})
 	if err != nil {
 		t.Fatalf("search accounts: %v", err)
 	}
 	seen := 0
-	for _, summary := range summaries {
+	for _, summary := range page.Accounts {
 		if summary.Kind != AccountKindBot {
 			continue
 		}

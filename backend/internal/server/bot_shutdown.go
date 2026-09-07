@@ -2,13 +2,14 @@ package server
 
 import (
 	"context"
+	"errors"
+	"io"
 	"log"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
-	"rps-strategy/backend/internal/botclient"
 	"rps-strategy/backend/internal/persistence"
 )
 
@@ -64,12 +65,6 @@ type BotDrainState struct {
 	RequestedAtUnixMs int64    `json:"requestedAtUnixMs,omitempty"`
 }
 
-// botShutdownExitVersion is the first rpsbot.py that understands being told to
-// stop. Older clients are sent `bot_rejected` instead, which every version
-// since 1.0 already exits on — so an owner running last year's script still
-// gets a graceful shutdown, just with a blunter line printed at the end of it.
-const botShutdownExitVersion = "1.2"
-
 // requestBotShutdown puts a connected engine into a drain, or updates the one
 // it is already in.
 //
@@ -87,29 +82,41 @@ func (server *Server) requestBotShutdown(
 	if !client.isBot() {
 		return BotDrainState{WaitingOn: []string{}}
 	}
-	client.bot.mu.Lock()
-	existing := client.bot.drain
-	// Nothing left to change, and saying so early matters: an engine that prints
-	// `shutdown` on every search would otherwise re-read every tournament and
-	// re-broadcast the roster once a move. The one request that gets past this
-	// is a pause being upgraded to a shutdown — never the reverse, because an
-	// owner who has said "stop when you are done" should not have that undone
-	// by an engine that also asked to be paused.
-	if existing != nil && (existing.exitWhenDone || !exitWhenDone) {
-		client.bot.mu.Unlock()
+	// Every slot of the bot, not the one that asked. An engine allowed three
+	// games at once holds three sockets, and "stop taking new games" is a thing
+	// the bot does rather than a thing one of its sockets does: draining the
+	// slot that printed `shutdown` and leaving the other two in the lobby is
+	// the shutdown not happening.
+	changed := false
+	for _, connection := range server.botDrainTargets(client) {
+		connection.bot.mu.Lock()
+		existing := connection.bot.drain
+		// Nothing left to change, and saying so early matters: an engine that
+		// prints `shutdown` on every search would otherwise re-read every
+		// tournament and re-broadcast the roster once a move. The one request
+		// that gets past this is a pause being upgraded to a shutdown — never
+		// the reverse, because an owner who has said "stop when you are done"
+		// should not have that undone by an engine that also asked to be paused.
+		if existing != nil && (existing.exitWhenDone || !exitWhenDone) {
+			connection.bot.mu.Unlock()
+			continue
+		}
+		if existing == nil {
+			connection.bot.drain = &botDrain{requestedAt: time.Now()}
+		}
+		connection.bot.drain.exitWhenDone = connection.bot.drain.exitWhenDone || exitWhenDone
+		connection.bot.drain.source = source
+		// Reaching here past the check above means this is a pause being
+		// upgraded to a shutdown, and a pause on an idle bot has already
+		// settled. Without clearing that, the settle below finds its own
+		// finished-with mark and the client is never told to stop.
+		connection.bot.drain.settled = false
+		connection.bot.mu.Unlock()
+		changed = true
+	}
+	if !changed {
 		return server.botDrainState(client)
 	}
-	if existing == nil {
-		client.bot.drain = &botDrain{requestedAt: time.Now()}
-	}
-	client.bot.drain.exitWhenDone = client.bot.drain.exitWhenDone || exitWhenDone
-	client.bot.drain.source = source
-	// Reaching here past the check above means this is a pause being upgraded
-	// to a shutdown, and a pause on an idle bot has already settled. Without
-	// clearing that, the settle below finds its own finished-with mark and the
-	// client is never told to stop.
-	client.bot.drain.settled = false
-	client.bot.mu.Unlock()
 
 	// Before anything is reported: an event nobody has played yet loses nothing
 	// by this bot leaving it, and staying in one would be a commitment the
@@ -117,11 +124,13 @@ func (server *Server) requestBotShutdown(
 	server.withdrawDrainingBotFromUnstartedTournaments(client)
 
 	state := server.botDrainState(client)
-	client.Send(ServerMessage{
-		Type:    "bot_draining",
-		Message: botDrainNotice(state),
-		Drain:   &state,
-	})
+	for _, connection := range server.botDrainTargets(client) {
+		connection.Send(ServerMessage{
+			Type:    "bot_draining",
+			Message: botDrainNotice(state),
+			Drain:   &state,
+		})
+	}
 	server.notifyBotOwnerOfDrain(client, state)
 	// The lobby has to stop offering this engine straight away, not on the next
 	// broadcast something else happens to trigger.
@@ -141,29 +150,74 @@ func (server *Server) cancelBotShutdown(client *Client) BotDrainState {
 	if !client.isBot() {
 		return BotDrainState{WaitingOn: []string{}}
 	}
-	client.bot.mu.Lock()
-	cancelled := client.bot.drain != nil
-	client.bot.drain = nil
-	client.bot.mu.Unlock()
+	targets := server.botDrainTargets(client)
+	cancelled := false
+	for _, connection := range targets {
+		connection.bot.mu.Lock()
+		cancelled = cancelled || connection.bot.drain != nil
+		connection.bot.drain = nil
+		connection.bot.mu.Unlock()
+	}
 	if !cancelled {
 		return BotDrainState{WaitingOn: []string{}}
 	}
 
 	state := BotDrainState{WaitingOn: []string{}}
-	client.Send(ServerMessage{
-		Type:    "bot_draining",
-		Message: "back in play: this bot is accepting games again",
-		Drain:   &state,
-	})
+	for _, connection := range targets {
+		connection.Send(ServerMessage{
+			Type:    "bot_draining",
+			Message: "back in play: this bot is accepting games again",
+			Drain:   &state,
+		})
+	}
 	server.notifyBotOwnerOfDrain(client, state)
 	server.broadcastBots()
 	return state
 }
 
+// botDrainTargets is every socket a drain has to reach: all of the bot's slots,
+// or the connection itself when it is no longer in the directory — a bot that
+// has just gone offline is still allowed to be told what happened to it.
+func (server *Server) botDrainTargets(client *Client) []*Client {
+	if !client.isBot() {
+		return nil
+	}
+	connections := server.botConnections(client.bot.botID)
+	for _, connection := range connections {
+		if connection == client {
+			return connections
+		}
+	}
+	return append(connections, client)
+}
+
 // botIsDraining is the question every path that could hand an engine a new game
 // asks. Cheap, and deliberately the only shape of that question in the server:
 // a second spelling is how one of those paths gets missed.
+//
+// Two things make it true, and the scheduled bench in bot_bench.go is here
+// rather than beside each offer because of the sentence above: a bench that
+// asked its own question would have to be remembered at every one of those
+// sites, and the one that got missed would be the one that handed out a game
+// during the tournament everything was stood down for.
 func botIsDraining(client *Client) bool {
+	if client == nil || !client.isBot() {
+		return false
+	}
+	if botsAreBenched(time.Now()) {
+		return true
+	}
+	return botHasOwnDrain(client)
+}
+
+// botHasOwnDrain is the narrower question: has *this* engine been asked to
+// stop, by its owner or by itself.
+//
+// The difference from botIsDraining matters wherever the answer is shown rather
+// than enforced. An owner looking at their bots during a bench has not asked
+// for anything and must not be shown a shutdown they did not start, and a
+// settle has nothing to settle for a drain that does not exist.
+func botHasOwnDrain(client *Client) bool {
 	if client == nil || !client.isBot() {
 		return false
 	}
@@ -205,8 +259,22 @@ func (server *Server) botShutdownCommitments(
 	record persistence.Bot,
 ) []string {
 	waiting := make([]string, 0, 3)
-	if server.participantFor(client) != nil {
+	// Counted rather than asked as a yes-or-no, because a bot with several
+	// slots can be finishing three games at once, and "finishing the game it is
+	// playing" would have its owner waiting on a list that never shortens for
+	// two of them.
+	playing := server.botActiveGames(client.bot.botID)
+	if playing == 0 && server.participantFor(client) != nil {
+		// A connection that has already left the directory, being told what it
+		// still owes. See botDrainTargets.
+		playing = 1
+	}
+	switch {
+	case playing == 1:
 		waiting = append(waiting, "finishing the game it is playing")
+	case playing > 1:
+		waiting = append(waiting,
+			"finishing the "+strconv.Itoa(playing)+" games it is playing")
 	}
 	if server.botSeriesForBot(client.bot.botID) != nil {
 		waiting = append(waiting, "finishing the current pair of a series")
@@ -307,15 +375,11 @@ func (server *Server) withdrawDrainingBotFromUnstartedTournaments(client *Client
 // finished its last game is nothing, and a second scheduler is a second thing
 // to reason about.
 func (server *Server) settleBotShutdowns() {
-	server.mu.RLock()
-	clients := make([]*Client, 0, len(server.bots))
-	for _, client := range server.bots {
-		clients = append(clients, client)
-	}
-	server.mu.RUnlock()
-
-	for _, client := range clients {
-		if botIsDraining(client) {
+	for _, client := range server.allBotConnections() {
+		// The bot's own drain, not botIsDraining: a bench stands every engine
+		// down without any of them having asked for anything, and there is
+		// nothing to settle for a drain nobody started.
+		if botHasOwnDrain(client) {
 			server.settleBotShutdown(client)
 		}
 	}
@@ -328,42 +392,60 @@ func (server *Server) settleBotShutdown(client *Client) {
 		return
 	}
 
-	client.bot.mu.Lock()
-	drain := client.bot.drain
-	if drain == nil || drain.settled {
-		client.bot.mu.Unlock()
+	// Every slot, and only the ones that have not already been told. The
+	// commitments above are the bot's, so they run out for all of its sockets
+	// at the same moment; each one still has to hear about it, because each is
+	// a thread of rpsbot.py waiting to be released.
+	type settled struct {
+		connection *Client
+		exit       bool
+		name       string
+	}
+	settling := make([]settled, 0, 1)
+	for _, connection := range server.botDrainTargets(client) {
+		connection.bot.mu.Lock()
+		drain := connection.bot.drain
+		if drain == nil || drain.settled {
+			connection.bot.mu.Unlock()
+			continue
+		}
+		drain.settled = true
+		settling = append(settling, settled{
+			connection: connection,
+			exit:       drain.exitWhenDone,
+			name:       connection.bot.record.Name,
+		})
+		connection.bot.mu.Unlock()
+	}
+	if len(settling) == 0 {
 		return
 	}
-	drain.settled = true
-	exit := drain.exitWhenDone
-	version := client.bot.clientVersion
-	name := client.bot.record.Name
-	client.bot.mu.Unlock()
 
 	server.notifyBotOwnerOfDrain(client, state)
-	if !exit {
-		client.Send(ServerMessage{
-			Type: "bot_draining",
-			Message: "paused: " + name + " has finished everything it owed" +
-				" and is accepting no new games",
-			Drain: &state,
-		})
-		return
-	}
+	for _, finished := range settling {
+		connection, exit, name := finished.connection, finished.exit, finished.name
 
-	message := name + " has finished everything it owed. Shutting down."
-	if botclient.CompareVersions(version, botShutdownExitVersion) < 0 {
-		// Every client since 1.0 exits on bot_rejected without retrying, which
-		// is what makes a graceful shutdown work for a script its owner has not
-		// re-downloaded. The wording arrives wrapped in "server refused this
-		// bot", which is not what happened — the tradeoff is worth it, and a
-		// 1.2 client gets the sentence as written.
-		client.Send(ServerMessage{Type: "bot_rejected", Message: message})
-	} else {
-		client.Send(ServerMessage{Type: "bot_shutdown", Message: message, Drain: &state})
+		if !exit {
+			connection.Send(ServerMessage{
+				Type: "bot_draining",
+				Message: "paused: " + name + " has finished everything it owed" +
+					" and is accepting no new games",
+				Drain: &state,
+			})
+			continue
+		}
+
+		// Every client that can connect understands bot_shutdown: the minimum
+		// version is past the one that added it, which is what let the older
+		// spelling — bot_rejected, carrying a sentence about a shutdown — go.
+		connection.Send(ServerMessage{
+			Type:    "bot_shutdown",
+			Message: name + " has finished everything it owed. Shutting down.",
+			Drain:   &state,
+		})
+		// The client closes its own socket on that message. Closing from here
+		// as well would race the write it has not read yet.
 	}
-	// The client closes its own socket on either message. Closing from here as
-	// well would race the write it has not read yet.
 }
 
 // notifyBotOwnerOfDrain keeps the owner's open pages current.
@@ -432,16 +514,20 @@ func (server *Server) shutdownBot(writer http.ResponseWriter, request *http.Requ
 	}
 	var input shutdownBotRequest
 	// An empty body is a pause, which is the recoverable half of the pair.
-	if request.ContentLength > 0 {
-		if err := decodeAPIRequest(writer, request, &input); err != nil {
-			writeAPIError(writer, http.StatusBadRequest, err.Error())
-			return
-		}
+	//
+	// Read rather than inferred from Content-Length. A body whose length the
+	// sender did not declare — anything re-framed as chunked on the way in — has
+	// a ContentLength of -1, and taking that for "no body" answers "stop when
+	// you are done" with a pause: the engine finishes the game it owed and then
+	// sits there connected and idle, waiting for nothing, having been told to
+	// leave. Silent, and only on the deployment with a proxy in front of it.
+	if err := decodeAPIRequest(writer, request, &input); err != nil &&
+		!errors.Is(err, io.EOF) {
+		writeAPIError(writer, http.StatusBadRequest, err.Error())
+		return
 	}
 
-	server.mu.RLock()
-	client := server.bots[bot.BotID]
-	server.mu.RUnlock()
+	client := server.botConnection(bot.BotID)
 	if client == nil {
 		// Not an error the caller can act on by retrying, and not a failure
 		// either: a bot that is not connected is already accepting no games.
@@ -464,9 +550,7 @@ func (server *Server) resumeBot(writer http.ResponseWriter, request *http.Reques
 	if !ok {
 		return
 	}
-	server.mu.RLock()
-	client := server.bots[bot.BotID]
-	server.mu.RUnlock()
+	client := server.botConnection(bot.BotID)
 	if client == nil {
 		writeJSON(writer, http.StatusOK, botShutdownReply{
 			Online: false,

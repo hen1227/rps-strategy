@@ -2,6 +2,7 @@ package persistence
 
 import (
 	"errors"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -33,6 +34,51 @@ func TestValidateUsernameAcceptsHandlesAndRejectsTraps(t *testing.T) {
 		if _, err := ValidateUsername(testCase.name); !errors.Is(err, ErrInvalidUsername) {
 			t.Errorf("%q should be rejected (%s), got %v", testCase.name, testCase.reason, err)
 		}
+	}
+}
+
+func TestValidateBotUsernameAllowsTwoCharactersAndNothingElseExtra(t *testing.T) {
+	// The whole point of the second bound: an engine called "RF" can claim its
+	// own name.
+	for _, name := range []string{"RF", "b1", "Ada", "rps_fish"} {
+		if _, err := ValidateBotUsername(name); err != nil {
+			t.Errorf("%q should be a valid bot username: %v", name, err)
+		}
+	}
+	// Two characters is a bot's privilege and not a person's, or the shorter
+	// bound would just be the bound.
+	if _, err := ValidateUsername("RF"); !errors.Is(err, ErrInvalidUsername) {
+		t.Errorf("a person should still need %d characters, got %v", MinimumUsernameLength, err)
+	}
+	// Only the length moved. Everything the character rule refuses it must
+	// still refuse, or a bot could claim a name that collides with a person's
+	// under SQLite's ASCII-only folding.
+	for _, name := range []string{"R", "", "_R", ".R", "R F", "R🙂", "Аl", strings.Repeat("R", 33)} {
+		if _, err := ValidateBotUsername(name); !errors.Is(err, ErrInvalidUsername) {
+			t.Errorf("%q should be rejected as a bot username, got %v", name, err)
+		}
+	}
+}
+
+func TestPolicyPublishesTheBotException(t *testing.T) {
+	policy := Policy()
+	if policy.BotMinLength != MinimumBotUsernameLength {
+		t.Errorf("policy should publish the bot minimum, got %d", policy.BotMinLength)
+	}
+	// The published patterns are read by a client that will never call the
+	// validator, so they have to agree with it rather than merely look right.
+	for name, allowed := range map[string]bool{"RF": false, "Ada": true} {
+		if matched, err := regexp.MatchString(policy.Pattern, name); err != nil || matched != allowed {
+			t.Errorf("pattern %q on %q: matched=%v want %v (%v)", policy.Pattern, name, matched, allowed, err)
+		}
+	}
+	for _, name := range []string{"RF", "Ada"} {
+		if matched, err := regexp.MatchString(policy.BotPattern, name); err != nil || !matched {
+			t.Errorf("bot pattern should accept %q: matched=%v (%v)", name, matched, err)
+		}
+	}
+	if matched, _ := regexp.MatchString(policy.BotPattern, "R"); matched {
+		t.Error("bot pattern should still refuse a single character")
 	}
 }
 

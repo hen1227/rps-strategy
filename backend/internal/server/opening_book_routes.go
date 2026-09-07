@@ -43,6 +43,22 @@ type openingGraphImport struct {
 	MainLine      []string              `json:"mainLine"`
 	Featured      [][]string            `json:"featured"`
 	Positions     []openingGraphPositon `json:"positions"`
+	// Certified is the engine's short list: the openings it will stand behind,
+	// each already cut at the ply where that stops being true. Absent from an
+	// export made before certification existed, which reads as "none", and is
+	// the honest reading -- that scan never asked.
+	Certified []openingGraphCertified      `json:"certified"`
+	Certainty persistence.OpeningCertainty `json:"certainty"`
+}
+
+// openingGraphCertified is one certified opening as the engine writes it.
+type openingGraphCertified struct {
+	Line         []string `json:"line"`
+	Rank         int      `json:"rank"`
+	Value        int      `json:"value"`
+	Stop         string   `json:"stop"`
+	Alternatives int      `json:"alternatives"`
+	Depth        int      `json:"depth"`
 }
 
 type openingGraphPositon struct {
@@ -163,11 +179,20 @@ func (server *Server) getOpeningBook(writer http.ResponseWriter, request *http.R
 		return
 	}
 
-	// Featured lines overlap heavily -- they share a root and often each
-	// other's first plies -- so this is deduplicated by key, not by line.
+	// The certified openings are what the screen leads with, so their positions
+	// are the ones worth having before the first tap; the featured lines follow
+	// because they are what the explorer opens on. Both overlap heavily -- they
+	// share a root and often each other's first plies -- so this is
+	// deduplicated by key rather than by line.
+	prefetch := make([][]string, 0, len(meta.Certified)+len(meta.Featured))
+	for _, opening := range meta.Certified {
+		prefetch = append(prefetch, opening.Line)
+	}
+	prefetch = append(prefetch, meta.Featured...)
+
 	seen := map[string]struct{}{meta.RootKey: {}}
-	featured := make([]persistence.OpeningPosition, 0, len(meta.Featured)*8)
-	for _, line := range meta.Featured {
+	featured := make([]persistence.OpeningPosition, 0, len(prefetch)*8)
+	for _, line := range prefetch {
 		path, err := server.data.ResolveOpeningLine(
 			request.Context(), string(modeID), meta.RootKey, line,
 		)
@@ -450,6 +475,7 @@ func openingGraphRecords(
 		EngineVersion: graph.EngineVersion, RulesVersion: graph.RulesVersion,
 		Weights: graph.Weights, Symmetry: graph.Symmetry, MaxPly: graph.MaxPly,
 		RootKey: graph.RootKey, MainLine: graph.MainLine, Featured: graph.Featured,
+		Certified: certifiedOpenings(graph.Certified), Certainty: graph.Certainty,
 	}
 	positions := make([]persistence.OpeningPosition, 0, len(graph.Positions))
 	for _, source := range graph.Positions {
@@ -575,7 +601,76 @@ func validateOpeningGraph(graph openingGraphImport) error {
 			}
 		}
 	}
+
+	// A certified opening is a claim the website will repeat in its own voice,
+	// so it is held to more than the shape of its notation: an empty line, an
+	// unknown stop reason or a tie count on a line that did not stop at a tie
+	// would each publish a certainty nobody measured.
+	for index := range graph.Certified {
+		certified := &graph.Certified[index]
+		if len(certified.Line) == 0 {
+			return fmt.Errorf("certified opening %d has no moves", index+1)
+		}
+		if len(certified.Line) > maximumOpeningLine {
+			return fmt.Errorf(
+				"certified opening %d is longer than %d moves", index+1, maximumOpeningLine,
+			)
+		}
+		for moveIndex, move := range certified.Line {
+			if !validOpeningMove(move) {
+				return fmt.Errorf(
+					"certified opening %d move %d is not notation like d7-d6",
+					index+1, moveIndex+1,
+				)
+			}
+		}
+		if !validCertaintyStop(certified.Stop) {
+			return fmt.Errorf(
+				"certified opening %d stops on %q, which is not a reason this server knows",
+				index+1, certified.Stop,
+			)
+		}
+		if certified.Alternatives > 0 && certified.Stop != certaintyStopIndifferent {
+			return fmt.Errorf(
+				"certified opening %d counts %d tied replies but stops on %q",
+				index+1, certified.Alternatives, certified.Stop,
+			)
+		}
+		if certified.Rank < 1 {
+			return fmt.Errorf("certified opening %d has rank %d", index+1, certified.Rank)
+		}
+		if certified.Depth < 0 || certified.Depth > 127 {
+			return fmt.Errorf("certified opening %d has invalid depth %d", index+1, certified.Depth)
+		}
+	}
 	return nil
+}
+
+// The reasons a certified line can stop, as RPSFish's `CertaintyStop::id`
+// writes them. Listed here rather than accepted freely because the website
+// turns each one into a sentence, and a reason this server does not know would
+// reach a reader as a blank.
+const certaintyStopIndifferent = "indifferent"
+
+func validCertaintyStop(stop string) bool {
+	switch stop {
+	case "plies", certaintyStopIndifferent, "shallow", "frontier", "decisive", "repetition":
+		return true
+	default:
+		return false
+	}
+}
+
+// certifiedOpenings converts the engine's list into the stored one.
+func certifiedOpenings(source []openingGraphCertified) []persistence.CertifiedOpening {
+	certified := make([]persistence.CertifiedOpening, 0, len(source))
+	for _, opening := range source {
+		certified = append(certified, persistence.CertifiedOpening{
+			Line: opening.Line, Rank: opening.Rank, Value: opening.Value,
+			Stop: opening.Stop, Alternatives: opening.Alternatives, Depth: opening.Depth,
+		})
+	}
+	return certified
 }
 
 func validateOpeningBook(book openingBookImport) error {
@@ -744,6 +839,79 @@ func (server *Server) suggestOpeningName(writer http.ResponseWriter, request *ht
 	writeJSON(writer, http.StatusCreated, suggestion)
 }
 
+// nameOpeningLine is a player naming an opening, published immediately.
+//
+// The line is validated against the *rules* rather than against the book, so
+// an opening RPSFish never looked at can still be named -- which is the
+// point. See replayOpeningLine.
+func (server *Server) nameOpeningLine(writer http.ResponseWriter, request *http.Request) {
+	modeID, ok := server.openingMode(writer, request)
+	if !ok {
+		return
+	}
+	var input openingNameRequest
+	if err := decodeAPIRequest(writer, request, &input); err != nil {
+		writeAPIError(writer, http.StatusBadRequest, err.Error())
+		return
+	}
+	// Throttled before anything is parsed or replayed, so a flood costs the
+	// rules engine and the database nothing.
+	if !server.allowOpeningSuggestion(writer, request) {
+		return
+	}
+	if len(input.Line) == 0 || len(input.Line) > persistence.PlayerOpeningNameLimit {
+		writeAPIError(writer, http.StatusBadRequest, fmt.Sprintf(
+			"name between 1 and %d moves", persistence.PlayerOpeningNameLimit,
+		))
+		return
+	}
+	if !replayOpeningLine(server.registry, modeID, input.Line) {
+		writeAPIError(
+			writer, http.StatusBadRequest,
+			"those moves cannot be played from this mode's starting position",
+		)
+		return
+	}
+	// Attribution when there is any: the choice was to let anybody name a line
+	// rather than to gate it behind an account, so a visitor with no session
+	// still gets to name one. Recording who did when we know is what gives a
+	// curator something to act on beyond the name itself.
+	author, _ := server.optionalSession(request)
+	name, err := server.data.PublishPlayerOpeningName(
+		request.Context(), string(modeID),
+		server.canonicalLineFor(modeID, input.Line), input.Name,
+		author.UserID, author.Username,
+	)
+	if err != nil {
+		writeOpeningBookError(writer, err)
+		return
+	}
+	writeJSON(writer, http.StatusCreated, name)
+}
+
+// browseOpeningNames is the index that makes every name findable.
+func (server *Server) browseOpeningNames(writer http.ResponseWriter, request *http.Request) {
+	modeID, ok := server.openingMode(writer, request)
+	if !ok {
+		return
+	}
+	query := request.URL.Query()
+	limit, _ := strconv.Atoi(query.Get("limit"))
+	offset, _ := strconv.Atoi(query.Get("offset"))
+	page, err := server.data.BrowseOpeningNames(request.Context(), persistence.OpeningNameFilter{
+		ModeID: string(modeID),
+		Source: query.Get("source"),
+		Query:  query.Get("q"),
+		Limit:  limit,
+		Offset: offset,
+	})
+	if err != nil {
+		writeOpeningBookError(writer, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, page)
+}
+
 func (server *Server) setOpeningName(writer http.ResponseWriter, request *http.Request) {
 	modeID, ok := server.openingMode(writer, request)
 	if !ok {
@@ -870,6 +1038,13 @@ func writeOpeningBookError(writer http.ResponseWriter, err error) {
 		writeAPIError(writer, http.StatusNotFound, err.Error())
 	case errors.Is(err, persistence.ErrInvalidOpeningName):
 		message := strings.TrimPrefix(err.Error(), persistence.ErrInvalidOpeningName.Error()+": ")
+		writeAPIError(writer, http.StatusBadRequest, message)
+	case errors.Is(err, persistence.ErrOpeningLineNamed):
+		// 409 rather than 400: the request was fine, somebody was faster. The
+		// client turns this into an offer to suggest an alternative instead.
+		writeAPIError(writer, http.StatusConflict, err.Error())
+	case errors.Is(err, persistence.ErrOpeningLineTooLong):
+		message := strings.TrimPrefix(err.Error(), persistence.ErrOpeningLineTooLong.Error()+": ")
 		writeAPIError(writer, http.StatusBadRequest, message)
 	default:
 		writeAPIError(writer, http.StatusInternalServerError, "opening book data is unavailable")

@@ -428,5 +428,5 @@ func EncodeStartingPosition(position game.StartingPosition) string {
 			grid[y][x].OwnerColor = owner
 		}
 	}
-	return EncodePosition(grid, game.Red)
+	return EncodePosition(grid, game.FirstToMove)
 }

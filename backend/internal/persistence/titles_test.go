@@ -2,6 +2,7 @@ package persistence
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 
 	"rps-strategy/backend/internal/game"
@@ -37,7 +38,24 @@ func evaluate(t *testing.T, store *Store, userID string) []TitleID {
 	if err != nil {
 		t.Fatalf("evaluate titles for %s: %v", userID, err)
 	}
-	return titleIDs(awarded)
+	return besidesDiscordVerified(titleIDs(awarded))
+}
+
+// besidesDiscordVerified drops D from a list of awards.
+//
+// Every fixture in this file registers through Discord, because that is how an
+// account is registered — so every one of them earns D on top of whatever the
+// test is about, and a ladder test that had to name it would be stating
+// something it is not checking. The D rule has its own tests below, and they do
+// not go through this.
+func besidesDiscordVerified(ids []TitleID) []TitleID {
+	kept := make([]TitleID, 0, len(ids))
+	for _, id := range ids {
+		if id != TitleDiscordVerified {
+			kept = append(kept, id)
+		}
+	}
+	return kept
 }
 
 // The tag is rendered inside a name row that has budgeted three characters for
@@ -204,9 +222,7 @@ func TestBotArchitectFollowsTheTopOfTheBotLadder(t *testing.T) {
 func completedTournament(t *testing.T, store *Store, id string, winner string, loser string) {
 	t.Helper()
 	ctx := t.Context()
-	if _, err := store.CreateTournament(ctx, id, "Cup "+id, game.ModeTotalWar, "Total War"); err != nil {
-		t.Fatalf("create tournament: %v", err)
-	}
+	openTournament(t, store, id, "Cup "+id, game.ModeTotalWar, "Total War")
 	for _, entrant := range []struct{ userID, ign string }{
 		{winner, "Winner-" + id},
 		{loser, "Loser-" + id},
@@ -242,11 +258,7 @@ func TestTournamentChampionIsAwardedOnceTheTournamentEnds(t *testing.T) {
 	registeredOwner(t, store, "ada", "Ada")
 	registeredOwner(t, store, "grace", "Grace")
 
-	if _, err := store.CreateTournament(
-		t.Context(), "cup", "Cup", game.ModeTotalWar, "Total War",
-	); err != nil {
-		t.Fatalf("create tournament: %v", err)
-	}
+	openTournament(t, store, "cup", "Cup", game.ModeTotalWar, "Total War")
 	for _, entrant := range []struct{ userID, ign string }{{"ada", "Ada"}, {"grace", "Grace"}} {
 		if _, err := store.SignupForTournament(
 			t.Context(), "cup", entrant.userID, entrant.ign, "handle", true,
@@ -287,7 +299,8 @@ func TestBotMasterFollowsAnEnginesTournamentWin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("evaluate for the bot: %v", err)
 	}
-	if titles := titleIDs(awarded["ada"]); len(titles) != 1 || titles[0] != TitleBotMaster {
+	titles := besidesDiscordVerified(titleIDs(awarded["ada"]))
+	if len(titles) != 1 || titles[0] != TitleBotMaster {
 		t.Fatalf("expected the owner to be made Bot Master, got %v", awarded)
 	}
 	// The owner did not play, so they are not the champion themselves.
@@ -379,7 +392,13 @@ func TestAGrantOutlivesTheRuleThatWouldAlsoAwardIt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read titles: %v", err)
 	}
-	if len(held) != 1 || held[0].Source != TitleSourceGranted {
+	granted := false
+	for _, award := range held {
+		if award.ID == TitleCandidateMaster {
+			granted = award.Source == TitleSourceGranted
+		}
+	}
+	if !granted {
 		t.Fatalf("the grant should have survived the evaluation: %#v", held)
 	}
 }
@@ -450,5 +469,224 @@ func TestAnonymizingAnAccountTakesItsTitlesWithIt(t *testing.T) {
 	}
 	if len(after.Titles) != 0 {
 		t.Fatalf("an anonymized account must hold nothing, got %v", titleIDs(after.Titles))
+	}
+}
+
+// titleGame is one finished rated game with the two things the streak rule
+// reads: who won it, and when. seedGame files a Red win every time, and a run
+// of wins is only a run because of what sits between them.
+type titleGame struct {
+	id   string
+	red  string
+	blue string
+	// winner is a user id, or "" for a draw.
+	winner     string
+	finishedAt int64
+}
+
+func seedTitleGame(t *testing.T, store *Store, seed titleGame) {
+	t.Helper()
+	outcome, winnerColor := "draw", "Neutral"
+	var winner any
+	switch seed.winner {
+	case seed.red:
+		outcome, winnerColor, winner = "red_win", "Red", seed.red
+	case seed.blue:
+		outcome, winnerColor, winner = "blue_win", "Blue", seed.blue
+	}
+	if _, err := store.db.ExecContext(t.Context(), `
+INSERT INTO game_history (
+    game_id, mode_id, mode_name,
+    red_player_id, red_username, blue_player_id, blue_username,
+    winner_player_id, winner_color, outcome, end_reason, ranked,
+    red_elo_before, red_elo_after, blue_elo_before, blue_elo_after,
+    move_number, initial_time_ms, increment_ms,
+    started_at_unix_ms, finished_at_unix_ms
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'resignation', 1,
+          1200, 1200, 1200, 1200, 30, 60000, 0, ?, ?)
+`,
+		seed.id, game.ModeTotalWar, "Total War",
+		seed.red, seed.red, seed.blue, seed.blue,
+		winner, winnerColor, outcome,
+		seed.finishedAt, seed.finishedAt,
+	); err != nil {
+		t.Fatalf("seed game %s: %v", seed.id, err)
+	}
+}
+
+// Grandmaster is the top of the ladder, and no rating clears anything above it.
+// The rung that used to sit there has been withdrawn, so this is the test that
+// says the ladder ends here rather than merely that nobody has passed it.
+func TestTheLadderTopsOutAtGrandmaster(t *testing.T) {
+	store := authTestStore(t)
+	registeredOwner(t, store, "ada", "Ada")
+	seedModeRating(t, store, "ada", game.ModeTotalWar, 2500, 40)
+
+	awarded := evaluate(t, store, "ada")
+	if len(awarded) != 4 || awarded[0] != TitleGrandmaster {
+		t.Fatalf("expected GM and the three below it, got %v", awarded)
+	}
+	if again := evaluate(t, store, "ada"); len(again) != 0 {
+		t.Fatalf("there is nothing above GM to award, got %v", again)
+	}
+	for _, rung := range ratingLadder {
+		if rung.minimumElo > 2000 {
+			t.Fatalf("the ladder has a rung above Grandmaster: %s", rung.id)
+		}
+	}
+}
+
+// A title that has left the catalogue comes off the name that was wearing it.
+// Owning it is another matter — reads drop what the catalogue cannot resolve —
+// but the worn column is read straight into a tag, so a withdrawn id left there
+// would be a mark nothing on the site could explain.
+func TestAWithdrawnTitleComesOffTheName(t *testing.T) {
+	store := authTestStore(t)
+	registeredOwner(t, store, "ada", "Ada")
+	ctx := t.Context()
+	if _, err := store.db.ExecContext(ctx, `
+UPDATE accounts SET title = 'SGM' WHERE user_id = 'ada'
+`); err != nil {
+		t.Fatalf("wear a withdrawn title: %v", err)
+	}
+	if err := store.retireWithdrawnTitles(ctx); err != nil {
+		t.Fatalf("retire: %v", err)
+	}
+	if worn := account(t, store, "ada").Title; worn != "" {
+		t.Fatalf("a withdrawn title must come off the name, got %q", worn)
+	}
+
+	// And a title that is still in the catalogue stays on.
+	if err := store.GrantTitle(ctx, "ada", TitleGrandmaster); err != nil {
+		t.Fatalf("grant: %v", err)
+	}
+	if _, err := store.SetAccountTitle(ctx, "ada", TitleGrandmaster); err != nil {
+		t.Fatalf("wear GM: %v", err)
+	}
+	if err := store.retireWithdrawnTitles(ctx); err != nil {
+		t.Fatalf("retire: %v", err)
+	}
+	if worn := account(t, store, "ada").Title; worn != TitleGrandmaster {
+		t.Fatalf("GM is in the catalogue and must stay on, got %q", worn)
+	}
+}
+
+// A run with nothing in between, and the longest run ever rather than the one
+// happening now — a streak finished last week is still a streak.
+func TestHotStreakCountsTheLongestUnbrokenRun(t *testing.T) {
+	store := authTestStore(t)
+	registeredOwner(t, store, "ada", "Ada")
+	registeredOwner(t, store, "grace", "Grace")
+
+	finished := int64(0)
+	win := func(id string) {
+		finished += 1_000
+		seedTitleGame(t, store, titleGame{
+			id: id, red: "ada", blue: "grace", winner: "ada", finishedAt: finished,
+		})
+	}
+
+	for index := range titleWinStreakLength - 1 {
+		win(fmt.Sprintf("first-%d", index))
+	}
+	if awarded := evaluate(t, store, "ada"); len(awarded) != 0 {
+		t.Fatalf("one win short of the run earns nothing, got %v", awarded)
+	}
+
+	// A draw is not a win, so it ends the run rather than extending it.
+	finished += 1_000
+	seedTitleGame(t, store, titleGame{
+		id: "drawn", red: "ada", blue: "grace", finishedAt: finished,
+	})
+	for index := range titleWinStreakLength - 1 {
+		win(fmt.Sprintf("second-%d", index))
+	}
+	if awarded := evaluate(t, store, "ada"); len(awarded) != 0 {
+		t.Fatalf("a draw breaks the run, got %v", awarded)
+	}
+
+	win("eighth")
+	if awarded := evaluate(t, store, "ada"); len(awarded) != 1 ||
+		awarded[0] != TitleHotStreak {
+		t.Fatalf("expected Hot Streak, got %v", awarded)
+	}
+}
+
+// Veteran is handed out rather than counted. How much play deserves it is a
+// judgement, and this is the test that stops somebody quietly turning it back
+// into a threshold.
+func TestVeteranIsGivenRatherThanEarned(t *testing.T) {
+	store := authTestStore(t)
+	registeredOwner(t, store, "ada", "Ada")
+	registeredOwner(t, store, "grace", "Grace")
+
+	// Losses throughout, so no other rule in the book fires either.
+	for index := range 150 {
+		seedTitleGame(t, store, titleGame{
+			id: fmt.Sprintf("rated-%d", index), red: "grace", blue: "ada",
+			winner: "grace", finishedAt: int64(index+1) * 1_000,
+		})
+	}
+	if awarded := evaluate(t, store, "ada"); len(awarded) != 0 {
+		t.Fatalf("no amount of play earns Veteran, got %v", awarded)
+	}
+
+	if err := store.GrantTitle(t.Context(), "ada", TitleVeteran); err != nil {
+		t.Fatalf("grant Veteran: %v", err)
+	}
+	if !holds(t, store, "ada", TitleVeteran) {
+		t.Fatal("an administrator is the only way to hold Veteran")
+	}
+}
+
+// D is the one title with no bar to clear, so the only thing to check is that
+// it follows the link rather than the account: an anonymous account holds
+// nothing, and the same account holds D the moment Discord vouches for it.
+func TestDiscordVerifiedFollowsTheLink(t *testing.T) {
+	store := authTestStore(t)
+	ctx := t.Context()
+	if _, err := store.EnsureAccountWithProfileKey(ctx, "anon", "Anon", testProfileKey); err != nil {
+		t.Fatalf("create anonymous account: %v", err)
+	}
+	if awarded, err := store.EvaluateTitles(ctx, "anon"); err != nil {
+		t.Fatalf("evaluate: %v", err)
+	} else if len(awarded) != 0 {
+		t.Fatalf("an unlinked account is verified by nobody, got %v", titleIDs(awarded))
+	}
+
+	if _, err := store.ClaimAccountWithDiscord(
+		ctx, "anon", "Anon", "80351110224678912", "anon",
+	); err != nil {
+		t.Fatalf("claim with discord: %v", err)
+	}
+	if awarded, err := store.EvaluateTitles(ctx, "anon"); err != nil {
+		t.Fatalf("evaluate: %v", err)
+	} else if ids := titleIDs(awarded); len(ids) != 1 || ids[0] != TitleDiscordVerified {
+		t.Fatalf("expected D once the link exists, got %v", ids)
+	}
+	if !holds(t, store, "anon", TitleDiscordVerified) {
+		t.Fatal("a verified account holds D")
+	}
+}
+
+// Anonymizing clears the link along with the name, so the rulebook has nothing
+// to award afterwards — which is what stops the deleted player's own next
+// evaluation handing the tag straight back.
+func TestDiscordVerifiedDoesNotSurviveAnonymization(t *testing.T) {
+	store := authTestStore(t)
+	registeredOwner(t, store, "ada", "Ada")
+	registeredOwner(t, store, "grace", "Grace")
+	ctx := t.Context()
+	if _, err := store.EvaluateTitles(ctx, "ada"); err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	seedGame(t, store, "played", account(t, store, "ada"), account(t, store, "grace"), 1_000)
+	if _, err := store.AnonymizeAccount(ctx, "ada"); err != nil {
+		t.Fatalf("anonymize: %v", err)
+	}
+	if awarded, err := store.EvaluateTitles(ctx, "ada"); err != nil {
+		t.Fatalf("evaluate: %v", err)
+	} else if len(awarded) != 0 {
+		t.Fatalf("an anonymized account is verified by nobody, got %v", titleIDs(awarded))
 	}
 }

@@ -148,10 +148,10 @@ func TestSeeksNeverPairRatedWithCasual(t *testing.T) {
 // A seat preference is the one difference that still leaves two people offering
 // each other the same game — unless they both want the same seat.
 func TestSeatPreferencesDecideColoursAndCompatibility(t *testing.T) {
-	var red, blue *Client
+	var opener, replier *Client
 	board, _ := testBoard(func(first, second *Seek) {
-		redSeek, blueSeek := seatOrder(first, second)
-		red, blue = redSeek.Client(), blueSeek.Client()
+		openerSeek, replierSeek := seatOrder(first, second)
+		opener, replier = openerSeek.Client(), replierSeek.Client()
 	})
 	wantsBlue := &Client{profile: game.PlayerProfile{UserID: "wants-blue"}}
 	noPreference := &Client{profile: game.PlayerProfile{UserID: "no-preference"}}
@@ -162,7 +162,9 @@ func TestSeatPreferencesDecideColoursAndCompatibility(t *testing.T) {
 	standardSeek(board, noPreference, game.ModeTotalWar)
 
 	board.pair()
-	if red != noPreference || blue != wantsBlue {
+	// seatOrder answers in opening order, and Blue is the side that opens, so
+	// the seek that asked for Blue is the one it names first.
+	if opener != wantsBlue || replier != noPreference {
 		t.Fatal("the seek that asked for Blue must get Blue")
 	}
 

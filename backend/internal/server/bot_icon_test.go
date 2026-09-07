@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"rps-strategy/backend/internal/botclient"
 	"rps-strategy/backend/internal/persistence"
 )
 
@@ -73,7 +74,7 @@ func connectBot(t *testing.T, url string, token string, name string, icon *strin
 
 	registration := map[string]any{
 		"type":             "authenticate_bot",
-		"clientVersion":    "1.1",
+		"clientVersion":    botclient.Version(),
 		"token":            token,
 		"name":             name,
 		"publicPlay":       true,
@@ -196,9 +197,10 @@ func TestAnIconSentOnConnectIsServedOverHTTP(t *testing.T) {
 	}
 }
 
-// The guarantee that lets 1.1 ship without touching MinimumVersion: an older
-// client sends no icon field at all, and that must not take down a picture its
-// owner uploaded from a newer one.
+// A registration with no icon field must leave the stored picture alone. Not a
+// legacy allowance any more — it is what every slot but the first of a bot
+// playing several games at once sends, because one bot has one picture and
+// there is no sense in uploading it five times.
 func TestAClientThatSendsNoIconLeavesTheStoredOneAlone(t *testing.T) {
 	server, token := iconTestServer(t)
 	httpServer := httptest.NewServer(server.Routes())

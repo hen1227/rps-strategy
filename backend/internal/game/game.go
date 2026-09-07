@@ -7,6 +7,22 @@ import (
 	"time"
 )
 
+// QuietPlyLimit is how many plies may pass with nothing captured before the
+// engine calls the game a draw.
+//
+// Two hundred plies is a hundred moves: a hundred from each side. Counted in
+// the unit Record.PlyCount reports -- one per side per turn -- because that is
+// what the record holds and what a replay walks, and the number is stated as
+// plies here so nothing has to remember which "move" is meant. Long enough that
+// no real endgame trips over it, short enough that two bots cannot shuffle
+// forever.
+//
+// Unconditional. Neither a mode feature nor a rule flag can lift it, because it
+// is the one rule that makes every game finite: repetition only catches a
+// position that comes back, and an army with room to wander need never repeat
+// one.
+const QuietPlyLimit = 200
+
 var (
 	ErrDrawOfferExists       = errors.New("a draw offer is already pending")
 	ErrDrawOfferUnavailable  = errors.New("a draw can only be offered once on your turn")
@@ -25,9 +41,12 @@ type Game struct {
 	state            GameState
 	initialPosition  *InitialPosition
 	repetitionCounts map[string]uint8
-	now              func() time.Time
-	clockUpdatedAt   time.Time
-	startedAt        time.Time
+	// quietPlies is how many plies have been played since the last capture.
+	// Reset by a capture and by nothing else; see QuietPlyLimit.
+	quietPlies     int
+	now            func() time.Time
+	clockUpdatedAt time.Time
+	startedAt      time.Time
 	// events is the archival record of the game. pendingElapsedMs holds clock
 	// time consumed since the last recorded event, so time spent on an action
 	// that never became an event is still attributed to the next one.
@@ -148,11 +167,11 @@ func NewGameWithRegistryTimeControlAndStartingPosition(
 	startingPosition *StartingPosition,
 ) (*Game, error) {
 	if startingPosition != nil {
-		mode, err := registry.New(modeID)
-		if err != nil {
+		// Resolved only to reject an unknown mode before the board is read.
+		if _, err := registry.New(modeID); err != nil {
 			return nil, fmt.Errorf("create game: %w", err)
 		}
-		if err := ValidatePositionFor(mode, *startingPosition); err != nil {
+		if err := startingPosition.Validate(); err != nil {
 			return nil, fmt.Errorf("create game: %w", err)
 		}
 	}
@@ -271,7 +290,7 @@ func newGame(
 		TimeControl: timeControl,
 		Rules:       options.rules,
 		Clock:       newClockState(timeControl, now),
-		CurrentTurn: Red,
+		CurrentTurn: FirstToMove,
 		Status:      InProgress,
 		Winner:      Neutral,
 		RedPlayer:   red,
@@ -308,7 +327,7 @@ func newGame(
 		(options.startingPosition == nil ||
 			*options.startingPosition == mode.Definition().StartingPosition)
 	var repetitionCounts map[string]uint8
-	if !options.rules.NoRepetitionDraw {
+	if repetitionDraws(state) {
 		repetitionCounts = map[string]uint8{
 			positionForRepetition(state): 1,
 		}
@@ -378,7 +397,7 @@ func (game *Game) Move(player PlayerColor, from, to Position) (GameState, error)
 	if err := game.mode.Move(&game.state, player, from, to); err != nil {
 		return game.stateCopyLocked(), err
 	}
-	if game.state.Status == InProgress && !game.state.Rules.NoRepetitionDraw {
+	if game.state.Status == InProgress && repetitionDraws(game.state) {
 		position := positionForRepetition(game.state)
 		game.repetitionCounts[position]++
 		if game.repetitionCounts[position] >= 3 {
@@ -386,6 +405,14 @@ func (game *Game) Move(player PlayerColor, from, to Position) (GameState, error)
 		}
 	}
 	game.adjudicateStalemateLocked()
+	// Counted for every move, including the ones that ended the game, so the
+	// number is right whatever a later reader asks it. Adjudicated last of the
+	// three engine-level endings, because it is the weakest claim any of them
+	// makes: a move that wins, blockades, or repeats has said something about
+	// the position, and "nothing has been taken for a while" must not overrule
+	// it. That ordering is what stops the hundredth quiet move from turning a
+	// blockade -- a win in a mode where being stuck loses -- into half a point.
+	game.countQuietPlyLocked(capturedPiece)
 	// A move by the recipient declines a pending offer. A move by the player
 	// who made the offer leaves it available for the opponent to accept.
 	if pendingDrawOffer != "" && pendingDrawOffer != player {
@@ -600,6 +627,27 @@ func (game *Game) Resign(player PlayerColor) (GameState, error) {
 	return game.stateCopyLocked(), nil
 }
 
+// Adjudicate ends a game in progress with a result nobody on the board chose.
+//
+// The only caller is a host stopping a match. It takes the winner rather than
+// the loser — unlike Resign and Abandon, which take the player doing the thing
+// — because there is no player doing the thing: the argument is the outcome
+// being declared. Neutral is a draw.
+//
+// It deliberately does not call recordEndLocked. That records who ended the
+// game for the notation's benefit, and the answer here is nobody who was
+// playing it; the end reason carries the whole story instead.
+func (game *Game) Adjudicate(winner PlayerColor) (GameState, error) {
+	game.mu.Lock()
+	defer game.mu.Unlock()
+	game.updateClockLocked(game.now())
+	if game.state.Status != InProgress {
+		return game.stateCopyLocked(), ErrGameFinished
+	}
+	game.finishLocked(winner, EndReasonAdjudication)
+	return game.stateCopyLocked(), nil
+}
+
 func (game *Game) Abandon(player PlayerColor) (GameState, error) {
 	game.mu.Lock()
 	defer game.mu.Unlock()
@@ -612,21 +660,91 @@ func (game *Game) Abandon(player PlayerColor) (GameState, error) {
 	return game.stateCopyLocked(), nil
 }
 
-// adjudicateStalemateLocked ends the game in a draw when the player to move
-// has no legal move.
+// adjudicateStalemateLocked ends the game when the player to move has no legal
+// move: a draw normally, and a loss for the stuck side in a mode that declares
+// FeatureStalemateLoses.
 //
 // This is an engine-level rule that every mode inherits: it asks the active
 // mode for its own legal moves rather than assuming standard movement, so a
 // mode with custom movement, blocking, or immobile pieces is covered without
-// changing anything here.
+// changing anything here. Only who the result belongs to is the mode's to say.
 func (game *Game) adjudicateStalemateLocked() {
 	if game.state.Status != InProgress {
 		return
 	}
-	if game.hasLegalMoveLocked(game.state.CurrentTurn) {
+	stuck := game.state.CurrentTurn
+	if game.hasLegalMoveLocked(stuck) {
 		return
 	}
-	game.finishLocked(Neutral, EndReasonStalemate)
+	game.finishLocked(stalemateWinner(game.state, stuck), EndReasonStalemate)
+}
+
+// countQuietPlyLocked records the ply just played against QuietPlyLimit and
+// draws the game when the limit is reached.
+//
+// A capture is the only thing that resets it. Territory does not: a claimed
+// tile is progress in Total War, but it is progress the mode already ends the
+// game on when the board fills, and folding it in here would mean two modes
+// disagreeing about what this rule counts.
+//
+// captured is the piece that stood on the destination square before the move.
+// Reading it there is exact rather than a heuristic -- validateMove only allows
+// a move onto an occupied square when the attacker beats what is standing on
+// it, so every such move takes the piece.
+func (game *Game) countQuietPlyLocked(captured Piece) {
+	if captured != Empty {
+		game.quietPlies = 0
+		return
+	}
+	game.quietPlies++
+	if game.state.Status == InProgress && game.quietPlies >= QuietPlyLimit {
+		game.finishLocked(Neutral, EndReasonNoCapture)
+	}
+}
+
+// QuietPlies is how many plies have been played since the last capture.
+func (game *Game) QuietPlies() int {
+	game.mu.RLock()
+	defer game.mu.RUnlock()
+	return game.quietPlies
+}
+
+// RepetitionDrawEnabled is whether this project plays the threefold-repetition
+// draw at all. It does not.
+//
+// One switch above the per-mode and per-game answers below, rather than the
+// rule being deleted, because it has been on and off before and the argument
+// has two real sides: a repeated position is a claim to half a point in a game
+// decided by what is left on the board, and a defensive resource in a race for
+// one tile. What settles it for now is that neither reading has to bound a
+// game's length any more -- QuietPlyLimit does that, in every mode, and unlike
+// repetition it cannot be shuffled around by an army with room to wander.
+//
+// Everything the rule needs is still here and still tested: turning this on
+// puts the draw back in every mode that has not taken it away.
+const RepetitionDrawEnabled = false
+
+// repetitionDraws reports whether the threefold-repetition draw applies to this
+// game: the rule has to be on at all, the mode has to allow it, and the game
+// must not have switched it off.
+//
+// Three sources for one rule because they answer different questions.
+// RepetitionDrawEnabled is whether the rule exists; RuleFlags is a deviation
+// one game's author chose; the mode feature is what the rules of that mode are,
+// so the toggle in the lobby cannot put a draw back into a mode that has none.
+func repetitionDraws(state GameState) bool {
+	return RepetitionDrawEnabled &&
+		!state.Rules.NoRepetitionDraw &&
+		!state.Mode.HasFeature(FeatureNoRepetitionDraw)
+}
+
+// stalemateWinner is who a stalemate belongs to: nobody, unless the mode says
+// that being unable to move loses.
+func stalemateWinner(state GameState, stuck PlayerColor) PlayerColor {
+	if state.Mode.HasFeature(FeatureStalemateLoses) {
+		return OtherColor(stuck)
+	}
+	return Neutral
 }
 
 // hasLegalMoveLocked reports whether player has at least one legal move.
