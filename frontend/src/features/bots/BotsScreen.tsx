@@ -4,7 +4,7 @@ import {StyleSheet, Text, View} from 'react-native';
 
 import BotLevelPicker from './BotLevelPicker';
 import BotSeriesPanel from './BotSeriesPanel';
-import EngineBotCard from './EngineBotCard';
+import EngineBotCard, {ENGINE_CARD_BASIS} from './EngineBotCard';
 import {BOT_PROFILES, DEFAULT_BOT_PROFILE_ID} from '@/engine/bots/profiles';
 import {
     engineSupportsMode,
@@ -42,10 +42,10 @@ import type {BotPresence} from '@/types/protocol';
 // What it is *mostly* for changed under it. RPSFish shipping in the bundle was
 // once the whole of this page and is now a long way off the pace — a dozen
 // people's engines are usually connected, several of them hundreds of points
-// stronger — so the panel order follows the roster: the connected engines lead
-// while any are online, and the practice ladder, which is always available and
-// never the reason anybody came, sits under them. With nothing connected it
-// leads instead, because then it is the only thing here that can be played.
+// stronger. So the connected engines lead and the practice ladder sits at the
+// bottom, unconditionally: it is always available and it is never the reason
+// anybody came, and a panel that jumps to the top of the page whenever the last
+// engine disconnects is one nobody can learn the position of.
 //
 // One mode governs the whole page. It decides which rating each card shows,
 // what a challenge is played at, and what a series is run at — three questions
@@ -54,6 +54,17 @@ import type {BotPresence} from '@/types/protocol';
 
 /** How a seat reads out loud, where 'random' is not a colour anybody plays. */
 const seatDescription = (seat: SeatChoice) => (seat === 'random' ? 'either side' : seat);
+
+/**
+ * Invisible items that pad out the grid's last row.
+ *
+ * Every card is `flexGrow: 1`, so a row that is not full shares the leftover
+ * space between whatever is on it — and a single orphan card takes all of it,
+ * arriving three times the width of the ones above it. Zero-height items with
+ * the card's own basis sit at the end and soak that up instead. Five of them
+ * covers a six-column row, which is wider than this page can get.
+ */
+const GRID_FILLERS = [0, 1, 2, 3, 4];
 
 /** The two sides of the series form, as the page holds them. */
 interface PitPick {
@@ -256,6 +267,9 @@ export default function BotsScreen() {
                                 }
                             />
                         ))}
+                        {GRID_FILLERS.map((index) => (
+                            <View key={`filler-${index}`} style={styles.gridFiller}/>
+                        ))}
                     </View>
                 </>
             )}
@@ -380,19 +394,9 @@ export default function BotsScreen() {
 
     return (
         <ScreenShell width={contentWidth.page}>
-            {engineBots.length > 0 ? (
-                <>
-                    {enginePanel}
-                    {pitPanel}
-                    {practicePanel}
-                </>
-            ) : (
-                <>
-                    {practicePanel}
-                    {enginePanel}
-                    {pitPanel}
-                </>
-            )}
+            {enginePanel}
+            {pitPanel}
+            {practicePanel}
         </ScreenShell>
     );
 }
@@ -417,4 +421,5 @@ const styles = StyleSheet.create({
         borderTopColor: colors.borderSoft,
     },
     grid: {flexDirection: 'row', flexWrap: 'wrap', gap: space.small, marginTop: space.medium},
+    gridFiller: {flexBasis: ENGINE_CARD_BASIS, flexGrow: 1, height: 0},
 });

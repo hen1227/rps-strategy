@@ -22,6 +22,16 @@ import { Badge, PrimaryButton } from '@/ui/primitives';
 // twice in chips of its own, immediately under a list of the same names; two
 // buttons on the cards that are already here say the same thing once.
 
+/**
+ * How wide a card wants to be, before `flexGrow` divides up what the row has
+ * left over.
+ *
+ * Exported because the grid holding these has to pad its last row with fillers
+ * of exactly this basis — see the note there — and a second copy of the number
+ * is a silent way for the two to drift apart.
+ */
+export const ENGINE_CARD_BASIS = 214;
+
 export interface EngineBotCardProps {
   bot: BotPresence;
   /** The mode being offered, which decides the rating shown and availability. */
@@ -160,14 +170,13 @@ export default function EngineBotCard({
 
 const styles = StyleSheet.create({
   card: {
-    // Four across a desktop page, two on a tablet, one on a phone, without a
-    // breakpoint: the basis is the width a card wants and `flexGrow` divides
-    // whatever the row has left. 214 rather than a rounder number because four
-    // of them plus three gaps has to clear a padded panel in the ~1000pt column
-    // this page gets between the shell's sidebar and its live rail — at 232 it
-    // missed by 17 points and dropped to three across with a third of the row
-    // empty.
-    flexBasis: 214,
+    // Three or four across a desktop page, two on a tablet, one on a phone,
+    // without a breakpoint: the basis is the width a card wants and `flexGrow`
+    // divides whatever the row has left. The column this page actually gets,
+    // between the shell's sidebar and its live rail, is a good deal narrower
+    // than the page's 1180 cap suggests — 784 points at a 1400-point window —
+    // so this is sized to give three there and four on a wide monitor.
+    flexBasis: ENGINE_CARD_BASIS,
     flexGrow: 1,
     minWidth: 0,
     padding: space.small,
