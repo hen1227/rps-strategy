@@ -16,6 +16,6 @@ if [ ! -x "$ENGINE/target/release/rpsfish" ]; then
   exit 1
 fi
 
-cd "$REPO" && python3 ./backend/internal/botclient/rpsbot.py \
+cd "$HERE" && python3 "$REPO/backend/internal/botclient/rpsbot.py" \
   --config "$HERE/altbot.conf" \
   -- "$ENGINE/target/release/rpsfish" rpsi --hash-mb 512 --book "$ENGINE/book"
