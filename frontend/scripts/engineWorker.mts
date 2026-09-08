@@ -6,6 +6,7 @@
 // the path the website actually runs. `npm run build:worker` produces that
 // file from `src/engine/rpsfish/worker/`, and `pretest` runs it first.
 
+import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { createContext, runInContext } from 'node:vm';
 import { performance } from 'node:perf_hooks';
@@ -27,6 +28,18 @@ import type { Move } from '../src/types/game';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const WORKER_PATH = resolvePath(HERE, '../public/rpsfish/rpsfish-worker.js');
 const WASM_PATH = resolvePath(HERE, '../public/rpsfish/rpsfish.wasm');
+
+/**
+ * Whether the engine has been built into `public/rpsfish/`.
+ *
+ * The `.wasm` comes from the RPSFish repository and is not tracked here,
+ * so a fresh clone has none until `npm run build:rpsfish` runs. Tests that
+ * need the engine ask this first and skip rather than fail: not having
+ * built a separate repository is a missing optional step, not a broken
+ * checkout.
+ */
+export const engineIsBuilt = (): boolean =>
+  existsSync(WORKER_PATH) && existsSync(WASM_PATH);
 
 /** The same two calls `engine/rpsfish/client.ts` offers the browser. */
 export interface NodeEngineWorker {

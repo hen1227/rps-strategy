@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      # No -tags meaf on purpose. This job is the standing check that a clone
+      # without the untracked meaf.us export builds and tests clean, which is
+      # the thing that is easy to break on a machine where the file happens to
+      # exist. See backend/internal/meafarchive/export_stub.go.
+      - run: go build ./...
+        working-directory: backend
+      - run: go test ./...
+        working-directory: backend
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      # The engine is a separate repository and is not built here. The one
+      # suite that drives RPSFish skips itself, saying so; the other 33 run.
+      # That is what the engine split buys: this job, like a contributor who
+      # only wants to fix the website, needs Node and nothing else.
+      - run: npm test
+        working-directory: frontend

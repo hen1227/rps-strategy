@@ -1,0 +1,7 @@
+[bot]
+name = ALTFish
+icon = ALTFishIcon.png
+public_play = yes
+tournaments = yes
+token = your-bot-token-here
+server = wss://api-rps.henhen1227.com/ws

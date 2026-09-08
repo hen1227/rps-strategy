@@ -1,3 +1,5 @@
+//go:build meaf
+
 package meafarchive
 
 import "testing"

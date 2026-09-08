@@ -17,11 +17,3 @@
 // deploy. TestMeafExportIsReadable is what tells you the new file is intact
 // before it reaches production.
 package meafarchive
-
-import _ "embed"
-
-// Export is the compact export exactly as meaf.us produced it. See Decode for
-// the format.
-//
-//go:embed games_export.txt
-var Export string

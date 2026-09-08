@@ -1,0 +1,9 @@
+[bot]
+name = RPSFish
+icon = RPSFishIcon.png
+public_play = yes
+tournaments = yes
+token = your-bot-token-here
+server = wss://api-rps.henhen1227.com/ws
+rules_seen = V3:2026-09-03 V5:2026-09-03 V6:2026-09-03
+

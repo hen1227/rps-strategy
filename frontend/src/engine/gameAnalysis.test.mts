@@ -23,7 +23,11 @@ import {
 } from './gameAnalysis';
 import type { ReviewFn } from './rpsfish/client';
 import type { SearchLimits } from './rpsfish/protocol';
-import { startEngineWorker, type NodeEngineWorker } from '../../scripts/engineWorker.mts';
+import {
+  engineIsBuilt,
+  startEngineWorker,
+  type NodeEngineWorker,
+} from '../../scripts/engineWorker.mts';
 import { testMode } from '@/testing/modes';
 import { FIRST_TO_MOVE, opposingColor, type Move, type SideColor } from '@/types/game';
 
@@ -109,7 +113,12 @@ describe('firstDivergence', () => {
   });
 });
 
-describe('createGameAnalysis against RPSFish', () => {
+describe('createGameAnalysis against RPSFish', {
+  // The only suite here that needs the engine binary. See engineIsBuilt.
+  skip: engineIsBuilt()
+    ? false
+    : 'RPSFish is not built. Run `npm run build:rpsfish` (README: Building the engine).',
+}, () => {
   let engine: NodeEngineWorker | undefined;
   let review: ReviewFn;
 

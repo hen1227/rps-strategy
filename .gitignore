@@ -1,0 +1,17 @@
+# Monorepo root. frontend/ and backend/ keep their own .gitignore files; this
+# one covers the root and anything that applies to the whole tree.
+
+.DS_Store
+
+# Live bot credentials. deploy/bots/*.conf holds a real bot token, so only the
+# .example files are ever tracked.
+deploy/bots/*.conf
+!deploy/bots/*.conf.example
+
+# The meaf.us export. The games are public but they are Meaf's to publish, so
+# the file stays out of this repository pending an arrangement. The backend
+# builds without it; see backend/internal/meafarchive.
+backend/internal/meafarchive/games_export.txt
+
+# Apple push key. A .p8 in a repository is a .p8 leaked.
+*.p8
