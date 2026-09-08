@@ -1,0 +1,42 @@
+{
+  "expo": {
+    "name": "RPS Strategy",
+    "slug": "rps-strategy",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.henhen1227.rps-strategy"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#334155",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      }
+    },
+    "web": {
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro",
+      "output": "static"
+    },
+    "plugins": [
+      [
+        "expo-router",
+        {
+          "origin": "https://rps.henhen1227.com"
+        }
+      ],
+      "expo-sqlite",
+      "expo-notifications",
+      "expo-web-browser"
+    ],
+    "scheme": "rps-strategy",
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}

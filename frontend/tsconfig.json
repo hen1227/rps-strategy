@@ -1,0 +1,29 @@
+{
+  "extends": "expo/tsconfig.base",
+  "compilerOptions": {
+    "strict": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "verbatimModuleSyntax": true,
+    // Tests import the Node-only script shims by their real `.mts` path.
+    // Safe with `noEmit`, and nothing in `src/app` does it.
+    "allowImportingTsExtensions": true,
+    // TypeScript 6 no longer pulls in every `@types/*` package on its own, so
+    // the two this project actually uses are named. `node` is here for the
+    // scripts and tests, which run under Node rather than in a browser.
+    "types": ["node", "react"],
+    "ignoreDeprecations": "6.0",
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"]
+    }
+  },
+  "include": [
+    "**/*.ts",
+    "**/*.tsx",
+    "**/*.mts",
+    ".expo/types/**/*.ts",
+    "expo-env.d.ts"
+  ],
+  "exclude": ["node_modules", "dist", "ios", "android", ".expo"]
+}
