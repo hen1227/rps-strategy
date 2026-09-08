@@ -2,7 +2,7 @@ import { Link, usePathname } from 'expo-router';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { groupForPath, groupHref, visibleGroups } from './sections';
-import { useGameStore } from '@/store/gameStore';
+import { useNavContext } from './useNavContext';
 import { colors, space, type } from '@/theme';
 
 // The phone's navigation.
@@ -21,14 +21,14 @@ import { colors, space, type } from '@/theme';
 
 export default function BottomTabBar() {
   const pathname = usePathname();
-  const account = useGameStore((state) => state.account);
-  const groups = visibleGroups(account);
+  const nav = useNavContext();
+  const groups = visibleGroups(nav);
   const current = groupForPath(pathname);
 
   return (
     <View style={styles.bar}>
       {groups.map((group) => {
-        const href = groupHref(group.id, account);
+        const href = groupHref(group.id, nav);
         // `visibleGroups` has already dropped the groups with nowhere to land,
         // so this is narrowing rather than a case that happens.
         if (!href) return null;

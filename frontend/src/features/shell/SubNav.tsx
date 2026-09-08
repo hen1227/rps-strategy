@@ -2,7 +2,7 @@ import { Link, usePathname } from 'expo-router';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { groupForPath, sectionForPath, sectionsInGroup } from './sections';
-import { useGameStore } from '@/store/gameStore';
+import { useNavContext } from './useNavContext';
 import { colors, radius, space, type } from '@/theme';
 
 // The pages inside the group the tab bar has open.
@@ -25,10 +25,10 @@ import { colors, radius, space, type } from '@/theme';
 
 export default function SubNav() {
   const pathname = usePathname();
-  const account = useGameStore((state) => state.account);
+  const nav = useNavContext();
   const group = groupForPath(pathname);
   const current = sectionForPath(pathname);
-  const sections = group ? sectionsInGroup(group, account) : [];
+  const sections = group ? sectionsInGroup(group, nav) : [];
 
   if (sections.length < 2) return null;
 

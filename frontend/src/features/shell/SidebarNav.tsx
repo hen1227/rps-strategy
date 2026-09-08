@@ -2,6 +2,7 @@ import { Link, usePathname } from 'expo-router';
 import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { sectionForPath, sectionsInGroup, visibleGroups } from './sections';
+import { useNavContext } from './useNavContext';
 import TournamentPromoLink from './TournamentPromoLink';
 import {links, webGoatGuy} from '@/navigation/links';
 import { useGameStore } from '@/store/gameStore';
@@ -35,10 +36,14 @@ const BrandMark = () => (
 
 export default function SidebarNav() {
   const pathname = usePathname();
-  const account = useGameStore((state) => state.account);
   const connectionStatus = useGameStore((state) => state.connectionStatus);
   const isConnected = connectionStatus === 'connected';
-  const groups = visibleGroups(account);
+  // The identity row reads the account out of here too, rather than selecting
+  // it a second time: the foot and the list should never be able to disagree
+  // about who is signed in.
+  const nav = useNavContext();
+  const { account } = nav;
+  const groups = visibleGroups(nav);
   // Which row is lit, by path rather than by href: `/account/bots/connect` is
   // the Connect page even though three sections' paths are prefixes of it.
   const current = sectionForPath(pathname);
@@ -65,7 +70,7 @@ export default function SidebarNav() {
               somebody.
             */}
             <Text style={styles.groupLabel}>{group.label}</Text>
-            {sectionsInGroup(group.id, account).map((section) => {
+            {sectionsInGroup(group.id, nav).map((section) => {
               const lit = section.id === current?.id;
               return (
                 // `StyleSheet.flatten`, and not the usual `({ pressed }) => [...]`

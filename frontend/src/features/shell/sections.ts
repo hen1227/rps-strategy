@@ -1,3 +1,4 @@
+import {officialTournamentPhase} from '@/features/tournaments/officialTournament';
 import {links} from '@/navigation/links';
 import type {Account} from '@/types/protocol';
 import type {Href} from 'expo-router';
@@ -17,6 +18,23 @@ import type {Href} from 'expo-router';
 // their children underneath.
 
 export type GroupId = 'play' | 'bots' | 'study' | 'compete' | 'you';
+
+/**
+ * What a section's visibility rule gets to look at.
+ *
+ * Two things rather than one, because one of these rows is about an event with
+ * dates on it. `now` is null until the browser has a clock — see `useNow` — and
+ * a rule that reads it must treat null as "do not list this", not as "not yet":
+ * every page here is pre-rendered in Node at build time, and a nav row that
+ * depended on the build machine's clock would be baked into the static HTML at
+ * whatever it happened to say. So a time-gated row is absent from the
+ * pre-rendered page and appears a render later, which is what the front-page
+ * banner and the promo button already do.
+ */
+export interface NavContext {
+    account: Account | null;
+    now: number | null;
+}
 
 export type SectionId =
     | 'play'
@@ -66,8 +84,8 @@ export interface Section {
      * door. See `groupHref`.
      */
     external?: boolean;
-    /** Sections not everyone may see. */
-    visible?: (account: Account | null) => boolean;
+    /** Sections not everyone sees, or not always. */
+    visible?: (context: NavContext) => boolean;
 }
 
 export interface Group {
@@ -122,7 +140,7 @@ export const SECTIONS: readonly Section[] = [
         // `/account/bots` beats `/account`. The URL keeps the reasoning
         // `links.myBots` gives — a bot belongs to an account — and the
         // navigation puts it where people look for it.
-        visible: (account) => Boolean(account?.discordVerified),
+        visible: ({account}) => Boolean(account?.discordVerified),
     },
     {
         id: 'bot-guide',
@@ -199,6 +217,19 @@ export const SECTIONS: readonly Section[] = [
         label: 'Official Event',
         href: links.tournamentInfo(),
         path: '/tournament-info',
+        // Listed while there is an event to list, and not otherwise. The dates
+        // in `officialTournament` are the whole condition, so scheduling the
+        // next one is an edit there and this row comes back on its own — and
+        // the last one going stale takes the row away without anybody
+        // remembering to. A permanent row for an afternoon that happened last
+        // month is the thing that makes a live site look abandoned.
+        //
+        // Only the listing is gated. `/tournament-info` stays addressable
+        // forever and `sectionForPath` still files it under Compete, so a link
+        // to it from a year ago opens the page with the right tab lit. What it
+        // loses between events is a row in the navigation, which is the same
+        // bargain the promo button and the front-page banner already make.
+        visible: ({now}) => now !== null && officialTournamentPhase(now) !== 'over',
     },
     {
         id: 'player',
@@ -243,16 +274,16 @@ export const SECTIONS: readonly Section[] = [
         // Gated on the account flag rather than on holding the host token, so an
         // administrator sees their tools without pasting a secret first. The server
         // accepts their session on the same routes.
-        visible: (account) => Boolean(account?.isAdmin),
+        visible: ({account}) => Boolean(account?.isAdmin),
     },
 ];
 
-export const visibleSections = (account: Account | null): Section[] =>
-    SECTIONS.filter((section) => section.visible?.(account) ?? true);
+export const visibleSections = (context: NavContext): Section[] =>
+    SECTIONS.filter((section) => section.visible?.(context) ?? true);
 
 /** The pages of one group that are worth listing, in order. */
-export const sectionsInGroup = (group: GroupId, account: Account | null): Section[] =>
-    visibleSections(account).filter((section) => section.group === group && !section.hidden);
+export const sectionsInGroup = (group: GroupId, context: NavContext): Section[] =>
+    visibleSections(context).filter((section) => section.group === group && !section.hidden);
 
 /**
  * Where a group's own tab goes: its first listed page that is inside the shell.
@@ -262,12 +293,12 @@ export const sectionsInGroup = (group: GroupId, account: Account | null): Sectio
  * lists the analysis board, but landing the Study tab on it would drop somebody
  * onto a full-bleed page with no tab bar to press again.
  */
-export const groupHref = (group: GroupId, account: Account | null): Href | null =>
-    sectionsInGroup(group, account).find((section) => !section.external)?.href ?? null;
+export const groupHref = (group: GroupId, context: NavContext): Href | null =>
+    sectionsInGroup(group, context).find((section) => !section.external)?.href ?? null;
 
 /** The groups with at least one page somebody may see, in bar order. */
-export const visibleGroups = (account: Account | null): Group[] =>
-    GROUPS.filter((group) => groupHref(group.id, account) !== null);
+export const visibleGroups = (context: NavContext): Group[] =>
+    GROUPS.filter((group) => groupHref(group.id, context) !== null);
 
 /**
  * Which section a path belongs to.
