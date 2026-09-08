@@ -124,23 +124,11 @@ export default function SidebarNav() {
         <TournamentPromoLink />
 
         {/*
-          Where this game came from. This used to be a bare link to one YouTube
-          video, labelled "the video behind this game", and that stopped being
-          the whole truth: there are two videos, an official site, and a Discord.
-          A route rather than an outward link, because the page is what holds
-          all four of them.
+          Where this game came from is now a row in the list above, under You,
+          because a phone had no other way to reach it once the More menu went.
+          What stays down here is the one link that is not a page of this site
+          and so cannot be a section: somebody else's Discord.
         */}
-        <Link asChild href={links.credits()} replace>
-          <Pressable
-            accessibilityLabel="Where this game came from"
-            accessibilityRole="link"
-            // One resolved style object: see the note above.
-            style={styles.video}
-          >
-            <Text style={styles.videoText}>Learn more about this game</Text>
-          </Pressable>
-        </Link>
-
           <Link asChild href={webGoatGuy.discordURL} replace>
               <Pressable
                   accessibilityLabel="Where this game came from"
@@ -151,10 +139,6 @@ export default function SidebarNav() {
                   <Text style={styles.videoText}>Official Intransitive Discord</Text>
               </Pressable>
           </Link>
-
-        <Link href={links.policy()} replace style={styles.policy}>
-          Privacy & play agreement
-        </Link>
       </View>
     </View>
   );
@@ -232,18 +216,6 @@ const styles = StyleSheet.create({
   },
   identityName: { ...type.rowTitle, color: colors.textStrong },
   identityMeta: { ...type.meta, color: colors.textFaint, marginTop: space.hair },
-  video: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: space.snug,
-    minHeight: 34,
-    paddingHorizontal: space.small,
-    borderRadius: radius.medium,
-    borderWidth: 1,
-    borderColor: colors.dangerBorder,
-    backgroundColor: colors.dangerSurfaceQuiet,
-  },
-  videoMark: { color: colors.dangerSoft, fontSize: 10 },
   videoText: { ...type.label, color: colors.textSubtle, letterSpacing: 0.4 },
     discord: {
     flexDirection: 'row',
@@ -258,5 +230,4 @@ const styles = StyleSheet.create({
   },
   discordMark: { color: colors.accentSoft, fontSize: 10 },
   discordText: { ...type.label, color: colors.textSubtle, letterSpacing: 0.4 },
-  policy: { ...type.meta, color: colors.textFaint, paddingHorizontal: space.small },
 });

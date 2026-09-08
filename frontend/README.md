@@ -39,12 +39,14 @@ src/
 
 ## The app shell
 
-Seven sections live inside one frame: **Play Online**, **Bots**, **Tournaments**,
-**Account**, **Leaderboard**, **Openings**, and — only for an account with the
-admin flag — **Admin**. On a wide screen that frame is a left sidebar, the
-section, and a floating right-hand rail of what is happening right now. On a
-phone it is a one-line header, the section, the rail collapsed to a single
-tappable line, and a bottom bar of four tabs plus **More**.
+Every page inside the frame belongs to one of five groups: **Play**, **Bots**,
+**Study**, **Compete**, and **You** — the last of which carries **Admin** for an
+account with the admin flag. `features/shell/sections.ts` is the whole list, and
+both surfaces render all of it. On a wide screen the frame is a left sidebar
+showing the five groups with their pages under them, the section, and a floating
+right-hand rail of what is happening right now. On a phone it is a one-line
+header, a strip naming the pages in the open group, the section, and a bottom
+bar of five tabs — one per group, with nothing behind a menu.
 
 They live in the route group `src/app/(shell)/`. A parenthesised directory
 contributes nothing to the URL, so every one of these pages keeps the address it
