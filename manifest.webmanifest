@@ -1,0 +1,14 @@
+{
+  "name": "RPS Strategy",
+  "short_name": "RPS",
+  "description": "A real-time Rock-Paper-Scissors strategy game on a 9x9 board.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#312e2b",
+  "theme_color": "#312e2b",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ]
+}

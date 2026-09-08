@@ -1,0 +1,28 @@
+# Hot reload for local development.
+#
+# `env_files` is the reason this file exists at all: the server reads its
+# configuration straight from the environment, and air loads the file below and
+# hands it to the binary it builds. Everything else here restates air's own
+# defaults, so adding this changes nothing about how the rebuild behaves.
+#
+# Note what it does *not* watch. `root` is this directory, so an edit anywhere
+# under `backend/internal/` — which is nearly the whole server — does not
+# trigger a rebuild. To watch the module instead, move this file and the .env
+# beside it up to `backend/`, run air from there, and use:
+#
+#   root = "."
+#   tmp_dir = "tmp"
+#   [build]
+#     cmd = "go build -o ./tmp/main ./cmd/server"
+#     entrypoint = ["./tmp/main"]
+#
+# That also changes the working directory, and RPS_DATABASE_PATH defaults to
+# `data/rps-strategy.sqlite` relative to it — so pin the path in .env first, or
+# the dev database silently becomes a different, empty file.
+env_files = [".env"]
+root = "."
+tmp_dir = "tmp"
+
+[build]
+  cmd = "go build -o ./tmp/main ."
+  entrypoint = ["./tmp/main"]
