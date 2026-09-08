@@ -1,0 +1,41 @@
+[Unit]
+Description=RPS Strategy server
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/production/henhen1227/api-rps.henhen1227.com
+EnvironmentFile=/var/www/production/henhen1227/api-rps.henhen1227.com/.env
+ExecStart=/var/www/production/henhen1227/api-rps.henhen1227.com/rps-server-arm64
+
+# Restart=always is load-bearing for deploys, not just for crashes. A graceful
+# restart works by the server *exiting on purpose* once the last game on the
+# board has finished, so systemd is what brings up the new binary — see
+# deploy-backend.sh and internal/server/deploy_drain.go. Take this out and a
+# deploy becomes a shutdown.
+Restart=always
+# One second rather than three. This is the whole of the gap between the last
+# move of the last game and the new build answering, so it is the only number
+# here a player can feel.
+RestartSec=1s
+# SIGTERM still means stop now, and that is deliberate: it is the escape hatch
+# for a server that is wedged, and the drain is asked for over HTTP instead.
+# Games still on the board are archived unfinished, as they always were, so this
+# stays short.
+KillSignal=SIGTERM
+TimeoutStopSec=15s
+UMask=0007
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/www/production/henhen1227/
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
