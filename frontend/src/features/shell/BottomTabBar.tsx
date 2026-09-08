@@ -1,100 +1,63 @@
 import { Link, usePathname } from 'expo-router';
-import { useEffect, useRef, useState } from 'react';
-import { Dimensions, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 
-import MoreMenu, { type MoreAnchor } from './MoreMenu';
-import { visibleSections } from './sections';
+import { groupForPath, groupHref, visibleGroups } from './sections';
 import { useGameStore } from '@/store/gameStore';
 import { colors, space, type } from '@/theme';
 
 // The phone's navigation.
 //
-// Seven sections do not fit across a phone, and a horizontally scrolling strip
-// hides the ones off the edge without admitting it. Four permanent tabs and a
-// More tab is the honest split: the four are what somebody opens repeatedly,
-// and More is the rest — a menu that opens upwards over the bar rather than a
-// page you have to travel to and back from. See `MoreMenu`.
+// Five tabs and nothing behind them. This used to be four tabs plus a More
+// menu, which was an honest answer to a flat list of ten sections but made the
+// bar a ranking: Weekend held a permanent tab and the leaderboard was in a
+// drawer, because somebody had guessed which was opened more. Grouping removes
+// the guess. Every page is now inside one of five groups, so every page is one
+// tap and then one more along the strip — see `SubNav` — and nothing is hidden
+// behind a menu that has to be discovered first.
+//
+// The same five, in the same order, are the sidebar's headings on a desktop.
+// That is the point of the change rather than a side effect of it: the two
+// surfaces used to disagree about what this site contains.
 
 export default function BottomTabBar() {
   const pathname = usePathname();
   const account = useGameStore((state) => state.account);
-  const sections = visibleSections(account);
-  const primary = sections.filter((section) => section.primary);
-  const overflow = sections.filter((section) => !section.primary);
-  const [menuOpen, setMenuOpen] = useState(false);
-  const [anchor, setAnchor] = useState<MoreAnchor | null>(null);
-  const moreTab = useRef<View>(null);
-
-  // More is current whenever the page on screen is not one of the four tabs,
-  // which is how a section reached through it stays visibly "under" More.
-  const onMore = !primary.some((section) =>
-    section.path === '/' ? pathname === '/' : pathname.startsWith(section.path),
-  );
-  const moreLit = onMore || menuOpen;
-
-  // Every way out of the menu that is not a press on it: the back button, a
-  // deep link, the call-out that opens a board.
-  useEffect(() => {
-    setMenuOpen(false);
-  }, [pathname]);
-
-  // Measured at layout rather than on the press, so the menu is already placed
-  // the moment it appears — and measured again whenever the bar moves, which is
-  // what a rotation, a resize, or a browser's collapsing address bar does.
-  const measure = () =>
-    moreTab.current?.measureInWindow((x, y, width) =>
-      setAnchor({
-        bottom: Math.max(0, Dimensions.get('window').height - y),
-        caretX: x + width / 2,
-      }),
-    );
+  const groups = visibleGroups(account);
+  const current = groupForPath(pathname);
 
   return (
-    <>
-      <View style={styles.bar}>
-        {primary.map((section) => {
-          const current =
-            section.path === '/' ? pathname === '/' : pathname.startsWith(section.path);
-          return (
-            <Link asChild href={section.href} key={section.id} replace>
-              <Pressable
-                accessibilityLabel={section.label}
-                accessibilityRole="link"
-                accessibilityState={{ selected: current }}
-                // See the note in SidebarNav: `Link asChild` takes one resolved
-                // style object and silently drops anything else.
-                style={styles.tab}
-              >
-                <View style={[styles.marker, current && styles.markerCurrent]} />
-                <Text style={[styles.label, current && styles.labelCurrent]}>
-                  {section.shortLabel ?? section.label}
-                </Text>
-              </Pressable>
-            </Link>
-          );
-        })}
-        <Pressable
-          accessibilityHint="Lists the sections without a tab of their own"
-          accessibilityLabel="More sections"
-          accessibilityRole="button"
-          accessibilityState={{ expanded: menuOpen, selected: onMore }}
-          onLayout={measure}
-          onPress={() => setMenuOpen((open) => !open)}
-          ref={moreTab}
-          style={styles.tab}
-        >
-          <View style={[styles.marker, moreLit && styles.markerCurrent]} />
-          <Text style={[styles.label, moreLit && styles.labelCurrent]}>More</Text>
-        </Pressable>
-      </View>
-
-      <MoreMenu
-        anchor={anchor}
-        onClose={() => setMenuOpen(false)}
-        sections={overflow}
-        visible={menuOpen}
-      />
-    </>
+    <View style={styles.bar}>
+      {groups.map((group) => {
+        const href = groupHref(group.id, account);
+        // `visibleGroups` has already dropped the groups with nowhere to land,
+        // so this is narrowing rather than a case that happens.
+        if (!href) return null;
+        const lit = group.id === current;
+        return (
+          <Link asChild href={href} key={group.id} replace>
+            <Pressable
+              accessibilityHint={group.hint}
+              accessibilityLabel={group.label}
+              accessibilityRole="link"
+              accessibilityState={{ selected: lit }}
+              // See the note in SidebarNav: `Link asChild` takes one resolved
+              // style object and silently drops anything else.
+              style={styles.tab}
+            >
+              <View style={[styles.marker, lit && styles.markerCurrent]} />
+              {/*
+                One line, always. Every group label is one short word, which is
+                what makes that safe — the bar used to render "Weekend Bot
+                Tourney" into a 62pt tab and let it wrap to three lines.
+              */}
+              <Text numberOfLines={1} style={[styles.label, lit && styles.labelCurrent]}>
+                {group.label}
+              </Text>
+            </Pressable>
+          </Link>
+        );
+      })}
+    </View>
   );
 }
 

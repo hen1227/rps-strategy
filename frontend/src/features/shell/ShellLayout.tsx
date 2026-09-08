@@ -5,6 +5,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import BottomTabBar from './BottomTabBar';
 import MobileTopBar from './MobileTopBar';
+import SubNav from './SubNav';
 import SidebarNav from './SidebarNav';
 import { useBottomInset } from './bottomInset';
 import ServerBanner from './ServerBanner';
@@ -98,6 +99,15 @@ export default function ShellLayout() {
           */
           <SafeAreaView edges={['top']} style={styles.barHolder}>
             <MobileTopBar />
+            {/*
+              The second row of the phone's navigation: the pages inside the
+              group the bar below has open. Part of the header rather than of
+              the page, because it belongs to the group and not to whichever of
+              its pages is showing — a strip that scrolled away with the page
+              would be a different control on every screen. It renders nothing
+              for a group holding one page.
+            */}
+            <SubNav />
           </SafeAreaView>
         )}
         <View style={styles.mainColumn}>

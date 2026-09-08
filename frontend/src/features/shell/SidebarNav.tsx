@@ -1,7 +1,7 @@
 import { Link, usePathname } from 'expo-router';
 import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
-import { visibleSections } from './sections';
+import { sectionForPath, sectionsInGroup, visibleGroups } from './sections';
 import TournamentPromoLink from './TournamentPromoLink';
 import {links, webGoatGuy} from '@/navigation/links';
 import { useGameStore } from '@/store/gameStore';
@@ -13,6 +13,13 @@ import { colors, radius, space, type } from '@/theme';
 // was the only global navigation anywhere, it only existed on one page, and
 // every other screen answered the question with its own back button pointing
 // somewhere slightly different. A column that is always there answers it once.
+//
+// Two levels now, and the same two the phone shows: five headings, each with
+// its pages under it. The flat list this replaced was not wrong so much as
+// unshared — the phone could only fit four of its ten rows and put the rest in
+// a menu, so the two surfaces described the site differently. Grouping is what
+// lets both render the same list. Every row here is a chip on the phone's
+// strip, in this order.
 
 const BrandMark = () => (
   <View style={styles.brand}>
@@ -31,7 +38,10 @@ export default function SidebarNav() {
   const account = useGameStore((state) => state.account);
   const connectionStatus = useGameStore((state) => state.connectionStatus);
   const isConnected = connectionStatus === 'connected';
-  const sections = visibleSections(account);
+  const groups = visibleGroups(account);
+  // Which row is lit, by path rather than by href: `/account/bots/connect` is
+  // the Connect page even though three sections' paths are prefixes of it.
+  const current = sectionForPath(pathname);
 
   return (
     <View style={styles.sidebar}>
@@ -44,34 +54,46 @@ export default function SidebarNav() {
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false} style={styles.list}>
-        {sections.map((section) => {
-          // `/` would otherwise prefix-match every page, so the front page is
-          // current only when it is exactly the front page.
-          const current =
-            section.path === pathname;
-          return (
-            // `StyleSheet.flatten`, and not the usual `({ pressed }) => [...]`
-            // function or even a plain array. `Link asChild` clones this child
-            // into a real anchor and accepts only one resolved style object;
-            // anything else is dropped, which left the row with none of these
-            // styles and the current-page marker pinned above its own label
-            // instead of beside it. A real `<a href>` is worth keeping —
-            // middle-click, copy-link, crawlers — so the press feedback goes.
-            <Link asChild href={section.href} key={section.id} replace>
-              <Pressable
-                accessibilityLabel={section.label}
-                accessibilityRole="link"
-                accessibilityState={{ selected: current }}
-                style={StyleSheet.flatten([styles.item, current && styles.itemCurrent])}
-              >
-                <View style={[styles.marker, current && styles.markerCurrent]} />
-                <Text style={[styles.itemLabel, current && styles.itemLabelCurrent]}>
-                  {section.label}
-                </Text>
-              </Pressable>
-            </Link>
-          );
-        })}
+        {groups.map((group) => (
+          <View key={group.id} style={styles.group}>
+            {/*
+              A heading rather than a link. The group is the five pages under
+              it; pressing the word would have to mean one of them, and picking
+              which is the guess this arrangement exists to remove. The phone's
+              tab has to land somewhere and does — see `groupHref` — but here
+              there is room to show the children instead of choosing for
+              somebody.
+            */}
+            <Text style={styles.groupLabel}>{group.label}</Text>
+            {sectionsInGroup(group.id, account).map((section) => {
+              const lit = section.id === current?.id;
+              return (
+                // `StyleSheet.flatten`, and not the usual `({ pressed }) => [...]`
+                // function or even a plain array. `Link asChild` clones this child
+                // into a real anchor and accepts only one resolved style object;
+                // anything else is dropped, which left the row with none of these
+                // styles and the current-page marker pinned above its own label
+                // instead of beside it. A real `<a href>` is worth keeping —
+                // middle-click, copy-link, crawlers — so the press feedback goes.
+                <Link asChild href={section.href} key={section.id} replace>
+                  <Pressable
+                    accessibilityLabel={section.label}
+                    accessibilityRole="link"
+                    accessibilityState={{ selected: lit }}
+                    style={StyleSheet.flatten([styles.item, lit && styles.itemCurrent])}
+                  >
+                    <View style={[styles.marker, lit && styles.markerCurrent]} />
+                    <Text style={[styles.itemLabel, lit && styles.itemLabelCurrent]}>
+                      {section.label}
+                    </Text>
+                    {/* Leaves the shell, and this column with it. See `SubNav`. */}
+                    {section.external ? <Text style={styles.away}>↗</Text> : null}
+                  </Pressable>
+                </Link>
+              );
+            })}
+          </View>
+        ))}
       </ScrollView>
 
       <View style={styles.foot}>
@@ -161,12 +183,20 @@ const styles = StyleSheet.create({
   statusText: { ...type.eyebrow, color: colors.textMuted, letterSpacing: 0.8 },
 
   list: { flex: 1 },
+  group: { marginBottom: space.small },
+  groupLabel: {
+    ...type.eyebrow,
+    color: colors.textFaint,
+    paddingHorizontal: space.snug,
+    marginBottom: space.hair,
+  },
   item: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: space.small,
-    minHeight: 38,
-    paddingHorizontal: space.snug,
+    minHeight: 34,
+    paddingLeft: space.small,
+    paddingRight: space.snug,
     borderRadius: radius.medium,
   },
   itemCurrent: { backgroundColor: colors.accentSurfaceQuiet },
@@ -190,6 +220,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   itemLabelCurrent: { color: colors.textStrong },
+  away: { ...type.meta, color: colors.textFaint },
 
   foot: { gap: space.small, marginTop: space.medium },
   identity: {

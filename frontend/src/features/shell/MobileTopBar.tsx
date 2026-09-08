@@ -1,7 +1,5 @@
-import { usePathname } from 'expo-router';
 import { Image, StyleSheet, Text, View } from 'react-native';
 
-import { sectionForPath } from './sections';
 import { liveHeadline } from '@/features/live/liveSelectors';
 import { useLiveSnapshot } from '@/features/live/useLiveSnapshot';
 import { useGameStore } from '@/store/gameStore';
@@ -9,11 +7,16 @@ import { colors, space, type } from '@/theme';
 
 // The phone's header.
 //
-// One line, because a phone has no room for more and the tab bar below already
-// says which section is open. What it adds is the two things the sidebar carries
-// on a desktop and nothing carried on a phone: the mark, so a page looks like
-// this site, and whether the socket is actually connected — which matters here,
-// because half of what the lobby shows is live.
+// One line, because a phone has no room for more and the navigation below
+// already says where you are. What it adds is the two things the sidebar
+// carries on a desktop and nothing carried on a phone: the mark, so a page
+// looks like this site, and whether the socket is actually connected — which
+// matters here, because half of what the lobby shows is live.
+//
+// It used to name the open section as well, for the sections the four-tab bar
+// could not name itself. Nothing is unnamed now: the bar names the group and
+// the strip under this line names the page, so a third copy of the answer
+// would only be taking room from the live line.
 //
 // The connection state also carries the room, now that the phone has no rail
 // and no strip above the tab bar. Connected, the dot is the socket and the line
@@ -23,10 +26,8 @@ import { colors, space, type } from '@/theme';
 // these numbers are on the lobby, one tap away in the bar below.
 
 export default function MobileTopBar() {
-  const pathname = usePathname();
   const connectionStatus = useGameStore((state) => state.connectionStatus);
   const isConnected = connectionStatus === 'connected';
-  const section = sectionForPath(pathname);
   const snapshot = useLiveSnapshot();
 
   return (
@@ -40,14 +41,7 @@ export default function MobileTopBar() {
         />
         {/* <Text style={styles.brandName}>Stoneplay</Text> */}
       </View>
-      {/* The tab bar names the four sections it holds; this names the others. */}
-      {section && !section.primary ? (
-        <Text numberOfLines={1} style={styles.section}>
-          {section.label}
-        </Text>
-      ) : (
-        <View style={styles.spacer} />
-      )}
+      <View style={styles.spacer} />
       <View style={styles.status}>
         <View style={[styles.dot, isConnected ? styles.dotOnline : styles.dotOffline]} />
         <Text numberOfLines={1} style={styles.statusText}>
@@ -73,16 +67,6 @@ const styles = StyleSheet.create({
   brandIcon: { width: 32, height: 32 },
   brandName: { ...type.bodyStrong, color: colors.accentBright, fontWeight: '900' },
   spacer: { flex: 1 },
-  // `minWidth: 0` so a long section name ellipsises and gives way to the live
-  // line, rather than pushing it off the end of the bar: a flex item will not
-  // shrink below its longest word without it.
-  section: {
-    ...type.label,
-    flex: 1,
-    minWidth: 0,
-    color: colors.textSubtle,
-    letterSpacing: 0.6,
-  },
   status: { flexDirection: 'row', alignItems: 'center', flexShrink: 1, gap: space.tight },
   dot: { width: 6, height: 6, borderRadius: 3 },
   dotOnline: { backgroundColor: colors.accent },
