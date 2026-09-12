@@ -1,4 +1,17 @@
-<!DOCTYPE html><html  lang="en"><head><title data-rh="true">Review · RPS Strategy</title><meta charSet="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no"/><meta http-equiv="X-UA-Compatible" content="IE=edge"/><meta name="description" content="A real-time Rock–Paper–Scissors strategy game on a 9x9 board, with a deterministic analysis engine, post-game review, and tournaments."/><link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48"/><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"/><link rel="icon" type="image/png" sizes="512x512" href="/icon-512.png"/><link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png"/><link rel="manifest" href="/manifest.webmanifest"/><meta name="theme-color" content="#312e2b"/><style id="expo-reset">#root,body,html{height:100%}body{overflow:hidden}#root{display:flex}</style><style id="react-native-stylesheet">[stylesheet-group="0"]{}
+<!DOCTYPE html><html  lang="en"><head><title data-rh="true">Review · RPS Strategy</title><meta charSet="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no"/><meta http-equiv="X-UA-Compatible" content="IE=edge"/><meta name="description" content="A real-time Rock–Paper–Scissors strategy game on a 9x9 board, with a deterministic analysis engine, post-game review, and tournaments."/><link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48"/><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"/><link rel="icon" type="image/png" sizes="512x512" href="/icon-512.png"/><link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png"/><link rel="manifest" href="/manifest.webmanifest"/><meta name="theme-color" content="#312e2b"/><script>(function(){try{
+var backgrounds={"forest":"#312e2b","midnight":"#1b2030","charcoal":"#2b2b2b","parchment":"#ece6d9","contrast":"#0b0b0b"};
+var fallback="forest";
+var raw=window.localStorage.getItem("rps.appearance.v1");
+var id=raw?(JSON.parse(raw)||{}).theme:null;
+if(!id||id===fallback||!backgrounds[id])return;
+document.documentElement.style.backgroundColor=backgrounds[id];
+document.documentElement.setAttribute('data-rps-theme',id);
+var hold=document.createElement('style');
+hold.id="rps-prepaint";
+hold.textContent='#root{visibility:hidden}';
+document.head.appendChild(hold);
+setTimeout(function(){var n=document.getElementById("rps-prepaint");if(n)n.remove();},4000);
+}catch(e){}})();</script><style id="expo-reset">#root,body,html{height:100%}body{overflow:hidden}#root{display:flex}</style><style id="rps-hover">.rps-hover-underline{cursor:pointer}.rps-hover-underline:hover{text-decoration:underline}</style><style id="react-native-stylesheet">[stylesheet-group="0"]{}
 body{margin:0;}
 button::-moz-focus-inner,input::-moz-focus-inner{border:0;padding:0;}
 html{-ms-text-size-adjust:100%;-webkit-text-size-adjust:100%;-webkit-tap-highlight-color:rgba(0,0,0,0);}
@@ -41,6 +54,7 @@ input::-webkit-search-cancel-button,input::-webkit-search-decoration,input::-web
 .r-1ozjpno{border-bottom-color:rgba(114,95,50,1.00);border-left-color:rgba(114,95,50,1.00);border-right-color:rgba(114,95,50,1.00);border-top-color:rgba(114,95,50,1.00);}
 .r-1pcd2l5{padding:20px;}
 .r-1phboty{border-bottom-style:solid;border-left-style:solid;border-right-style:solid;border-top-style:solid;}
+.r-1px6drs{border-bottom-left-radius:7px;border-bottom-right-radius:7px;border-top-left-radius:7px;border-top-right-radius:7px;}
 .r-1q9bdsx{border-bottom-left-radius:12px;border-bottom-right-radius:12px;border-top-left-radius:12px;border-top-right-radius:12px;}
 .r-1qsk4np{overflow-x:clip;overflow-y:clip;}
 .r-1rf8fdq{border-bottom-width:1.5px;border-left-width:1.5px;border-right-width:1.5px;border-top-width:1.5px;}
@@ -352,6 +366,7 @@ input::-webkit-search-cancel-button,input::-webkit-search-decoration,input::-web
 .r-1kihuf0{align-self:center;}
 .r-1kr1oia{min-height:43px;}
 .r-1kt6imw{line-height:27px;}
+.r-1kvn7zp{max-height:150px;}
 .r-1ld3bg{top:-4px;}
 .r-1ldzwu0{animation-timing-function:linear;}
 .r-1lexl5r{background-color:rgba(119,115,109,1.00);}
@@ -530,6 +545,7 @@ input::-webkit-search-cancel-button,input::-webkit-search-decoration,input::-web
 .r-a5pmau{margin-right:2px;}
 .r-a7xpnb{color:rgba(143,58,48,1.00);}
 .r-acwz6v{color:rgba(200,75,68,1.00);}
+.r-ad9o1y{vertical-align:top;}
 .r-adacv{min-height:64px;}
 .r-adyw6z{font-size:20px;}
 .r-agouwx{transform:translateZ(0);}
@@ -560,6 +576,7 @@ input::-webkit-search-cancel-button,input::-webkit-search-decoration,input::-web
 .r-dfe81l{min-height:46px;}
 .r-dkge59{background-color:rgba(170,184,194,1.00);}
 .r-dnmrzs{max-width:100%;}
+.r-dwliz8{border-left-width:2px;}
 .r-eafdt9{transition-duration:0.15s;}
 .r-ebwn4k{animation-name:r-q67da2;}
 .r-ehq7j7{background-size:contain;}
@@ -575,6 +592,7 @@ input::-webkit-search-cancel-button,input::-webkit-search-decoration,input::-web
 .r-fxxt2n{line-height:15px;}
 .r-g3mlsw{animation-name:r-t2lo5v;}
 .r-ge05fs{background-color:rgba(41,37,27,1.00);}
+.r-ghqz6g{border-left-color:rgba(104,100,94,1.00);}
 .r-ghxds0{transform:translateY(0%);}
 .r-glunga{padding-top:5px;}
 .r-gtdqiz{position:-webkit-sticky;position:sticky;}
@@ -661,6 +679,7 @@ input::-webkit-search-cancel-button,input::-webkit-search-decoration,input::-web
 .r-qn3fzs{padding-bottom:24px;}
 .r-qpl8lv{height:13px;}
 .r-qqjak8{font-size:9px;}
+.r-qu4leh{min-height:74px;}
 .r-qvu1fp{box-shadow:0px 12px 22px 0 rgba(23,22,19,0.55);}
 .r-rabhyy{padding-bottom:28px;}
 .r-rierb{padding-right:1px;}
@@ -742,5 +761,5 @@ input::-webkit-search-cancel-button,input::-webkit-search-decoration,input::-web
 @keyframes r-1pzkwqh{0%{transform:translateY(100%);}100%{transform:translateY(0%);}}
 @keyframes r-imtty0{0%{opacity:0;}100%{opacity:1;}}
 @keyframes r-q67da2{0%{transform:translateX(-100%);}100%{transform:translateX(400%);}}
-@keyframes r-t2lo5v{0%{opacity:1;}100%{opacity:0;}}</style><script type="module">globalThis.__EXPO_ROUTER_HYDRATE__=true;</script></head><body><div id="root"><div class="css-g5y9jx r-13awgt0"><!--$--><div class="css-g5y9jx" style="flex:1"><div style="position:absolute;left:0;right:0;top:0;bottom:0;pointer-events:none;visibility:hidden"></div><div class="css-g5y9jx r-13awgt0"><div class="css-g5y9jx r-13awgt0 r-1p0dtai r-1d2f490 r-u8s1d r-zchlnj r-ipm5af" style="background-color:rgba(49,46,43,1.00);display:flex"><div class="css-g5y9jx r-13awgt0"><div class="css-g5y9jx r-13awgt0" style="background-color:rgba(49,46,43,1.00)"><!--$--><div class="css-g5y9jx r-qiweh6 r-13awgt0" style="padding-top:0px;padding-right:0px;padding-bottom:0px;padding-left:0px"><div class="css-g5y9jx r-1awozwy r-13awgt0 r-1ssbvtb r-1777fci r-d23pfw"><div role="progressbar" aria-valuemax="1" aria-valuemin="0" class="css-g5y9jx r-1awozwy r-1777fci"><div class="css-g5y9jx r-1r8g8re r-1acpoxo r-17bb2tj r-1muvv40 r-1yef0xd r-1ldzwu0"><svg height="100%" viewBox="0 0 32 32" width="100%"><circle cx="16" cy="16" fill="none" r="14" stroke-width="4" style="stroke:#81b64c;opacity:0.2"></circle><circle cx="16" cy="16" fill="none" r="14" stroke-width="4" style="stroke:#81b64c;stroke-dasharray:80;stroke-dashoffset:60"></circle></svg></div></div><div dir="auto" class="css-146c3p1 r-ch83vw r-1enofrn r-q4m81j">Loading the game record…</div></div></div><!--/$--></div></div></div></div></div><!--/$--></div></div><script src="/_expo/static/js/web/entry-4d9335376432b4bbc3adae8fef3a2b1f.js" defer></script>
+@keyframes r-t2lo5v{0%{opacity:1;}100%{opacity:0;}}</style><script type="module">globalThis.__EXPO_ROUTER_HYDRATE__=true;</script></head><body><div id="root"><div class="css-g5y9jx r-13awgt0"><!--$--><div class="css-g5y9jx" style="flex:1"><div style="position:absolute;left:0;right:0;top:0;bottom:0;pointer-events:none;visibility:hidden"></div><div class="css-g5y9jx r-13awgt0"><div class="css-g5y9jx r-13awgt0 r-1p0dtai r-1d2f490 r-u8s1d r-zchlnj r-ipm5af" style="background-color:rgba(49,46,43,1.00);display:flex"><div class="css-g5y9jx r-13awgt0"><div class="css-g5y9jx r-13awgt0" style="background-color:rgba(49,46,43,1.00)"><!--$--><div class="css-g5y9jx r-qiweh6 r-13awgt0" style="padding-top:0px;padding-right:0px;padding-bottom:0px;padding-left:0px"><div class="css-g5y9jx r-1awozwy r-13awgt0 r-1ssbvtb r-1777fci r-d23pfw"><div role="progressbar" aria-valuemax="1" aria-valuemin="0" class="css-g5y9jx r-1awozwy r-1777fci"><div class="css-g5y9jx r-1r8g8re r-1acpoxo r-17bb2tj r-1muvv40 r-1yef0xd r-1ldzwu0"><svg height="100%" viewBox="0 0 32 32" width="100%"><circle cx="16" cy="16" fill="none" r="14" stroke-width="4" style="stroke:#81b64c;opacity:0.2"></circle><circle cx="16" cy="16" fill="none" r="14" stroke-width="4" style="stroke:#81b64c;stroke-dasharray:80;stroke-dashoffset:60"></circle></svg></div></div><div dir="auto" class="css-146c3p1 r-ch83vw r-1enofrn r-q4m81j">Loading the game record…</div></div></div><!--/$--></div></div></div></div></div><!--/$--></div></div><script src="/_expo/static/js/web/entry-219de1f509e5dae246464260df95ec11.js" defer></script>
 </body></html>
