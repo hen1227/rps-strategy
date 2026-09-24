@@ -161,6 +161,11 @@ type discordFlow struct {
 	verifier   string
 	returnTo   string
 	linkUserID string
+	// linkFromSession says linkUserID was proved by a session token rather than
+	// by a device key, which is the difference between "attach this identity to
+	// *this* account" and "upgrade this browser's guest if that helps". The
+	// first is a request that can be refused; the second is an optimisation.
+	linkFromSession bool
 }
 
 // discordTicket is the one-shot result of a finished OAuth conversation,
@@ -172,6 +177,9 @@ type discordTicket struct {
 	// linkUserID is the account this identity should attach to, when the
 	// caller proved one at /start.
 	linkUserID string
+	// linkFromSession carries the flow's distinction through to redemption. See
+	// discordFlow.
+	linkFromSession bool
 }
 
 // ttlStore is a small expiring map: mutex, clock, capacity bound, sweep.

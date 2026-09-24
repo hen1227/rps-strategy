@@ -3,7 +3,7 @@ import { StyleSheet, Text, View } from 'react-native';
 import { formatScore } from './EvalBar';
 import { moveLabel } from '@/engine/analysisGame';
 import type { Analysis, EngineLine } from '@/engine/rpsfish/protocol';
-import { board, colors, radius } from '@/theme';
+import { board, colors, radius, themedSheet } from '@/theme';
 import type { PlayerColor } from '@/types/game';
 
 const variationLabel = (line: EngineLine) =>
@@ -73,7 +73,7 @@ export default function EngineLinesCard({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   card: {
     overflow: 'hidden',
     borderRadius: radius.large,
@@ -120,4 +120,4 @@ const styles = StyleSheet.create({
     borderTopColor: colors.border,
   },
   emptyText: { color: colors.textFaint, fontSize: 9 },
-});
+}));

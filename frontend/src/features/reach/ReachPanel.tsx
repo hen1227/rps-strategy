@@ -7,7 +7,7 @@ import ReachSummary from './ReachSummary';
 import { REACH_VIEWS, REACH_VIEW_LABELS, type ReachView } from './settings';
 import type { ReachToolResult } from '@/hooks/useReach';
 import { useGameStore } from '@/store/gameStore';
-import { colors, radius, space } from '@/theme';
+import { colors, radius, space, themedSheet } from '@/theme';
 import { BOARD_SIZE } from '@/types/game';
 
 // The tool's controls, in a column 310 points wide.
@@ -203,7 +203,7 @@ export default function ReachPanel({ tool }: ReachPanelProps) {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   card: {
     width: '100%',
     gap: space.snug,
@@ -269,4 +269,4 @@ const styles = StyleSheet.create({
 
   hint: { color: colors.textFaint, fontSize: 8, lineHeight: 12 },
   pressed: { opacity: 0.7 },
-});
+}));

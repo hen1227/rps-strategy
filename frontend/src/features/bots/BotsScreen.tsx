@@ -5,6 +5,15 @@ import {StyleSheet, Text, View} from 'react-native';
 import BotLevelPicker from './BotLevelPicker';
 import BotSeriesPanel from './BotSeriesPanel';
 import EngineBotCard, {ENGINE_CARD_BASIS} from './EngineBotCard';
+import PitBar from './PitBar';
+import {
+    NO_PIT_PICK,
+    clearedPitPick,
+    nextPitPick,
+    swappedPitPick,
+    type PitPick,
+} from './pitSelection';
+import {useBotSeriesForm} from './useBotSeriesForm';
 import {BOT_PROFILES, DEFAULT_BOT_PROFILE_ID} from '@/engine/bots/profiles';
 import {
     engineSupportsMode,
@@ -12,10 +21,11 @@ import {
     isEngineAvailable,
 } from '@/engine/rpsfish/client';
 import {engineElo} from '@/features/live/liveSelectors';
+import {useCalloutReserve} from '@/features/shell/CalloutLayer';
 import {links} from '@/navigation/links';
 import {useGameStore} from '@/store/gameStore';
 import {SEAT_CHOICES, type SeatChoice} from '@/store/setupSelectors';
-import {colors, contentWidth, space, type} from '@/theme';
+import { colors, contentWidth, space, themedSheet, type } from '@/theme';
 import LinkRow from '@/ui/LinkRow';
 import ScreenShell from '@/ui/ScreenShell';
 import {
@@ -51,6 +61,15 @@ import type {BotPresence} from '@/types/protocol';
 // what a challenge is played at, and what a series is run at — three questions
 // with one honest answer, where the page used to ask two of them separately in
 // chip rows six inches apart.
+//
+// The page's own shape caused the last thing added to it. The two engines of a
+// series are entered on the cards, and the form describing the run is the panel
+// under them — which with a dozen engines online is two or three phone screens
+// below the presses that filled it. So choosing two engines ended in a question
+// nothing on screen answered. `PitBar` is the answer: it floats at the foot of
+// the page from the first pick onward and carries the only START on it, and the
+// panel keeps the fight at full size and the numbers behind it. The state the
+// two share is `useBotSeriesForm`.
 
 /** How a seat reads out loud, where 'random' is not a colour anybody plays. */
 const seatDescription = (seat: SeatChoice) => (seat === 'random' ? 'either side' : seat);
@@ -65,12 +84,6 @@ const seatDescription = (seat: SeatChoice) => (seat === 'random' ? 'either side'
  * covers a six-column row, which is wider than this page can get.
  */
 const GRID_FILLERS = [0, 1, 2, 3, 4];
-
-/** The two sides of the series form, as the page holds them. */
-interface PitPick {
-    first: string | null;
-    second: string | null;
-}
 
 export default function BotsScreen() {
     const router = useRouter();
@@ -95,10 +108,16 @@ export default function BotsScreen() {
     // silently apply to a practice board six inches further down.
     const [engineSeat, setEngineSeat] = useState<SeatChoice>('random');
     const [practiceSeat, setPracticeSeat] = useState<SeatChoice>('random');
-    // Null until somebody presses VS, which is what lets the default below track
-    // the roster: the two strongest engines are already in the slots when the
-    // page loads, and stop being the moment anybody says otherwise.
-    const [pitPick, setPitPick] = useState<PitPick | null>(null);
+    // Both sides start empty. The page used to arrive with the two strongest
+    // free engines already in the slots, on the theory that starting a series
+    // should be one press — but a form that has answered its own question
+    // proposes a fight nobody chose, and the press that starts it is the press
+    // that discovers what is in it. Nothing is entered until somebody enters it.
+    const [pitPick, setPitPick] = useState<PitPick>(NO_PIT_PICK);
+    // What the bar at the foot of the page is standing on, and how much room the
+    // shell's floating call-out wants above it.
+    const [barHeight, setBarHeight] = useState(0);
+    const calloutReserve = useCalloutReserve();
 
     const playableModes = useMemo(() => modes.filter((mode) => mode.playable !== false), [modes]);
     // The two panels below are RPSFish playing, so they offer only the modes
@@ -155,40 +174,26 @@ export default function BotsScreen() {
         [engines],
     );
 
-    // The fight the page proposes before anybody has proposed one: the two
-    // strongest free engines, preferring a second one with a different owner so
-    // the default run is a rated one rather than a casual pair of somebody's own
-    // bots. Starting a series is then a single press, which is the whole point.
-    const defaultPit = useMemo<PitPick>(() => {
-        const [top, ...rest] = pittable;
-        if (!top) return {first: null, second: null};
-        const rival =
-            rest.find((bot) => !top.ownerUserId || bot.ownerUserId !== top.ownerUserId) ??
-            rest[0] ??
-            null;
-        return {first: top.botId, second: rival?.botId ?? null};
-    }, [pittable]);
-
-    const pick = pitPick ?? defaultPit;
     // Resolved against the free engines rather than trusted: a bot that has since
     // picked up a game empties its slot instead of arming a START button that the
     // server would refuse.
     const inPit = (botId: string | null) =>
         pittable.find((bot) => bot.botId === botId) ?? null;
-    const pitFirst = inPit(pick.first);
-    const pitSecond = inPit(pick.second);
+    const pitFirst = inPit(pitPick.first);
+    const pitSecond = inPit(pitPick.second);
+    // The engine any other card's button would fight, which is what those cards
+    // print on it. With both sides taken the next press keeps the two most
+    // recent — see togglePit — so the one it lands against is the second, not
+    // the first, and a button promising otherwise would be lying about its own
+    // press.
+    const pitOpponent = pitSecond ?? pitFirst;
 
-    const togglePit = (bot: BotPresence) => {
-        const id = bot.botId;
-        if (pick.first === id) setPitPick({first: null, second: pick.second});
-        else if (pick.second === id) setPitPick({first: pick.first, second: null});
-        else if (!pick.first) setPitPick({first: id, second: pick.second});
-        else if (!pick.second) setPitPick({first: pick.first, second: id});
-        // Both sides taken. Keeping the two most recent presses is the only rule
-        // that lets somebody walk down the roster comparing engines without
-        // having to empty a slot between each pair.
-        else setPitPick({first: pick.second, second: id});
-    };
+    const togglePit = (bot: BotPresence) => setPitPick(nextPitPick(pitPick, bot.botId));
+
+    // The run itself — the four numbers, the host credential and the request.
+    // Held here rather than in either component that draws it, because both of
+    // them need it now. See useBotSeriesForm.
+    const form = useBotSeriesForm({first: pitFirst, mode: engineMode, second: pitSecond});
 
     // RPSFish runs in a browser Worker, so the bots that ship with the app are a
     // website feature. An engine on somebody else's machine is not, which is why
@@ -219,15 +224,20 @@ export default function BotsScreen() {
             />
             {engineBots.length === 0 ? (
                 <EmptyState
-                    detail="Anyone can connect one — write a program that reads and writes lines."
+                    detail="Connect your own engine with the bot client."
                     title="No engines are connected"
                 />
             ) : (
                 <>
+                    {/*
+              What the buttons cannot say for themselves. The half of this
+              paragraph that explained PLAY and VS is gone: the cards say which
+              engine a press would fight and how big a decision each button is,
+              which is the same sentence in a form somebody skimming a grid of
+              cards actually receives.
+            */}
                     <Text style={styles.help}>
-                        Programs other people wrote, running on their own machines. PLAY challenges
-                        one, VS puts it in the series below, and the mode decides both — as well as
-                        which rating each card shows.
+                        Challenge community engines. Choose a mode to see their ratings.
                     </Text>
                     {playableModes.length > 1 ? (
                         <OptionChips<ModeID | null>
@@ -258,6 +268,7 @@ export default function BotsScreen() {
                                 modeId={ratedAt}
                                 onChallenge={() => challengeBot(bot.botId, engineMode!.id, engineSeat)}
                                 onPit={togglePit}
+                                pitOpponentName={pitOpponent?.name ?? null}
                                 pitRole={
                                     pitFirst?.botId === bot.botId
                                         ? 'first'
@@ -274,7 +285,7 @@ export default function BotsScreen() {
                 </>
             )}
             <LinkRow
-                detail="Register an engine, take its token, and run it from your own machine."
+                detail="Register a bot and run it on your machine."
                 divided={engineBots.length > 0}
                 href={links.myBots()}
                 title="Run your own engine"
@@ -289,14 +300,34 @@ export default function BotsScreen() {
         <BotSeriesPanel
             available={pittable.length}
             first={pitFirst}
+            form={form}
             mode={engineMode}
-            onClear={(side) =>
-                setPitPick(side === 'first' ? {...pick, first: null} : {...pick, second: null})
-            }
-            onSwap={() => setPitPick({first: pick.second, second: pick.first})}
+            onClear={(side) => setPitPick(clearedPitPick(pitPick, side))}
+            onSwap={() => setPitPick(swappedPitPick(pitPick))}
             second={pitSecond}
         />
     ) : null;
+
+    // Gated on the same resolved mode the panel is: with none there is nothing
+    // to play and no line to describe a run with.
+    const pitBar = engineMode ? (
+        <PitBar
+            available={pittable.length}
+            first={pitFirst}
+            form={form}
+            lift={calloutReserve}
+            mode={engineMode}
+            onClear={(side) => setPitPick(clearedPitPick(pitPick, side))}
+            onHeight={setBarHeight}
+            second={pitSecond}
+        />
+    ) : null;
+
+    // The room the bar takes, and only while it is taking it: a measurement left
+    // standing after the last engine is cleared is a band of blank page under
+    // the final panel. Measured rather than a constant because the bar is one
+    // row on a desktop column and three on a phone.
+    const barReserve = engineMode && (pitFirst || pitSecond) ? barHeight + space.medium : 0;
 
     const practicePanel = (
         <Panel>
@@ -312,8 +343,8 @@ export default function BotsScreen() {
             />
             <Text style={styles.help}>
                 {nativeBotsSupported
-                    ? 'RPSFish plays the other side on this device. No clock, no rating, and the hint and undo buttons stay switched on.'
-                    : 'This build does not include the RPSFish engine, so the practice board is unavailable here.'}
+                    ? "Practice against RPSFish with hints and undo. No clock or rating."
+                    : "Practice is unavailable in this build."}
             </Text>
             {tournamentNotice ? (
                 <Text style={styles.tournamentNotice}>{tournamentNotice}</Text>
@@ -392,16 +423,25 @@ export default function BotsScreen() {
         </Panel>
     );
 
+    // The bar is a sibling of the shell rather than a child of it, because the
+    // shell *is* the ScrollView — an absolutely positioned child of that scrolls
+    // away with the page. It needs no bottom inset of its own: the phone's tab
+    // bar is a flex sibling after this whole column, so the column already ends
+    // where the tab bar starts, safe area included.
     return (
-        <ScreenShell width={contentWidth.page}>
-            {enginePanel}
-            {pitPanel}
-            {practicePanel}
-        </ScreenShell>
+        <View style={styles.page}>
+            <ScreenShell bottomInset={calloutReserve + barReserve} width={contentWidth.page}>
+                {enginePanel}
+                {pitPanel}
+                {practicePanel}
+            </ScreenShell>
+            {pitBar}
+        </View>
     );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
+    page: {flex: 1, minHeight: 0},
     help: {...type.body, color: colors.textMuted, marginTop: space.small},
     tournamentNotice: {
         ...type.body,
@@ -422,4 +462,4 @@ const styles = StyleSheet.create({
     },
     grid: {flexDirection: 'row', flexWrap: 'wrap', gap: space.small, marginTop: space.medium},
     gridFiller: {flexBasis: ENGINE_CARD_BASIS, flexGrow: 1, height: 0},
-});
+}));

@@ -1,6 +1,6 @@
 import { StyleSheet, Pressable, Text, View } from 'react-native';
 
-import { colors, radius, space, type } from '@/theme';
+import { colors, radius, space, themedSheet, type } from '@/theme';
 
 // One row of tabs.
 //
@@ -82,7 +82,7 @@ export default function TabBar<Value extends string | number>({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   bar: { flexDirection: 'row', flexWrap: 'wrap', gap: space.small },
   tab: {
     paddingHorizontal: space.medium,
@@ -112,4 +112,4 @@ const styles = StyleSheet.create({
     backgroundColor: 'transparent',
   },
   markerSelected: { backgroundColor: colors.accentBright },
-});
+}));

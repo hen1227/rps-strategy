@@ -4,11 +4,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import PlayersCard from './PlayersCard';
 import { applyAnalysisMove, moveLabel, type AnalysisGame } from '@/engine/analysisGame';
 import { interactiveLimits, type AnalysisEffort } from '@/engine/analysisBudget';
 import {
   ReviewError,
   expectedScoreCurve,
+  formatLoss,
   reviewSourceFromPGN,
   type GradedMove,
   type RecordedMove,
@@ -20,13 +22,19 @@ import type { Analysis } from '@/engine/rpsfish/protocol';
 import AccuracyCard from '@/features/analysis/AccuracyCard';
 import AnalysisEffortToggle from '@/features/analysis/AnalysisEffortToggle';
 import EngineLinesCard from '@/features/analysis/EngineLinesCard';
+import EngineSwitch from '@/features/analysis/EngineSwitch';
 import EvalBar from '@/features/analysis/EvalBar';
 import EvalChart from '@/features/analysis/EvalChart';
 import MoveAnalysisList from '@/features/analysis/MoveAnalysisList';
 import MoveQualityBadge from '@/features/analysis/MoveQualityBadge';
 import ReplayControls from '@/features/analysis/ReplayControls';
+import QuietMoveMeter from '@/features/analysis/QuietMoveMeter';
 import TerritoryMeter from '@/features/analysis/TerritoryMeter';
 import Board from '@/features/board/Board';
+import { namedResultLabel } from '@/features/game/resultLabels';
+import BoardExportButton from '@/features/board/BoardExportButton';
+import { capturedPieces } from '@/features/board/CapturedPieces';
+import type { ShareCardInput } from '@/features/board/export/shareCard';
 import { usePieceDrag } from '@/features/board/pieceDrag';
 import SeriesLink from '@/features/bots/SeriesLink';
 import { seriesContains } from '@/features/bots/seriesSummary';
@@ -47,10 +55,13 @@ import { up } from '@/navigation/upFrom';
 import { isGameLive } from '@/store/spectateSelectors';
 import { getGamePGN, putGameAccuracy } from '@/store/api/review';
 import { chatRoomScopeOf } from '@/store/chatSelectors';
+import { toggleEngineAnalysis, useEngineAnalysis } from '@/store/enginePreference';
 import { useGameStore } from '@/store/gameStore';
 import { useReviewHandoff } from '@/store/reviewHandoff';
-import { colors, radius, space } from '@/theme';
+import { colors, players, radius, space, themedSheet } from '@/theme';
 import BackLink from '@/ui/BackLink';
+import KeyboardLift from '@/ui/KeyboardLift';
+import PlayerLink from '@/ui/PlayerLink';
 import {
   SIDE_COLORS,
   sameMove,
@@ -122,12 +133,14 @@ const branchMove = (
  */
 const moveVerdict = (move: GradedMove) => {
   if (move.grade.key === 'great') {
-    return `The only move at depth ${move.depth} that stayed within the Good threshold.`;
+    return `At depth ${move.depth} every other move the engine could see was a mistake.`;
   }
   if (move.isTopMove) return `The engine's own choice at depth ${move.depth}.`;
   const best = move.bestMove ? moveLabel(move.bestMove) : 'unavailable';
   if (move.lossPercent < 0.05) return `As strong as the engine's ${best}.`;
-  return `Best was ${best} · ${move.lossPercent.toFixed(1)} points of expected score given up.`;
+  return `Best was ${best} at depth ${move.depth} · ${formatLoss(
+    move.lossPercent,
+  )} of expected score given up.`;
 };
 
 /**
@@ -140,24 +153,50 @@ const moveVerdict = (move: GradedMove) => {
  * tell them the other five are one press away.
  */
 const recordCardHint = (options: { shareable: boolean; inSeries: boolean }) => {
-  if (!options.shareable) return 'Copy this game to save it or analyze it again later.';
+  if (!options.shareable) return "Copy the game to save or review it later.";
   return options.inSeries
-    ? 'Copy the link to hand this game to anybody, or open the run it was one game of.'
-    : 'Copy the link to hand this review to anybody, or the PGN to keep the game.';
+    ? "Share this game or view its series."
+    : "Share the review link or copy the PGN to save it.";
 };
 
 /** The same line once a button has been pressed, for whichever button it was. */
 const copiedMessage = (copied: { what: 'pgn' | 'link'; ok: boolean }) => {
   if (copied.what === 'link') {
     return copied.ok
-      ? 'Link copied. Whoever opens it gets this game, graded the same way.'
+      // Not "graded the same way" any more: whether the engine runs at all is
+      // the reader's own choice, on their own device.
+      ? "Game link copied."
       : 'The link could not be copied.';
   }
   return copied.ok ? 'PGN copied to your clipboard.' : 'The PGN could not be copied.';
 };
 
+/**
+ * How long the player sat on this move, as the record kept it.
+ *
+ * `null` for a move nobody was on a clock for — an untimed game, or a line the
+ * reviewer played themselves.
+ */
+const thinkingTime = (elapsedMs: number | null) => {
+  if (elapsedMs === null || elapsedMs < 0) return null;
+  if (elapsedMs < 1000) return `${elapsedMs}ms`;
+  if (elapsedMs < 60_000) return `${(elapsedMs / 1000).toFixed(1)}s`;
+  const minutes = Math.floor(elapsedMs / 60_000);
+  return `${minutes}m ${Math.round((elapsedMs % 60_000) / 1000)}s`;
+};
+
 interface CurrentMoveCardProps {
   analysis: Analysis | null;
+  /**
+   * Whether this move is being graded at all.
+   *
+   * Off, the card is the record's account of the move and nothing else: what
+   * was played, by whom, and how long they spent on it. That last is the one
+   * thing a review can say about a move without an engine, and it is worth
+   * saying — a blunder played in half a second and one played after two
+   * minutes are different mistakes.
+   */
+  graded: boolean;
   /**
    * Whether the engine is still working on this position. A boolean rather
    * than a status, because the card is fed by two different vocabularies —
@@ -170,10 +209,10 @@ interface CurrentMoveCardProps {
   onPlayBest: (best: Move) => void;
 }
 
-function CurrentMoveCard({ analysis, move, onPlayBest, thinking }: CurrentMoveCardProps) {
+function CurrentMoveCard({ analysis, graded, move, onPlayBest, thinking }: CurrentMoveCardProps) {
   // Offered only when there was something better: a move that gave up nothing
   // has no alternative worth trying.
-  const bestMove = move && !move.pending && !move.isTopMove ? move.bestMove : null;
+  const bestMove = graded && move && !move.pending && !move.isTopMove ? move.bestMove : null;
   if (!move) {
     return (
       <View style={styles.currentCard}>
@@ -185,6 +224,8 @@ function CurrentMoveCard({ analysis, move, onPlayBest, thinking }: CurrentMoveCa
     );
   }
 
+  const spent = thinkingTime(move.elapsedMs);
+
   return (
     <View style={styles.currentCard}>
       <View style={styles.currentTop}>
@@ -194,13 +235,18 @@ function CurrentMoveCard({ analysis, move, onPlayBest, thinking }: CurrentMoveCa
           </Text>
           <Text style={styles.currentMove}>{formatMove(move)}</Text>
         </View>
-        {move.pending ? (
+        {!graded ? null : move.pending ? (
           <ActivityIndicator color={colors.textMuted} size="small" />
         ) : (
           <MoveQualityBadge grade={move.grade} />
         )}
       </View>
-      {move.pending ? (
+      {!graded ? (
+        <Text style={styles.currentDetail}>
+          {spent ? `${move.player} spent ${spent} on it. ` : ''}
+          Play a move on the board to try your own line from here.
+        </Text>
+      ) : move.pending ? (
         <Text style={styles.currentDetail}>RPSFish has not reached this move yet.</Text>
       ) : (
         <Text style={styles.currentDetail}>{moveVerdict(move)}</Text>
@@ -214,7 +260,7 @@ function CurrentMoveCard({ analysis, move, onPlayBest, thinking }: CurrentMoveCa
           <Text style={styles.tryButtonText}>Play the engine move instead</Text>
         </Pressable>
       ) : null}
-      {thinking && !analysis ? (
+      {graded && thinking && !analysis ? (
         <Text style={styles.currentDetail}>Analysing this position…</Text>
       ) : null}
     </View>
@@ -285,6 +331,10 @@ export default function ReviewScreen() {
   // this is the same animation the spectate screen plays when a series moves on
   // to its next board, because it is the same act.
   const [switchingTo, setSwitchingTo] = useState<string | null>(null);
+  // Whether RPSFish is asked about this game at all. A device preference, not
+  // screen state, and it ships off — see `store/enginePreference.ts`. Off, this
+  // page is the game and the reader; on, it is the graded review it used to be.
+  const engineOn = useEngineAnalysis();
   const [effort, setEffort] = useState<AnalysisEffort>('full');
   const [branch, setBranch] = useState<ReviewBranch | null>(null);
   // Which of the two things this card copies was last copied, and whether the
@@ -375,8 +425,14 @@ export default function ReviewScreen() {
   // The review itself. `useGameAnalysis` is the same walk the bot battle and
   // the analysis board run; a record arrives whole, so it is handed over once
   // and graded in one pass.
+  //
+  // Off unless the reviewer has asked for it. With the engine off the hook
+  // still builds a report — every move ungraded — which is exactly the score
+  // sheet a manual review wants: the moves that were played, steppable, with
+  // nothing claimed about them.
   const gameAnalysis = useGameAnalysis({
     bookPlies: record?.bookPlies ?? 0,
+    enabled: engineOn,
     mode: record?.mode,
     moves: record?.moves ?? EMPTY_MOVES,
     positions: record?.positions ?? EMPTY_POSITIONS,
@@ -420,7 +476,7 @@ export default function ReviewScreen() {
     position: game,
     history: branchHistory,
     limits: interactiveLimits({ effort }),
-    enabled: !onMainLine,
+    enabled: !onMainLine && engineOn,
   });
   const branchAnalysis = branchSearch.analysis;
   const branchState = branchSearch.status;
@@ -519,7 +575,10 @@ export default function ReviewScreen() {
     const viewerColor: SideColor | null = record
       ? (SIDE_COLORS.find((color) => record.players[color]?.userId === accountId) ?? null)
       : null;
-    if (!record || !report?.complete || !gameId || !viewerColor) return;
+    // `report.complete` is already false with the engine off, since nothing was
+    // graded. Said again here because this writes to the archive: a review that
+    // measured nothing must never overwrite a number an earlier one measured.
+    if (!engineOn || !record || !report?.complete || !gameId || !viewerColor) return;
     const measured = report.accuracy[viewerColor];
     if (!measured) return;
     const key = `${gameId}:${viewerColor}:${engineLimits.maxDepth}`;
@@ -554,7 +613,7 @@ export default function ReviewScreen() {
       // A review the archive would not take is not worth interrupting the
       // reviewer over: the numbers on screen are the same either way.
       .catch(() => {});
-  }, [accountId, effort, engineLimits, gameId, profileKey, record, report]);
+  }, [accountId, effort, engineLimits, engineOn, gameId, profileKey, record, report]);
 
   // Chat lives under the board on a wide screen, so the board leaves room for
   // it rather than pushing it off the bottom.
@@ -625,6 +684,52 @@ export default function ReviewScreen() {
         ? branch.moves[cursor - branch.baseIndex - 1]
         : record.moves[cursor - 1]
       : null;
+  // The board as the export dialog needs it. The clocks are the record's own —
+  // what each side had left after the move being looked at, not what they
+  // finished with — so a picture of move fourteen is a picture of move
+  // fourteen, clocks included.
+  const captureTrays = capturedPieces({ grid: game.grid, mode: record.mode });
+  const exportBoard: ShareCardInput = {
+    grid: game.grid,
+    currentTurn: game.currentTurn,
+    mode: record.mode,
+    era: record.era,
+    flipped: viewerColor === 'Red',
+    lastMove: lastMoveShown ? { from: lastMoveShown.from, to: lastMoveShown.to } : null,
+    detail: {
+      players: {
+        Red: {
+          name: record.players.Red.name || 'Red',
+          detail: record.players.Red.elo ? String(record.players.Red.elo) : undefined,
+        },
+        Blue: {
+          name: record.players.Blue.name || 'Blue',
+          detail: record.players.Blue.elo ? String(record.players.Blue.elo) : undefined,
+        },
+      },
+      clock:
+        lastMoveShown?.redRemainingMs !== null &&
+        lastMoveShown?.redRemainingMs !== undefined &&
+        lastMoveShown?.blueRemainingMs !== null &&
+        lastMoveShown?.blueRemainingMs !== undefined
+          ? { Red: lastMoveShown.redRemainingMs, Blue: lastMoveShown.blueRemainingMs }
+          : null,
+      captured: { Red: captureTrays.Red.tally, Blue: captureTrays.Blue.tally },
+      heading: record.event || undefined,
+      caption:
+        cursor >= record.moves.length && record.endReason
+          ? namedResultLabel({
+              redName: record.players.Red.name || 'Red',
+              blueName: record.players.Blue.name || 'Blue',
+              winnerName:
+                record.winner === 'Neutral'
+                  ? null
+                  : record.players[record.winner].name || record.winner,
+              endReason: record.endReason,
+            })
+          : `Move ${cursor} · ${game.currentTurn} to move`,
+    },
+  };
   const chartPoints = expectedScoreCurve(report.evaluations, record.mode.id);
   // How far the walk has got, as one number for the header. A first pass counts
   // positions graded; a deeper pass counts positions regraded, because by then
@@ -653,14 +758,26 @@ export default function ReviewScreen() {
     />
   ) : null;
 
-  const effortToggle = (
-    <AnalysisEffortToggle
-      deeperToCome={gameAnalysis.deeperToCome}
-      depth={gameAnalysis.depth}
-      onToggleQuick={() => setEffort((current) => (current === 'quick' ? 'full' : 'quick'))}
-      quick={effort === 'quick'}
-      refining={gameAnalysis.refining}
-    />
+  // The engine switch always, and how hard it is thinking only while it is
+  // thinking: a depth readout beside a switch that is off describes a search
+  // nobody asked for.
+  const engineControls = (
+    <View style={styles.engineControls}>
+      <EngineSwitch
+        enabled={engineOn}
+        offDetail="MANUAL REVIEW"
+        onToggle={toggleEngineAnalysis}
+      />
+      {engineOn ? (
+        <AnalysisEffortToggle
+          deeperToCome={gameAnalysis.deeperToCome}
+          depth={gameAnalysis.depth}
+          onToggleQuick={() => setEffort((current) => (current === 'quick' ? 'full' : 'quick'))}
+          quick={effort === 'quick'}
+          refining={gameAnalysis.refining}
+        />
+      ) : null}
+    </View>
   );
 
   const boardBlock = (
@@ -675,7 +792,10 @@ export default function ReviewScreen() {
             const measured = Math.ceil(event.nativeEvent.layout.height / 8) * 8;
             setSeriesTableHeight((current) => (current === measured ? current : measured));
           }}
-          style={[styles.seriesStrip, { maxWidth: boardSize + EVAL_BAR_GUTTER }]}
+          style={[
+            styles.seriesStrip,
+            { maxWidth: boardSize + (engineOn ? EVAL_BAR_GUTTER : 0) },
+          ]}
         >
           <SeriesScoreTable
             compact
@@ -688,15 +808,22 @@ export default function ReviewScreen() {
       ) : null}
       <GameTransition gameKey={gameId ?? null} leaving={Boolean(switchingTo)}>
     <View style={styles.boardWithEval}>
-      <EvalBar height={boardSize} redScore={analysis?.redScore} />
+      {/*
+        The bar, the arrows and the grade on the last square are all the engine
+        talking. With it off the board is the board: the game replayed, the last
+        move highlighted, and nothing drawn over it that somebody has to decide
+        whether to believe.
+      */}
+      {engineOn ? <EvalBar height={boardSize} redScore={analysis?.redScore} /> : null}
       <Board
-        analysisArrows={analysis?.lines ?? []}
+        analysisArrows={engineOn ? analysis?.lines ?? [] : []}
         boardSize={boardSize}
         canMove={game.status === 'InProgress'}
         grid={game.grid}
         lastMove={lastMoveShown ? { from: lastMoveShown.from, to: lastMoveShown.to } : null}
-        lastMoveGrade={onMainLine && !currentMove?.pending ? currentMove?.grade : null}
+        lastMoveGrade={engineOn && onMainLine && !currentMove?.pending ? currentMove?.grade : null}
         modeId={record.mode.id}
+        era={record.era}
         movableColor={game.currentTurn}
         onPieceDrop={playMove}
         onTilePress={selection.selectTile}
@@ -741,6 +868,18 @@ export default function ReviewScreen() {
           </Pressable>
         </View>
       ) : null}
+
+      {/*
+        Above the record card, because who played is read before how to keep
+        the game: this is the first thing the panel says about the record, and
+        it is one of the two the header has no room for.
+      */}
+      <PlayersCard
+        players={record.players}
+        ranked={record.ranked}
+        ratingSystem={record.ratingSystem}
+        viewerColor={viewerColor}
+      />
 
       <View style={styles.recordCard}>
         <View style={styles.recordCopy}>
@@ -804,39 +943,69 @@ export default function ReviewScreen() {
         </View>
       </View>
 
-      <AccuracyCard
-        accuracy={report.accuracy}
-        pendingDetail={
-          gameAnalysis.error ? 'The review stopped before it could finish.' : 'Still reviewing…'
-        }
-        players={record.players}
-        viewerColor={viewerColor}
-      />
+      {/*
+        Accuracy and the evaluation curve are the two things a review is
+        usually opened for, and both are the engine's claim rather than the
+        record's. With it off they are absent rather than empty: a chart with
+        no line in it and a card reading "—%" would be an unfinished review,
+        which is not what this is.
+      */}
+      {engineOn ? (
+        <AccuracyCard
+          accuracy={report.accuracy}
+          pendingDetail={
+            gameAnalysis.error ? 'The review stopped before it could finish.' : 'Still reviewing…'
+          }
+          players={record.players}
+          viewerColor={viewerColor}
+        />
+      ) : null}
 
       {isWide ? null : chat}
 
-      <EvalChart
-        currentIndex={mainLineIndex}
-        moves={report.moves}
-        onSelect={goTo}
-        points={chartPoints}
-        total={record.positions.length}
-      />
+      {engineOn ? (
+        <EvalChart
+          currentIndex={mainLineIndex}
+          moves={report.moves}
+          onSelect={goTo}
+          points={chartPoints}
+          total={record.positions.length}
+        />
+      ) : null}
 
+      {/*
+        Both read the board rather than the engine — how the territory stands
+        and how close the position is to the quiet-move draw — so both survive
+        the engine being off, and they are most of what a manual review has to
+        look at besides the pieces.
+      */}
       {record.mode.features?.includes('territory') ? <TerritoryMeter grid={game.grid} /> : null}
+      <QuietMoveMeter game={game} />
 
       {onMainLine ? (
         <CurrentMoveCard
           analysis={analysis}
+          graded={engineOn}
           thinking={reviewState === 'running'}
           move={currentMove}
           onPlayBest={(best) => playInstead(mainLineIndex - 1, best)}
         />
       ) : null}
 
-      <EngineLinesCard analysis={analysis} turn={game.currentTurn} />
+      {engineOn ? <EngineLinesCard analysis={analysis} turn={game.currentTurn} /> : null}
 
-      <MoveAnalysisList moves={report.moves} onSelect={goTo} selectedIndex={mainLineIndex} />
+      <MoveAnalysisList
+        graded={engineOn}
+        moves={report.moves}
+        onSelect={goTo}
+        selectedIndex={mainLineIndex}
+        // The board as it stands, not the game's final one: a review is read by
+        // stepping through it, and the position worth taking away is whichever
+        // one stopped you — including one off the record, down a line of your
+        // own. COPY PGN on the card above is the other half of that pair and
+        // hands over the whole game.
+        titleAccessory={<BoardExportButton board={exportBoard} />}
+      />
     </View>
   );
 
@@ -855,8 +1024,57 @@ export default function ReviewScreen() {
                     ? `DEPTH ${refining?.limits.maxDepth ?? gameAnalysis.depth} · ${progress}%`
                     : record.result}
               </Text>
-              <Text numberOfLines={1} style={styles.title}>
-                {record.players.Red?.name || 'Red'} vs {record.players.Blue?.name || 'Blue'}
+              {/*
+                Both names lead to their pages. This is the screen the game just
+                ended on, which is exactly when "who was that" is worth asking —
+                and unlike the board, there is nobody left waiting on a move.
+                Addressed by user id where the record has one, since a name off
+                a pasted PGN is whatever the file said.
+
+                Each name is prefixed by the side that played it, because this
+                is the one line naming both players that is on the screen in
+                every layout and with the engine off — and without it the whole
+                page, the result token above included, talks about two colours
+                it never attaches to anybody. Set in the side's own colour and
+                spelled out as well, so it does not rest on the colour alone;
+                small, because the names are what this line is for. `PLAYERS`
+                below carries the same pairing at full size along with what the
+                two were rated.
+
+                Nested inside the one `Text` rather than laid out as a row of
+                pieces: this is a sentence, and a flex row wraps it in the
+                wrong places.
+
+                And allowed to wrap, where it used to be cut off at one line.
+                The tags cost about five characters a side and a phone header
+                has no five characters spare: `ProfessorLongstocking vs
+                AnotherVeryLongBotName` was already being cut short at 390
+                points, and with the tags in front of it the cut landed before
+                `BLUE`, which took the second player off the header altogether.
+                A `numberOfLines` of two is not the fix — react-native-web
+                clamps with `-webkit-line-clamp`, so a name that will not fit
+                on the second line is replaced by the ellipsis rather than
+                broken across a third — and this line is the one place both
+                players are named in every layout, so losing one of them is the
+                one outcome not worth trading for.
+
+                It only wraps when it would otherwise have been truncated: an
+                ordinary matchup still sits on one line at every width, and a
+                wrap costs a line of header only on a phone, whose board is
+                inside a scroller and does not pay for it.
+              */}
+              <Text style={styles.title}>
+                <Text style={[styles.sideTag, styles.redTag]}>RED </Text>
+                <PlayerLink
+                  handle={record.players.Red?.userId || record.players.Red?.name || ''}
+                  name={record.players.Red?.name || 'Red'}
+                />
+                {' vs '}
+                <Text style={[styles.sideTag, styles.blueTag]}>BLUE </Text>
+                <PlayerLink
+                  handle={record.players.Blue?.userId || record.players.Blue?.name || ''}
+                  name={record.players.Blue?.name || 'Blue'}
+                />
               </Text>
             </View>
             {/*
@@ -868,9 +1086,9 @@ export default function ReviewScreen() {
               narrower than three chips were, but only just, and the status line
               is the part that grows.
             */}
-            {isWide ? effortToggle : null}
+            {isWide ? engineControls : null}
           </View>
-          {isWide ? null : <View style={styles.effortRow}>{effortToggle}</View>}
+          {isWide ? null : <View style={styles.effortRow}>{engineControls}</View>}
         </View>
 
         {isWide ? (
@@ -884,7 +1102,13 @@ export default function ReviewScreen() {
             <View style={[styles.boardColumn, { width: boardSize + 38 }]}>
               {boardBlock}
               {controls}
-              {chat}
+              {/*
+                Lifted over the column when the keyboard is up rather than
+                resized under it — the same as the live board's chat, and for
+                the same reason: this column is as tall as the board plus its
+                controls, and there is no room under them to give a keyboard.
+              */}
+              {chat ? <KeyboardLift style={styles.chatSlot}>{chat}</KeyboardLift> : null}
             </View>
             <ScrollView
               contentContainerStyle={styles.widePanelContent}
@@ -900,6 +1124,11 @@ export default function ReviewScreen() {
           </View>
         ) : (
           <ScrollView
+            // The chat is at the bottom of this page on a phone, so the keyboard
+            // is iOS's problem to solve: it pads the content by the room the
+            // keyboard takes and brings the focused composer up out from under
+            // it. Without this the composer was simply behind the keyboard.
+            automaticallyAdjustKeyboardInsets
             contentContainerStyle={styles.mobileContent}
             keyboardShouldPersistTaps="handled"
             // The board is inside this scroller on a phone, and dragging a
@@ -917,7 +1146,7 @@ export default function ReviewScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   safeArea: { flex: 1, backgroundColor: colors.background },
   screen: {
     flex: 1,
@@ -937,12 +1166,33 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   topBarRow: { minHeight: 64, flexDirection: 'row', alignItems: 'center' },
+  // Two chips and a status line, shrinking together: on a phone this shares the
+  // header with the matchup, and the part that gives way must be the status
+  // text rather than the players' names.
+  engineControls: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    minWidth: 0,
+    flexShrink: 1,
+  },
   effortRow: { flexDirection: 'row', justifyContent: 'flex-end', paddingBottom: 8 },
   titleCopy: { flex: 1, minWidth: 0, paddingHorizontal: 10 },
   kicker: { color: colors.accentBright, fontSize: 8, fontWeight: '900', letterSpacing: 1.35 },
   title: { color: colors.textStrong, fontSize: 18, fontWeight: '900', marginTop: 2 },
+  // Riding inside the title's line, at the size of an eyebrow rather than of
+  // the names: a phone header holds `RED Henhen1227 vs BLUE Guest` at these
+  // sizes and would not hold two more words at eighteen points.
+  sideTag: { fontSize: 9, fontWeight: '900', letterSpacing: 0.8 },
+  redTag: { color: players.Red.strong },
+  blueTag: { color: players.Blue.strong },
   wideLayout: { flex: 1, flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'center', gap: 18 },
   boardColumn: { alignItems: 'center', gap: 10 },
+  // The chat's slot, which is a wrapper's now rather than the card's own. The
+  // column centres its children, so the wrapper has to be told to span it: an
+  // auto-width parent has nothing for the card's `width: '100%'` to be a
+  // percentage of.
+  chatSlot: { alignSelf: 'stretch' },
   boardWithEval: { flexDirection: 'row', alignItems: 'stretch', gap: 7 },
   // The strip sits over the board and no wider than it, so a six-game run reads
   // as belonging to the board underneath rather than to the page.
@@ -1027,4 +1277,4 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surfaceRaised,
   },
   tryButtonText: { color: colors.textSoft, fontSize: 9, fontWeight: '900' },
-});
+}));

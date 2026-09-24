@@ -1,12 +1,14 @@
-import { usePathname, useRouter } from 'expo-router';
+import { usePathname } from 'expo-router';
 import { useEffect, useRef } from 'react';
 
 import GameScreen from '@/features/game/GameScreen';
 import { links } from '@/navigation/links';
 import PageTitle from '@/navigation/PageTitle';
+import { useGoTo } from '@/navigation/stack';
 import { useSettledSearchParams } from '@/navigation/useSettledSearchParams';
 import { useGameStore } from '@/store/gameStore';
 import { isGameLive } from '@/store/spectateSelectors';
+import { useAppearanceGeneration } from '@/appearance/store';
 
 // Watching somebody else's game, at an address.
 //
@@ -25,11 +27,21 @@ import { isGameLive } from '@/store/spectateSelectors';
 // page's: leaving unmounts it. `SessionBridge` puts the board down when the
 // address stops being this one — see the rule beside its sibling there.
 export default function Page() {
+  // Re-render this page when the look changes.
+  //
+  // A route file is the seam because every one of them is behind its own
+  // `StaticContainer` — expo-router renders each route through a `React.memo`
+  // whose comparator skips `children`, so a re-render above never reaches in.
+  // Subscribing here does, and because the page's element is created inline
+  // below rather than handed in as a prop, the whole subtree follows.
+  useAppearanceGeneration();
   const { params, settled } = useSettledSearchParams<{ gameId?: string }>();
   const requested = (Array.isArray(params.gameId) ? params.gameId[0] : params.gameId) ?? '';
   const gameId = requested.trim();
 
-  const router = useRouter();
+  // Every way off this page takes the page with it: this one is full-screen, so
+  // covering it over is what built the pile `navigation/stack` describes.
+  const go = useGoTo();
   // Whether this page is the page somebody is on. A screen that has been
   // pushed over — a player's profile, the review of the game — leaves this one
   // mounted underneath it, and a page nobody is looking at has no business
@@ -75,11 +87,11 @@ export default function Page() {
     // An address with no game in it is not a page. The lobby is where the games
     // worth watching are listed.
     if (!gameId) {
-      router.replace(links.lobby());
+      go(links.lobby());
       return;
     }
     if (ownGameId) {
-      router.replace(links.play());
+      go(links.play());
       return;
     }
     // Not connected yet means not knowing anything: the live list arrives with
@@ -94,7 +106,7 @@ export default function Page() {
     // this page is still standing at its address, which is what leaving looks
     // like from in here.
     //
-    // Leaving has to be allowed to finish. `router.replace` is queued and
+    // Leaving has to be allowed to finish. Navigation is queued and
     // dispatched from an effect rather than taken on the spot, so this page
     // renders once more — still `/watch`, now with an empty store — before the
     // lobby it asked for arrives, and anything this effect decides in that
@@ -121,7 +133,7 @@ export default function Page() {
     // the refusal, because that list is complete and is already here. It is the
     // same rule `useOpenGame` applies to every other list of games.
     if (!isGameLive(liveGames, gameId)) {
-      router.replace(links.review(gameId));
+      go(links.review(gameId));
       return;
     }
     asked.current = true;
@@ -130,10 +142,10 @@ export default function Page() {
     cancelledGame,
     connectionStatus,
     gameId,
+    go,
     liveGames,
     ownGameId,
     pathname,
-    router,
     settled,
     spectateGame,
     spectatedGameId,

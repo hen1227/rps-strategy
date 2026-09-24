@@ -4,15 +4,17 @@ import { StyleSheet, Text, View } from 'react-native';
 
 import AccountsPanel from './AccountsPanel';
 import AnalyticsPanel from './AnalyticsPanel';
+import BotBenchPanel from './BotBenchPanel';
 import BotControlPanel from './BotControlPanel';
 import GamesPanel from './GamesPanel';
+import ReportsPanel from './ReportsPanel';
 import ServerControlsPanel from './ServerControlsPanel';
 import WeekendAdminPanel from './WeekendAdminPanel';
 import TournamentAdminPanel from './TournamentAdminPanel';
 import { adminStyles } from './adminStyles';
 import { useAdminToken } from '@/hooks/useAdminToken';
 import { links } from '@/navigation/links';
-import { colors, contentWidth, space, type } from '@/theme';
+import { colors, contentWidth, space, themedSheet, type } from '@/theme';
 import ScreenShell from '@/ui/ScreenShell';
 import TabBar from '@/ui/TabBar';
 import { Banner, LabeledInput, Panel, PrimaryButton, SectionHeading } from '@/ui/primitives';
@@ -43,6 +45,9 @@ import { Banner, LabeledInput, Panel, PrimaryButton, SectionHeading } from '@/ui
 const TABS = [
   { id: 'overview', label: 'Overview' },
   { id: 'players', label: 'Players' },
+  // Beside the players rather than under the server, because acting on a report
+  // means opening an account and the two tabs are used together.
+  { id: 'reports', label: 'Reports' },
   { id: 'games', label: 'Games' },
   { id: 'tournaments', label: 'Tournaments' },
   { id: 'weekend', label: 'Weekend' },
@@ -87,10 +92,23 @@ export default function AdminScreen({ tab }: AdminScreenProps) {
 
       {current === 'overview' ? <AnalyticsPanel admin={admin} /> : null}
       {current === 'players' ? <AccountsPanel admin={admin} /> : null}
+      {current === 'reports' ? <ReportsPanel admin={admin} /> : null}
       {current === 'games' ? <GamesPanel admin={admin} /> : null}
       {current === 'tournaments' ? <TournamentAdminPanel admin={admin} /> : null}
       {current === 'weekend' ? <WeekendAdminPanel admin={admin} /> : null}
-      {current === 'bots' ? <BotControlPanel admin={admin} /> : null}
+      {/*
+        Two panels on one tab, which is the exception to the rule above. They are
+        the same subject read at two timescales — what the engines are doing now,
+        and when they are scheduled to stand down — and a host looking at one
+        wants the other in the same glance. Both fetch on mount; that is two
+        requests for a tab nobody opens by accident.
+      */}
+      {current === 'bots' ? (
+        <>
+          <BotControlPanel admin={admin} />
+          <BotBenchPanel admin={admin} />
+        </>
+      ) : null}
       {current === 'server' ? <ServerControlsPanel admin={admin} /> : null}
     </ScreenShell>
   );
@@ -114,8 +132,7 @@ function AdminUnlock({ admin }: { admin: ReturnType<typeof useAdminToken> }) {
       <Panel style={adminStyles.panel}>
         <SectionHeading eyebrow="PRIVATE" title="Host controls" />
         <Text style={styles.help}>
-          Sign in with an administrator account and these tools open by themselves. This form
-          is the other door, for a host running the server without one.
+          Sign in as an administrator or enter the server admin token.
         </Text>
         {admin.error ? <Banner message={admin.error} tone="error" /> : null}
         <LabeledInput
@@ -136,8 +153,8 @@ function AdminUnlock({ admin }: { admin: ReturnType<typeof useAdminToken> }) {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   tabBar: { paddingBottom: space.tight },
 
   help: { ...type.body, color: colors.textFaint, marginBottom: space.small },
-});
+}));

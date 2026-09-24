@@ -78,16 +78,19 @@ export const usePositionAnalysis = ({
   latest.current = { position, history, limits };
 
   useEffect(() => {
-    if (unavailable) {
-      setAnalysis(null);
-      setStatus('error');
-      setError(unavailable);
-      return undefined;
-    }
+    // `enabled` is asked first, and the order matters: a caller who has
+    // switched the engine off is not waiting to hear which modes it supports.
+    // An unsupported mode is only news to somebody who asked for a search.
     if (!enabled || !lineKey) {
       setAnalysis(null);
       setStatus('idle');
       setError(null);
+      return undefined;
+    }
+    if (unavailable) {
+      setAnalysis(null);
+      setStatus('error');
+      setError(unavailable);
       return undefined;
     }
 

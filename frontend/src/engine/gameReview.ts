@@ -23,21 +23,25 @@ import {
   allValidMoves,
   applyAnalysisMove,
   createAnalysisGameFrom,
+  startingPositionFromGrid,
   type AnalysisGame,
 } from './analysisGame';
+import type { RulesEra } from './goals';
 import { decodePosition, parsePGN, winnerFromResult, type GameResult } from './pgn';
 import type { ReviewEntry } from './rpsfish/protocol';
-import type {
-  GameEndReason,
-  ModeDefinition,
-  ModeFeature,
-  ModeID,
-  Move,
-  Piece,
-  PlayablePiece,
-  PlayerColor,
-  Position,
-  SideColor,
+import {
+  FIRST_TO_MOVE,
+  type GameEndReason,
+  type Grid,
+  type ModeDefinition,
+  type ModeFeature,
+  type ModeID,
+  type Move,
+  type Piece,
+  type PlayablePiece,
+  type PlayerColor,
+  type Position,
+  type SideColor,
 } from '@/types/game';
 
 /**
@@ -70,8 +74,41 @@ export const WIN_PROBABILITY_SCALE: Partial<Record<ModeID, number>> = Object.fre
   V3: 0.004_949, // Infiltration, 75% at 222 centipawns
 });
 
+/**
+ * Modes the engine will search that nobody has fitted a scale for yet.
+ *
+ * Being on this list is not a configuration choice — it is an admission, and
+ * `gameReview.test.mts` requires that every mode in `ENGINE_MODE_CODES` is
+ * either fitted above or named here. The point is that the fallback below is
+ * otherwise *silent*: a mode added to the engine starts converting its
+ * evaluations through some other mode's logistic, every grade and accuracy on
+ * the screen is downstream of that conversion, and nothing anywhere says so.
+ *
+ * That is exactly what happened to Intransitive. It was added to
+ * `ENGINE_MODE_CODES`, the review started grading it, and it spent that whole
+ * time borrowing Infiltration's curve — while being the mode nearly every game
+ * on the site is now played in. A borrowed scale is not a small error either:
+ * it is the number that decides how many points of expected score a centipawn
+ * is worth, so getting it wrong tilts every badge in the same direction at
+ * once.
+ *
+ * Remove an entry by running the fit, not by deleting the line — but read
+ * `docs/review.md` under "Intransitive cannot be fitted by self-play" first.
+ * For Intransitive the existing script cannot do it at all: the engine draws
+ * 145 of 150 games against itself in that mode and never builds an advantage
+ * past two pawns, so there is nothing for a logistic to predict and the fit
+ * pins at its own lower bound. That mode needs fitting from archived games,
+ * which have real results in them.
+ */
+export const UNCALIBRATED_MODES: ReadonlySet<string> = new Set(['V6']);
+
 // A mode nobody has calibrated yet borrows a measured scale rather than a
-// guess of its own.
+// guess of its own — Infiltration's, which is the sharper of the two fitted
+// modes and is therefore the more conservative thing to borrow only for a
+// mode that turns out to be quieter than it. Whether that is so is not
+// knowable in advance, which is the whole reason `UNCALIBRATED_MODES` exists:
+// this is a placeholder to be removed by measurement, not a default to settle
+// for.
 const DEFAULT_SCALE = 0.004_949;
 const MATE_THRESHOLD = 29_000;
 // Beyond this the logistic is already pinned; clamping keeps a mate score from
@@ -106,16 +143,57 @@ export const winPercent = (score: number | null | undefined, modeId: ModeID) => 
 export const decisiveScore = (modeId: ModeID) => Math.log(19) / scaleFor(modeId);
 
 /**
+ * Lichess's accuracy curve. Exactly the published constants, named so that the
+ * bands below can be derived from the same three numbers the curve uses rather
+ * than from a second copy of them.
+ */
+const ACCURACY_CURVE = Object.freeze({ scale: 103.1668, decay: 0.043_54, offset: 3.166_9 });
+
+/**
  * Lichess's accuracy curve, applied to expected-score points lost.
  *
- * Exactly the published constants. The curve's job is to turn "you gave away
- * eight points of expected score" into a number a human reads as a school
- * grade, and that job does not depend on which game produced the eight points.
+ * The curve's job is to turn "you gave away eight points of expected score"
+ * into a number a human reads as a school grade, and that job does not depend
+ * on which game produced the eight points.
  */
-export const moveAccuracy = (winPercentBefore: number, winPercentAfter: number) => {
-  const lost = Math.max(0, winPercentBefore - winPercentAfter);
-  const raw = 103.1668 * Math.exp(-0.043_54 * lost) - 3.166_9;
+export const accuracyForLoss = (lossPercent: number) => {
+  const lost = Math.max(0, lossPercent);
+  const raw =
+    ACCURACY_CURVE.scale * Math.exp(-ACCURACY_CURVE.decay * lost) - ACCURACY_CURVE.offset;
   return Math.max(0, Math.min(100, raw));
+};
+
+export const moveAccuracy = (winPercentBefore: number, winPercentAfter: number) =>
+  accuracyForLoss(winPercentBefore - winPercentAfter);
+
+/**
+ * The loss that scores a given accuracy — the curve above, read backwards.
+ *
+ * This is where the grade bands come from, so it is computed rather than
+ * tabulated: a boundary and the accuracy it corresponds to cannot drift apart
+ * if only one of them exists.
+ */
+export const lossForAccuracy = (accuracy: number) =>
+  -Math.log((accuracy + ACCURACY_CURVE.offset) / ACCURACY_CURVE.scale) / ACCURACY_CURVE.decay;
+
+/**
+ * A loss, written to the precision the engine can actually support.
+ *
+ * "10.1 points of expected score given up" reads as a measurement to a tenth
+ * of a point. It is not one. `scripts/reviewStability.mts` grades the same
+ * games at every rung of the shipped ladder and compares each move's loss
+ * against the deepest opinion available: the shallowest rung a reviewer can
+ * see disagrees with it by more than two points on one move in ten, and even
+ * the Deep rung by more than one. The tenths were never information, and
+ * printing them invites a reader to compare two moves that the engine cannot
+ * separate.
+ *
+ * Whole points, then, and "under a point" rather than "0.4" — because the
+ * interesting thing about 0.4 is that it is nothing, not that it is 0.4.
+ */
+export const formatLoss = (lossPercent: number) => {
+  if (!Number.isFinite(lossPercent) || lossPercent < 1) return 'under a point';
+  return `${Math.round(lossPercent)} points`;
 };
 
 export type GradeKey =
@@ -135,15 +213,116 @@ export interface MoveGrade {
   maxLoss: number;
 }
 
+/**
+ * How far RPSFish typically disagrees with itself about one move, in
+ * expected-score points.
+ *
+ * Measured by `scripts/reviewStability.mts`: it plays games, grades each one at
+ * every rung of the shipped ladder, and compares every move's loss against the
+ * deepest opinion the engine has. This is the *third quartile* of that
+ * disagreement at the shallowest rung a reviewer can be shown — shallowest
+ * because which rung a reader gets is decided by `analysisBudget.ts` from their
+ * device and not by them, and the third quartile because of what the rest of
+ * the distribution looks like.
+ *
+ * Measured over 521 positions of Infiltration: median 1.7, p75 4.8, p90 8.5,
+ * p95 11.5. Total War is quieter by a factor of four at every quantile, which
+ * is what the steeper win-probability scale for Infiltration implies, so the
+ * figure here is Infiltration's — the bands are shared, so they have to hold
+ * for the noisier mode.
+ *
+ * **The tail is not a band width anybody can build with.** No scheme with five
+ * classes can put twelve points between every boundary and still call a
+ * twelve-point loss anything but excellent. So this is the number the
+ * *descriptive* bands have to clear, and the tail is the reason the two
+ * *accusing* ones — Mistake and Blunder — start four and seven times further
+ * out than it, rather than just past it.
+ *
+ * Either way it is a floor on the real uncertainty rather than an estimate of
+ * it, because it only measures the engine disagreeing with a deeper version of
+ * itself. The larger error cannot be measured from in here: RPSFish is weaker
+ * than most of the bots on this site, so the move it names as best is
+ * sometimes not the best move, and a loss measured against a wrong baseline is
+ * wrong by however much the baseline was.
+ */
+export const ENGINE_LOSS_ERROR_BAR = 5;
+
+/**
+ * The same disagreement at the 95th percentile, rounded up: the tail.
+ *
+ * Kept separate from the figure above because it is used for a different job.
+ * No five-class scheme can be built out of twelve-point bands, so this is not
+ * a band width — it is the distance a badge has to be from the boundary below
+ * it before the badge is worth *accusing* somebody with. Mistake starts at 20
+ * and Blunder at 34, so both clear it with room, and `gameReview.test.mts`
+ * requires that they keep doing so.
+ */
+export const ENGINE_LOSS_ERROR_TAIL = 12;
+
+/**
+ * The accuracy each band ends at: one fifth of the scale per grade.
+ *
+ * The bands are not chosen. They are the quintiles of the accuracy curve this
+ * review already scores every move on, read backwards through
+ * `lossForAccuracy`, so a grade means something a reader can state without
+ * looking anything up: **Excellent scored 80% or better, Good 60 to 80,
+ * Inaccuracy 40 to 60, Mistake 20 to 40, and a Blunder scored under 20.**
+ *
+ * They used to be 2 / 5 / 10 / 20 points of loss, which on this same curve is
+ * 91 / 80 / 64 / 40 percent — three of the five bands crowded into the top
+ * third of the scale, and the first boundary drawn at a loss of 2. Three
+ * quarters of the moves in a measured game lose less than that, so the badge
+ * on most of a game was being decided inside the engine's own margin of
+ * error; `scripts/reviewStability.mts` found a quarter of all badges changing
+ * class between the shallowest rung of the ladder and the deepest, and one in
+ * nine even between Deep and the rung above it, while the loss *numbers* those
+ * badges came from barely moved. Narrow bands in the wrong place, not a noisy
+ * engine.
+ *
+ * The quintiles fix that on their own, and they turn out to clear
+ * `ENGINE_LOSS_ERROR_BAR` at every boundary as well — which
+ * `gameReview.test.mts` checks rather than assumes, since the two were derived
+ * independently and only one of them is a measurement.
+ *
+ * None of this touches an accuracy figure. Accuracy is the curve applied to
+ * the loss; these are cut points on the same curve, and a cut point is not an
+ * input to the number being cut. What changed is which word is printed over a
+ * move.
+ */
+const BAND_ACCURACIES = Object.freeze({
+  excellent: 80,
+  good: 60,
+  inaccuracy: 40,
+  mistake: 20,
+});
+
+/** The loss a band ends at, in whole points: nothing here reads a tenth. */
+const bandCeiling = (accuracy: number) => Math.round(lossForAccuracy(accuracy));
+
 export const MOVE_GRADES: readonly MoveGrade[] = Object.freeze([
   { key: 'best', label: 'Best', symbol: '★', maxLoss: 0 },
   { key: 'great', label: 'Great', symbol: '!', maxLoss: 0 },
-  { key: 'excellent', label: 'Excellent', symbol: '✓', maxLoss: 2 },
-  { key: 'good', label: 'Good', symbol: '.', maxLoss: 5 },
-  { key: 'inaccuracy', label: 'Inaccuracy', symbol: '?!', maxLoss: 10 },
-  { key: 'mistake', label: 'Mistake', symbol: '?', maxLoss: 20 },
+  {
+    key: 'excellent',
+    label: 'Excellent',
+    symbol: '✓',
+    maxLoss: bandCeiling(BAND_ACCURACIES.excellent),
+  },
+  { key: 'good', label: 'Good', symbol: '.', maxLoss: bandCeiling(BAND_ACCURACIES.good) },
+  {
+    key: 'inaccuracy',
+    label: 'Inaccuracy',
+    symbol: '?!',
+    maxLoss: bandCeiling(BAND_ACCURACIES.inaccuracy),
+  },
+  {
+    key: 'mistake',
+    label: 'Mistake',
+    symbol: '?',
+    maxLoss: bandCeiling(BAND_ACCURACIES.mistake),
+  },
   { key: 'blunder', label: 'Blunder', symbol: '??', maxLoss: Infinity },
-] as const satisfies readonly MoveGrade[]);
+] satisfies readonly MoveGrade[]);
 
 const gradeByKey = (key: GradeKey): MoveGrade => {
   const grade = MOVE_GRADES.find((candidate) => candidate.key === key);
@@ -155,14 +334,32 @@ const BEST_GRADE = gradeByKey('best');
 const GREAT_GRADE = gradeByKey('great');
 const LOSS_GRADES = MOVE_GRADES.filter((grade) => grade.key !== 'best' && grade.key !== 'great');
 const WORST_GRADE = LOSS_GRADES[LOSS_GRADES.length - 1] ?? gradeByKey('blunder');
-const GOOD_MOVE_MAX_LOSS = gradeByKey('good').maxLoss;
 
 /**
- * Whether the engine's first line was the only move that still grades Good.
+ * How much the second line has to give up before the first one earns `!`.
  *
- * MultiPV is ordered, so if line two gives up more than the Good threshold,
- * every later legal move does too. That makes this a measurable version of
- * the conventional Chess.com-style Great Move rather than a decorative `!`.
+ * Keyed to the Inaccuracy ceiling, so the claim `!` makes is "every other move
+ * the engine could see was a mistake or worse" rather than the weaker "every
+ * other move was less than Good".
+ *
+ * It was the latter, and that was too cheap for the strongest claim on the
+ * badge list. `!` rests on more of the engine's opinion than any other grade:
+ * not just on the score of the move played, but on the score of a move nobody
+ * played *and* on MultiPV having ordered the alternatives correctly at this
+ * depth. `scripts/reviewStability.mts` measures how far that trust goes — the
+ * engine's own first line changes between the shallowest rung and the deepest
+ * on one position in eight, and line two is a weaker opinion than line one. So
+ * the margin has to be wide enough that the ordering being slightly wrong does
+ * not matter.
+ */
+const ONLY_GOOD_MOVE_MARGIN = gradeByKey('inaccuracy').maxLoss;
+
+/**
+ * Whether the engine's first line was the only move it thinks is playable.
+ *
+ * MultiPV is ordered, so if line two gives up more than the margin, every
+ * later legal move does too. That makes this a measurable version of the
+ * conventional Chess.com-style Great Move rather than a decorative `!`.
  */
 export const isOnlyGoodMove = (
   bestScore: number | null | undefined,
@@ -174,7 +371,7 @@ export const isOnlyGoodMove = (
     0,
     winPercent(bestScore, modeId) - winPercent(secondBestScore, modeId),
   );
-  return lossPercent > GOOD_MOVE_MAX_LOSS;
+  return lossPercent > ONLY_GOOD_MOVE_MARGIN;
 };
 
 /**
@@ -267,6 +464,24 @@ const MODE_FALLBACK_ROWS = [
 ];
 
 /**
+ * The opening a stand-in definition carries, for the modes that do not share
+ * the block above.
+ *
+ * Only Intransitive needs an entry, and it needs one for a narrower reason than
+ * it looks: every archived record carries its own `FEN`, so the board a review
+ * replays from never comes from here. What does come from here is the opening
+ * `eraOf` measures a record against, and measuring a V6 record against V3's
+ * blocks would answer "not the pre-change opening" for every game in the mode.
+ */
+const MODE_FALLBACK_LAYOUTS: Record<string, string[]> = {
+  V6: [
+    '.........', '...RP....', '..RPS....',
+    '.RPS.....', '.PS...sp.', '.....spr.',
+    '....spr..', '....pr...', '.........',
+  ],
+};
+
+/**
  * The rules a stand-in definition has to carry, because they are what the
  * replay below adjudicates on. The same answers the server's mode registry
  * gives; only the ones that change the outcome of a position are listed, so a
@@ -302,8 +517,54 @@ const modeFor = (
     displayOrder: 0,
     playable: false,
     features: MODE_FALLBACK_FEATURES[modeId] ?? [],
-    startingPosition: { rows: MODE_FALLBACK_ROWS },
+    startingPosition: { rows: MODE_FALLBACK_LAYOUTS[modeId] ?? MODE_FALLBACK_ROWS },
   };
+};
+
+/**
+ * Reverse the ranks and swap the colours: `RankFlip` in `game/rank_flip.go`,
+ * spelled on layout rows because that is the shape both sides of the
+ * comparison below are already in.
+ *
+ * Files are left alone. This is an end-for-end flip, not a rotation — the
+ * distinction that matters, because the half turn is a symmetry of today's
+ * rules and would carry V6's opening onto itself instead of onto yesterday's.
+ */
+const rankFlipRows = (rows: string[]): string[] =>
+  [...rows]
+    .reverse()
+    .map((row) =>
+      row.replace(/[a-zA-Z]/g, (letter) =>
+        letter === letter.toUpperCase() ? letter.toLowerCase() : letter.toUpperCase(),
+      ),
+    );
+
+/**
+ * Which rules a record was played under, read off the record itself.
+ *
+ * The evidence is the board it declares, not its date and not a version tag:
+ * a `FEN` that rank-flips onto exactly this mode's opening, side to move
+ * included, is yesterday's opening position and nothing else is. That is the
+ * same test the backend applies before it will relabel an archived game —
+ * `isStandardStartingPosition` in `opening_stats.go` — and it is deliberately
+ * strict. A position somebody drew and handed to Red is also a game that opens
+ * with Red to move, and it is *not* a pre-change game; judging it by yesterday's
+ * corners would break a record that reads correctly today.
+ *
+ * Records that started from a board somebody drew therefore read as `current`
+ * whichever era they came from. There is no evidence either way in such a
+ * record, and today's rules are the answer that needs no assumption.
+ */
+const eraOf = (
+  mode: ModeDefinition,
+  grid: Grid,
+  currentTurn: PlayerColor,
+): RulesEra => {
+  if (currentTurn === FIRST_TO_MOVE || currentTurn === 'Neutral') return 'current';
+  const opening = mode.startingPosition?.rows;
+  if (!opening || opening.length !== grid.length) return 'current';
+  const flipped = rankFlipRows(startingPositionFromGrid(grid).rows);
+  return flipped.join('/') === opening.join('/') ? 'preChange' : 'current';
 };
 
 const numberTag = (parsed: { tag: (name: string) => string }, name: string) => {
@@ -327,7 +588,9 @@ export interface RecordedMove extends Move {
 export interface RecordedPlayer {
   name: string;
   userId: string;
+  /** What they were rated going into the game, when the record says. */
   elo: number | null;
+  /** And coming out of it, for a game that moved a rating. */
   eloAfter: number | null;
 }
 
@@ -337,6 +600,13 @@ export interface RecordedPlayer {
  */
 export interface ReviewSource {
   mode: ModeDefinition;
+  /**
+   * Which rules this record was played under. `preChange` for a game from
+   * before the 2026-09-03 board flip, which is where its goal squares are —
+   * the board draws them from here so that a tile tinted as a goal is the tile
+   * the replay ends the game on. See `./goals`.
+   */
+  era: RulesEra;
   positions: AnalysisGame[];
   moves: RecordedMove[];
   gameId: string;
@@ -351,6 +621,18 @@ export interface ReviewSource {
   endedBy: string | null;
   termination: string;
   players: Record<SideColor, RecordedPlayer>;
+  /**
+   * Which scale this record's ratings are written on, straight off the tag, or
+   * `null` for a record archived before there were two of them.
+   *
+   * Read rather than assumed, and worth carrying for the same reason `era` is.
+   * The old scale was chess Elo centred on 1200 and today's starts at 1 — both
+   * produce numbers that look like ratings, nothing else in the file says which
+   * is which, and the two cannot be compared. What this string is *worth* is
+   * `features/ratings/scale`'s to say; a replayed record's job is only to
+   * report what was written down.
+   */
+  ratingSystem: string | null;
   startedAtUnixMs: number | null;
   pgn: string;
 }
@@ -375,7 +657,7 @@ export const reviewSourceFromPGN = (
   const start = setUp
     ? (() => {
         const { grid, currentTurn } = decodePosition(setUp);
-        return createAnalysisGameFrom(mode, grid, currentTurn);
+        return createAnalysisGameFrom(mode, grid, currentTurn, eraOf(mode, grid, currentTurn));
       })()
     : createAnalysisGameFrom(mode, decodePosition(MODE_FALLBACK_ROWS.join('/')).grid);
 
@@ -410,6 +692,7 @@ export const reviewSourceFromPGN = (
   const ending = [...parsed.events].reverse().find((event) => event.kind === 'end');
   return {
     mode,
+    era: start.era,
     positions,
     moves,
     gameId: parsed.tag('GameId'),
@@ -439,6 +722,7 @@ export const reviewSourceFromPGN = (
         eloAfter: numberTag(parsed, 'BlueEloAfter'),
       },
     },
+    ratingSystem: parsed.tag('RatingSystem') || null,
     startedAtUnixMs: numberTag(parsed, 'StartTimeUnixMs'),
     pgn: pgnText,
   };

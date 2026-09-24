@@ -114,7 +114,7 @@ func TestWebSocketCanJoinQueue(t *testing.T) {
 	if ready.DefaultTimeControl == nil || *ready.DefaultTimeControl != game.DefaultTimeControl() {
 		t.Fatalf("expected connection default 5/+3, got %#v", ready.DefaultTimeControl)
 	}
-	if ready.Account == nil || ready.Account.Elo != persistence.DefaultElo {
+	if ready.Account == nil || ready.Account.Elo != persistence.RatingFloor {
 		t.Fatalf("expected a persisted default account, got %#v", ready.Account)
 	}
 	if len(ready.ModePlayerCounts) != registered {
@@ -135,10 +135,10 @@ func TestWebSocketCanJoinQueue(t *testing.T) {
 			t.Fatal(err)
 		}
 		if message.Type == "queue_update" {
-			if message.SearchRange != matchmakingInitialEloRange {
+			if message.SearchRange != matchmakingInitialRatingRange {
 				t.Fatalf(
 					"expected initial ±%d range, got %d",
-					matchmakingInitialEloRange,
+					matchmakingInitialRatingRange,
 					message.SearchRange,
 				)
 			}
@@ -168,6 +168,10 @@ func TestOriginCheckerAllowsLocalNetworkOrigins(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.origin, func(t *testing.T) {
 			request := httptest.NewRequest(http.MethodGet, "/ws", nil)
+			// Named explicitly, because httptest calls this host example.com
+			// and a rejection has to be a rejection on the merits rather than
+			// same-origin failing to apply.
+			request.Host = "api-rps.example"
 			request.Header.Set("Origin", test.origin)
 			if allowed := checkOrigin(request); allowed != test.allowed {
 				t.Fatalf("origin allowed = %t, want %t", allowed, test.allowed)
@@ -179,9 +183,43 @@ func TestOriginCheckerAllowsLocalNetworkOrigins(t *testing.T) {
 func TestOriginCheckerAllowsConfiguredPublicOrigin(t *testing.T) {
 	checkOrigin := originChecker([]string{"https://rps.example"})
 	request := httptest.NewRequest(http.MethodGet, "/ws", nil)
+	request.Host = "api-rps.example"
 	request.Header.Set("Origin", "https://rps.example")
 	if !checkOrigin(request) {
 		t.Fatal("configured origin was rejected")
+	}
+}
+
+// TestOriginCheckerAllowsItsOwnHost covers the native app, which cannot say
+// anything else: React Native builds the Origin header from the socket URL, so
+// the iOS client's Origin is the API host it is dialling. Nothing configures
+// that host here -- the point is that no deployment has to.
+func TestOriginCheckerAllowsItsOwnHost(t *testing.T) {
+	checkOrigin := originChecker([]string{"https://rps.example"})
+	tests := []struct {
+		name    string
+		host    string
+		origin  string
+		allowed bool
+	}{
+		{name: "native app", host: "api-rps.example", origin: "https://api-rps.example", allowed: true},
+		{name: "case insensitive", host: "api-rps.example", origin: "https://API-RPS.example", allowed: true},
+		{name: "with port", host: "api-rps.example:8443", origin: "https://api-rps.example:8443", allowed: true},
+		{name: "port mismatch", host: "api-rps.example:8443", origin: "https://api-rps.example", allowed: false},
+		{name: "neighbouring host", host: "api-rps.example", origin: "https://evil.example", allowed: false},
+		{name: "prefix only", host: "api-rps.example", origin: "https://api-rps.example.evil.com", allowed: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, "/ws", nil)
+			request.Host = test.host
+			request.Header.Set("Origin", test.origin)
+			if allowed := checkOrigin(request); allowed != test.allowed {
+				t.Fatalf("origin %q on host %q allowed = %t, want %t",
+					test.origin, test.host, allowed, test.allowed)
+			}
+		})
 	}
 }
 
@@ -220,7 +258,7 @@ func TestPersistentAccountHistoryAndHeadToHeadRoutes(t *testing.T) {
 	if err := json.NewDecoder(accountRecorder.Body).Decode(&account); err != nil {
 		t.Fatal(err)
 	}
-	if account.Wins != 1 || account.ModeElo(game.ModeTotalWar) != 1216 {
+	if account.Wins != 1 || account.ModeElo(game.ModeTotalWar) <= persistence.RatingFloor {
 		t.Fatalf("unexpected account response: %#v", account)
 	}
 
@@ -886,19 +924,21 @@ func TestFinishedRankedGameMovesOnlyThePlayedModesRating(t *testing.T) {
 	server.resign(blueClient)
 	final := awaitMessageOfType(t, redClient, "game_state")
 	if final.RatingUpdate == nil || final.RatingUpdate.ModeID != game.ModeTotalWar ||
-		final.RatingUpdate.RedEloAfter != 1216 || final.RatingUpdate.BlueEloAfter != 1184 {
+		final.RatingUpdate.RedEloAfter <= final.RatingUpdate.RedEloBefore {
 		t.Fatalf("unexpected rating update: %#v", final.RatingUpdate)
 	}
+	won := final.RatingUpdate.RedEloAfter
 
 	// The connection keeps playing, so its in-memory account has to carry the
 	// new Total War rating while every other mode stays on the shared seed.
-	if got := matchmakingElo(redClient, game.ModeTotalWar); got != 1216 {
-		t.Fatalf("expected the winner to queue at 1216, got %d", got)
+	if got := matchmakingElo(redClient, game.ModeTotalWar); got != won {
+		t.Fatalf("expected the winner to queue at %d, got %d", won, got)
 	}
-	if got := matchmakingElo(blueClient, game.ModeTotalWar); got != 1184 {
-		t.Fatalf("expected the loser to queue at 1184, got %d", got)
+	if got := matchmakingElo(blueClient, game.ModeTotalWar); got != final.RatingUpdate.BlueEloAfter {
+		t.Fatalf("expected the loser to queue at %d, got %d",
+			final.RatingUpdate.BlueEloAfter, got)
 	}
-	if got := matchmakingElo(redClient, game.ModeInfiltration); got != persistence.DefaultElo {
+	if got := matchmakingElo(redClient, game.ModeInfiltration); got != persistence.RatingFloor {
 		t.Fatalf("Infiltration must not inherit the Total War result, got %d", got)
 	}
 
@@ -906,7 +946,7 @@ func TestFinishedRankedGameMovesOnlyThePlayedModesRating(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored.ModeElo(game.ModeTotalWar) != 1216 || stored.Elo != persistence.DefaultElo {
+	if stored.ModeElo(game.ModeTotalWar) != won || stored.Elo != persistence.RatingFloor {
 		t.Fatalf("unexpected stored account: %#v", stored)
 	}
 }

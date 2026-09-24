@@ -16,27 +16,41 @@ import (
 // knows how to build a signup-order round robin, seat two players in an
 // ordinary game, record the result, and update the standings. All a bot needs
 // is to be entered like anyone else and then to turn up when its match is
-// due — so that is all this file does: the two doors it can be entered
-// through — its owner, or the host filling a field — and the sweep that
-// notices when its match has come round.
+// due — so that is all this file does: the sweep that enters it, and the sweep
+// that notices when its match has come round.
+//
+// # An engine does not register
+//
+// It has a switch. `enterTournaments` on the bot is the whole of an author's
+// say in the matter, and everything below reads it: an engine that is online
+// with the switch on is entered when an event it can play begins, and one with
+// the switch off is never entered by anything.
+//
+// It used to be both — a standing switch *and* a per-event registration an owner
+// pressed. They answered the same question in two voices and disagreed in the
+// case that mattered: the weekend arena, which is the only event most engines
+// ever see, swept in every online engine whatever anybody had registered, so the
+// registration it offered was decoration. Worse, the registration carried a
+// one-place-per-party rule, so an author with three engines was made to choose
+// between them for an event that would take all three anyway.
+//
+// So the registration is gone and the switch is what decides. An author who
+// wants their engine in events turns it on once, rather than per event and per
+// engine, and the answer on the page matches what the sweep will do.
 
 // enrollBots enters every connected engine that is set to enter tournaments.
 //
-// The host's tool, and only the host's: it is behind adminOnly and there is no
-// owner-facing equivalent. Registration is otherwise self-service — see
-// registerBotForTournament, which is how an engine normally gets in — and this
-// exists for the case that is not self-service at all: a bots-only event whose
-// field the host is assembling from whatever is up, where chasing four authors
-// for four clicks is the whole of the friction.
+// The host's tool, and it is the same sweep the arena runs on its own timer —
+// this is the button for an event that is not on a timer, a bots-only cup whose
+// field the host is assembling from whatever is up.
 //
 // # What it overrides, and what it does not
 //
-// It seats **every** eligible engine, including two from the same author. The
-// one-place-per-party rule is about somebody choosing between themselves and
-// their own bots; a host looking at the engines that are online and deciding the
-// field should contain them is not making that choice, and an author who happens
-// to run two of the four is not taking the event from anybody. See
-// HostSignupForTournament, which is the only caller of the lifted door.
+// It seats **every** eligible engine, including two from the same author, by
+// going through the door with the one-place-per-party rule lifted. That rule is
+// about an entrant choosing between themselves and their own bots, and nobody is
+// choosing here: an author who happens to run two of the four has not taken the
+// event from anybody. See HostSignupForTournament.
 //
 // Everything else stands. An engine whose owner switched events off is not
 // conscripted, and neither is one that is shutting down, barred, or unable to
@@ -81,9 +95,14 @@ func (server *Server) enrollBots(writer http.ResponseWriter, request *http.Reque
 // thing on a timer. Neither is an owner choosing, so both go through the door
 // that lifts the one-place-per-party rule — see HostSignupForTournament.
 //
-// Returns the engines now in the field and, for each one left out, why. The
+// Returns the engines it just entered and, for each one left out, why. The
 // second half is the interesting one: an engine that was not enrolled is
 // skipped for a reason, and each reason has a different fix.
+//
+// Note what the first half is *not*: the field. An engine already entered is
+// skipped silently, so a caller asking "is there an event here" has to count the
+// bracket rather than this slice. See weekendFieldSize, which is that caller and
+// which used to get it wrong.
 func (server *Server) enrolOnlineBots(
 	ctx context.Context,
 	tournament persistence.Tournament,
@@ -154,130 +173,15 @@ func (server *Server) enrolOnlineBots(
 	return enrolled, skipped
 }
 
-// registerBotForTournament enters one of the caller's engines.
+// botTournamentSwitchHint is the one sentence every refused engine entry gets.
 //
-// The owner chooses, and that is the whole design. There used to be a host
-// button that swept every online bot with its "enter tournaments" switch on
-// into the field, which meant an author found out their engine was in an event
-// by watching it lose one, and meant a field could hold four engines from the
-// same person. Both are gone: nothing enrols a bot but its owner, and the
-// one-entry rule in tournamentPartyID is what makes "exactly one of your bots"
-// true rather than merely intended.
-//
-// Nothing here asks whether the engine is connected. Registration is the days
-// before the event and the bot is expected to be up for the event itself; an
-// engine that is offline when its match is called forfeits that match, which
-// is the same answer a person gets. What is checked instead is everything the
-// registry already knows and that no amount of turning up later can fix.
-func (server *Server) registerBotForTournament(
-	writer http.ResponseWriter,
-	request *http.Request,
-	botID string,
-) {
-	account, ok := server.requireSession(writer, request)
-	if !ok {
-		return
-	}
-	tournament, err := server.data.Tournament(request.Context(), request.PathValue("tournamentID"))
-	if err != nil {
-		writeTournamentError(writer, err)
-		return
-	}
-	// The same answer getTournament gives, and for the same reason: a draft's
-	// address must not confirm that anything is there.
-	if tournament.Status == persistence.TournamentDraft {
-		writeAPIError(writer, http.StatusNotFound, persistence.ErrTournamentNotFound.Error())
-		return
-	}
-	bot, err := server.data.Bot(request.Context(), botID)
-	if err != nil {
-		writeBotError(writer, err)
-		return
-	}
-	// Not a 404. Bot ids are public — they are in the directory and in every
-	// icon URL — so there is nothing to protect by pretending somebody else's
-	// engine does not exist, and a clear answer is worth more than a coy one.
-	if bot.OwnerUserID != account.UserID {
-		writeAPIError(writer, http.StatusForbidden, "that bot belongs to another account")
-		return
-	}
-	if bot.Retired {
-		writeAPIError(writer, http.StatusConflict, persistence.ErrBotRetired.Error())
-		return
-	}
-	if bot.Disabled {
-		writeAPIError(writer, http.StatusForbidden, persistence.ErrBotDisabled.Error())
-		return
-	}
-	// An unclaimed slot has no account and no name: there is literally nothing
-	// to write in the bracket. The owner has minted a token and not yet run the
-	// client with it, so the fix is on their machine rather than on this page.
-	if !bot.Claimed || bot.UserID == "" || bot.Name == "" {
-		writeAPIError(
-			writer, http.StatusConflict,
-			"that bot has never connected, so it has no name to enter under",
-		)
-		return
-	}
-	// The owner's own switch, which is now the only thing it guards: with the
-	// sweep gone nothing else reads it, so leaving it off is how an author says
-	// "this one is not ready for events" and has that answer respected even by
-	// their own mis-click.
-	if !bot.EnterTournaments {
-		writeAPIError(
-			writer, http.StatusConflict,
-			bot.Name+" is set not to enter tournaments; turn that on for it first",
-		)
-		return
-	}
-	// The modes its last handshake reported, rather than a live one, so a bot
-	// can be entered while it is switched off. An engine that has never said
-	// what it plays is let through: the alternative is refusing on no evidence.
-	if len(bot.EngineModes) > 0 && !slices.Contains(bot.EngineModes, string(tournament.ModeID)) {
-		writeAPIError(
-			writer, http.StatusConflict,
-			bot.Name+" does not play "+tournament.ModeName,
-		)
-		return
-	}
-	// Verification is asked of the owner, because an engine has no Discord
-	// account to link. The door enforces it regardless — see the party check in
-	// SignupForTournament — but refusing here is what lets the message name the
-	// person who has to fix it and the page they fix it on.
-	if !account.DiscordVerified {
-		writeAPIError(
-			writer, http.StatusForbidden,
-			"verify your account with Discord before entering an engine",
-		)
-		return
-	}
-	// Both accounts, because either being barred is a reason. An owner under a
-	// tournament ban who could still enter through an engine would not be under
-	// one at all.
-	if refusal := server.tournamentRefusal(account.UserID); refusal != "" {
-		writeAPIError(writer, http.StatusForbidden, refusal)
-		return
-	}
-	if refusal := server.tournamentRefusal(bot.UserID); refusal != "" {
-		writeAPIError(writer, http.StatusForbidden, refusal)
-		return
-	}
-
-	// The signup table wants a Discord handle and an agreement to unfiltered
-	// chat, and neither means anything said about a program. The agreement is
-	// the owner's, made by entering it. The handle is a placeholder that the
-	// door replaces with the owner's verified one.
-	entered, err := server.data.SignupForTournament(
-		request.Context(), tournament.TournamentID, bot.UserID, bot.Name,
-		"bot."+strings.ToLower(bot.Name), true,
-	)
-	if err != nil {
-		writeTournamentError(writer, err)
-		return
-	}
-	server.broadcastTournaments()
-	writeJSON(writer, http.StatusCreated, entered)
-}
+// Named because more than one refusal says it and they have to say it
+// identically: an owner who reads two different explanations of the same rule
+// learns that the rule has exceptions. It names the switch rather than a page,
+// because the switch is drawn on the bots page, the account page and the event
+// page itself, and pointing at one of those would be wrong on the other two.
+const botTournamentSwitchHint = "engines are not entered one event at a time: " +
+	"turn on \"Tournaments\" for the engine and it enters every event it can play"
 
 // autoReadyBotMatches starts any scheduled match whose players are all bots.
 //

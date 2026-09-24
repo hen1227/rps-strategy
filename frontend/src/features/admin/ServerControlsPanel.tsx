@@ -25,7 +25,7 @@ import { useGameStore } from '@/store/gameStore';
 import { useNow } from '@/hooks/useNow';
 import { noticeRemaining, standingNotice } from '@/store/noticeSelectors';
 import type { ServerUpdate } from '@/types/protocol';
-import { colors, radius, space, type } from '@/theme';
+import { colors, radius, space, themedSheet, type } from '@/theme';
 
 // The two controls that act on the server rather than on anything in it.
 //
@@ -147,9 +147,7 @@ export default function ServerControlsPanel({ admin }: { admin: AdminToken }) {
             }
           />
           <Text style={styles.help}>
-            Calling it off puts the server back in play with the seeks and searches people
-            were already holding — nobody has to press play again. It cannot be undone once
-            the last game ends, because by then the process has gone.
+            Cancel to restore matchmaking and existing searches. You cannot cancel after the final game ends and the server stops.
           </Text>
         </View>
       ) : (
@@ -211,15 +209,14 @@ export default function ServerControlsPanel({ admin }: { admin: AdminToken }) {
           </View>
         ) : (
           <Text style={styles.help}>
-            Nothing is up. Whatever you post here goes in front of everybody online, and
-            stays in front of whoever arrives while it lasts.
+            No announcement. Post a message for everyone online and anyone who joins.
           </Text>
         )}
 
         <LabeledInput
           label="ANNOUNCEMENT"
           onChangeText={setAnnouncement}
-          placeholder="Sorry — restarting now to fix the clock bug."
+          placeholder="Restarting to fix the clock bug."
           value={announcement}
         />
         <OptionChips
@@ -253,7 +250,7 @@ export function LockedServerControls() {
   return <EmptyState detail="Unlock host controls to reach these." title="The server" />;
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   panel: { gap: space.medium },
   block: { gap: space.small },
   buttons: { flexDirection: 'row', flexWrap: 'wrap', gap: space.small },
@@ -279,4 +276,4 @@ const styles = StyleSheet.create({
   },
   standingLabel: { ...type.label, color: colors.textMuted },
   standingText: { ...type.bodyStrong, color: colors.text },
-});
+}));

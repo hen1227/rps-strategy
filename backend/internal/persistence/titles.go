@@ -28,6 +28,11 @@ import (
 // say the same thing and a way for the two to disagree. Administrators grant
 // out of the same catalogue; there is no such thing here as a title nobody can
 // look up.
+//
+// Engines collect too, out of a catalogue of their own that shares this table
+// and nothing else. Both pools are declared below, so the whole of what exists
+// is in one list; the rules that hand the engine ones out, and the one way they
+// behave differently from everything described above, are in bot_titles.go.
 
 // TitleID is a title's identity *and* the three letters it displays as.
 //
@@ -51,6 +56,28 @@ const (
 	TitleKindAchievement TitleKind = "achievement"
 	// TitleKindGranted cannot be earned at all. An administrator hands it out.
 	TitleKindGranted TitleKind = "granted"
+)
+
+// TitlePool says who a title is for. People and engines collect from separate
+// catalogues that never overlap, because almost nothing means the same thing to
+// both: a rating rung measured on the human ladder is not the number an engine
+// is fitted to, and "won the arena that only engines enter" is not something a
+// person can go and do.
+//
+// The two pools share this table, this tag and these routes. What they do not
+// share is a single entry — which is what stops an engine wearing GM, and what
+// lets the bot rules be written without every one of them having to say "unless
+// this is a person".
+type TitlePool string
+
+const (
+	// TitlePoolPlayer is the catalogue people collect from, and the default: a
+	// title with no pool named is a player's.
+	TitlePoolPlayer TitlePool = "player"
+	// TitlePoolBot is the engine catalogue. See bot_titles.go for the rules,
+	// and for the one way it behaves differently from this file's — a bot's
+	// tags are a reflection of the record rather than a collection.
+	TitlePoolBot TitlePool = "bot"
 )
 
 // TitleSourceEarned and TitleSourceGranted record *how* a particular account
@@ -93,7 +120,7 @@ const (
 	// the site, sitting in front of a name that has nothing else to say.
 	TitleDiscordVerified TitleID = "D"
 
-	// The last six cannot be earned at all. An administrator hands them out.
+	// The last eight cannot be earned at all. An administrator hands them out.
 	// TitleVeteran is among them by choice rather than for want of a rule: how
 	// much play deserves it is a judgement, and one a query would get wrong in
 	// both directions.
@@ -101,12 +128,48 @@ const (
 	TitleDeveloper   TitleID = "DEV"
 	TitleModerator   TitleID = "MOD"
 	TitleContributor TitleID = "CON"
-	TitleFounder     TitleID = "FND"
+	// TitleBotPioneer is for the engine work itself, which is the thing the two
+	// bot titles above miss: Bot Architect and Bot Master are both read off a
+	// record, and a record only ever notices the engine that won — never the
+	// person who first worked out how to make one play. A judgement with no
+	// query behind it, like Veteran, and grantable more than once, because a
+	// breakthrough is not something only one person is allowed to have.
+	TitleBotPioneer TitleID = "PIO"
+	TitleFounder    TitleID = "FND"
 	// TitleWebGoatGuy belongs to one person: the one who invented this game.
 	// Not "an award for game design" with a rule somebody could satisfy — the
 	// requirement is being him, which is why there is exactly one of these and
 	// no evaluator that could ever hand out a second.
 	TitleWebGoatGuy TitleID = "WGG"
+	// TitleIrishPizza is the same shape as the one above, and here for the same
+	// reason rather than as the start of a habit: it is one person's, being him
+	// is the whole of the requirement, and no rule could hand out a second.
+	TitleIrishPizza TitleID = "PIZ"
+)
+
+// The engine catalogue. Two, and deliberately not more: a pool where every
+// engine wears something distinguishes nobody, and these are the two facts
+// about an engine that are worth a tag in front of its name.
+//
+// Letters, like every other tag on the site. The crown below was once the glyph
+// itself, drawn oversized, with a second crown beside it — which put a pair of
+// small gold squares in front of a name rather than an abbreviation of
+// anything. See the note on TitleID about the id being what it displays as.
+const (
+	// TitleReigningChampion is the arena crown, and there is at most one
+	// weekend's worth of them at a time: whoever won the most recent arena,
+	// until the next one is played.
+	//
+	// The only thing a weekend win earns. A second tag for a win inside the last
+	// ninety days stood beside it and is gone: two gold tags differing only in
+	// shade, where the quieter one made a claim the weekend page already makes
+	// in its own words and at more length. A champion that has been succeeded
+	// has CUP left to wear, and the archive still says what it won.
+	TitleReigningChampion TitleID = "RC"
+	// TitleCupWinner is a tournament somebody organised, which is the engine's
+	// counterpart to the owner's Bot Master. Weekend arenas do not count; they
+	// have the crown above.
+	TitleCupWinner TitleID = "CUP"
 )
 
 // MaximumTitleLength is the promise the tag makes to every layout that renders
@@ -120,16 +183,24 @@ type Title struct {
 	ID   TitleID   `json:"id"`
 	Name string    `json:"name"`
 	Kind TitleKind `json:"kind"`
+	// Pool is who the title is for. Sent on every entry rather than only on the
+	// engine ones, so a client can group the catalogue by it instead of
+	// knowing which ids are which.
+	Pool TitlePool `json:"pool"`
 	// Requirement is how it is earned, in the words shown to the player.
 	Requirement string `json:"requirement"`
 }
 
-// titleCatalogue is every title there is, most prestigious first.
+// playerTitleCatalogue is every title a person can hold, most prestigious first.
 //
 // The order is the display order everywhere: a player's tags, the picker on the
 // account page, the admin list. Sorting by it rather than by award date means a
 // collection reads as a ranking instead of as a diary.
-var titleCatalogue = []Title{
+//
+// The pool is stamped on where the two halves are joined rather than repeated
+// on every entry, so a title added here cannot end up in the engine catalogue
+// by having a field left off.
+var playerTitleCatalogue = []Title{
 	{
 		ID:          TitleGrandmaster,
 		Name:        "Grandmaster",
@@ -215,6 +286,12 @@ var titleCatalogue = []Title{
 		Requirement: "Granted by the admin, for work on the game itself.",
 	},
 	{
+		ID:          TitleBotPioneer,
+		Name:        "Bot Pioneer",
+		Kind:        TitleKindGranted,
+		Requirement: "Granted by the admin, for a breakthrough in engine development.",
+	},
+	{
 		ID:          TitleFounder,
 		Name:        "Founder",
 		Kind:        TitleKindGranted,
@@ -229,7 +306,59 @@ var titleCatalogue = []Title{
 		// there is nothing here to work towards.
 		Requirement: "Be WebGoatGuy, who invented this game.",
 	},
+	{
+		ID:   TitleIrishPizza,
+		Name: "IrishPizza",
+		Kind: TitleKindGranted,
+		// A fact about one person, in the same words as the one above, and just
+		// as short: anything longer would be this list explaining a joke.
+		Requirement: "Be IrishPizza.",
+	},
 }
+
+// botTitleCatalogue is every title an engine can hold, most prestigious first.
+//
+// Read the requirements as being about *now* rather than about ever. The rules
+// are in bot_titles.go and so is the argument for that; the short version is
+// that one of these two is a superlative, and a superlative that is kept after
+// it stops being true is a lie on somebody's name.
+var botTitleCatalogue = []Title{
+	{
+		ID:          TitleReigningChampion,
+		Name:        "Reigning Champion",
+		Kind:        TitleKindAchievement,
+		Requirement: "Win the most recent weekend arena.",
+	},
+	{
+		ID:          TitleCupWinner,
+		Name:        "Cup Winner",
+		Kind:        TitleKindAchievement,
+		Requirement: "Win a tournament outside the weekend arena.",
+	},
+}
+
+// titleCatalogue is both pools, one after the other, with each entry stamped
+// with the pool it came from.
+//
+// People first, because the catalogue route is read by the account page far
+// more often than by anything looking at engines, and because a list that opens
+// with two titles nobody reading it can earn reads as the wrong list.
+var titleCatalogue = func() []Title {
+	catalogue := make([]Title, 0, len(playerTitleCatalogue)+len(botTitleCatalogue))
+	for _, pool := range []struct {
+		id      TitlePool
+		entries []Title
+	}{
+		{id: TitlePoolPlayer, entries: playerTitleCatalogue},
+		{id: TitlePoolBot, entries: botTitleCatalogue},
+	} {
+		for _, title := range pool.entries {
+			title.Pool = pool.id
+			catalogue = append(catalogue, title)
+		}
+	}
+	return catalogue
+}()
 
 // titleIndex is the catalogue by id, plus each title's place in the order, so a
 // read can both resolve and sort without scanning the slice.
@@ -260,11 +389,24 @@ type ratingRung struct {
 // not only the highest. A Grandmaster owns CM, FM and IM as well, which is what
 // makes the ladder a collection rather than a single slot, and what lets a
 // player who prefers the modest tag wear it.
+//
+// Restated for the anchored scale, and the numbers are a judgement rather than
+// a conversion. The old rungs sat 200 points apart on a scale where 120 points
+// was a doubling of the odds, so each was about one and two-thirds doublings
+// above the last; these sit 40 apart on a scale where 20 is a doubling, which is
+// two doublings a rung — a slightly steeper climb, chosen because the bottom of
+// this scale is a real opponent rather than an arbitrary constant and the first
+// rung should mean something specific. Candidate Master is 60: eight games in
+// nine against an engine that plays at random.
+//
+// The old thresholds cannot simply be divided down. 1400 meant "two hundred
+// above average" and average was wherever the field happened to sit; 60 means a
+// fixed thing about how you play, and the two are not the same kind of claim.
 var ratingLadder = []ratingRung{
-	{id: TitleGrandmaster, minimumElo: 2000},
-	{id: TitleInternationalMaster, minimumElo: 1800},
-	{id: TitleMaster, minimumElo: 1600},
-	{id: TitleCandidateMaster, minimumElo: 1400},
+	{id: TitleGrandmaster, minimumElo: 180},
+	{id: TitleInternationalMaster, minimumElo: 140},
+	{id: TitleMaster, minimumElo: 100},
+	{id: TitleCandidateMaster, minimumElo: 60},
 }
 
 // titleLadderMinimumGames is how much play a mode rating must have behind it
@@ -294,9 +436,25 @@ type TitleAward struct {
 	ID              TitleID   `json:"id"`
 	Name            string    `json:"name"`
 	Kind            TitleKind `json:"kind"`
+	Pool            TitlePool `json:"pool"`
 	Requirement     string    `json:"requirement"`
 	Source          string    `json:"source"`
 	AwardedAtUnixMs int64     `json:"awardedAtUnixMs"`
+}
+
+// awardOf flattens a catalogue entry with how and when an account came by it,
+// so the three places that build one cannot describe the same title
+// differently.
+func awardOf(title Title, source string, awardedAtUnixMs int64) TitleAward {
+	return TitleAward{
+		ID:              title.ID,
+		Name:            title.Name,
+		Kind:            title.Kind,
+		Pool:            title.Pool,
+		Requirement:     title.Requirement,
+		Source:          source,
+		AwardedAtUnixMs: awardedAtUnixMs,
+	}
 }
 
 // TitleCatalogue is every title that exists, in display order. Copied on the
@@ -326,7 +484,48 @@ CREATE INDEX IF NOT EXISTS account_titles_user_idx ON account_titles(user_id);
 	if _, err := store.db.ExecContext(ctx, schema); err != nil {
 		return fmt.Errorf("migrate account titles: %w", err)
 	}
+	if err := store.renameTitles(ctx); err != nil {
+		return err
+	}
 	return store.retireWithdrawnTitles(ctx)
+}
+
+// titleRenames is every id this catalogue has spelled differently in the past,
+// and what it is spelled now.
+//
+// A rename is not a withdrawal, and that is the whole reason this exists: the
+// rows below hold the award they always held, so they are carried across rather
+// than left for retireWithdrawnTitles to strand. One entry, and there is no
+// reason to expect a second — the reigning champion's tag used to be the crown
+// glyph itself, from when two of the engine tags were symbols.
+var titleRenames = []struct{ from, to TitleID }{
+	{from: "♛", to: TitleReigningChampion},
+}
+
+// renameTitles carries the rows above onto the current spelling.
+//
+// Before retireWithdrawnTitles rather than after, so that an engine wearing the
+// old id ends up wearing the new one instead of wearing nothing until the next
+// sweep comes round a quarter of an hour later.
+func (store *Store) renameTitles(ctx context.Context) error {
+	for _, rename := range titleRenames {
+		// OR IGNORE is for an account that somehow holds both: the old row
+		// loses and is thereafter invisible, for the reason TitleID gives. It
+		// cannot arise for the one rename there is, since RC was a new id the
+		// day the glyph stopped being one — but a primary key conflict here
+		// would fail every start-up after it.
+		if _, err := store.db.ExecContext(ctx, `
+UPDATE OR IGNORE account_titles SET title_id = ? WHERE title_id = ?
+`, rename.to, rename.from); err != nil {
+			return fmt.Errorf("rename title %q: %w", rename.from, err)
+		}
+		if _, err := store.db.ExecContext(ctx, `
+UPDATE accounts SET title = ?, updated_at_unix_ms = ? WHERE title = ?
+`, rename.to, time.Now().UnixMilli(), rename.from); err != nil {
+			return fmt.Errorf("rename worn title %q: %w", rename.from, err)
+		}
+	}
+	return nil
 }
 
 // retireWithdrawnTitles takes a title that has left the catalogue off the names
@@ -394,14 +593,7 @@ SELECT title_id, source, awarded_at_unix_ms FROM account_titles WHERE user_id = 
 		if !known {
 			continue
 		}
-		awards = append(awards, TitleAward{
-			ID:              title.ID,
-			Name:            title.Name,
-			Kind:            title.Kind,
-			Requirement:     title.Requirement,
-			Source:          source,
-			AwardedAtUnixMs: awardedAt,
-		})
+		awards = append(awards, awardOf(title, source, awardedAt))
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("read account titles: %w", err)
@@ -582,14 +774,7 @@ ON CONFLICT(user_id, title_id) DO NOTHING
 `, userID, id, TitleSourceEarned, now); err != nil {
 			return nil, fmt.Errorf("evaluate titles: award %s: %w", id, err)
 		}
-		awarded = append(awarded, TitleAward{
-			ID:              title.ID,
-			Name:            title.Name,
-			Kind:            title.Kind,
-			Requirement:     title.Requirement,
-			Source:          TitleSourceEarned,
-			AwardedAtUnixMs: now,
-		})
+		awarded = append(awarded, awardOf(title, TitleSourceEarned, now))
 	}
 	sort.SliceStable(awarded, func(first, second int) bool {
 		return titleIndex[awarded[first].ID].order < titleIndex[awarded[second].ID].order
@@ -660,33 +845,27 @@ LIMIT 1
 		earned = append(earned, TitleBotSlayer)
 	}
 
-	// Owning the best engine on some mode's bot ladder. Read against the same
-	// rows the bot leaderboard ranks, and with its minimum-games rule, so the
-	// title and the board cannot disagree about who is top.
-	topBot, err := store.exists(ctx, `
-SELECT 1
-FROM bots b
-JOIN account_mode_ratings r ON r.user_id = b.user_id
-JOIN accounts a ON a.user_id = b.user_id
-WHERE b.owner_user_id = ?1
-  AND a.disabled = 0
-  AND r.games_played >= ?2
-  AND r.elo = (
-    SELECT MAX(peer.elo)
-    FROM account_mode_ratings peer
-    JOIN accounts peer_account ON peer_account.user_id = peer.user_id
-    WHERE peer.mode_id = r.mode_id
-      AND peer_account.kind = ?3
-      AND peer_account.disabled = 0
-      AND peer.games_played >= ?2
-  )
-LIMIT 1
-`, userID, leaderboardDefaultMinimumGames, AccountKindBot)
+	// Owning the best engine on some mode's bot ladder, read through the board's
+	// own idea of who leads a mode so that the title and the page cannot
+	// disagree.
+	//
+	// This used to be a query of its own that matched `r.elo = (SELECT MAX(...))`
+	// and it was wrong in two ways that only show up on a real board. A tie
+	// against the maximum is not a rank: every engine level at the top earned
+	// this, and on a board where nothing has been placed that is the whole
+	// fleet. And it read raw `elo` without the placement the board sorts on
+	// first, so an engine the fit could not place could out-rank the engine
+	// actually listed in front. modeBoardLeaders answers the question the board
+	// answers, once, for every mode.
+	leaders, err := store.modeBoardLeaders(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("evaluate titles: read bot ladder: %w", err)
 	}
-	if topBot {
-		earned = append(earned, TitleBotArchitect)
+	for _, leader := range leaders {
+		if leader.OwnerUserID == userID {
+			earned = append(earned, TitleBotArchitect)
+			break
+		}
 	}
 
 	streak, err := store.longestWinStreak(ctx, userID)

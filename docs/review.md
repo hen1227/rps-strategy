@@ -1,10 +1,13 @@
 # Game review
 
 After a game ends, its players are offered a review: the game replayed move by
-move, every move graded against RPSFish, an evaluation chart across the whole
-game, and an accuracy percentage for each side. It runs on the archived PGN, so
-anything the archive holds can be reviewed — ranked, unranked, tournament, or a
-bot game the server never saw.
+move, with the score sheet, the clocks, and a board you can play your own lines
+out on. Switch the engine on and every move is graded against RPSFish as well,
+with an evaluation chart across the whole game and an accuracy percentage for
+each side — but it ships off, for the reason set out under "The engine is off
+unless you ask for it". It runs on the archived PGN, so anything the archive
+holds can be reviewed — ranked, unranked, tournament, or a bot game the server
+never saw.
 
 Everything below the storage section happens in the browser. The server hands
 over a text record and, later, accepts a number back; it does not search a
@@ -30,8 +33,10 @@ the same address as **COPY LINK**, and both build it through `gameReviewURL` in
 `frontend/src/navigation/links.ts`, which is the one place that knows the
 route's whole address. Nothing about the link is private: the archived record is
 served by id to anybody who asks, and the review runs in the reader's own
-browser, so an opponent, a coach or a stranger who opens it gets the same game
-graded the same way — without an account, and without having played in it.
+browser, so an opponent, a coach or a stranger who opens it gets the same game,
+read on their own terms — without an account, and without having played in it.
+Whether it is *graded* is their own device's business; see "The engine is off
+unless you ask for it".
 Accuracy is still only *stored* for a player who was in the game, which is why
 `putGameAccuracy` takes a profile key.
 
@@ -55,6 +60,75 @@ hand is not a deviation — it just advances.
 **Play the engine move instead** on a graded move takes the position back one
 step and plays the engine's choice there, because the move being graded is the
 one that led into the position on screen.
+
+## The engine is off unless you ask for it
+
+A review opens with RPSFish switched off, and so does the analysis board.
+
+The reason is the engine's strength, not the feature's cost. RPSFish is weaker
+than most of the bots people actually play here, so its verdict on one of their
+games is frequently wrong — and it is wrong in the worst register available,
+because a grade is printed in a confident badge and read as a fact. `??` under a
+move that was fine is worse than no badge at all: the reader either believes it
+and learns something untrue, or stops believing the badges, which costs the
+right ones too. Until the engine is strong enough to be believed against the
+field it is grading, the honest default is what a review was before engines —
+the game, replayed, with the reader doing the judging.
+
+What a review is with the engine off:
+
+- the board, stepped through with the arrow keys, the replay controls or the
+  score sheet
+- the score sheet, ungraded: the moves that were played and which one you are
+  standing on
+- how long the player spent on the move in front of you, off the record's own
+  clocks — the one thing a review can say about a move without searching it, and
+  worth saying, because a mistake made in half a second and one made after two
+  minutes are different mistakes
+- your own lines, played onto the board from any position and discarded by
+  stepping back, exactly as before but unanalysed
+- the territory and quiet-move meters, which read the board rather than the
+  engine
+- the PGN, the game link, the series table, and the chat room
+
+What it is not: an evaluation bar, an evaluation chart, engine arrows, move
+grades, accuracy, ranked lines, or *play the engine move instead*. Those are
+**absent rather than blank**. A chart with no line in it and an accuracy reading
+`—%` would say the review had failed, which is a different claim from the one
+being made.
+
+Turning it on is one press — **ENGINE**, in the review's header or in the
+analysis board's own control row — and all of it comes back. The effort toggle
+sits beside it and is hidden while it is off, because a depth readout for a
+search nobody is running is furniture for a thing that is not there.
+
+The choice is remembered per device (`store/enginePreference.ts`, under
+`rps.engineAnalysis.v1`), because somebody who wants the grades should ask once
+rather than once a game. It is deliberately *not* part of the account's synced
+appearance: it says how far you trust the build of the engine in front of you,
+which is a property of the machine you are holding rather than of you.
+
+Three consequences worth stating:
+
+- **An ungraded review stores nothing.** `putGameAccuracy` is only ever sent
+  from a completed graded report, so a manual review cannot overwrite an
+  accuracy some earlier graded one measured.
+- **`enabled: false` beats an unsupported mode.** `useGameAnalysis` and
+  `usePositionAnalysis` both ask `enabled` before they ask
+  `engineUnavailableMessage`. A reviewer who switched the engine off is not
+  waiting to hear which modes it would have refused, and an error banner saying
+  so would read as a fault rather than as a mode.
+- **The analysis board still moves.** Its pieces used to wait for
+  `engineState === 'ready'`, which with nothing searching never arrives. Both
+  that gate and the one in `performMove` now apply only while the engine is on;
+  off, the board is a study board — position setup, reach maps, undo and redo,
+  and both sides yours.
+
+The bot battle is not covered by any of this. Its players *are* RPSFish, at
+rungs the grading walk outsearches, so the engine grading them is the engine
+grading itself — the one comparison it is qualified to make — and a screen whose
+entire purpose is a graded game would have nothing left to show. It opens
+graded, as it always did.
 
 ## How RPSFish is used
 
@@ -234,7 +308,8 @@ under the reviewer needs to be explicable rather than doubted.
 
 What is left is one switch, **QUICK**: a single shallow pass and no deepening,
 for a reviewer who wants a number now and does not care that a deeper search
-might revise it.
+might revise it. It sits beside **ENGINE**, and only appears once that is on —
+two switches, in the order the questions are actually asked.
 
 MultiPV 3 rather than 1 costs about twice as much per position and pays for
 itself twice. The reviewer gets alternatives to look at, and the played move is
@@ -347,28 +422,282 @@ npm run calibrate:review -- --games 150 --depth 8 --plies 400
 and put the fitted values into `WIN_PROBABILITY_SCALE` in
 `frontend/src/engine/gameReview.ts`. They are measurements, not preferences.
 
+#### The fitted scales are overdue a re-measurement
+
+Re-running the script as a control — same protocol, same shipped weights,
+nothing changed but the seed — does not reproduce the values in
+`WIN_PROBABILITY_SCALE`:
+
+| Mode | Shipped | Seed 6180339 | Seed 1414213 | Positions |
+| --- | --- | --- | --- | --- |
+| Infiltration (V3) | 0.004949 | 0.008216 | 0.007020 | 6,266 / 5,912 |
+| Total War (V5) | 0.003236 | 0.004117 | — | 31,136 |
+
+Two fresh seeds agreeing in direction is the bar this file sets for believing a
+shift, and Infiltration clears it: both are far above the shipped figure and
+within 16% of each other. Total War moved the same way on one seed, +27%.
+Every fresh fit reads higher than what is shipped, which would mean the review
+currently reads every loss as *smaller* than the games say it is.
+
+Do not act on that yet, and in particular do not reach for the obvious
+explanation. Total War's run produced 31,136 positions against the ~30,600
+recorded for its last re-fit — the same sample, from the same protocol — and
+`k` still moved 27%. So "the games got shorter" does not account for it, even
+though Infiltration's position count is now well down on what this file
+records. That leaves a genuine evaluation change and the script's own seed
+noise, and one seed per mode cannot separate them.
+
+What is needed is two seeds for Total War as well, and an explanation for the
+direction. Re-fitting moves every accuracy figure for the mode, including the
+ones already stored against archived games in `game_accuracy` — which records
+the engine budget a number came from but not the scale. So this is recorded
+rather than applied.
+
+#### A mode with no fit of its own
+
+`scaleFor` falls back to Infiltration's curve for a mode that has none, and it
+does that **silently**. This is the number that says how many points of
+expected score a centipawn is worth, and every grade and every accuracy on the
+screen is downstream of it, so a borrowed one tilts a whole report at once —
+every move in the same direction, by roughly the same factor.
+
+Intransitive spent its whole life so far in that state. It was added to
+`ENGINE_MODE_CODES`, the review started grading it, and nothing said the curve
+underneath was somebody else's — while it became the mode nearly every game on
+the site is played in.
+
+Which direction that tilts Intransitive is not known yet, and is not worth
+guessing: the two fitted modes differ by more than 50% in `k`, so a mode
+borrowing one of them could be off by that much either way. Measure it. What
+is already clear is that it compounds with the band widths above rather than
+cancelling them, because a scale that is wrong in one direction and a boundary
+drawn in the wrong place are independent errors in the same arithmetic.
+
+`UNCALIBRATED_MODES` now names the modes in that state, and
+`gameReview.test.mts` fails if a mode the engine will search is neither fitted
+nor named there. A new mode therefore arrives with a fit or with an
+acknowledgement, and never again with a borrowed curve nobody mentioned.
+
+#### Intransitive cannot be fitted by self-play
+
+The obvious next step is to run the script on it. That does not work, and the
+way it fails is worth writing down, because it produces a number rather than an
+error:
+
+| Seed | Outcomes over 150 games | Fitted `k` |
+| --- | --- | --- |
+| 6180339 | 0 decisive, 145 draws | 0.000010 |
+| 1414213 | 4 decisive, 140 draws | 0.001208 |
+
+The engine draws itself in Intransitive essentially always. With no decisive
+results there is nothing for a logistic to predict: every score bucket in the
+calibration table comes back with an actual expected score of exactly 0.500,
+and the likelihood is maximised by the flattest curve available, so the first
+fit simply pinned at the lower bound of its own bracketing interval. The
+evaluation never moves either — 21,782 of 32,166 positions sat within two
+pawns of level, and none at all past 200 centipawns. The two seeds disagree by
+a factor of 120.
+
+Either number taken at face value would be much worse than the borrowed curve
+it replaced: both are far flatter than Infiltration's, so every loss in the
+mode would convert to approximately nothing and a review would grade an entire
+game Excellent. **A degenerate fit here is not a null result, it is a
+plausible-looking constant.** Hence the note in `UNCALIBRATED_MODES` rather
+than a command to run.
+
+Real Intransitive games are not drawish — 44 archived records sampled for the
+band measurement above were every one of them decisive, and a bot's recent 40
+came in at 17/20/3 with most games ending by corner. So the signal exists; it
+is self-play at this strength that has none. Fitting the mode means fitting it
+from the archive — take the evaluation at each position of a stored game and
+the result that game actually reached — which is the source
+`reviewStability.mts --pgn` already reads and `reviewCalibration.mts` does not.
+
 ### Move grades
 
 A grade is the expected score, in percentage points, that a move gave away:
 
-| Badge | Grade | Points given up |
-| --- | --- | --- |
-| `★` | Best | the engine's own choice, or nothing at all given up |
-| `!` | Great | the engine's choice when line two gives up more than 5 points |
-| `✓` | Excellent | up to 2 |
-| `!?` | Good | up to 5 |
-| `?!` | Inaccuracy | up to 10 |
-| `?` | Mistake | up to 20 |
-| `??` | Blunder | more |
+| Badge | Grade | Points given up | Which is an accuracy of |
+| --- | --- | --- | --- |
+| `★` | Best | the engine's own choice, or nothing at all given up | 100 |
+| `!` | Great | the engine's choice when line two gives up more than 20 points | 100 |
+| `✓` | Excellent | up to 5 | 80 or better |
+| `!?` | Good | up to 11 | 60 to 80 |
+| `?!` | Inaccuracy | up to 20 | 40 to 60 |
+| `?` | Mistake | up to 34 | 20 to 40 |
+| `??` | Blunder | more | under 20 |
 
 The punctuation follows familiar chess-review notation, while Best and
 Excellent use neutral symbols because traditional notation has no separate
-marks for those engine categories. A Great Move is deliberately strict:
-MultiPV is ordered, so when the second line is already outside the Good band,
-the top line is the only good move in the position.
+marks for those engine categories.
 
-Blunders and mistakes are marked on the evaluation chart; the smaller grades
-are not, or the chart becomes a rash of dots instead of a picture of the game.
+#### The bands are the accuracy scale, in fifths
+
+That last column is not a coincidence and not a table: it is where the bands
+come from. Each grade is one fifth of the accuracy curve above, and the
+boundaries are computed by reading that curve backwards
+(`lossForAccuracy` in `gameReview.ts`), so a grade means something a reader
+can state without looking anything up — **an Excellent move scored 80% or
+better, a Mistake scored between 20 and 40, a Blunder scored under 20.** A cut
+point and the accuracy it corresponds to cannot drift apart, because only one
+of them exists in the source.
+
+They used to be 2 / 5 / 10 / 20 points of loss, which on that same curve is
+91 / 80 / 64 / 40 percent: three of the five bands crowded into the top third
+of the scale, and the first boundary drawn at a loss of 2 points. That last
+one is what made the review unreadable, and it took a measurement to see why.
+
+`frontend/scripts/reviewStability.mts` measures how far RPSFish disagrees with
+itself, the way `reviewCalibration.mts` measures the win-probability scale:
+play games, grade each one at *every* rung of the shipped ladder, and compare
+each move's loss against the deepest opinion the engine has. Run it after an
+evaluation change, for the same reason:
+
+```sh
+cd frontend
+npm run measure:stability -- --games 30 --plies 90 --mode V5 --top deep
+```
+
+The loss *numbers* turned out to be tolerable. Over 521 positions of
+Infiltration, the shallowest rung differs from the deepest by a median of 1.7
+points, 4.8 at the third quartile, 11.5 at the 95th. The *classes* were not
+tolerable at all:
+
+| Rung read at | Badges that changed class | Condemned, then cleared |
+| --- | --- | --- |
+| Quick (d6) | 40.5% | 29.7% of 91 |
+| Standard (d9) | 34.0% | 28.4% of 105 |
+| Deep (d12) | 28.4% | 25.7% of 105 |
+
+"Condemned, then cleared" is the column that matters: a move the review called
+a Mistake or a Blunder, which a deeper search of the same position says was
+neither. Close to a third of the accusations in the review were ones the engine
+itself withdrew on a longer look — and the reader was never going to see the
+longer look, because how far the ladder climbs is decided by
+`analysisBudget.ts` from core count, so a `low` device stops at Standard.
+
+Those two findings are only compatible because of where the boundaries sat.
+Three quarters of the moves in a measured game lose less than two points, so
+the Excellent/Good boundary was drawn at 2 with a typical error of 5, in the
+exact part of the range where almost every move lands. It was not sorting
+moves. It was sorting which rung the reader's device happened to reach, so the
+same game graded on a laptop and on a phone disagreed about most of itself.
+
+`ENGINE_LOSS_ERROR_BAR` holds the measured typical figure and
+`ENGINE_LOSS_ERROR_TAIL` the 95th percentile; `gameReview.test.mts` fails if
+any band is narrower than the first or if either accusing band starts inside
+one and a half times the second. The quintiles clear both at every boundary,
+which is worth stating as luck rather than as design: the two were derived
+independently and only one of them is a measurement.
+
+#### What this fixes, measured on real games
+
+Both schemes scored on the same positions: 20 archived Intransitive records,
+1,249 moves, graded at Quick and Standard and checked against Deep. Use real
+records for this and not the script's synthetic games — see `playGame` on why.
+
+| Scheme | Read at | Grade changed | Condemned, then cleared |
+| --- | --- | --- | --- |
+| 2/5/10/20 | Quick | 29.3% | 21.2% of 170 |
+| 2/5/10/20 | Standard | 19.6% | 9.8% of 153 |
+| quintiles | Quick | **14.3%** | **2.3% of 129** |
+| quintiles | Standard | **9.5%** | **3.0% of 134** |
+
+Grade instability halves. The withdrawn accusations — the column that matters —
+fall from 36 moves to 3 at Quick, and from 15 to 4 at Standard.
+
+That is a larger improvement than "fewer badges" would explain, and the reason
+is in the shape of the distribution rather than in the count. Intransitive's
+losses are strongly bimodal: median 0.4 points, third quartile 3.2, then
+37.2 at the 90th. Almost every real condemnation in the mode is a decisive
+position — a tenth of all moves are Blunders under either scheme, and those are
+*stable*, because a position that is lost at depth 9 is still lost at depth 12.
+What the old `mistake` band at 10–20 caught was the unstable middle, and the
+error bar there is the size of the loss itself:
+
+| Loss, at Deep | 0–3 | 3–6 | 6–10 | 10–15 |
+| --- | --- | --- | --- | --- |
+| p90 disagreement, Quick vs Deep | 3.3 | 5.5 | 6.6 | **13.6** |
+
+A twelve-point loss that the engine's own deeper search disagrees about by
+thirteen points is not a measurement of anything. Moving that range into
+Inaccuracy is most of the gain, and it is why the accusing bands start where
+they do.
+
+**The bands still do not make one accusation trustworthy.** They move the
+lines to where the engine is actually able to tell two moves apart, which is a
+different thing from the engine being right, and the gap between those is the
+engine's strength against the field it is grading. Until that closes this is
+the honest trade — the same argument, at a finer grain, as the one for shipping
+with the engine switched off.
+
+Two things the measurement cannot see, which is why the accusing bands sit far
+out rather than just outside the error bar:
+
+> The error bar only measures the engine disagreeing with a deeper version of
+> itself. RPSFish is weaker than most of the bots on this site, so the move it
+> names as best is sometimes not the best move, and a loss measured against a
+> wrong baseline is wrong by however much the baseline was. There is no way to
+> measure that from inside the engine. The response to an error you cannot
+> measure is margin, not precision.
+
+None of this touches an accuracy figure. Accuracy is that curve applied to the
+loss; these are cut points on the same curve, and a cut point is not an input
+to the number being cut. What changed is which word is printed over a move.
+
+A Great Move is deliberately strict, and stricter than it was: MultiPV is
+ordered, so when line two is already a mistake, line one is the only move the
+engine thinks is playable. It used to ask only that line two be less than
+Good. `!` rests on more of the engine's opinion than any other badge — on the
+score of a move nobody played, *and* on MultiPV having ordered the
+alternatives correctly — and the same script finds the engine's own first
+line changes between the shallowest rung and the deepest on one position in
+eight. A badge resting on that much needs the widest margin on the list, not
+the narrowest.
+
+#### And no false precision
+
+A loss is printed in whole points. "10.1 points of expected score given up"
+reads as a measurement to a tenth of a point from a search whose opinion of
+that same move moves by two points between depths; the tenths were never
+information, and printing them invites a reader to rank two moves the engine
+cannot separate. `formatLoss` in `gameReview.ts` is the one place that decides
+this, so the review, the analysis board and the bot battle cannot drift apart
+on it. Each of those three also now names the depth the verdict came off,
+which they previously did only for the engine's own choice.
+
+### What the evaluation chart marks
+
+Mistakes and blunders, and only the few of them the chart has room to say
+clearly. The rule is `frontend/src/features/analysis/chartMarks.ts`, tested
+next to it; the chart itself only decides where to draw what that returns.
+
+It used to badge every `great`, `mistake` and `blunder` in the game, which was
+the right idea and the wrong amount of it. On an eighty-move game between
+imperfect players it produced around twenty badges on one chart, arriving in
+clumps of four that overlapped each other and hid the curve they were
+annotating. An overlapped badge is worse than an absent one — it hides one
+verdict and misreads the one drawn on top of it — and a chart with a badge on
+a quarter of its moves has stopped being a picture of the game.
+
+Three rules, in the order they apply:
+
+- **Errors only.** A compliment is not a turning point. `great` also makes the
+  strongest claim any badge makes — that no other move in the position was any
+  good — which is the claim this engine is least able to support, so it is the
+  last one worth printing in two places. Every grade is still on every move in
+  the score sheet, which is the list, and lists can afford one mark per row.
+- **A budget, spent worst-first.** However long a game is, the moments that
+  decided it are a handful: at most six on a desktop review and two on a
+  phone, and they go to the costliest moves. Spare budget is never a reason to
+  draw a seventh.
+- **No overlaps.** A mark is dropped if it would land within a badge's width of
+  one already taken. Because the budget is spent worst-first, what survives a
+  clump of four consecutive mistakes is the worst of the four.
+
+The last two rules are separate on purpose. Spacing alone would still allow
+thirty legible badges across a wide chart, and thirty legible badges is still
+not a picture of anything.
 
 ### Accuracy
 
@@ -472,6 +801,9 @@ record's tags exactly. All twelve records agree.
 | Per-game engine walk | `frontend/src/engine/rpsfish/worker/` (built to `public/rpsfish/rpsfish-worker.js`) |
 | Screens | `frontend/src/features/review/ReviewScreen.tsx`, `frontend/src/features/bots/BotBattleScreen.tsx`, `frontend/src/features/analysis/AnalysisScreen.tsx` |
 | Shared analysis UI | `frontend/src/features/analysis/EvalChart.tsx`, `AccuracyCard.tsx`, `AnalysisEffortToggle.tsx`, `MoveAnalysisList.tsx`, `EngineLinesCard.tsx` |
+| The engine switch, and where it is kept | `frontend/src/features/analysis/EngineSwitch.tsx`, `frontend/src/store/enginePreference.ts` |
 | Calibration | `frontend/scripts/reviewCalibration.mts` |
+| How far the engine disagrees with itself | `frontend/scripts/reviewStability.mts` |
+| What the chart badges | `frontend/src/features/analysis/chartMarks.ts` |
 | Root-move restriction | `RPSFish/src/search.rs`, `RPSFish/src/wasm.rs` |
 | Storage | `backend/internal/persistence/accuracy.go`, `backend/internal/server/accuracy_routes.go` |

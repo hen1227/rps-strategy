@@ -191,6 +191,18 @@ export const links = {
    */
   /** The recurring bot event, which has its own page because it is a place. */
   weekend: (): Href => '/weekend',
+
+  /**
+   * The hourly ranked rounds: who is entered, and what the last one produced.
+   *
+   * Addressed rather than left as a panel on `/leaderboard`, and the reason is
+   * the same one `weekend` gives: this is a place, with an appointment attached
+   * to it. The board is the result and this is the competition behind it, so an
+   * owner asking "will my engine be in the next one" is not asking a question
+   * about the standings — and the link handed to them in Discord has to land on
+   * the answer rather than on a page they then have to scroll.
+   */
+  rounds: (): Href => '/rounds',
   myBots: (): Href => '/account/bots',
   botGuide: (): Href => '/account/bots/connect',
   botProtocol: (): Href => '/account/bots/protocol',
@@ -207,6 +219,9 @@ export const links = {
     tab ? { pathname: '/admin', params: { tab } } : '/admin',
   policy: (): Href => '/policy',
 
+  /** Themes, boards, piece sets and sounds. */
+  appearance: (): Href => '/appearance',
+
   /**
    * Where this game came from, and the people it came from.
    *
@@ -216,6 +231,38 @@ export const links = {
    * a credit.
    */
   credits: (): Href => '/credits',
+  /**
+   * The feedback board: bugs, suggestions, and the host's answers.
+   *
+   * Three optional parameters, all of which exist to make one link do a job:
+   *
+   * - `item` opens the board on one thread. This is the shareable form —
+   *   `feedbackItemURL` below wraps it — and it is why an item needs an
+   *   address at all: a bug worth discussing is a bug somebody links to in
+   *   Discord.
+   * - `compose` opens the form, already set to a bug or a suggestion. The
+   *   finished-game card uses it, so reporting what just went wrong is one tap
+   *   rather than a page, a button and a dropdown.
+   * - `gameId` travels with it, so a bug reported from a board arrives with the
+   *   game attached. That is the difference between "the clock did something
+   *   odd" and something reproducible.
+   *
+   * Query parameters rather than path segments, for the reason at the top of
+   * this file: item ids are not knowable at build time.
+   */
+  feedback: (
+    options: { item?: string; compose?: 'bug' | 'suggestion'; gameId?: string } = {},
+  ): Href =>
+    options.item || options.compose || options.gameId
+      ? {
+          pathname: '/feedback',
+          params: {
+            ...(options.item ? { item: options.item } : {}),
+            ...(options.compose ? { compose: options.compose } : {}),
+            ...(options.gameId ? { gameId: options.gameId } : {}),
+          },
+        }
+      : '/feedback',
 
   /**
    * The official tournament, which is not run here and is not on the
@@ -262,6 +309,24 @@ export const shareURL = (href: Href): string => {
   return query ? `${SITE_URL}${pathname}?${query}` : `${SITE_URL}${pathname}`;
 };
 
+/**
+ * Which page an address names, with its parameters left off.
+ *
+ * The one thing about an `Href` that several callers need and none of them
+ * should be parsing: `usePathname` answers this for the page somebody is
+ * standing on, and this answers it for a page they are about to go to, so the
+ * two can be compared. `navigation/stack` compares them to tell going somewhere
+ * else from opening the same page on different parameters.
+ *
+ * Every builder above answers either a path or `{ pathname, params }`, which is
+ * narrower than `Href` allows and is what makes the cast safe — the same
+ * narrowing, for the same reason, as `shareURL`.
+ */
+export const pageOf = (href: Href): string => {
+  if (typeof href === 'string') return href.split('?')[0];
+  return (href as { pathname: string }).pathname;
+};
+
 /** One game's review, for a link that leaves the app. */
 export const gameReviewURL = (gameId: string) => shareURL(links.review(gameId));
 
@@ -299,6 +364,16 @@ export const playerURL = (handle: string) => shareURL(links.player(handle));
  */
 export const playerHandle = (params: { user?: string; bot?: string }): string =>
   params.user ?? params.bot ?? '';
+
+/**
+ * One item on the feedback board, for a link handed to somebody who is not
+ * here.
+ *
+ * The reason the board addresses its items at all: a bug is discussed
+ * somewhere else — Discord, usually — and the thing to paste there is the
+ * thread, not the board.
+ */
+export const feedbackItemURL = (itemId: string) => shareURL(links.feedback({ item: itemId }));
 
 /**
  * One run's page, for the same reason.

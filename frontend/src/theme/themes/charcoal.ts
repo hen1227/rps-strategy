@@ -1,0 +1,123 @@
+import type { ThemeSpec } from '../spec';
+
+// Neutral grey, with the accent pulled from Forest's yellow-green to a colder
+// emerald. The quietest theme here: nothing in the chrome has a temperature, so
+// the board and the player colours are the only warm things on the screen.
+export const charcoal: ThemeSpec = {
+  id: 'charcoal',
+  name: 'Charcoal',
+  blurb: "Neutral grey.",
+  scheme: 'dark',
+
+  scrim: '#0d0d0d',
+  rim: '#ffffff',
+
+  surface: {
+    background: '#2b2b2b',
+    surface: '#222222',
+    surfaceRaised: '#292929',
+    surfaceSunken: '#1c1c1c',
+    surfaceMuted: '#343434',
+    surfaceWell: '#1a1a1a',
+    surfaceDeep: '#121212',
+  },
+  border: {
+    border: '#414141',
+    borderStrong: '#4e4e4e',
+    borderSoft: '#383838',
+    borderLight: '#626262',
+    borderFaint: '#4d4d4d',
+  },
+  text: {
+    text: '#f4f4f4',
+    textStrong: '#ffffff',
+    textSoft: '#dadada',
+    textSubtle: '#c2c2c2',
+    textMuted: '#a8a8a8',
+    textDim: '#8e8e8e',
+    textFaint: '#777777',
+    textInverse: '#1c1c1c',
+  },
+  accent: {
+    accent: '#3fae6b',
+    accentBright: '#58cd86',
+    accentSoft: '#94ddb0',
+    accentText: '#8cc9a4',
+    accentTextStrong: '#ddf6e6',
+    accentSurfaceQuiet: '#16261d',
+    accentSurface: '#1a3025',
+    accentSurfaceRaised: '#1f3b2c',
+    accentSurfaceStrong: '#244634',
+    accentBorder: '#3d6f52',
+  },
+  gold: {
+    gold: '#eac45f',
+    goldBright: '#f1ddaa',
+    goldSoft: '#f2dc9e',
+    goldMuted: '#a99b76',
+    goldDot: '#cfa94a',
+    goldSurface: '#453d26',
+    goldSurfaceDeep: '#26231a',
+    goldBorder: '#6d5c32',
+  },
+  danger: {
+    danger: '#d4554c',
+    dangerStrong: '#96382f',
+    dangerSurface: '#4e2a27',
+    dangerSurfaceQuiet: '#302220',
+    dangerBorder: '#6a3a34',
+    dangerText: '#ffd8d4',
+    dangerSoft: '#de7a72',
+  },
+  live: {
+    live: '#e07a5f',
+    liveSoft: '#f0b8a5',
+    liveSurface: '#40302b',
+    liveBorder: '#7a4b3c',
+  },
+  notice: { noticeSurface: '#1f3b2c', noticeText: '#d2efdd' },
+  discord: { discordBorder: '#4a7fc1', discordSurface: '#2b3546' },
+  title: { titleBackground: '#414141', titleText: '#f4f4f4' },
+
+  players: {
+    Red: {
+      strong: '#d4554c',
+      soft: '#de7a72',
+      pale: '#eba49d',
+      contrast: '#ffdcd8',
+      surface: '#4e2a27',
+      border: '#a85c54',
+    },
+    Blue: {
+      strong: '#4785c0',
+      soft: '#8fbbdf',
+      pale: '#aed0ea',
+      contrast: '#ddeeff',
+      surface: '#2c3f52',
+      border: '#5484ab',
+    },
+  },
+  medal: {
+    firstSurface: '#443a22',
+    bronzeText: '#c99160',
+    bronzeSurface: '#2a221b',
+    bronzeBorder: '#5c3f28',
+  },
+  signals: {
+    orange: '#f08a22',
+    orangeDeep: '#6d3300',
+    orangeSoft: '#ffd0a0',
+    purple: '#9b6fe8',
+    coral: '#f0643e',
+    clockFace: '#ececec',
+    clockFaceText: '#1c1c1c',
+    clockFaceLow: '#f5dedb',
+    clockFaceLowText: '#96382f',
+    selection: '#f0c964',
+    selectionMark: '#f4dda3',
+    lastMove: '#58cd86',
+    lastMoveMark: '#ddf6e6',
+  },
+
+  monogram: ['#4f7f66', '#7a5c9e', '#b5763f', '#3f7b91', '#9e5c6b', '#6b7a3f'],
+};

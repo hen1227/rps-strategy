@@ -6,7 +6,7 @@
 // `backend/internal/game`, and the comments mark the places where matching the
 // server exactly is the whole point.
 
-import { goalEndReason, goalOwnerAt } from './goals';
+import { goalEndReason, goalOwnerAt, type RulesEra } from './goals';
 import { QUIET_PLY_LIMIT, repetitionDraws, stalemateLoses } from './modeRules';
 import { positionKey } from './positionKey';
 import {
@@ -70,6 +70,16 @@ export interface AnalysisGame extends PositionLike {
    * something was taken.
    */
   quietPlies: number;
+  /**
+   * Which rules decide where this board is won — today's, or the ones in force
+   * before the 2026-09-03 board flip. See `./goals`.
+   *
+   * Carried on the position rather than passed to `applyAnalysisMove`, because
+   * every position in a replay belongs to one record and the whole line has to
+   * be judged the same way. A game built any other way is `current`, which is
+   * every live game, every local game and every position somebody set up.
+   */
+  era: RulesEra;
 }
 
 /**
@@ -125,27 +135,47 @@ export const STANDARD_ALPHABET: PieceAlphabet = {
   s: { occupant: 'Scissors', occupantOwner: 'Red' },
 };
 
+/** Territory letters, the same `r`/`b` the FEN's third field is written with. */
+const OWNER_LETTERS: Record<string, SideColor> = { r: 'Red', b: 'Blue' };
+
 /**
  * A board from nine rows of `RPSrps.` symbols.
  *
  * Exported because a diagram of a starting position has rows and no game: the
  * lobby thumbnail draws one before anybody has played a move.
+ *
+ * `owners` is the territory, given as rows of `r`/`b`/`.` — the FEN's third
+ * field in row form. Omitted, ownership follows the pieces, which is the shape
+ * every mode's opening board has and the only one a layout string can describe.
+ * Given, it replaces ownership outright rather than adding to it: a tile whose
+ * owner row says `.` is unowned even with a piece standing on it, because that
+ * is a board Total War can reach and a caller must be able to state it.
  */
 export const gridFromRows = (
   rows: readonly string[] | undefined,
   alphabet: PieceAlphabet = STANDARD_ALPHABET,
+  owners?: readonly string[],
 ): Grid =>
   Array.from({ length: rows?.length ?? BOARD_SIZE }, (_unusedRow, y) =>
     Array.from({ length: rows?.[y]?.length ?? BOARD_SIZE }, (_unusedTile, x): Tile => {
       const piece = alphabet[rows?.[y]?.[x] ?? ''];
+      const occupantOwner = piece?.occupantOwner ?? 'Neutral';
       return {
         x,
         y,
         occupant: piece?.occupant ?? 'Empty',
-        occupantOwner: piece?.occupantOwner ?? 'Neutral',
-        ownerColor: piece?.occupantOwner ?? 'Neutral',
+        occupantOwner,
+        ownerColor: owners ? (OWNER_LETTERS[owners[y]?.[x] ?? ''] ?? 'Neutral') : occupantOwner,
       };
     }),
+  );
+
+/** The territory of a board, in the row form `gridFromRows` reads back. */
+export const ownerRowsFrom = (grid: Grid): string[] =>
+  grid.map((row) =>
+    row
+      .map((tile) => (tile.ownerColor === 'Neutral' ? '.' : tile.ownerColor === 'Red' ? 'r' : 'b'))
+      .join(''),
   );
 
 /**
@@ -157,9 +187,15 @@ export const gridFromRows = (
 export const repetitionKey = (game: PositionLike): string =>
   positionKey(game.grid, game.currentTurn);
 
-const newGame = (mode: ModeDefinition, grid: Grid, currentTurn: SideColor): AnalysisGame => {
+const newGame = (
+  mode: ModeDefinition,
+  grid: Grid,
+  currentTurn: SideColor,
+  era: RulesEra = 'current',
+): AnalysisGame => {
   const game = {
     endReason: null,
+    era,
     grid,
     id: `analysis-${mode.id}`,
     mode,
@@ -221,12 +257,55 @@ export const createAnalysisGameFrom = (
   mode: ModeDefinition,
   grid: Grid,
   currentTurn: PlayerColor = FIRST_TO_MOVE,
+  era: RulesEra = 'current',
 ): AnalysisGame =>
   newGame(
     mode,
     grid.map((row) => row.map((tile) => ({ ...tile }))),
-    currentTurn === 'Neutral' ? FIRST_TO_MOVE : currentTurn,
+    sideToMove(currentTurn),
+    era,
   );
+
+/**
+ * The board a game begins from, when it is not the mode's own opening.
+ *
+ * Distinct from `StartingPosition`, which is rows of pieces and nothing else.
+ * A board somebody set up also has a **side to move** — "Red to play" is half
+ * of what makes a position a question rather than a picture — and, for a
+ * position lifted out of an archived game, the rules era it was played under.
+ * Those are the two fields the three-field FEN carries and a layout string
+ * cannot, which is why a set-up board travels as this rather than as rows.
+ */
+export interface StartingBoard {
+  grid: Grid;
+  currentTurn?: PlayerColor;
+  era?: RulesEra;
+}
+
+/**
+ * The side a board is to be played from.
+ *
+ * Neutral and absent both read as the opener: a position with nobody to move is
+ * a finished game or a board nobody has said anything about, and neither is
+ * something to hand a player. One door for the question so the editor, the
+ * sessions and `createAnalysisGameFrom` cannot answer it three ways.
+ */
+export const sideToMove = (turn: PlayerColor | undefined): SideColor =>
+  turn === 'Red' || turn === 'Blue' ? turn : FIRST_TO_MOVE;
+
+/**
+ * A game on `start`'s board, or on the mode's own opening when there is none.
+ *
+ * The one place "no board given means the usual one" is decided, so the bot
+ * session and the local session cannot drift on what an absent start means.
+ */
+export const createAnalysisGameOn = (
+  mode: ModeDefinition,
+  start?: StartingBoard | null,
+): AnalysisGame =>
+  start
+    ? createAnalysisGameFrom(mode, start.grid, start.currentTurn, start.era)
+    : createAnalysisGame(mode);
 
 /**
  * The squares one piece could step to, whoever's turn it is.
@@ -365,10 +444,13 @@ export const applyAnalysisMove = (
   ) {
     decide(mover, 'annihilation');
   } else if (
-    goalOwnerAt(game.mode.id, to.x, to.y, {
-      columns: boardWidth(grid),
-      rows: boardHeight(grid),
-    }) === mover
+    goalOwnerAt(
+      game.mode.id,
+      to.x,
+      to.y,
+      { columns: boardWidth(grid), rows: boardHeight(grid) },
+      game.era,
+    ) === mover
   ) {
     // Non-null whenever `goalOwnerAt` named a side: both come from the same
     // pair of modes in `./goals`.

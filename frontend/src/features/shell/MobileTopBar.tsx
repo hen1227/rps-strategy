@@ -3,7 +3,7 @@ import { Image, StyleSheet, Text, View } from 'react-native';
 import { liveHeadline } from '@/features/live/liveSelectors';
 import { useLiveSnapshot } from '@/features/live/useLiveSnapshot';
 import { useGameStore } from '@/store/gameStore';
-import { colors, space, type } from '@/theme';
+import { colors, space, themedSheet, type } from '@/theme';
 
 // The phone's header.
 //
@@ -34,12 +34,12 @@ export default function MobileTopBar() {
     <View style={styles.bar}>
       <View style={styles.brand}>
         <Image
-          source={require('../../../assets/pieces/blue_rock.png')}
+          source={require('../../../assets/pieces/classic/blue_rock.png')}
           style={styles.brandIcon}
           resizeMode="contain"
           accessibilityLabel="Blue rock"
         />
-        {/* <Text style={styles.brandName}>Stoneplay</Text> */}
+         <Text style={styles.brandName}>RPS Strategy</Text>
       </View>
       <View style={styles.spacer} />
       <View style={styles.status}>
@@ -52,7 +52,7 @@ export default function MobileTopBar() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   bar: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -72,4 +72,4 @@ const styles = StyleSheet.create({
   dotOnline: { backgroundColor: colors.accent },
   dotOffline: { backgroundColor: colors.textFaint },
   statusText: { ...type.eyebrow, color: colors.textFaint, letterSpacing: 0.8 },
-});
+}));

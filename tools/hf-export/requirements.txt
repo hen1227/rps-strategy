@@ -1,0 +1,22 @@
+# Dependencies for the daily Hugging Face export. Install into a virtualenv on
+# the server and call that interpreter directly from the systemd unit, rather
+# than relying on whatever `python3` resolves to:
+#
+#   python3 -m venv /var/www/.../export/venv
+#   /var/www/.../export/venv/bin/pip install -r requirements.txt
+#
+# Pinned exactly, because this is the first thing in this repository with a
+# Python dependency and an unpinned upgrade would land at 4am unattended, on an
+# ARM board, in a job that publishes irreversibly.
+#
+# Both of these ship aarch64 wheels, which is the thing to re-check when
+# bumping them -- a source build of pyarrow on an Orange Pi is not something to
+# discover during a deploy. hf-xet is optional: it makes uploads chunk and
+# deduplicate, and if no wheel is available for the board, drop it and set
+# HF_HUB_DISABLE_XET=1 to fall back to plain HTTP.
+#
+# Nothing else is needed. The PGN sidecar is written with the standard
+# library's gzip rather than zstd precisely to keep this list at two lines.
+
+huggingface_hub==1.31.0
+pyarrow==25.0.1

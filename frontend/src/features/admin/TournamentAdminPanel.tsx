@@ -23,7 +23,7 @@ import {
   type TournamentConfig,
 } from '@/store/api/tournaments';
 import { statusOf } from '@/store/tournamentSelectors';
-import { colors, radius, space, type } from '@/theme';
+import { colors, radius, space, themedSheet, type } from '@/theme';
 import type { Tournament } from '@/types/protocol';
 import {
   Badge,
@@ -522,7 +522,7 @@ export default function TournamentAdminPanel({ admin }: TournamentAdminPanelProp
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   headerActions: { flexDirection: 'row', alignItems: 'center', gap: space.snug },
   locked: {
     ...type.meta,
@@ -533,4 +533,4 @@ const styles = StyleSheet.create({
   // The three verbs in the note below the list, so a host scanning it can find
   // the one they mean without reading the paragraph.
   term: { color: colors.textSubtle, fontWeight: '800' },
-});
+}));

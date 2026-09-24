@@ -46,7 +46,7 @@ type AccountSummary struct {
 	// summary the combined leaderboard publishes and for the same reason:
 	// ranked play moves `account_mode_ratings`, and `accounts.elo` is only the
 	// seed a new mode starts from, so a list built on that column would show
-	// every account — engines included — at DefaultElo for ever.
+	// every account — engines included — at RatingFloor for ever.
 	Elo         int   `json:"elo"`
 	GamesPlayed int   `json:"gamesPlayed"`
 	BotCount    int   `json:"botCount"`
@@ -409,6 +409,16 @@ SELECT (SELECT COUNT(*) FROM game_history WHERE red_player_id = ?1 OR blue_playe
      + (SELECT COUNT(*) FROM tournament_players WHERE user_id = ?1)
 `, userID).Scan(&appearances); err != nil {
 		return 0, fmt.Errorf("anonymize account: count appearances: %w", err)
+	}
+
+	// The board, either way. Feedback is not an "appearance" in the sense
+	// counted above — nobody's rating hangs off a bug report — but a post is
+	// still a thing with somebody's name on it, and an account that leaves
+	// should not leave that behind. Done before the branch because both
+	// branches need it: the delete below would otherwise strand the posts
+	// behind an id that no longer resolves.
+	if err := AnonymizeFeedbackAuthorshipTx(ctx, transaction, userID, anonymousName); err != nil {
+		return 0, err
 	}
 
 	if appearances == 0 {

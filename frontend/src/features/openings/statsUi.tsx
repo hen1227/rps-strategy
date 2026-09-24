@@ -8,7 +8,7 @@
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { formatShare, hasEnoughGames, openingScoreline } from '@/engine/openingStats';
-import { colors, players, radius, space } from '@/theme';
+import { colors, players, radius, space, themedSheet } from '@/theme';
 
 import { ui } from './openingsUi';
 
@@ -107,7 +107,7 @@ export function ShareRow({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   row: { gap: 3 },
   heading: { alignItems: 'baseline', flexDirection: 'row', gap: space.small },
   // `minWidth: 0` is what lets a long line wrap rather than push the counts off
@@ -134,6 +134,6 @@ const styles = StyleSheet.create({
   drawSegment: { backgroundColor: colors.textFaint },
   blueSegment: { backgroundColor: players.Blue.strong },
   results: { color: colors.textFaint, fontSize: 10, fontVariant: ['tabular-nums'] },
-});
+}));
 
 export default ShareRow;

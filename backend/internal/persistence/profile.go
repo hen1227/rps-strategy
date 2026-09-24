@@ -47,8 +47,17 @@ type PublicProfile struct {
 	// Kind is "human" or "bot". Engines get profiles too — they are accounts
 	// with ratings and histories, and a bot's page is the natural place for its
 	// author's description of it.
-	Kind             string                     `json:"kind"`
+	Kind string `json:"kind"`
+	// Elo is the strongest mode this account has been measured in, and RatingState
+	// is whether that number is a measurement at all. Both come from
+	// profileRating, which is where the choice between modes is explained.
+	//
+	// The state is not decoration: on a board with no yardstick designated
+	// nothing is placed, so every engine's figure is a placeholder, and a page
+	// that printed it bare would be making a claim the ladder beside it
+	// withdraws. See RatingState.
 	Elo              int                        `json:"elo"`
+	RatingState      RatingState                `json:"ratingState"`
 	Wins             int                        `json:"wins"`
 	Losses           int                        `json:"losses"`
 	Draws            int                        `json:"draws"`
@@ -65,6 +74,19 @@ type PublicProfile struct {
 	// Bots is the engines this account owns, for a profile that belongs to
 	// somebody who writes them. Retired ones are left out.
 	Bots []ProfileBot `json:"bots,omitempty"`
+	// EngineVersions is the builds this engine has been seen running, newest
+	// first, and like Reigns is only ever set on a bot's page. Empty for an
+	// engine that declares no build, which is most of them.
+	EngineVersions []BotEngineVersion `json:"engineVersions,omitempty"`
+	// Reigns is every spell this engine has spent top of a mode, newest first,
+	// and is only ever set on a bot's page. Empty for an engine that has never
+	// led — which is most of them, and is not an error.
+	//
+	// The whole history rather than just the current one, because the question
+	// it was built for is how dominant an engine has been, and one engine that
+	// has led three times for a week each is a different answer from one that
+	// has led once for three weeks. See bot_reigns.go.
+	Reigns []BotReign `json:"reigns,omitempty"`
 }
 
 // ProfileTournament is one event on somebody's page.
@@ -88,9 +110,14 @@ type ProfileBot struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
 	IconSHA256  string `json:"iconSha256,omitempty"`
-	Elo         int    `json:"elo"`
-	Username    string `json:"username"`
-	UserID      string `json:"userId"`
+	// Elo and RatingState are the engine's own, read the same way its page reads
+	// them — see profileRating. An owner's list of engines is a column of
+	// ratings, which is the shape that most needs to distinguish a low one from
+	// an absent one.
+	Elo         int         `json:"elo"`
+	RatingState RatingState `json:"ratingState"`
+	Username    string      `json:"username"`
+	UserID      string      `json:"userId"`
 }
 
 // ProfileSummary is one row of the player directory.
@@ -113,6 +140,57 @@ type ProfileSummary struct {
 // Discord — which from the outside are the same thing, and are answered the
 // same way. See PublicProfile's note about who gets a page.
 var ErrProfileNotFound = errors.New("no such player")
+
+// profileRating is the single number a page headlines, chosen the way the
+// combined leaderboard chooses the row it lists: the best *measured* mode, and
+// only then the best number.
+//
+// Two rules, and this used to get both wrong by being one line of `if
+// rating.Elo > profile.Elo`.
+//
+// **`accounts.elo` is a fallback, not a floor.** It is the seed a mode with no
+// row of its own inherits, and every other rollup on the site treats it as the
+// answer only when there is no mode row at all — `COALESCE(MAX(r.elo), a.elo)`
+// in SearchAccounts, in PublicProfiles and in botSelect. Seeding a maximum with
+// it instead is a different query, and the difference is exactly an account
+// whose measured ratings are *below* its seed. That is not a corner case: the
+// old scale seeded every account at 1200, restateSeededRatings resets it to
+// RatingFloor for people and deliberately leaves engines alone because nothing
+// was supposed to read it — so every engine that predates the rebuild carries
+// 1200, which on this scale is RatingCeiling. Those pages headlined the top of
+// the printable scale while the ladder they were reached from showed what the
+// engine had actually been measured at.
+//
+// **An unrated number does not represent an account.** RatingState exists to
+// say that a published figure is a placeholder rather than a measurement, and
+// the board sorts on it for this reason; a profile taking the plain maximum
+// would headline the one number the board declined to rank.
+func profileRating(account Account) (int, RatingState) {
+	best, bestState, found := 0, RatingStateUnrated, false
+	for _, rating := range account.ModeRatings {
+		ranked := rating.State.Ranked()
+		if found && !strongerRating(ranked, rating.Elo, bestState.Ranked(), best) {
+			continue
+		}
+		best, bestState, found = rating.Elo, rating.State, true
+	}
+	if !found {
+		// The seed, and unrated by construction: an account with no mode row has
+		// never been measured in anything, so the number beside it is the
+		// starting point rather than a result.
+		return account.Elo, RatingStateUnrated
+	}
+	return best, bestState
+}
+
+// strongerRating is the leaderboard's `ranked DESC, elo DESC` as a comparison,
+// so the two orders cannot drift apart.
+func strongerRating(ranked bool, elo int, againstRanked bool, against int) bool {
+	if ranked != againstRanked {
+		return ranked
+	}
+	return elo > against
+}
 
 // PublicProfile reads one player's page by username or by user id.
 //
@@ -170,7 +248,6 @@ WHERE username_lower = ? OR user_id = ?
 		Discord:        account.Discord,
 		Titles:         account.Titles,
 		Kind:           account.Kind,
-		Elo:            account.Elo,
 		Wins:           account.Wins,
 		Losses:         account.Losses,
 		Draws:          account.Draws,
@@ -178,15 +255,7 @@ WHERE username_lower = ? OR user_id = ?
 		ModeRatings:    account.ModeRatings,
 		JoinedAtUnixMs: account.CreatedAtUnixMs,
 	}
-	// The strongest mode rating, matching what the ladder and the admin browser
-	// show. `accounts.elo` is only the seed a new mode starts from — see
-	// AccountSummary.Elo — so publishing it as "rating" would show every active
-	// player at the default.
-	for _, rating := range account.ModeRatings {
-		if rating.Elo > profile.Elo {
-			profile.Elo = rating.Elo
-		}
-	}
+	profile.Elo, profile.RatingState = profileRating(account)
 
 	games, err := store.GameHistory(ctx, userID, historyLimit, 0)
 	if err != nil {
@@ -214,6 +283,27 @@ WHERE username_lower = ? OR user_id = ?
 			return PublicProfile{}, err
 		}
 		profile.Bots = bots
+	} else {
+		reigns, err := store.BotReigns(ctx, userID)
+		if err != nil {
+			return PublicProfile{}, err
+		}
+		profile.Reigns = reigns
+
+		// The build history hangs off the registry row rather than the account,
+		// so an engine whose registry row has gone simply has no history to
+		// show. That is not an error: the account, its rating and its games are
+		// the page, and the builds are a detail of it.
+		bot, err := store.BotForAccount(ctx, userID)
+		if err == nil {
+			versions, err := store.BotEngineVersions(ctx, bot.BotID)
+			if err != nil {
+				return PublicProfile{}, err
+			}
+			profile.EngineVersions = versions
+		} else if !errors.Is(err, ErrBotNotFound) {
+			return PublicProfile{}, err
+		}
 	}
 	return profile, nil
 }
@@ -335,18 +425,19 @@ func (store *Store) profileBots(ctx context.Context, userID string) ([]ProfileBo
 		if bot.UserID != "" {
 			if account, err := store.Account(ctx, bot.UserID); err == nil {
 				entry.Username = account.Username
-				entry.Elo = account.Elo
-				for _, rating := range account.ModeRatings {
-					if rating.Elo > entry.Elo {
-						entry.Elo = rating.Elo
-					}
-				}
+				entry.Elo, entry.RatingState = profileRating(account)
 			}
 		}
 		profiles = append(profiles, entry)
 	}
+	// Strongest first, in the board's order rather than by the number alone: an
+	// engine nobody has been able to place does not lead its author's list
+	// because its placeholder happens to read high.
 	sort.SliceStable(profiles, func(first, second int) bool {
-		return profiles[first].Elo > profiles[second].Elo
+		return strongerRating(
+			profiles[first].RatingState.Ranked(), profiles[first].Elo,
+			profiles[second].RatingState.Ranked(), profiles[second].Elo,
+		)
 	})
 	return profiles, nil
 }

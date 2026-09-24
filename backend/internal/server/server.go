@@ -22,6 +22,7 @@ import (
 	"github.com/gorilla/websocket"
 	"rps-strategy/backend/internal/game"
 	"rps-strategy/backend/internal/persistence"
+	"rps-strategy/backend/internal/textfilter"
 )
 
 type GameSession struct {
@@ -46,10 +47,22 @@ type GameSession struct {
 	// cannot change hands mid-game. See botReconnectGracePeriod.
 	redIsEngine  bool
 	blueIsEngine bool
-	startedAt    time.Time
-	ranked       bool
-	tournament   *tournamentMatchRef
-	botMatch     *botMatchRef
+	// redEngineVersion and blueEngineVersion are the builds each engine
+	// declared, for the record this game is archived as. Empty for a human
+	// seat and for an engine that declares none.
+	//
+	// Snapshotted here for the reason given just above about redIsEngine, and
+	// it bites harder for this one: a game most often ends *because* an engine
+	// went away, so reading the build off the connection at archive time would
+	// lose it in precisely the games somebody would want it for. It also has
+	// to be the build that played — an owner who restarts onto a new binary
+	// mid-game has not retroactively played the earlier moves with it.
+	redEngineVersion  string
+	blueEngineVersion string
+	startedAt         time.Time
+	ranked            bool
+	tournament        *tournamentMatchRef
+	botMatch          *botMatchRef
 	// bookPlies and openingSeed describe the dealt opening a series game
 	// started from, so the archive can mark which moves nobody chose.
 	bookPlies   int
@@ -174,6 +187,11 @@ type Server struct {
 	// set it so proving the rule does not cost fifteen seconds of wall clock.
 	// Read through seriesAwayGrace.
 	seriesAwayOverride time.Duration
+	// movePaceOverride overrides the interval an engine's moves are spaced by.
+	// Zero means the default; tests set it small, because a stub engine answers
+	// in microseconds and a paced game of it would otherwise take a minute of
+	// wall clock. Read through botMovePace.
+	movePaceOverride time.Duration
 	// update is the graceful restart, if one is under way: no new games, and
 	// the process exits when the last one on the board finishes. See
 	// deploy_drain.go. Its own lock rather than mu, because every path that
@@ -187,13 +205,31 @@ type Server struct {
 	// above, because the gates that consult it are called from inside mu. See
 	// moderation.go.
 	restrictions moderationBoard
+	// blocks is every player's own block list, held in memory for the same
+	// reason and with the same lock discipline as the sanctions above: chat
+	// delivery asks about it once per listener per message. See blocks.go.
+	blocks blockBoard
 	// reservations is which engines are being held for a tournament they have
 	// entered, for the same reason and with the same locking. See
 	// bot_reserve.go.
 	reservations reservationBoard
+	// benches is the schedule of windows in which no engine takes a new game,
+	// held in memory for the same reason and with the same lock discipline as
+	// the three above: every path that could open a game asks about it. See
+	// bot_bench.go.
+	benches benchBoard
 	// weekend is the recurring bot event's scheduler state: when it last looked
 	// at the clock, and which matches it is waiting on. See weekend.go.
 	weekend *weekendState
+	// botTitles is when the engine-title sweep last ran. See bot_titles.go.
+	botTitles *botTitleState
+
+	// ladder is when the bot ladder is next recomputed. See ladder_refit.go.
+	ladder *ladderRefitState
+
+	// ladderPool is when the next round of ranked engine games is seated. See
+	// ladder_pool.go.
+	ladderPool *ladderPoolState
 }
 
 // botSession is what the server knows about a bot game: who is playing one,
@@ -255,6 +291,9 @@ func NewWithRegistryAndStore(
 		tournamentGames: make(map[tournamentMatchKey]*GameSession),
 		tournamentChats: make(map[string]*chatRoom),
 		weekend:         newWeekendState(),
+		botTitles:       &botTitleState{},
+		ladder:          newLadderRefitState(),
+		ladderPool:      &ladderPoolState{},
 
 		botSessions:        make(map[*Client]botSession),
 		bots:               make(map[string][]*Client),
@@ -286,6 +325,14 @@ func NewWithRegistryAndStore(
 	// Read once, here, for the reason moderation.go explains at length: the
 	// paths that ask about a sanction are the hottest paths in the server.
 	server.loadRestrictions(context.Background())
+	// Beside it, and for the same reason: chat delivery consults the block
+	// lists on every message. See blocks.go.
+	server.loadBlocks(context.Background())
+	// And once more, for the paths that open games rather than the ones that
+	// carry chat. This one also applies whatever windows the binary ships with,
+	// so a bench known at build time is live the moment the build is. See
+	// bot_bench.go.
+	server.loadBotBenches(context.Background())
 	return server
 }
 
@@ -323,6 +370,25 @@ func (server *Server) Run(ctx context.Context) {
 			// minute; the rest of the time it is one config read. See weekend.go.
 			server.runWeekend(now)
 			server.settleWeekendForfeits(now)
+			// After the arena, so a weekend that has just been settled is the
+			// picture the crowns are worked out from. Guarded to do real work
+			// once a quarter of an hour. See bot_titles.go.
+			server.runBotTitles(now)
+			// After runBotTitles rather than before: the crowns are read off the
+			// ladder, so a sweep that refitted first would award them from numbers
+			// nobody has published yet and then publish those numbers a tick later.
+			server.runLadderRefits(now)
+			// And after the refit, so that a round pairs on the ratings the last
+			// round produced rather than on the ones before it. An hour apart in
+			// practice, but the ordering is what makes a restart's first round
+			// correct.
+			server.runLadderRound(now)
+			// And the pairings that round could not start, which is most ticks'
+			// share of the pool: an engine that was mid-game at the hour has its
+			// pairing held, and this is what gets it going the moment the board
+			// clears. After runLadderRound, so a round seated this very tick has
+			// its own held list to work from rather than last hour's.
+			server.resumeHeldPairings(ctx)
 			server.settleUpdateDrain()
 			server.authLimiter.sweep()
 			server.seriesLimiter.sweep()
@@ -362,6 +428,9 @@ func (server *Server) Routes() http.Handler {
 	})
 	mux.HandleFunc("GET /api/accounts/{userID}", server.getAccount)
 	mux.HandleFunc("PATCH /api/accounts/{userID}", server.updateAccount)
+	// Deleting your own account, which is the player's own way to the operation
+	// the admin route below has always offered. See account_delete.go.
+	mux.HandleFunc("DELETE /api/accounts/{userID}", server.deleteOwnAccount)
 	mux.HandleFunc("GET /api/accounts/{userID}/games", server.getGameHistory)
 	mux.HandleFunc("GET /api/accounts/{userID}/games/pgn", server.getAccountGamePGNs)
 	mux.HandleFunc("GET /api/games/{gameID}/pgn", server.getGamePGN)
@@ -379,6 +448,7 @@ func (server *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/players/{handle}/games", server.getPlayerGames)
 	mux.HandleFunc("GET /api/titles", server.getTitles)
 	mux.HandleFunc("PUT /api/accounts/{userID}/title", server.setAccountTitle)
+	mux.HandleFunc("PUT /api/accounts/{userID}/appearance", server.setAccountAppearance)
 	mux.HandleFunc("GET /api/tournaments", server.getTournaments)
 	mux.HandleFunc("GET /api/tournaments/{tournamentID}", server.getTournament)
 	mux.HandleFunc(
@@ -401,6 +471,46 @@ func (server *Server) Routes() http.Handler {
 	mux.HandleFunc("PUT /api/admin/weekend", server.adminOnly(server.saveWeekendConfig))
 	mux.HandleFunc("POST /api/admin/weekend/open", server.adminOnly(server.runWeekendNow))
 	mux.HandleFunc("GET /api/identity/policy", server.identityPolicy)
+	// One player's own preferences about another, and the path to the host when
+	// a preference is not enough. See blocks.go and reports.go.
+	mux.HandleFunc("GET /api/blocks", server.listBlocks)
+	mux.HandleFunc("POST /api/blocks", server.blockPlayer)
+	mux.HandleFunc("DELETE /api/blocks/{userID}", server.unblockPlayer)
+	mux.HandleFunc("GET /api/reports/categories", server.reportCategories)
+	mux.HandleFunc("POST /api/reports", server.fileReport)
+	// The feedback board. Reading is open to anybody, including a visitor with
+	// no account at all; writing takes a Discord-verified one. See
+	// feedback.go for why the two ends are set so far apart.
+	mux.HandleFunc("GET /api/feedback", server.getFeedback)
+	mux.HandleFunc("GET /api/feedback/policy", server.feedbackPolicy)
+	// Before the single-item route, because `policy` would otherwise be read as
+	// an item id. Go's mux prefers the more specific pattern, so the order here
+	// is for the reader rather than for the router.
+	mux.HandleFunc("GET /api/feedback/{itemID}", server.getFeedbackItem)
+	mux.HandleFunc("POST /api/feedback", server.postFeedback)
+	mux.HandleFunc("DELETE /api/feedback/{itemID}", server.deleteFeedbackItem)
+	mux.HandleFunc("POST /api/feedback/{itemID}/votes", server.voteOnFeedback)
+	mux.HandleFunc("DELETE /api/feedback/{itemID}/votes", server.dropVoteOnFeedback)
+	mux.HandleFunc("POST /api/feedback/{itemID}/comments", server.commentOnFeedback)
+	// A reply is addressed under the item it is on rather than beside it.
+	// Both because that is what it is, and because `/api/feedback/comments/x`
+	// and `/api/feedback/{itemID}/votes` are patterns the router cannot tell
+	// apart — they both match `/api/feedback/comments/votes`.
+	mux.HandleFunc(
+		"DELETE /api/feedback/{itemID}/comments/{commentID}",
+		server.deleteFeedbackComment,
+	)
+	// The host's pass, under /api/admin like every other route only the host
+	// may call, so the admin surface is one prefix rather than a flag sprinkled
+	// through the public one.
+	mux.HandleFunc(
+		"PATCH /api/admin/feedback/{itemID}",
+		server.adminOnly(server.updateFeedbackItem),
+	)
+	mux.HandleFunc(
+		"PATCH /api/admin/feedback/{itemID}/comments/{commentID}",
+		server.adminOnly(server.hideFeedbackComment),
+	)
 	mux.HandleFunc("GET /api/push/key", server.getPushKey)
 	mux.HandleFunc("POST /api/push/subscriptions", server.subscribeToPush)
 	mux.HandleFunc("DELETE /api/push/subscriptions", server.unsubscribeFromPush)
@@ -426,6 +536,9 @@ func (server *Server) Routes() http.Handler {
 	mux.HandleFunc("DELETE /api/bots/{botID}", server.deleteBot)
 	mux.HandleFunc("POST /api/bots/{botID}/shutdown", server.shutdownBot)
 	mux.HandleFunc("DELETE /api/bots/{botID}/shutdown", server.resumeBot)
+	// The hourly round, seated now. Owner-only, and the one other place besides
+	// the pairer that may set the ladder flag; see ladder_match.go.
+	mux.HandleFunc("POST /api/bots/{botID}/ranked-match", server.startLadderMatch)
 	// Answers to a bot id or to a bot's account id, so every list that shows a
 	// bot can build this URL from whichever of the two it already carries.
 	mux.HandleFunc("GET /api/bots/{botID}/icon.png", server.getBotIcon)
@@ -438,6 +551,10 @@ func (server *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/bot-series", server.getBotSeriesList)
 	mux.HandleFunc("GET /api/bot-series/{seriesID}", server.getBotSeries)
 	mux.HandleFunc("GET /api/bot-matches", server.getBotMatches)
+	mux.HandleFunc("GET /api/ladder-pool", server.getLadderPool)
+	// The same pool with the field named rather than counted, and the last
+	// round's results. One read for the page; see ladder_round_routes.go.
+	mux.HandleFunc("GET /api/ladder-rounds", server.getLadderRounds)
 	// Public, with the ceilings in bot_series.go. The administrative pair below
 	// is the same call without them.
 	mux.HandleFunc("POST /api/bot-series", server.startBotSeries)
@@ -451,6 +568,8 @@ func (server *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/bot/guide", server.getBotGuide)
 	mux.HandleFunc("GET /api/bot/rpsbot.py", server.getBotClientScript)
 	mux.HandleFunc("GET /api/bot/example_engine.py", server.getExampleEngine)
+	mux.HandleFunc("GET /api/bot/yardstick_random.py", server.getYardstickEngine)
+	mux.HandleFunc("GET /api/bot/yardstick_greedy.py", server.getGreedyEngine)
 
 	mux.HandleFunc("GET /api/admin/session", server.adminOnly(server.getAdminSession))
 	// The graceful restart: stop taking games, wait out the ones being played,
@@ -461,6 +580,17 @@ func (server *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/admin/drain", server.adminOnly(server.getUpdateDrain))
 	mux.HandleFunc("POST /api/admin/notice", server.adminOnly(server.postNotice))
 	mux.HandleFunc("DELETE /api/admin/notice", server.adminOnly(server.clearNotice))
+	// The scheduled bench: every engine stood down for a window, because
+	// something is happening elsewhere that a practice ladder would spoil. Next
+	// to the drain and the notice rather than with the per-engine routes, for
+	// the same reason those two are here — it is about the server rather than
+	// about any one row in it. See admin_bench.go.
+	mux.HandleFunc("GET /api/admin/bot-bench", server.adminOnly(server.listBenchWindows))
+	mux.HandleFunc("POST /api/admin/bot-bench", server.adminOnly(server.addBenchWindow))
+	mux.HandleFunc(
+		"DELETE /api/admin/bot-bench/{windowID}",
+		server.adminOnly(server.deleteBenchWindow),
+	)
 	mux.HandleFunc("GET /api/openings/{modeID}", server.getOpeningBook)
 	// One position, resolved from `?line=d9-c8,d2-c3`. The book is a graph the
 	// server owns; a visitor walks it a layer at a time rather than downloading
@@ -546,6 +676,12 @@ func (server *Server) Routes() http.Handler {
 	)
 	mux.HandleFunc("DELETE /api/admin/bots/{botID}", server.adminOnly(server.deleteAdminBot))
 	mux.HandleFunc(
+		"PUT /api/admin/bots/{botID}/reference", server.adminOnly(server.setBotReference),
+	)
+	mux.HandleFunc(
+		"GET /api/admin/benchmarks", server.adminOnly(server.getBenchmarkDrift),
+	)
+	mux.HandleFunc(
 		"GET /api/admin/accounts/{userID}/restrictions",
 		server.adminOnly(server.listAccountRestrictions),
 	)
@@ -556,6 +692,13 @@ func (server *Server) Routes() http.Handler {
 	mux.HandleFunc(
 		"DELETE /api/admin/accounts/{userID}/restrictions/{kind}",
 		server.adminOnly(server.liftAccountRestriction),
+	)
+	// The report queue, which is where the sanctions above are usually decided
+	// from. See reports.go.
+	mux.HandleFunc("GET /api/admin/reports", server.adminOnly(server.listReports))
+	mux.HandleFunc(
+		"PATCH /api/admin/reports/{reportID}",
+		server.adminOnly(server.resolveReport),
 	)
 	mux.HandleFunc("GET /api/admin/analytics", server.adminOnly(server.getAdminAnalytics))
 	mux.HandleFunc("GET /api/admin/live-games", server.adminOnly(server.listAdminLiveGames))
@@ -812,7 +955,7 @@ func (server *Server) handleWebSocket(writer http.ResponseWriter, request *http.
 	// The same reasoning one more time: somebody arriving in the middle of a
 	// scheduled bench needs to be told why the whole bot ladder is unavailable,
 	// and somebody arriving an hour before one needs to be told it is coming.
-	botBench := botBenchState(time.Now())
+	botBench := server.botBenchState(time.Now())
 	client.Send(ServerMessage{
 		Type:               "connection_ready",
 		Update:             &updateState,
@@ -836,6 +979,10 @@ func (server *Server) handleWebSocket(writer http.ResponseWriter, request *http.
 		PushEnabled:        server.push.enabled(),
 		PushTransports:     &transports,
 		Restrictions:       server.activeRestrictions(account.UserID),
+		// Who this connection is hiding. Sent with the handshake for the same
+		// reason the sanctions above are: the client needs it before the first
+		// message arrives, not after it has already painted one.
+		BlockedUserIDs: server.blockedUserIDs(account.UserID),
 	})
 	go client.writePump()
 	client.readPump()
@@ -977,7 +1124,7 @@ func (server *Server) spectateGame(client *Client, gameID string) {
 		// twenty has seen none of them, and they are the reader this exists
 		// for. See ServerMessage.PGN.
 		PGN:           livePGN(session),
-		ChatMessages:  history,
+		ChatMessages:  server.visibleChat(client, history),
 		ChatRoomID:    session.chat.id,
 		ChatRoomScope: session.chat.scope,
 		ChatOccupancy: session.chat.occupancy(),
@@ -1138,6 +1285,18 @@ func (server *Server) sendChat(client *Client, text string) {
 		})
 		return
 	}
+	// Refused before it is anybody's message. The refusal deliberately does not
+	// quote the word back — see textfilter.Match.Term — and deliberately does
+	// not pretend the message was sent, which is what a shadow-drop would do
+	// and is how somebody ends up talking to a room that cannot hear them.
+	if match, found := textfilter.Check(text); found {
+		log.Printf("chat refused for %s: matched %q", client.profile.UserID, match.Term)
+		client.Send(ServerMessage{
+			Type:    "chat_rejected",
+			Message: "that message contains language this server does not carry",
+		})
+		return
+	}
 	messageID, err := randomID()
 	if err != nil {
 		client.Send(ServerMessage{Type: "chat_rejected", Message: "could not send chat message"})
@@ -1176,6 +1335,12 @@ func (server *Server) sendChat(client *Client, text string) {
 
 	broadcast := ServerMessage{Type: "chat_message", ChatMessage: &chatMessage}
 	for _, listener := range listeners {
+		// Neither side of a block hears the other. Asked per listener rather
+		// than filtered out of the room, because the room is shared and the
+		// preference is not: everybody else in it sees the message normally.
+		if server.blockedBetween(listener.profile.UserID, chatMessage.SenderUserID) {
+			continue
+		}
 		listener.Send(broadcast)
 	}
 }
@@ -1242,7 +1407,7 @@ func (server *Server) rejoinGame(client *Client, gameID string) {
 					Color:         color,
 					GameState:     &state,
 					PGN:           livePGN(room),
-					ChatMessages:  history,
+					ChatMessages:  server.visibleChat(client, history),
 					ChatRoomID:    roomID,
 					ChatRoomScope: roomScope,
 					ChatOccupancy: occupancy,
@@ -1299,7 +1464,7 @@ func (server *Server) rejoinGame(client *Client, gameID string) {
 			Color:         playerColor,
 			GameState:     &rejoinState,
 			PGN:           livePGN(session),
-			ChatMessages:  chatHistory,
+			ChatMessages:  server.visibleChat(client, chatHistory),
 			ChatRoomID:    chatRoomID,
 			ChatRoomScope: chatRoomScope,
 			ChatOccupancy: session.chat.occupancy(),
@@ -1348,7 +1513,7 @@ func (server *Server) rejoinGame(client *Client, gameID string) {
 			// The game so far, so a player who reloaded mid-match gets their
 			// move list back rather than a board with no history behind it.
 			PGN:                     livePGN(session),
-			ChatMessages:            chatHistory,
+			ChatMessages:            server.visibleChat(client, chatHistory),
 			ChatRoomID:              chatRoomID,
 			ChatRoomScope:           chatRoomScope,
 			ChatOccupancy:           rejoinedRoom.occupancy(),
@@ -1665,6 +1830,8 @@ func (server *Server) startConfiguredMatch(
 		blueDisconnectedAt: blueAbsentSince,
 		redIsEngine:        first.Client.isBot(),
 		blueIsEngine:       second.Client.isBot(),
+		redEngineVersion:   first.Client.engineVersion(),
+		blueEngineVersion:  second.Client.engineVersion(),
 		redElo:             first.Elo,
 		blueElo:            second.Elo,
 		spectators:         make(map[*Client]struct{}),
@@ -1707,7 +1874,7 @@ func (server *Server) startConfiguredMatch(
 			// move, so the first board a spectator or an owner sees can
 			// already have moves behind it.
 			PGN:                     livePGN(session),
-			ChatMessages:            chatHistory,
+			ChatMessages:            server.visibleChat(seat.client, chatHistory),
 			ChatRoomID:              room.id,
 			ChatRoomScope:           room.scope,
 			ChatOccupancy:           roomOccupancy,
@@ -2378,12 +2545,15 @@ func (server *Server) finishSession(session *GameSession, state game.GameState) 
 		}
 		if err == nil {
 			server.updateSessionAccounts(session, ratingUpdate)
-			// A ranked game between two engines refits the whole mode's ladder,
-			// so every other engine on the roster is now publishing a rating
-			// from before it.
+			// A ranked game between two engines changes the whole mode's
+			// ladder, not just these two seats, so every engine on the roster
+			// is now publishing a rating from before it. The fit itself is not
+			// done here — it is a matrix inverse on a one-connection database
+			// and this is the path every finished game goes down — so this only
+			// asks for one. See ladder_refit.go.
 			if ratingUpdate.Ranked &&
 				session.redClient.isBot() && session.blueClient.isBot() {
-				server.republishBotLadder(context.Background(), ratingUpdate.ModeID)
+				server.requestLadderRefit(ratingUpdate.ModeID)
 			}
 		}
 		// Archived after the rating transaction so the stored game can name
@@ -2475,7 +2645,7 @@ func (server *Server) republishBotLadder(ctx context.Context, modes ...game.Mode
 				if !found {
 					// A bot with no rating row in this mode has never finished
 					// a ranked game in it, so there is nothing to correct.
-					// Writing DefaultElo here would invent a mode rating the
+					// Writing RatingFloor here would invent a mode rating the
 					// database does not have, and ModeElo already answers for a
 					// mode with none.
 					continue
@@ -2525,6 +2695,18 @@ func originChecker(allowed []string) func(*http.Request) bool {
 		parsed, err := url.Parse(origin)
 		if err != nil {
 			return false
+		}
+		// This server's own host, which is what a native client announces:
+		// React Native derives the Origin header from the socket URL and gives
+		// the app no way to override it, so an iOS build opening
+		// wss://api-rps.../ws sends https://api-rps... and nothing else. Safe
+		// for the reason it is gorilla's own default: a browser sends this
+		// Origin only for a page the API host served itself, and the API host
+		// serves no pages. request.Host is the client's own Host header --
+		// nginx forwards it as $host (backend/deploy/nginx-api-rps.conf) rather
+		// the socket it proxies to.
+		if strings.EqualFold(parsed.Host, request.Host) {
+			return true
 		}
 		hostname := parsed.Hostname()
 		if hostname == "localhost" {

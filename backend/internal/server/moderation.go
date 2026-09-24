@@ -20,7 +20,7 @@ import (
 //
 //	mute        → sendChat, postSeek
 //	ranked      → rankedAllowed
-//	tournament  → signupForTournament, registerBotForTournament, enrollBots
+//	tournament  → signupForTournament, enrolOnlineBots
 //
 // # Why they are cached in memory
 //
@@ -152,7 +152,18 @@ func (server *Server) uncacheRestriction(userID string, kind persistence.Restric
 // one of them ends up not being enforced. See the note on
 // persistence.RestrictMute.
 func (server *Server) muteRefusal(client *Client, what string) string {
-	restriction := server.restrictionOn(client.profile.UserID, persistence.RestrictMute)
+	return server.mutedRefusal(client.profile.UserID, what)
+}
+
+// mutedRefusal is the same answer for a caller that arrived over HTTP rather
+// than down a socket.
+//
+// The feedback board is the third thing a mute covers, and it reaches this by
+// account id because a REST request has no Client behind it. One function for
+// all three, for the reason above: a sanction with two implementations is one
+// that eventually means two different things.
+func (server *Server) mutedRefusal(userID string, what string) string {
+	restriction := server.restrictionOn(userID, persistence.RestrictMute)
 	if restriction == nil {
 		return ""
 	}

@@ -11,7 +11,8 @@ import {
 } from 'react-native';
 
 import TournamentMatchRow from './TournamentMatchRow';
-import TournamentRegisterForm from './TournamentRegisterForm';
+import TournamentRegisterForm, { hasEntryPanel } from './TournamentRegisterForm';
+import PlayerLink from '@/ui/PlayerLink';
 import ScreenShell from '@/ui/ScreenShell';
 import {
   Badge,
@@ -37,6 +38,7 @@ import { useMyBots } from '@/hooks/useMyBots';
 import {
   championOf,
   currentTournaments,
+  entrantHandle,
   entryFor,
   matchesOf,
   pastTournaments,
@@ -49,7 +51,7 @@ import type {
   TournamentMatch,
   TournamentMatchResult,
 } from '@/types/protocol';
-import { colors, contentWidth, radius } from '@/theme';
+import { colors, contentWidth, radius, themedSheet } from '@/theme';
 
 export default function TournamentScreen() {
   const accountId = useGameStore((state) => state.accountId);
@@ -165,15 +167,14 @@ export default function TournamentScreen() {
     );
 
   // An entrant leaving of their own accord, which the server only allows while
-  // registration is open. The message names what left, because for an owner it
-  // is their engine rather than them.
+  // registration is open, and only for their own entry. An engine's place is not
+  // withdrawn — it is entered by its switch and leaves by it — so the button
+  // this runs is drawn for people only.
   const withdraw = () =>
     runAction(
       'withdraw',
       () => withdrawFromTournament(sessionToken ?? '', selected?.tournamentId ?? ''),
-      entryIsBot
-        ? `${entry?.ign} is out of the event. You can register a different bot.`
-        : 'You are out of the event.',
+      'You are out of the event.',
     );
 
   const updateResult = (match: TournamentMatch, result: TournamentMatchResult) =>
@@ -247,13 +248,7 @@ export default function TournamentScreen() {
                     <Text style={styles.unlockedText}>Admin commands unlocked</Text>
                   </View>
                   <Text style={styles.helpText}>
-                    Creating an event, and everything about how it is run — the format,
-                    who may enter, the clock, the field cap — lives on the admin screen
-                    now. An event is written down as a draft there and only appears here
-                    once it is published, so a half-finished one is never in front of
-                    anybody. What is left on this page is the match-day half: starting a
-                    published event and recording results while you watch. Entrants enter
-                    themselves, engines included — an engine is registered by its owner.
+                    Create and publish events in Admin. Start events and record results here.
                   </Text>
                   <View style={styles.adminSubmit}>
                     <GhostLink
@@ -353,17 +348,25 @@ export default function TournamentScreen() {
                     <Text style={styles.championCrown}>♛</Text>
                     <View>
                       <Text style={styles.championLabel}>TOURNAMENT WINNER</Text>
-                      <Text style={styles.championName}>{selected.standings[0].ign}</Text>
+                      <PlayerLink
+                        handle={entrantHandle(selected, selected.standings[0].playerId)}
+                        name={selected.standings[0].ign}
+                        style={styles.championName}
+                      />
                     </View>
                   </View>
                 )}
 
-                {selected.status === 'registration' && !entry && (
-                  <View style={styles.signupSection}>
-                    <SectionHeading eyebrow="ENTER THE EVENT" title="Registration" />
-                    <TournamentRegisterForm tournament={selected} />
-                  </View>
-                )}
+                {selected.status === 'registration' &&
+                  hasEntryPanel(selected, accountId, mine.bots) && (
+                    <View style={styles.signupSection}>
+                      <SectionHeading
+                        eyebrow="ENTER THE EVENT"
+                        title={selected.field === 'bots' ? 'Your engines' : 'Registration'}
+                      />
+                      <TournamentRegisterForm tournament={selected} />
+                    </View>
+                  )}
 
                 {entry ? (
                   <View style={styles.signedUpCard}>
@@ -371,14 +374,20 @@ export default function TournamentScreen() {
                     <View style={styles.signedUpCopy}>
                       <Text style={styles.signedUpTitle}>
                         {entryIsBot
-                          ? `${entry.ign} is registered`
+                          ? `${entry.ign} is in the field`
                           : `You are registered as ${entry.ign}`}
                       </Text>
                       <Text style={styles.signedUpMeta}>
-                        Seed #{entry.signupOrder} · Discord: {entry.discord}
+                        {/* No way out for an engine, because there is no way in
+                            either: the switch above is both. Saying so here is
+                            what stops an owner hunting for a button. */}
+                        {entryIsBot
+                          ? `Seed #${entry.signupOrder} · it entered on its Tournaments switch, ` +
+                            'and turning that off is how it stays out'
+                          : `Seed #${entry.signupOrder} · Discord: ${entry.discord}`}
                       </Text>
                     </View>
-                    {selected.status === 'registration' ? (
+                    {selected.status === 'registration' && !entryIsBot ? (
                       <GhostButton
                         compact
                         disabled={isBusy}
@@ -492,9 +501,17 @@ export default function TournamentScreen() {
                   {selected.standings.map((standing) => (
                     <View key={standing.playerId} style={styles.standingRow}>
                       <Text style={styles.standingRank}>{standing.rank}</Text>
-                      <Text style={styles.standingPlayer} numberOfLines={1}>
-                        {standing.ign}
-                      </Text>
+                      {/*
+                        A standings row names an account but does not carry one:
+                        it has the `playerId` of a signup, and the roster is
+                        where that meets a user. See `entrantHandle`.
+                      */}
+                      <PlayerLink
+                        handle={entrantHandle(selected, standing.playerId)}
+                        name={standing.ign}
+                        numberOfLines={1}
+                        style={styles.standingPlayer}
+                      />
                       <Text style={styles.standingStat}>{standing.played}</Text>
                       <Text style={styles.standingStat}>{standing.wins}</Text>
                       <Text style={styles.standingStat}>{standing.draws}</Text>
@@ -524,7 +541,7 @@ export default function TournamentScreen() {
                         <Text style={styles.seedNumber}>{player.signupOrder}</Text>
                         <View style={styles.rosterIdentity}>
                           <Text style={styles.rosterIGN}>
-                            {player.ign}
+                            <PlayerLink handle={player.userId} name={player.ign} />
                             {player.userId === accountId ? ' (you)' : ''}
                           </Text>
                           <Text style={styles.rosterDiscord}>{player.discord}</Text>
@@ -545,8 +562,7 @@ export default function TournamentScreen() {
                 trailing={<Badge label={`${past.length}`} />}
               />
               <Text style={styles.historyHelp}>
-                Every event that has finished. Open one for its full standings, roster, and
-                round-by-round results.
+                Past events with standings and results.
               </Text>
               <View style={styles.historyList}>
                 {past.map((tournament) => {
@@ -627,7 +643,7 @@ function ResultButton({ label, selected, disabled, onPress }: ResultButtonProps)
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   topBarActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
 
   hero: { paddingBottom: 6 },
@@ -830,4 +846,4 @@ const styles = StyleSheet.create({
 
   disabled: { opacity: 0.35 },
   pressed: { opacity: 0.7 },
-});
+}));

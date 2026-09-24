@@ -15,10 +15,12 @@ import {
   MAX_BOARD_SIDE,
   MAX_BOARD_TILES,
   MIN_BOARD_SIDE,
+  modeHasFeature,
   opposingColor,
   type GameEndReason,
   type GameStatus,
   type Grid,
+  type ModeDefinition,
   type Piece,
   type PlayablePiece,
   type PlayerColor,
@@ -366,14 +368,36 @@ const pieceSymbol = (tile: Tile) => {
 
 const TURN_SYMBOLS: Record<PlayerColor, string> = { Red: 'r', Blue: 'b', Neutral: '-' };
 
-export const encodePosition = (grid: Grid, currentTurn: PlayerColor) =>
-  [
-    encodeRows(grid, pieceSymbol),
-    TURN_SYMBOLS[currentTurn] ?? '-',
-    encodeRows(grid, (tile) =>
-      tile.ownerColor === 'Neutral' ? '' : TURN_SYMBOLS[tile.ownerColor],
-    ),
-  ].join(' ');
+export interface EncodePositionOptions {
+  /**
+   * Whether to write the territory field at all.
+   *
+   * On for a game record, which is the archive's own shape and what the server
+   * writes. Off for a mode with no `territory` feature, where a tile's owner
+   * decides nothing: ownership there merely trails the pieces around — a square
+   * a piece left keeps its colour — so the field would be a third of the text
+   * saying something no rule reads, and a reader who believed it would be
+   * believing an accident. `decodePosition` lets ownership follow the pieces
+   * when the field is missing, so leaving it off loses nothing such a mode had.
+   */
+  territory?: boolean;
+}
+
+export const encodePosition = (
+  grid: Grid,
+  currentTurn: PlayerColor,
+  { territory = true }: EncodePositionOptions = {},
+) => {
+  const fields = [encodeRows(grid, pieceSymbol), TURN_SYMBOLS[currentTurn] ?? '-'];
+  if (territory) {
+    fields.push(
+      encodeRows(grid, (tile) =>
+        tile.ownerColor === 'Neutral' ? '' : TURN_SYMBOLS[tile.ownerColor],
+      ),
+    );
+  }
+  return fields.join(' ');
+};
 
 /** The row form `createAnalysisGame` builds a board from. */
 export const startingRowsFrom = (grid: Grid) =>
@@ -714,6 +738,55 @@ export const encodePGN = ({
   tokens.push(result ?? RESULT_UNFINISHED);
   return `${header}\n\n${wrapTokens(tokens)}\n`;
 };
+
+/** The `BoardSize` tag: one number for a square board, `WxH` for anything else. */
+const boardSizeTag = (grid: Grid) => {
+  const columns = grid[0]?.length ?? 0;
+  const rows = grid.length;
+  return columns === rows ? String(rows) : `${columns}x${rows}`;
+};
+
+export interface PositionRecord {
+  grid: Grid;
+  currentTurn: PlayerColor;
+  mode: ModeDefinition;
+}
+
+/**
+ * One position, written as a record that has not been played yet.
+ *
+ * A board on its own is not something this project can hand around: a FEN says
+ * what stands where and whose move it is, and says nothing about which mode's
+ * rules those pieces are under — and V5, V3 and V6 all share the nine by nine
+ * board, so a reader handed a bare position would have to guess, silently, and
+ * would sometimes guess a mode where territory decides the game. So the
+ * position travels as the smallest legal record carrying it: the tags that name
+ * the mode, the standard `SetUp`/`FEN` pair holding the board, and the `*` of a
+ * game with no moves in it. That is a thing `parsePGN` already reads and the
+ * PGN box on the analysis screen already accepts, which is the point — copying
+ * a board and pasting it are the two halves of one act, and neither needed a
+ * new format to do it.
+ */
+export const encodePositionPGN = ({ currentTurn, grid, mode }: PositionRecord) =>
+  encodePGN({
+    tags: [
+      { name: 'Event', value: 'Position' },
+      { name: 'Site', value: 'RPS Strategy' },
+      { name: 'Variant', value: mode.name },
+      { name: 'ModeId', value: mode.id },
+      { name: 'BoardSize', value: boardSizeTag(grid) },
+      { name: 'SetUp', value: '1' },
+      {
+        name: 'FEN',
+        value: encodePosition(grid, currentTurn, {
+          territory: modeHasFeature(mode, 'territory'),
+        }),
+      },
+      { name: 'Result', value: RESULT_UNFINISHED },
+      { name: 'Generator', value: GENERATOR },
+    ],
+    result: RESULT_UNFINISHED,
+  });
 
 export const resultFor = (status: GameStatus | string, winner: PlayerColor): GameResult => {
   if (status !== 'Finished') return RESULT_UNFINISHED;

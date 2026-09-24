@@ -180,8 +180,16 @@ func completeDiscordSignup(
 	t *testing.T, server *Server, ticket, username, reservation string,
 ) (discordExchangeReply, int) {
 	t.Helper()
+	return completeDiscordSignupWithPassword(t, server, ticket, username, "", reservation)
+}
+
+func completeDiscordSignupWithPassword(
+	t *testing.T, server *Server, ticket, username, password, reservation string,
+) (discordExchangeReply, int) {
+	t.Helper()
 	body, err := json.Marshal(discordCompleteRequest{
-		Ticket: ticket, Username: username, ReservationToken: reservation,
+		Ticket: ticket, Username: username, Password: password,
+		ReservationToken: reservation,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -514,5 +522,194 @@ func TestDiscordCallbackReportsACancelledConsent(t *testing.T) {
 	server.Routes().ServeHTTP(recorder, request)
 	if !strings.Contains(recorder.Header().Get("Location"), "error=access_denied") {
 		t.Fatalf("pressing Cancel was not reported: %q", recorder.Header().Get("Location"))
+	}
+}
+
+// linkDiscordDirectly writes the identity columns without going through a
+// sign-in, so a test can set up "somebody else already holds this snowflake"
+// without spending the fake Discord's single identity on it.
+func linkDiscordDirectly(t *testing.T, databasePath, userID, discordUserID, handle string) {
+	t.Helper()
+	database, err := sql.Open("sqlite", databasePath)
+	if err != nil {
+		t.Fatalf("open database directly: %v", err)
+	}
+	defer func() { _ = database.Close() }()
+	if _, err := database.ExecContext(t.Context(), `
+UPDATE accounts SET discord_user_id = ?, discord = ?, discord_linked_at_unix_ms = 1
+WHERE user_id = ?
+`, discordUserID, handle, userID); err != nil {
+		t.Fatalf("link discord directly: %v", err)
+	}
+}
+
+// Pressing "link Discord" on one account must never sign somebody into a
+// different one.
+//
+// This is what a legacy account holder hits after the front door has already
+// handed them a stray second account: the identity is taken, by the stray, and
+// answering that the way a plain sign-in is answered moved them silently onto
+// it — their real account left unlinked, their rating and games behind, and
+// nothing on screen saying anything had happened.
+func TestLinkingRefusesAnIdentityHeldByAnotherAccount(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "legacy.sqlite")
+	server, data, fake := discordTestServerAt(t, databasePath)
+
+	// Ada's real account, from before Discord sign-in.
+	if _, err := data.EnsureAccountWithProfileKey(
+		t.Context(), "legacy", "Guest", routeTestProfileKey,
+	); err != nil {
+		t.Fatal(err)
+	}
+	seedLegacyPasswordAccount(t, databasePath, "legacy", "Ada")
+	// A stray account that got hold of her snowflake first.
+	if _, err := data.EnsureAccountWithProfileKey(
+		t.Context(), "stray", "Guest", strings.Repeat("a", 64),
+	); err != nil {
+		t.Fatal(err)
+	}
+	linkDiscordDirectly(t, databasePath, "stray", fake.identity.ID, "yuki")
+
+	// She signs in with her password and presses LINK DISCORD.
+	token, err := data.CreateSession(t.Context(), "legacy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := beginDiscordSignIn(t, server, token, "")
+	ticket, _ := followDiscordCallback(t, server, state)
+	reply, status := redeemDiscordTicket(t, server, ticket)
+
+	if status != http.StatusConflict {
+		t.Fatalf("linking an identity held elsewhere answered %d, want 409: %+v", status, reply)
+	}
+	if reply.Token != "" || reply.Account != nil {
+		t.Fatalf("a refused link handed back a session anyway: %+v", reply)
+	}
+	// The specific damage: she asked to link and was moved house instead.
+	if reply.Account != nil && reply.Account.UserID != "legacy" {
+		t.Fatalf("linking signed her into %q", reply.Account.UserID)
+	}
+}
+
+// The same collision, reached with only a device key rather than a session,
+// still signs the player in. Nobody named an account to attach to, so the
+// identity's own account is the right answer and always was.
+func TestSigningInWithADeviceKeyStillFollowsTheIdentity(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "device.sqlite")
+	server, data, fake := discordTestServerAt(t, databasePath)
+
+	if _, err := data.EnsureAccountWithProfileKey(
+		t.Context(), "mine", "Guest", routeTestProfileKey,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := data.ClaimAccountWithDiscord(
+		t.Context(), "mine", "Yuki", fake.identity.ID, "yuki",
+	); err != nil {
+		t.Fatal(err)
+	}
+	// A different browser, holding its own throwaway guest.
+	if _, err := data.EnsureAccountWithProfileKey(
+		t.Context(), "other-browser", "Guest", strings.Repeat("b", 64),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	state := beginDiscordSignIn(t, server, strings.Repeat("b", 64), "other-browser")
+	ticket, _ := followDiscordCallback(t, server, state)
+	reply, status := redeemDiscordTicket(t, server, ticket)
+	if status != http.StatusOK {
+		t.Fatalf("exchange: %d %+v", status, reply)
+	}
+	if reply.Account == nil || reply.Account.UserID != "mine" {
+		t.Fatalf("a device-key sign-in did not follow the identity: %+v", reply.Account)
+	}
+}
+
+// The front door, taken by somebody whose account predates it: they have no
+// session, so the naming step is where they land, and typing the name they
+// have always had has to be a way in rather than a wall.
+func TestTheNamingStepOffersAPasswordForANameThatIsAlreadyTheirs(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "legacy.sqlite")
+	server, data, _ := discordTestServerAt(t, databasePath)
+
+	if _, err := data.EnsureAccountWithProfileKey(
+		t.Context(), "legacy", "Guest", routeTestProfileKey,
+	); err != nil {
+		t.Fatal(err)
+	}
+	seedLegacyPasswordAccount(t, databasePath, "legacy", "Ada")
+
+	// A fresh device: this browser's own guest, and no session.
+	freshKey := strings.Repeat("c", 64)
+	if _, err := data.EnsureAccountWithProfileKey(
+		t.Context(), "fresh-device", "Guest", freshKey,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	state := beginDiscordSignIn(t, server, freshKey, "fresh-device")
+	ticket, _ := followDiscordCallback(t, server, state)
+	reply, status := redeemDiscordTicket(t, server, ticket)
+	if status != http.StatusOK || !reply.NeedsUsername {
+		t.Fatalf("exchange: %d %+v", status, reply)
+	}
+
+	// She types "Ada".
+	named, namedStatus := completeDiscordSignup(t, server, ticket, "Ada", "")
+	if namedStatus != http.StatusOK {
+		t.Fatalf("her own name answered %d, want 200 with a question: %+v",
+			namedStatus, named)
+	}
+	if !named.NeedsPassword {
+		t.Fatalf("her own name was refused rather than offered a password: %+v", named)
+	}
+	if named.Token != "" || named.Account != nil {
+		t.Fatalf("a question handed back a session: %+v", named)
+	}
+
+	// And the ticket is still live for the password, without another trip
+	// through Discord.
+	if _, ok := server.discordTickets.peek(hashDiscordTicket(ticket)); !ok {
+		t.Fatal("the ticket was spent on asking a question")
+	}
+}
+
+// A name held by somebody who already signs in with Discord has no password to
+// offer, so it really is just taken.
+func TestTheNamingStepStillRefusesANameHeldByADiscordAccount(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "taken.sqlite")
+	server, data, _ := discordTestServerAt(t, databasePath)
+
+	if _, err := data.EnsureAccountWithProfileKey(
+		t.Context(), "bex", "Guest", routeTestProfileKey,
+	); err != nil {
+		t.Fatal(err)
+	}
+	linkDiscordDirectly(t, databasePath, "bex", "999999999", "bex")
+	if _, err := data.UpdateAccountProfile(t.Context(), "bex", "Bex", "bex"); err != nil {
+		t.Fatal(err)
+	}
+
+	freshKey := strings.Repeat("d", 64)
+	if _, err := data.EnsureAccountWithProfileKey(
+		t.Context(), "fresh-device", "Guest", freshKey,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	state := beginDiscordSignIn(t, server, freshKey, "fresh-device")
+	ticket, _ := followDiscordCallback(t, server, state)
+	if reply, status := redeemDiscordTicket(t, server, ticket); status != http.StatusOK ||
+		!reply.NeedsUsername {
+		t.Fatalf("exchange: %d %+v", status, reply)
+	}
+
+	reply, status := completeDiscordSignup(t, server, ticket, "Bex", "")
+	if status != http.StatusConflict {
+		t.Fatalf("a name with no password behind it answered %d, want 409: %+v", status, reply)
+	}
+	if reply.NeedsPassword {
+		t.Fatal("offered a password box for an account that has no password")
 	}
 }

@@ -42,13 +42,20 @@ type ClientMessage struct {
 	// Engine-bot fields. `authenticate_bot` carries a bot's whole
 	// registration: the durable token that identifies it, plus the name and
 	// settings its config file asserts on every connect.
-	Token            string `json:"token,omitempty"`
-	ClientVersion    string `json:"clientVersion,omitempty"`
+	Token         string `json:"token,omitempty"`
+	ClientVersion string `json:"clientVersion,omitempty"`
+	// EngineVersion is a build the owner declared in rpsbot.conf, for an engine
+	// that does not announce one itself through `id version`. Absent from every
+	// client older than the field, and from every conf that does not set it.
+	EngineVersion    string `json:"engineVersion,omitempty"`
 	Name             string `json:"name,omitempty"`
 	Description      string `json:"description,omitempty"`
 	PublicPlay       bool   `json:"publicPlay,omitempty"`
 	EnterTournaments bool   `json:"enterTournaments,omitempty"`
-	BotID            string `json:"botId,omitempty"`
+	// EnterLadder is a pointer so that a client which never mentions it is
+	// distinguishable from one that says no. See persistence.BotSettings.
+	EnterLadder *bool  `json:"enterLadder,omitempty"`
+	BotID       string `json:"botId,omitempty"`
 	// MaxGames is how many games at once the machine running this engine says
 	// it can afford, and SessionID and Slot are how its connections recognise
 	// each other. One process opens one socket per slot, each with its own
@@ -291,8 +298,17 @@ type ServerMessage struct {
 	// one activity each; this is the whole room.
 	OnlineCount  int                       `json:"onlineCount,omitempty"`
 	RatingUpdate *persistence.RatingUpdate `json:"ratingUpdate,omitempty"`
-	ChatMessage  *ChatMessage              `json:"chatMessage,omitempty"`
-	ChatMessages []ChatMessage             `json:"chatMessages,omitempty"`
+	// BlockedUserIDs is who this connection is currently hiding, sent on
+	// connect and again whenever the list changes. Ids rather than names: a
+	// client matches it against the sender id on a chat line, and a name would
+	// go stale the moment somebody renamed themselves. See blocks.go.
+	//
+	// A slice rather than a pointer to one, with `omitempty`, because an empty
+	// list and an absent one mean the same thing here — nobody is blocked — and
+	// the message is sent to every connection on every handshake.
+	BlockedUserIDs []string      `json:"blockedUserIds,omitempty"`
+	ChatMessage    *ChatMessage  `json:"chatMessage,omitempty"`
+	ChatMessages   []ChatMessage `json:"chatMessages,omitempty"`
 	// ChatRoomID accompanies a chat history, naming the conversation the
 	// client has just joined so it can tell which later messages are for it.
 	// Equal to the game id for an ordinary game; equal to the series id for

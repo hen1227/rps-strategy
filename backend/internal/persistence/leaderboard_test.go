@@ -23,13 +23,42 @@ UPDATE accounts SET wins = ?, games_played = ? WHERE user_id = ?
 	}
 }
 
+// seedModeRating writes a rating the board will treat as measured, because that
+// is what a ranked game leaves behind: both write paths set rating_placed. A row
+// seeded without it is the unrated case, which seedUnplacedRating is for, and
+// leaving these on the default would quietly make every test below a test of a
+// board with nothing on it.
 func seedModeRating(t *testing.T, store *Store, userID string, modeID game.ModeID, elo int, played int) {
+	t.Helper()
+	seedRatingRow(t, store, userID, modeID, elo, played, true, 1)
+}
+
+// seedUnplacedRating is an account the rating system could not place: a bot the
+// fit left out, or a person who has not played the mode.
+func seedUnplacedRating(
+	t *testing.T, store *Store, userID string, modeID game.ModeID, elo int, played int,
+) {
+	t.Helper()
+	seedRatingRow(t, store, userID, modeID, elo, played, false, 0)
+}
+
+func seedRatingRow(
+	t *testing.T,
+	store *Store,
+	userID string,
+	modeID game.ModeID,
+	elo int,
+	played int,
+	placed bool,
+	confidence float64,
+) {
 	t.Helper()
 	if _, err := store.db.ExecContext(t.Context(), `
 INSERT INTO account_mode_ratings
-    (user_id, mode_id, elo, wins, games_played, created_at_unix_ms, updated_at_unix_ms)
-VALUES (?, ?, ?, ?, ?, 1, 1)
-`, userID, modeID, elo, played, played); err != nil {
+    (user_id, mode_id, elo, wins, games_played,
+     rating_placed, rating_confidence, created_at_unix_ms, updated_at_unix_ms)
+VALUES (?, ?, ?, ?, ?, ?, ?, 1, 1)
+`, userID, modeID, elo, played, played, boolToInt(placed), confidence); err != nil {
 		t.Fatalf("seed mode rating for %s: %v", userID, err)
 	}
 }
@@ -268,5 +297,156 @@ func TestLeaderboardNamesTheOwnerOfABot(t *testing.T) {
 	}
 	if len(humans) != 1 || humans[0].OwnerUsername != "" || humans[0].EngineName != "" {
 		t.Fatalf("a person has no owner and no engine: %#v", humans)
+	}
+}
+
+// claimBotFor enters an engine under an owner and gives it a record, which is
+// three calls every test about the bot board would otherwise repeat.
+func claimBotFor(t *testing.T, store *Store, ownerID string, name string, elo int, played int) Bot {
+	t.Helper()
+	_, token, err := store.MintBotToken(t.Context(), ownerID)
+	if err != nil {
+		t.Fatalf("mint for %s: %v", ownerID, err)
+	}
+	bot, err := store.ClaimBot(t.Context(), token, BotSettings{Name: name, AllowPublicPlay: true})
+	if err != nil {
+		t.Fatalf("claim %s: %v", name, err)
+	}
+	seedRecord(t, store, bot.UserID, elo, played)
+	return bot
+}
+
+// One owner, one row.
+//
+// An owner may hold MaximumBotsPerAccount engines, so without this the whole
+// top of the board is one person's five copies of one result.
+func TestBotBoardListsOnlyEachOwnersBestEngine(t *testing.T) {
+	store := authTestStore(t)
+	ctx := t.Context()
+
+	registeredOwner(t, store, "ada", "Ada")
+	registeredOwner(t, store, "grace", "Grace")
+
+	// Ada enters her whole allowance; Grace enters one engine that is better
+	// than four of Ada's five and worse than the fifth. Ungrouped, Grace is
+	// rank five behind four rows belonging to one person.
+	claimBotFor(t, store, "ada", "AdaTop", 1900, 30)
+	claimBotFor(t, store, "ada", "AdaTwo", 1880, 30)
+	claimBotFor(t, store, "ada", "AdaThree", 1860, 30)
+	claimBotFor(t, store, "ada", "AdaFour", 1840, 30)
+	claimBotFor(t, store, "ada", "AdaFive", 1700, 30)
+	claimBotFor(t, store, "grace", "GraceOne", 1850, 30)
+
+	// Both shapes: a mode board and the combined one are two different SELECTs,
+	// and an owner can only hold one slot on either.
+	for _, filter := range []LeaderboardFilter{
+		{Kind: LeaderboardKindBot},
+		{Kind: LeaderboardKindBot, ModeID: string(game.ModeTotalWar)},
+	} {
+		board, err := store.Leaderboard(ctx, filter)
+		if err != nil {
+			t.Fatalf("bot board %+v: %v", filter, err)
+		}
+		got := usernames(board)
+		if len(got) != 2 || got[0] != "AdaTop" || got[1] != "GraceOne" {
+			t.Fatalf("bot board %+v: expected AdaTop then GraceOne, got %v", filter, got)
+		}
+		// Rank counts the board that is left, so the person behind the dropped
+		// rows moves up into the place they actually hold.
+		if board[0].Rank != 1 || board[1].Rank != 2 {
+			t.Fatalf("bot board %+v: ranks should close up: %#v", filter, board)
+		}
+		// The surviving row is a real engine with its own record, not a total
+		// of everything its owner runs.
+		if board[0].Elo != 1900 || board[0].GamesPlayed != 30 {
+			t.Fatalf("bot board %+v: row should be one engine: %#v", filter, board[0])
+		}
+	}
+
+	// Paging counts the same board. Filtering a page of fifty after the fact
+	// would open page two on a row page one had already shown.
+	page, err := store.Leaderboard(ctx, LeaderboardFilter{
+		Kind: LeaderboardKindBot, Limit: 1, Offset: 1,
+	})
+	if err != nil {
+		t.Fatalf("second page: %v", err)
+	}
+	if len(page) != 1 || page[0].Username != "GraceOne" || page[0].Rank != 2 {
+		t.Fatalf("second page should be GraceOne at rank 2: %#v", page)
+	}
+}
+
+// The slot goes to the row that would have led the group anyway, which matters
+// when two of an owner's engines are level: something has to break the tie, and
+// if nothing does they both survive and the rule quietly does not hold.
+func TestBotBoardBreaksATieBetweenOneOwnersEngines(t *testing.T) {
+	store := authTestStore(t)
+	ctx := t.Context()
+
+	registeredOwner(t, store, "ada", "Ada")
+	claimBotFor(t, store, "ada", "Zeno", 1700, 20)
+	claimBotFor(t, store, "ada", "Atlas", 1700, 20)
+
+	board, err := store.Leaderboard(ctx, LeaderboardFilter{Kind: LeaderboardKindBot})
+	if err != nil {
+		t.Fatalf("bot board: %v", err)
+	}
+	if got := usernames(board); len(got) != 1 || got[0] != "Atlas" {
+		t.Fatalf("a tie should still leave one row, first by the board's order: %v", got)
+	}
+}
+
+// An unknown owner is not a shared one. Two engines whose registry rows have
+// gone still have accounts and still have ratings, and grouping them together
+// would rank them as one person's — the same reading botHeadToHeadTx takes when
+// it decides whether a pair of bots may score against each other.
+func TestBotBoardKeepsEnginesWithNoOwnerApart(t *testing.T) {
+	store := authTestStore(t)
+	ctx := t.Context()
+
+	registeredOwner(t, store, "ada", "Ada")
+	first := claimBotFor(t, store, "ada", "Orphan", 1800, 12)
+	second := claimBotFor(t, store, "ada", "Foundling", 1600, 12)
+	for _, bot := range []Bot{first, second} {
+		if _, err := store.db.ExecContext(ctx, `
+DELETE FROM bots WHERE bot_id = ?
+`, bot.BotID); err != nil {
+			t.Fatalf("drop registry row for %s: %v", bot.UserID, err)
+		}
+	}
+
+	board, err := store.Leaderboard(ctx, LeaderboardFilter{Kind: LeaderboardKindBot})
+	if err != nil {
+		t.Fatalf("bot board: %v", err)
+	}
+	if got := usernames(board); len(got) != 2 || got[0] != "Orphan" || got[1] != "Foundling" {
+		t.Fatalf("ownerless engines each keep their place, got %v", got)
+	}
+}
+
+// The human board has no owners to group on, so it must list everybody it
+// listed before — including the people whose bots the rule above thins out.
+func TestHumanBoardIsNotGroupedByOwner(t *testing.T) {
+	store := authTestStore(t)
+	ctx := t.Context()
+
+	registeredOwner(t, store, "ada", "Ada")
+	registeredOwner(t, store, "grace", "Grace")
+	seedRecord(t, store, "ada", 1500, 10)
+	seedRecord(t, store, "grace", 1400, 10)
+	claimBotFor(t, store, "ada", "AdaTop", 1900, 30)
+	claimBotFor(t, store, "ada", "AdaTwo", 1880, 30)
+
+	for _, filter := range []LeaderboardFilter{
+		{},
+		{ModeID: string(game.ModeTotalWar)},
+	} {
+		board, err := store.Leaderboard(ctx, filter)
+		if err != nil {
+			t.Fatalf("human board %+v: %v", filter, err)
+		}
+		if got := usernames(board); len(got) != 2 || got[0] != "Ada" || got[1] != "Grace" {
+			t.Fatalf("human board %+v: expected Ada then Grace, got %v", filter, got)
+		}
 	}
 }

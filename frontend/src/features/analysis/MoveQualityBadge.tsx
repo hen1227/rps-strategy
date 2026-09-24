@@ -1,7 +1,7 @@
 import { Image, StyleSheet, Text, View } from 'react-native';
 
 import type { MoveGrade } from '@/engine/gameReview';
-import { colors, moveQuality } from '@/theme';
+import { colors, moveQuality, themedSheet } from '@/theme';
 
 const BADGE_SHAPE = require('../../../assets/review/move-quality-badge.png');
 const BORDER_DIRECTIONS: [number, number][] = [
@@ -92,7 +92,7 @@ export default function MoveQualityBadge({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   badge: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   shape: { position: 'absolute', width: '100%', height: '100%' },
   symbol: {
@@ -106,4 +106,4 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   label: { color: colors.textStrong, fontSize: 9, fontWeight: '900' },
-});
+}));

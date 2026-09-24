@@ -7,6 +7,7 @@ Go HTTP/WebSocket service for RPS Strategy.
 ```text
 backend/
 ├── cmd/server/          # Executable entry point and process lifecycle
+├── cmd/exportgames/     # Reads the archive read-only for the Hugging Face data set
 ├── deploy/              # systemd, Nginx, and production environment templates
 ├── docs/                # Backend-specific development documentation
 ├── internal/game/       # Game state, rules, modes, clocks, event records, and tests
@@ -175,9 +176,10 @@ The process listens only on this Unix socket, so no backend TCP port is exposed:
 
 ### Deploying an update without ending anybody's game
 
-`./deploy-backend.sh` from the repository root does all of this, and does it in
-an order that matters: it installs the new binary **while the old one is still
-serving**, then asks the server to drain.
+`./deploy/deploy-backend.sh` from the repository root does all of this, and does
+it in an order that matters: it checks the admin token against the running
+server before building anything, installs the new binary **while the old one is
+still serving**, then asks the server to drain.
 
 A drain stops the server taking new games, lets the ones already on the board
 finish, and then exits — so systemd's `Restart=always` brings up the binary that
@@ -187,9 +189,26 @@ Everybody connected gets a banner explaining why the play button is refusing,
 and the script prints what the drain is still waiting on while it waits.
 
 ```sh
-./deploy-backend.sh --say "Back in about a minute."
-./deploy-backend.sh --now --say "Sorry — restarting to fix the clock bug."
+./deploy/deploy-backend.sh --message "Back in about a minute."
+./deploy/deploy-backend.sh --now --message "Sorry — restarting to fix the clock bug."
+./deploy/deploy-backend.sh --check
 ```
+
+`--check` runs the preflight and stops: it finds the admin token, says which of
+the three places it came from, proves it against the running server, and builds
+nothing. That is the first thing to run when a deploy says it has no token.
+
+The token is the server's own `RPS_ADMIN_TOKEN`, the one systemd hands the
+process out of the `.env` next to the binary — the script reads that file back
+over ssh, so there is one copy of the secret and nothing that can drift. It is
+parsed the way systemd parses it, quotes and stray whitespace and all, because a
+token read a few characters differently from the one the server is holding fails
+authentication looking exactly like a wrong password. A deploy machine that
+cannot read that file sets `RPS_ADMIN_TOKEN` in the environment, or keeps a copy
+in `deploy/deploy.env`, which is gitignored.
+
+Note that the `.env` is read at *service start*: editing the token and not
+restarting leaves the running process holding the old one.
 
 `--now` skips the waiting and restarts immediately, posting the message as an
 announcement first. That is the escape hatch, and it costs whatever is on the
@@ -306,6 +325,80 @@ the public route:
 curl https://api-rps.henhen1227.com/healthz
 ```
 
+### 4. Configure the daily Hugging Face export
+
+The privacy policy promises players that every finished game is published daily
+to [`Henhen1227/rps-strategy-games`](https://huggingface.co/datasets/Henhen1227/rps-strategy-games).
+`cmd/exportgames` reads the archive and resolves every name and account id to
+what the policy allows; `tools/hf-export/export.py` groups the result into daily
+files and uploads them. A systemd timer runs the pair.
+
+This is the first systemd **timer** in this repository. Everything else that
+recurs is a goroutine inside the server, and the reason this one is not is that
+deploys drain and exit the server: an upload living inside that process would be
+killed mid-flight or would hold the drain open, and its interval would reset on
+every deploy.
+
+Everything below is one command, run from the repository root:
+
+```sh
+./deploy/deploy-export.sh
+```
+
+It cross-compiles `cmd/exportgames` for ARM64 — **without** `-tags meaf`, which
+is what structurally keeps meaf.us games out of the data set, since a binary
+built without that tag cannot reach the embedded archive at all — ships it
+alongside `export.py` and the pinned requirements, creates the directory tree
+and the virtualenv, installs both systemd units, and enables the timer.
+
+It is idempotent and it never touches `rps-strategy.service`. Run it again after
+editing `export.py` or bumping a dependency; it leaves `export.env`, the ledger
+and the staging directory alone. `--check` runs the preflight and builds
+nothing. `--run` installs and then performs one export immediately, printing the
+journal.
+
+**The first run will stop and ask you to fill in `export.env`,** which the
+script creates from the template but deliberately never overwrites:
+
+```sh
+ssh server2
+openssl rand -hex 32                      # for RPS_EXPORT_KEY_SECRET
+sudoedit /var/www/production/henhen1227/api-rps.henhen1227.com/export/export.env
+```
+
+Those four values are the whole configuration: the database path, the key
+secret, the dataset repository, and a Hugging Face write token scoped to that
+one repository. **Back up the key secret.** It is what makes the published
+player keys opaque, and a different one regroups every player in every file
+published afterwards, with no way to reconcile them against the old ones.
+
+They live in `export.env` and not in the server's `.env` on purpose, in both
+directions: the game server has no use for a Hugging Face write token, and the
+export has no use for the admin token, the Discord client secret or the VAPID
+private key that the server's `.env` carries. Each process holds only what it
+needs.
+
+Then run the script again to arm the timer, and watch one cycle:
+
+```sh
+./deploy/deploy-export.sh --run
+```
+
+**The job fails closed.** A missing secret, an unreadable database, or a remote
+file that already exists all exit non-zero having published nothing, and the
+next night retries. Nothing is recorded as published until the upload has been
+accepted, so a crash mid-push leaves the run repeatable rather than half-done.
+
+To leave somebody out of future files, add their account id — not their
+username, which changes — to `RPS_EXPORT_EXCLUDE` in `export.env` and restart
+nothing; the next run reads it:
+
+```sh
+sudo -u www-data sqlite3 -readonly \
+  /var/www/production/henhen1227/api-rps.henhen1227.com/rps-strategy.sqlite \
+  "SELECT user_id FROM accounts WHERE username = 'their-name'"
+```
+
 Completed games and accounts are stored at `RPS_DATABASE_PATH` (default
 `data/rps-strategy.sqlite`). Every account rates each game mode separately in
 `account_mode_ratings`; a mode's row is created the first time that account
@@ -358,6 +451,24 @@ POST /api/auth/password    Authorization: Bearer <session-token>
 GET  /api/identity/policy
 ```
 
+One player's own preferences about another, and the way to ask the host to look:
+
+```text
+GET    /api/blocks                  Authorization: Bearer <session-token>
+POST   /api/blocks                  {"userId":"…"} or {"username":"…"}
+DELETE /api/blocks/{userId}
+GET    /api/reports/categories      the reasons the report form offers
+POST   /api/reports?userId={userId} Authorization: Bearer <session | profile-key>
+```
+
+Blocking needs a session and reporting takes either, which is the one asymmetry
+worth remembering: a block is a durable preference that has to survive a cleared
+browser, while a report is a single message acted on within a day and loses
+nothing by coming from a guest. A block hides chat in both directions and
+refuses a challenge addressed by name in either; it deliberately leaves
+matchmaking alone. See [`blocks.go`](internal/server/blocks.go) and
+[`reports.go`](internal/server/reports.go).
+
 Register and login return the account and a 90-day session token. Registering a
 reserved username needs the host token in a `reservationToken` field, because
 the `Authorization` header on that route is already carrying the profile key.
@@ -375,6 +486,25 @@ Only a registered account has a profile to edit: an unregistered one is called
 "Guest" until it claims a name, and the route answers 401 for a local key and
 403 for another account's session. A rename obeys the same username rule as
 registration and moves the uniqueness key with it, so the old name is released.
+
+Deleting your own account takes either credential, which is looser than editing
+one and deliberately so — a guest owns an account here too, and it holds their
+games and the name their opponents saw:
+
+```text
+DELETE /api/accounts/{userId}?userId={userId}
+Authorization: Bearer <session-token | local-profile-key>
+
+{"confirm":"<the account's own username>"}
+```
+
+The same operation the admin route below performs, with the player as its
+author. `confirm` is checked against the stored username: the route is
+irreversible and reachable in one call, so what stands between a mis-click and
+an erased account should be something only the person looking at the screen can
+produce. Bots the account owns are retired first, since refusing an owner who
+still has one — which is right for the admin screen, where a host can go and
+look — would be a dead end here. See [`account_delete.go`](internal/server/account_delete.go).
 Discord is optional. The saved username and Discord handle are copied into every
 newly created online game and returned in both player profiles.
 
@@ -430,6 +560,8 @@ DELETE /api/admin/accounts/{userId}/purge    delete: removes the rows
 DELETE /api/admin/bots/{botId}               delete a bot, its games, its account
 GET    /api/admin/games?query=&limit=&offset=
 DELETE /api/admin/games/{gameId}?revertRatings=true
+GET    /api/admin/reports?status=open&limit=&offset=
+PATCH  /api/admin/reports/{reportId}         {"status":"actioned","note":"…"}
 ```
 
 Two ways to remove somebody, and the difference is deliberate. *Anonymizing*

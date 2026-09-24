@@ -1,6 +1,6 @@
 import { StyleSheet, Text, View } from 'react-native';
 
-import { colors, radius } from '@/theme';
+import { colors, radius, themedSheet } from '@/theme';
 import {
   matchResultLabel,
   matchScoreLabel,
@@ -8,6 +8,7 @@ import {
   seatsFor,
 } from '@/store/tournamentSelectors';
 import type { Tournament, TournamentMatch } from '@/types/protocol';
+import PlayerLink from '@/ui/PlayerLink';
 import { Badge, GhostButton, PrimaryButton } from '@/ui/primitives';
 
 /** Everything a viewer can do about a match. */
@@ -69,23 +70,29 @@ export default function TournamentMatchRow({
           {isMine && !isDecided && !state.live && <Badge label="YOUR MATCH" tone="accent" />}
         </View>
         <View style={styles.versusRow}>
-          <Text
-            style={[styles.player, seats?.me === match.player1 && styles.playerMine]}
+          {/*
+            Both entrants lead to their pages. A pairing is the moment somebody
+            wants to know who they have been drawn against, and a match row is
+            where they read the name — a round that is not scheduled yet says
+            TBD, which carries no account and stays plain text.
+          */}
+          <PlayerLink
+            handle={match.player1?.userId ?? ''}
+            name={match.player1?.ign ?? 'TBD'}
             numberOfLines={1}
-          >
-            {match.player1?.ign ?? 'TBD'}
-          </Text>
+            style={[styles.player, seats?.me === match.player1 && styles.playerMine]}
+          />
           <Text style={styles.versus}>VS</Text>
-          <Text
+          <PlayerLink
+            handle={match.player2?.userId ?? ''}
+            name={match.player2?.ign ?? 'TBD'}
+            numberOfLines={1}
             style={[
               styles.player,
               styles.playerRight,
               seats?.me === match.player2 && styles.playerMine,
             ]}
-            numberOfLines={1}
-          >
-            {match.player2?.ign ?? 'TBD'}
-          </Text>
+          />
         </View>
         {score ? <Text style={styles.score}>{score}</Text> : null}
         <Text style={[styles.status, isDecided && styles.statusDecided]}>
@@ -139,7 +146,7 @@ export default function TournamentMatchRow({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   row: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -164,4 +171,4 @@ const styles = StyleSheet.create({
   status: { color: colors.textMuted, fontSize: 10, marginTop: 5 },
   statusDecided: { color: colors.accentSoft, fontWeight: '800' },
   actions: { alignItems: 'flex-end', gap: 6 },
-});
+}));

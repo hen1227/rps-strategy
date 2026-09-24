@@ -23,7 +23,7 @@ import (
 // toggle would have left behind.
 func openToPlay(t *testing.T, server *Server, bot persistence.Bot) {
 	t.Helper()
-	updated, err := server.data.UpdateBotSettings(t.Context(), bot.BotID, true, false, "")
+	updated, err := server.data.UpdateBotSettings(t.Context(), bot.BotID, true, false, false, "")
 	if err != nil {
 		t.Fatalf("open %s to public play: %v", bot.Name, err)
 	}

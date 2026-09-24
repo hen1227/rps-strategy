@@ -4,7 +4,7 @@ import type { LayoutChangeEvent } from 'react-native';
 
 import ModePreview from './ModePreview';
 import { describeSetup } from '@/store/setupSelectors';
-import { colors, radius, space, type } from '@/theme';
+import { colors, radius, space, themedSheet, type } from '@/theme';
 import { Badge } from '@/ui/primitives';
 import type { GameSetup, ModeDefinition, TimeControl } from '@/types/game';
 
@@ -35,8 +35,15 @@ import type { GameSetup, ModeDefinition, TimeControl } from '@/types/game';
 /** How much room the preview has, and so how much of the game it spells out. */
 export type SetupPreviewSize = 'compact' | 'standard' | 'feature' | 'banner';
 
-/** The feature card is a column beside a form, so its width is the fixed thing. */
-const FEATURE_WIDTH = 240;
+/**
+ * The feature card is a column beside a form, so its width is the fixed thing.
+ *
+ * Exported because a caller putting it beside a form is the one that has to
+ * know whether there is room for both — see `PlayOnlineScreen`, where a panel
+ * too narrow for the pair stacks them instead. It stretches on request, but it
+ * does not shrink: 240 is the smallest this card reads as a card.
+ */
+export const SETUP_CARD_WIDTH = 240;
 const FEATURE_PAD = space.medium;
 /** How much of a stretched card's width the board may take before it stops. */
 const FEATURE_BOARD_MAX = 320;
@@ -49,7 +56,7 @@ const BOARD: Record<SetupPreviewSize, number> = {
   compact: 68,
   standard: 116,
   // Whatever is left inside the card once its padding and border are paid.
-  feature: FEATURE_WIDTH - 2 * FEATURE_PAD - 2,
+  feature: SETUP_CARD_WIDTH - 2 * FEATURE_PAD - 2,
   banner: BANNER_BOARD,
 };
 
@@ -201,14 +208,14 @@ export default function SetupPreview({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   frame: { alignItems: 'stretch', gap: space.snug, width: BOARD.standard + 2 * space.small },
   frameCompact: { width: BOARD.compact + 2 * space.small, gap: space.tight },
   // A card rather than a bare stack, so that stretching it to a neighbour's
   // height reads as a panel holding its space rather than a thumbnail adrift in
   // it. The contents centre in whatever room that turns out to be.
   frameFeature: {
-    width: FEATURE_WIDTH,
+    width: SETUP_CARD_WIDTH,
     alignSelf: 'stretch',
     alignItems: 'center',
     justifyContent: 'center',
@@ -278,4 +285,4 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: colors.borderSoft,
   },
-});
+}));

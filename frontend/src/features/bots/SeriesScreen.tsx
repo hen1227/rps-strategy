@@ -17,7 +17,7 @@ import { up } from '@/navigation/upFrom';
 import { useSettledSearchParams } from '@/navigation/useSettledSearchParams';
 import { useGameStore } from '@/store/gameStore';
 import type { BotSeries } from '@/store/api/bots';
-import { colors, contentWidth, radius, space, type } from '@/theme';
+import { colors, contentWidth, radius, space, themedSheet, type } from '@/theme';
 import CopyLinkButton from '@/ui/CopyLinkButton';
 import ListRow from '@/ui/ListRow';
 import PageHeading from '@/ui/PageHeading';
@@ -97,8 +97,8 @@ export default function SeriesScreen() {
           <EmptyState
             detail={
               seriesId
-                ? 'This run is not on the server. The link may be mistyped, or the run may have been removed.'
-                : 'A series link carries the run it leads to. This one arrived without one.'
+                ? "Series not found. Check the link; it may have been removed."
+                : "This link is missing the series ID."
             }
             title="No such series"
           />
@@ -156,7 +156,7 @@ export default function SeriesScreen() {
         </View>
         {liveGame ? (
           <Text style={styles.live}>
-            Game {liveGame.number} is being played right now — press its column to watch it.
+            Game {liveGame.number} is live. Select its column to watch.
           </Text>
         ) : null}
         <Provenance series={series} />
@@ -168,8 +168,7 @@ export default function SeriesScreen() {
           title={view.games.length === 1 ? 'The game' : `All ${view.games.length} games`}
         />
         <Text style={styles.help}>
-          Every game of a run is an ordinary archived game. Open one to have RPSFish grade it,
-          or copy its link to hand that review to somebody else.
+          Open a game to review it, or copy its link to share.
         </Text>
         {view.games.length === 0 ? (
           <EmptyState
@@ -317,7 +316,7 @@ function GameRow({ divided, entry, live, onOpen, wide }: GameRowProps) {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   help: { ...type.body, color: colors.textMuted, marginTop: space.small },
   // Sized to its label rather than stretched across the panel: a column lays its
   // children out at full width, and a ghost button that wide reads as the page's
@@ -368,4 +367,4 @@ const styles = StyleSheet.create({
   numberLive: { backgroundColor: colors.liveSurface, borderColor: colors.liveBorder },
   numberText: { ...type.label, color: colors.textFaint },
   numberTextLive: { color: colors.live },
-});
+}));

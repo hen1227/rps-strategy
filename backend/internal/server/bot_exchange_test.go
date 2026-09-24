@@ -122,10 +122,12 @@ func TestAMoveChosenForAFinishedGameIsNotPlayedIntoTheNextOne(t *testing.T) {
 	}
 	before := len(second.game.Record().Moves())
 
-	// The engine answers game one's question, late but inside its deadline.
+	// The engine answers game one's question, late but inside its deadline. A
+	// question asked a second ago is past its pace, so the answer is dealt with
+	// on this goroutine rather than after a wait.
 	server.applyBotMove(bot, first.gameID, []string{
 		"bestmove " + notation.FormatSquare(chosen.From) + "-" + notation.FormatSquare(chosen.To),
-	})
+	}, time.Now().Add(-time.Second))
 
 	if after := len(second.game.Record().Moves()); after != before {
 		t.Errorf(

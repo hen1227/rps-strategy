@@ -413,12 +413,17 @@ that ladder caps what one matchup can be worth, wants at least two opponents per
 bot, publishes only the group of bots that all play each other, and assumes
 nothing at all about a bot nobody has played. See
 [`backend/internal/persistence/bot_rating.go`](backend/internal/persistence/bot_rating.go).
-Three exclusions, each for its own reason:
+Four exclusions, each for its own reason:
 disabled accounts, because a ban that leaves someone on the front page is not
 much of a ban; unregistered accounts on the human board, because every browser
 that has ever loaded the site owns a real playable account called "Guest";
-and anyone below `minGames`, because an untested rating is a starting value
-rather than an achievement.
+anyone below `minGames`, because an untested rating is a starting value
+rather than an achievement; and, on the bot board, every engine but its owner's
+best, because an owner may enter five and five entries of one engine are one
+result reported five times. The engines left off keep their ratings, their
+profiles and their place in the bot directory — what they lose is a second seat
+on a page of fifty — and an engine whose registry row has gone counts as its own
+owner, because an unknown owner is not a shared one.
 
 The bot board carries the games behind it. `GET /api/bot-matches` is the
 bot-versus-bot slice of `game_history` — both seats' account kind is `bot`,

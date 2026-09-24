@@ -1,4 +1,3 @@
-import { useRouter } from 'expo-router';
 import { useEffect, useMemo, useRef, type ReactNode } from 'react';
 import {
   Animated as NativeAnimated,
@@ -16,6 +15,7 @@ import { useBotSeries } from '@/hooks/useBotSeries';
 import { useWideScreen } from '@/hooks/useBoardLayout';
 import { useGameStore } from '@/store/gameStore';
 import { links } from '@/navigation/links';
+import { useGoTo } from '@/navigation/stack';
 import type { SpectateContext } from '@/hooks/useSpectateContext';
 import {
   isGameLive,
@@ -23,7 +23,7 @@ import {
   seriesScoreOf,
   type TournamentBoard,
 } from '@/store/spectateSelectors';
-import { colors, radius, space } from '@/theme';
+import { colors, radius, space, themedSheet } from '@/theme';
 import type { GameEndReason, GameStatus, PlayerColor } from '@/types/game';
 import type { LiveGameSummary } from '@/types/protocol';
 
@@ -171,7 +171,7 @@ function SeriesRail({
   winner,
 }: SeriesRailProps) {
   const isWide = useWideScreen();
-  const router = useRouter();
+  const go = useGoTo();
   const liveGames = useGameStore((state) => state.liveGames);
   const liveGameIds = useMemo(() => liveGames.map((live) => live.gameId), [liveGames]);
   // Refetched on all three things that change what the strip should say: the
@@ -228,7 +228,9 @@ function SeriesRail({
       onWatch(gameId);
       return;
     }
-    router.push(links.review(gameId));
+    // The rail is drawn over a watched board, which is a full-screen page: the
+    // record replaces it rather than covering it over. See `navigation/stack`.
+    go(links.review(gameId));
   };
   const score = seriesScoreOf(series, redName, blueName);
   const played = series.firstWins + series.secondWins + series.draws;
@@ -400,7 +402,7 @@ function TournamentRail({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   // The steering bar and the run's own games, stacked: one says where you are,
   // the other says what has happened.
   seriesFrame: { gap: space.snug },
@@ -506,4 +508,4 @@ const styles = StyleSheet.create({
   boardNames: { color: colors.text, fontSize: 12, fontWeight: '800' },
 
   pressed: { opacity: 0.72 },
-});
+}));

@@ -1,7 +1,7 @@
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { adminStyles } from './adminStyles';
-import { colors, radius, space, type } from '@/theme';
+import { colors, radius, space, themedSheet, type } from '@/theme';
 import type { Account, Title, TitleID } from '@/types/protocol';
 
 // Awarding titles.
@@ -85,7 +85,7 @@ export default function TitleEditor({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   row: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -113,4 +113,4 @@ const styles = StyleSheet.create({
   chipName: { fontSize: 8, color: colors.textFaint, flexShrink: 1 },
   disabled: { opacity: 0.45 },
   pressed: { opacity: 0.7 },
-});
+}));

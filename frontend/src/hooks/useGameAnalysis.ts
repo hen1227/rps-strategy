@@ -129,7 +129,10 @@ export function useGameAnalysis<TMove extends GradableMove = RecordedMove>({
   useEffect(() => {
     if (!active) {
       sessionRef.current = null;
-      setState(unavailable ? { ...EMPTY, error: unavailable, status: 'error' } : EMPTY);
+      // A mode the engine cannot answer for is worth saying; a reviewer who
+      // switched the engine off is not waiting to be told what it would have
+      // refused to do. So `enabled` wins: off is off, not off-with-an-error.
+      setState(enabled && unavailable ? { ...EMPTY, error: unavailable, status: 'error' } : EMPTY);
       return undefined;
     }
     // An effort change regrades from the start: it changes the whole ladder,
@@ -148,7 +151,7 @@ export function useGameAnalysis<TMove extends GradableMove = RecordedMove>({
       session.stop();
       if (sessionRef.current === session) sessionRef.current = null;
     };
-  }, [active, effort, live, mode?.id, unavailable]);
+  }, [active, effort, enabled, live, mode?.id, unavailable]);
 
   useEffect(() => {
     lineRef.current = { moves, positions, streaming };

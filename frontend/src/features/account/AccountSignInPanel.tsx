@@ -5,7 +5,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import DiscordSignInButton from './DiscordSignInButton';
 import { Banner, LabeledInput, Panel, PrimaryButton, SectionHeading } from '@/ui/primitives';
 import { useGameStore } from '@/store/gameStore';
-import { colors } from '@/theme';
+import { colors, themedSheet } from '@/theme';
 
 // Getting into an account.
 //
@@ -47,8 +47,7 @@ export default function AccountSignInPanel() {
         <View style={styles.legacy}>
           <SectionHeading eyebrow="OLDER ACCOUNTS" title="Sign in with a password" />
           <Text style={styles.help}>
-            For accounts made before Discord sign-in. Once you are in, you can link your Discord
-            and stop needing this.
+            For older accounts. Sign in once, then link Discord.
           </Text>
           {error ? <Banner message={error} onDismiss={() => setError(null)} tone="error" /> : null}
           <LabeledInput
@@ -86,14 +85,14 @@ export default function AccountSignInPanel() {
           onPress={() => setShowPasswordForm(true)}
           style={({ pressed }) => [styles.legacyLink, pressed && styles.legacyLinkPressed]}
         >
-          <Text style={styles.legacyLinkText}>I have an older account with a password</Text>
+          <Text style={styles.legacyLinkText}>Sign in with a password</Text>
         </Pressable>
       )}
     </Panel>
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   help: { color: colors.textMuted, fontSize: 11, lineHeight: 17, marginTop: 8 },
   discordAction: { marginTop: 14 },
   legacyLink: { alignSelf: 'center', marginTop: 16, paddingVertical: 2 },
@@ -114,4 +113,4 @@ const styles = StyleSheet.create({
     marginTop: 14,
   },
   legacy: { marginTop: 18 },
-});
+}));

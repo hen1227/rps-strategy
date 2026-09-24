@@ -127,8 +127,8 @@ func TestFinishedGameIsArchivedAsReplayablePGN(t *testing.T) {
 	}
 	// The rating the game produced is part of the record, so a stored game
 	// explains the Elo it moved without a database join.
-	if parsed.Metadata.RedEloBefore != persistence.DefaultElo ||
-		parsed.Metadata.RedEloAfter != 1216 {
+	if parsed.Metadata.RedEloBefore != persistence.RatingFloor ||
+		parsed.Metadata.RedEloAfter <= parsed.Metadata.RedEloBefore {
 		t.Fatalf("ratings did not reach the archive: %#v", parsed.Metadata)
 	}
 	if parsed.Record.Moves()[0].From != from || parsed.Record.Moves()[0].To != to {

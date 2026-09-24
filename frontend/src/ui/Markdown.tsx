@@ -1,7 +1,7 @@
 import { Fragment, type ReactNode } from 'react';
 import { Linking, StyleSheet, Text, View, type TextStyle } from 'react-native';
 
-import { colors, radius } from '@/theme';
+import { colors, radius, themedSheet } from '@/theme';
 
 // A small Markdown renderer, for documents the server ships.
 //
@@ -132,7 +132,7 @@ export default function Markdown({ source }: MarkdownProps) {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   document: { gap: 10 },
   heading: { color: colors.textStrong, fontWeight: '800' },
   heading1: { fontSize: 22, marginTop: 6 },
@@ -176,7 +176,7 @@ const styles = StyleSheet.create({
     padding: 8,
   },
   cellHead: { color: colors.textFaint, fontWeight: '800', fontSize: 10, letterSpacing: 1 },
-});
+}));
 
 /**
  * The style for a heading level.

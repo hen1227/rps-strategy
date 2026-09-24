@@ -125,10 +125,13 @@ next recorded event, so the elapsed times always sum to time actually spent.
 ### Positions
 
 `FEN` and `FinalFEN` hold three space-separated fields: pieces, the side to
-move (`r`, `b`, or `-`), and territory ownership. A generated record always
+move (`r`, `b`, or `-`), and territory ownership. A generated game record always
 writes all three, but `DecodePosition` reads a position with the territory field
 left off — ownership then follows the pieces — so a board written by hand for a
-mode where ownership decides nothing need not spell it out. Rows run from rank 1 to rank
+mode where ownership decides nothing need not spell it out. The app's own
+"copy position" writes such a board: outside Total War the field would record
+where the pieces used to be, because a tile no rule reads keeps the colour of
+whoever last stood on it. Rows run from rank 1 to rank
 9 separated by `/`, digits count consecutive empty (or unowned) tiles,
 uppercase letters are Blue pieces and lowercase are Red — the same convention a
 mode's `StartingPosition` uses. Territory is a separate field because a tile

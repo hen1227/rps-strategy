@@ -783,6 +783,13 @@ LIMIT 1
 }
 
 // RecentWeekends is the series' own history, most recent first.
+//
+// Ordered down to the last tie, because a millisecond is a long time and two
+// events that share one are not hypothetical: a sweep that settles a backlog
+// gives them the same instant. On a timestamp alone the order would be
+// whichever rows the database happened to return, which decides both what this
+// history looks like and -- at the hundredth event -- which one the limit cuts
+// off. See weekendSettledLater, which is this ordering asked about two events.
 func (store *Store) RecentWeekends(ctx context.Context, limit int) ([]Tournament, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 20
@@ -790,7 +797,9 @@ func (store *Store) RecentWeekends(ctx context.Context, limit int) ([]Tournament
 	rows, err := store.db.QueryContext(ctx, `
 SELECT tournament_id FROM tournaments
 WHERE kind = ?
-ORDER BY COALESCE(completed_at_unix_ms, created_at_unix_ms) DESC
+ORDER BY COALESCE(completed_at_unix_ms, created_at_unix_ms) DESC,
+         created_at_unix_ms DESC,
+         tournament_id DESC
 LIMIT ?
 `, string(TournamentWeekend), limit)
 	if err != nil {
@@ -824,6 +833,35 @@ LIMIT ?
 		events = append(events, tournament)
 	}
 	return events, nil
+}
+
+// weekendSettledLater reports whether one settled weekend is the later of two.
+//
+// The same order RecentWeekends sorts by, asked about a pair, and it exists
+// because "which of these finished last" cannot be left to the order the
+// archive came back in. An event that has not settled is never the later of
+// anything, whenever it was created: the question is about the last weekend to
+// have *finished*.
+//
+// Creation order breaks a tie on the instant, because an event opened later is
+// the later event. The id is the tie-break under that, arbitrary on purpose:
+// two events created in the same millisecond too have nothing left to tell them
+// apart, and one arbitrary answer given every time beats a defensible one that
+// changes with the query plan.
+func weekendSettledLater(event, than Tournament) bool {
+	if event.CompletedAtUnixMs == nil {
+		return false
+	}
+	if than.CompletedAtUnixMs == nil {
+		return true
+	}
+	if *event.CompletedAtUnixMs != *than.CompletedAtUnixMs {
+		return *event.CompletedAtUnixMs > *than.CompletedAtUnixMs
+	}
+	if event.CreatedAtUnixMs != than.CreatedAtUnixMs {
+		return event.CreatedAtUnixMs > than.CreatedAtUnixMs
+	}
+	return event.TournamentID > than.TournamentID
 }
 
 // ConfigureWeekendStart writes the decisions that could not be made when the

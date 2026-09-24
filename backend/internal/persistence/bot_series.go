@@ -87,15 +87,19 @@ type BotSeries struct {
 	Games         []BotSeriesGame `json:"games,omitempty"`
 	CreatedAtMs   int64           `json:"createdAtUnixMs"`
 	CompletedAtMs *int64          `json:"completedAtUnixMs,omitempty"`
-	// Casual is a run between two engines one person registered, which does not
-	// move the ladder: bot_series.go seats those games casual, and the ladder
-	// drops the pair however they were flagged (botHeadToHeadTx).
+	// Ladder is a run the ranked pool arranged, which is the only kind that
+	// moves a rating. Stored on the row, because "who arranged this" is a fact
+	// about the run and not something derivable from it afterwards.
+	Ladder bool `json:"ladder"`
+	// Casual is a run that does not move the ladder, which is every run except a
+	// pool round — and a pool round between two engines one person registered,
+	// which the fit drops however it was flagged (botHeadToHeadTx).
 	//
-	// Derived from the two owners on every read rather than stored on the row,
-	// which is what makes it right about the runs that were played before the
-	// rule existed. Those games went down `ranked = 1` and the fit ignores them
-	// now, so the run did not move anything and saying "casual" is the true
-	// answer to the only question anybody is asking of the word here.
+	// Derived on every read rather than stored, which is what makes it right
+	// about the runs played before the pool existed. Those games went down
+	// `ranked = 1` and are not counted now, so the run did not move anything,
+	// and "casual" is the true answer to the only question anybody asks of the
+	// word here.
 	Casual bool `json:"casual"`
 }
 
@@ -166,6 +170,16 @@ CREATE INDEX IF NOT EXISTS bot_series_games_game_idx
 	if err != nil {
 		return fmt.Errorf("inspect bot series schema: %w", err)
 	}
+	// The ranked pool arrives with the ladder column; a run recorded before it
+	// existed was started by hand, which is exactly what a 0 here means.
+	if !columns["ladder"] {
+		if _, err := store.db.ExecContext(ctx,
+			"ALTER TABLE bot_series ADD COLUMN ladder INTEGER NOT NULL DEFAULT 0"+
+				" CHECK (ladder IN (0, 1))",
+		); err != nil {
+			return fmt.Errorf("add bot series ladder column: %w", err)
+		}
+	}
 	if !columns["requested_by_user_id"] {
 		if _, err := store.db.ExecContext(ctx,
 			"ALTER TABLE bot_series ADD COLUMN requested_by_user_id TEXT NOT NULL DEFAULT ''",
@@ -182,12 +196,13 @@ func (store *Store) CreateBotSeries(ctx context.Context, series BotSeries) (BotS
 	if _, err := store.db.ExecContext(ctx, `
 INSERT INTO bot_series (
     series_id, mode_id, first_bot_id, second_bot_id, pairs, opening_plies, seed,
-    initial_time_ms, increment_ms, requested_by_user_id, created_at_unix_ms
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    initial_time_ms, increment_ms, requested_by_user_id, ladder, created_at_unix_ms
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `,
 		series.SeriesID, series.ModeID, series.FirstBotID, series.SecondBotID,
 		series.Pairs, series.OpeningPlies, series.Seed,
-		series.InitialTimeMs, series.IncrementMs, series.RequestedByUserID, now,
+		series.InitialTimeMs, series.IncrementMs, series.RequestedByUserID,
+		boolToInt(series.Ladder), now,
 	); err != nil {
 		return BotSeries{}, fmt.Errorf("create bot series: %w", err)
 	}
@@ -286,8 +301,11 @@ SELECT s.series_id, s.mode_id, s.first_bot_id, s.second_bot_id,
        s.initial_time_ms, s.increment_ms,
        s.first_wins, s.second_wins, s.draws,
        s.created_at_unix_ms, s.completed_at_unix_ms,
-       COALESCE(fb.owner_user_id IS NOT NULL
-                AND fb.owner_user_id = sb.owner_user_id, 0)
+       s.ladder,
+       CASE WHEN s.ladder = 0 THEN 1
+            ELSE COALESCE(fb.owner_user_id IS NOT NULL
+                          AND fb.owner_user_id = sb.owner_user_id, 0)
+       END
 FROM bot_series s
 LEFT JOIN bots fb ON fb.bot_id = s.first_bot_id
 LEFT JOIN accounts fa ON fa.user_id = fb.user_id
@@ -300,7 +318,7 @@ LEFT JOIN accounts ra ON ra.user_id = s.requested_by_user_id`
 func scanBotSeries(scanner interface{ Scan(...any) error }) (BotSeries, error) {
 	var series BotSeries
 	var completedAt sql.NullInt64
-	var casual int
+	var ladder, casual int
 	err := scanner.Scan(
 		&series.SeriesID, &series.ModeID, &series.FirstBotID, &series.SecondBotID,
 		&series.FirstBotName, &series.SecondBotName,
@@ -310,7 +328,7 @@ func scanBotSeries(scanner interface{ Scan(...any) error }) (BotSeries, error) {
 		&series.Status, &series.Pairs, &series.OpeningPlies, &series.Seed,
 		&series.InitialTimeMs, &series.IncrementMs,
 		&series.FirstWins, &series.SecondWins, &series.Draws,
-		&series.CreatedAtMs, &completedAt, &casual,
+		&series.CreatedAtMs, &completedAt, &ladder, &casual,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return BotSeries{}, ErrBotSeriesNotFound
@@ -321,6 +339,7 @@ func scanBotSeries(scanner interface{ Scan(...any) error }) (BotSeries, error) {
 	if completedAt.Valid {
 		series.CompletedAtMs = &completedAt.Int64
 	}
+	series.Ladder = ladder == 1
 	series.Casual = casual == 1
 	return series, nil
 }
@@ -378,14 +397,53 @@ func (store *Store) BotSeriesList(ctx context.Context, limit int) ([]BotSeries, 
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
-	rows, err := store.db.QueryContext(ctx, botSeriesSelect+`
+	return store.botSeriesWhere(ctx, `
 ORDER BY s.created_at_unix_ms DESC LIMIT ?`, limit)
+}
+
+// LadderSeriesBetween returns the pool's own runs from one window of time,
+// newest first, with their games.
+//
+// The window is how a *round* is identified, and it is the only handle there
+// is: the pool records that a round ran and when, not which runs it seated, so
+// the runs of the 14:00 round are the ladder runs created between 14:00 and
+// 15:00. That holds because a round is seated within seconds of its slot and
+// is skipped outright once the grace has passed — see ladderRoundDue — so no
+// run can be filed under a round that did not start it.
+//
+// `ladder = 1` is the other half. A round's window also contains whatever
+// anybody started by hand in the same hour, and those did not move a rating;
+// a page that showed them as the round's results would be describing the wrong
+// games.
+func (store *Store) LadderSeriesBetween(
+	ctx context.Context,
+	fromUnixMs int64,
+	toUnixMs int64,
+) ([]BotSeries, error) {
+	return store.botSeriesWhere(ctx, `
+WHERE s.ladder = 1 AND s.created_at_unix_ms >= ? AND s.created_at_unix_ms < ?
+ORDER BY s.created_at_unix_ms DESC`, fromUnixMs, toUnixMs)
+}
+
+// botSeriesWhere reads runs and their games, however the caller narrowed them.
+//
+// Two queries rather than a join, so that a run with no games yet still comes
+// back — and so the runs are not multiplied out and reassembled. Shared because
+// the second query is the easy half to forget: a list read without it is a list
+// of scorelines with no games under them, which every caller here draws as a
+// run that played nothing.
+func (store *Store) botSeriesWhere(
+	ctx context.Context,
+	clause string,
+	arguments ...any,
+) ([]BotSeries, error) {
+	rows, err := store.db.QueryContext(ctx, botSeriesSelect+clause, arguments...)
 	if err != nil {
 		return nil, fmt.Errorf("list bot series: %w", err)
 	}
 	defer rows.Close()
-	list := make([]BotSeries, 0, limit)
-	identifiers := make([]string, 0, limit)
+	list := make([]BotSeries, 0, 16)
+	identifiers := make([]string, 0, 16)
 	for rows.Next() {
 		series, err := scanBotSeries(rows)
 		if err != nil {

@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { failureMessage } from '@/errors';
-import { colors } from '@/theme';
+import { colors, themedSheet } from '@/theme';
 import { useMyBots } from '@/hooks/useMyBots';
 import { useWatchGame } from '@/hooks/useWatchGame';
 import { withdrawFromTournament } from '@/store/api/tournaments';
@@ -138,6 +138,9 @@ function TournamentCard({
   const entry = entryFor(tournament, accountId, botUserIds);
   const entryIsBot = Boolean(entry) && entry?.userId !== accountId;
   const isRegistration = tournament.status === 'registration';
+  // An engines-only event has nothing for a person to fill in, so the button
+  // that opens the panel should not promise one. See TournamentRegisterForm.
+  const enginesOnly = tournament.field === 'bots';
 
   const leave = async () => {
     setLeaving(true);
@@ -183,12 +186,17 @@ function TournamentCard({
                 Seed #{entry.signupOrder} · the match order appears when the host starts
               </Text>
             </View>
-            <GhostButton
-              compact
-              disabled={leaving}
-              label={leaving ? 'LEAVING' : 'WITHDRAW'}
-              onPress={leave}
-            />
+            {/* An engine has no way out here because it had no way in: its
+                switch is both, and it lives on the panel the button below
+                opens. */}
+            {entryIsBot ? null : (
+              <GhostButton
+                compact
+                disabled={leaving}
+                label={leaving ? 'LEAVING' : 'WITHDRAW'}
+                onPress={leave}
+              />
+            )}
           </View>
         ) : registerOpen ? (
           <TournamentRegisterForm
@@ -199,9 +207,15 @@ function TournamentCard({
         ) : (
           <View style={styles.enterRow}>
             <Text style={styles.enterCopy}>
-              Enter yourself or one of your bots to get a seed and a schedule.
+              {enginesOnly
+                ? "Check which engines are set to enter."
+                : 'Enter to get a seed and a schedule.'}
             </Text>
-            <PrimaryButton compact label="REGISTER" onPress={() => setRegisterOpen(true)} />
+            <PrimaryButton
+              compact
+              label={enginesOnly ? 'YOUR ENGINES' : 'REGISTER'}
+              onPress={() => setRegisterOpen(true)}
+            />
           </View>
         ))}
 
@@ -273,13 +287,13 @@ function TournamentCard({
         </Text>
       </Pressable>
       {!isConnected && (
-        <Text style={styles.offlineNote}>Reconnecting — match actions resume shortly.</Text>
+        <Text style={styles.offlineNote}>Reconnecting…</Text>
       )}
     </Panel>
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   stack: { gap: 12 },
   meta: { color: colors.textMuted, fontSize: 11, lineHeight: 17, marginTop: 8 },
 
@@ -321,4 +335,4 @@ const styles = StyleSheet.create({
   boardLinkText: { color: colors.accentBright, fontSize: 11, fontWeight: '900' },
   offlineNote: { color: colors.textFaint, fontSize: 10, marginTop: 8 },
   pressed: { opacity: 0.7 },
-});
+}));

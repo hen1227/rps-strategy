@@ -36,8 +36,9 @@ import {
   type ReplayTracks,
 } from '@/engine/replayAnimation';
 import type { MoveGrade } from '@/engine/gameReview';
+import type { RulesEra } from '@/engine/goals';
 import type { PieceLook } from './pieceLook';
-import { board, players, shadows } from '@/theme';
+import { board, players, shadows, themedSheet } from '@/theme';
 import {
   samePosition,
   sameMove,
@@ -105,8 +106,6 @@ const frameSizeFor = (boardSize: number, shape: BoardShape) => {
  */
 const boardShapeLabel = ({ columns, rows }: BoardShape) =>
   columns === 9 && rows === 9 ? 'Nine by nine' : `${columns} by ${rows}`;
-const ANNOTATION_COLOR = board.annotation;
-const ARROW_OUTLINE = board.arrowOutline;
 /** In squares, like everything else an arrow is measured in. */
 const ARROW_OUTLINE_WIDTH = 0.028;
 /** A drawn arrow sits between the engine's best and its also-rans: it is the reader's own note. */
@@ -376,10 +375,10 @@ const DraggablePiece = memo(function DraggablePiece({
         {...panResponder.panHandlers}
         style={[
           styles.piece,
+          dragEnabled ? styles.pieceGrip : styles.pieceInert,
           dragEnabled && styles.draggablePiece,
           isDragging && styles.draggingPiece,
           {
-            pointerEvents: dragEnabled ? 'auto' : 'none',
             transform: [
               ...translation.getTranslateTransform(),
               { scale: isDragging ? 1.14 : isSelected ? 1.08 : 1 },
@@ -387,9 +386,18 @@ const DraggablePiece = memo(function DraggablePiece({
           },
         ]}
       >
+        {/*
+          `liftable` says the shadow is coming before it does. Without it the
+          artwork is thrown away and drawn again on the touch and again on the
+          release — see the prop on `PieceIcon` — which on a phone is a piece
+          that blinks twice every time it is tapped. The same tree swap the
+          `pieceGrip` note below is about, costing a picture rather than a
+          gesture.
+        */}
         <PieceIcon
           color={tile.occupantOwner}
           dropShadow={isDragging}
+          liftable
           piece={tile.occupant}
           look={look}
           size={pieceSize}
@@ -682,6 +690,13 @@ export interface BoardProps {
   lastMoveGrade?: MoveGrade | null;
   modeId?: ModeID;
   /**
+   * Which rules say where this mode's goal tiles are. Absent means today's,
+   * which is every live game; a review of a record from before the 2026-09-03
+   * board flip passes `preChange` so the tinted squares are the ones that
+   * record is actually won on. See `@/engine/goals`.
+   */
+  era?: RulesEra;
+  /**
    * How each kind is drawn, for a mode that declared its own kinds: the
    * artwork it borrows, and the letter it falls back to without one. Absent for
    * the built-in modes, whose ids name their own artwork. See `looksFor`.
@@ -736,6 +751,7 @@ export default function Board({
   lastMove,
   lastMoveGrade = null,
   modeId,
+  era = 'current',
   pieceLooks,
   boardBackground,
   movableColor,
@@ -1083,7 +1099,7 @@ export default function Board({
               const isHighlighted = highlightKeys.has(`${tile.x}:${tile.y}`);
               const isLastMoveFrom = samePosition(displayedLastMove?.from, position);
               const isLastMoveTo = samePosition(displayedLastMove?.to, position);
-              const tint = tintForTile(modeId, tile, shape);
+              const tint = tintForTile(modeId, tile, shape, era);
               const overlayCell = overlayCellAt(overlay, tile.x, tile.y);
               const overlayLabel = overlayCell?.describe ? `, ${overlayCell.describe}` : '';
               const tintLabel = tint
@@ -1257,7 +1273,7 @@ export default function Board({
                     fillOpacity={arrow.dashed ? TWIN_FILL_OPACITY : 1}
                     key={`${arrow.from.x}:${arrow.from.y}-${arrow.to.x}:${arrow.to.y}`}
                     opacity={ink.opacity}
-                    stroke={arrow.dashed ? arrowColor(rank) : ARROW_OUTLINE}
+                    stroke={arrow.dashed ? arrowColor(rank) : board.arrowOutline}
                     strokeDasharray={arrow.dashed ? TWIN_DASH : undefined}
                     strokeLinejoin="round"
                     strokeWidth={arrow.dashed ? TWIN_OUTLINE_WIDTH : ARROW_OUTLINE_WIDTH}
@@ -1287,10 +1303,10 @@ export default function Board({
                 return (
                   <Path
                     d={path}
-                    fill={ANNOTATION_COLOR}
+                    fill={board.annotation}
                     key={`${arrow.from.x}:${arrow.from.y}-${arrow.to.x}:${arrow.to.y}`}
                     opacity={0.82}
-                    stroke={ARROW_OUTLINE}
+                    stroke={board.arrowOutline}
                     strokeLinejoin="round"
                     strokeWidth={ARROW_OUTLINE_WIDTH}
                   />
@@ -1370,7 +1386,7 @@ export default function Board({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   boardFrame: {
     borderWidth: BOARD_BORDER_WIDTH,
     borderColor: board.frame,
@@ -1528,6 +1544,30 @@ const styles = StyleSheet.create({
     paddingRight: 1,
   },
   piece: { alignItems: 'center', justifyContent: 'center' },
+  // The piece takes the touch; the artwork inside it never does.
+  //
+  // `PieceIcon` used to draw a different tree once `dropShadow` turned on, so
+  // the node under the finger was replaced the instant a drag was granted —
+  // and a touch belongs for its whole life to the node it started on.
+  // Detached, that node stops bubbling to the document, where
+  // react-native-web's responder system listens, so the responder never heard
+  // another move or the release: the piece sat still, sprang back, and the
+  // *next* drag worked because the swap had already happened. This view is
+  // rendered unconditionally, so `box-only` makes it the same target from
+  // touch to release.
+  //
+  // `liftable` has since taken the swap out at the source — see the prop on
+  // `PieceIcon`, and the note beside it above — but this stays: it is what
+  // makes the target one node rather than whatever the artwork happens to be
+  // drawn as, and the failure it prevents is silent.
+  //
+  // Registered here rather than written inline beside the transform, because
+  // `box-only` is not a CSS value — only a style that reaches react-native-web's
+  // compiler is expanded into the two rules it needs. Same trap as
+  // `pieceLayout` above, and it fails the same silent way: the property is
+  // dropped and the piece stops taking touches at all.
+  pieceGrip: { pointerEvents: 'box-only' },
+  pieceInert: { pointerEvents: 'none' },
   // `grab`/`grabbing` are web cursors; React Native's own type knows only
   // `auto` and `pointer`, so the recipes are declared as web styles.
   draggablePiece: webDragStyle('grab'),
@@ -1550,4 +1590,4 @@ const styles = StyleSheet.create({
   },
   labelOnLight: { color: board.labelOnLight },
   labelOnDark: { color: board.labelOnDark },
-});
+}));

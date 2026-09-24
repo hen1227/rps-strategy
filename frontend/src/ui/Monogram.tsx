@@ -1,6 +1,6 @@
 import { StyleSheet, Text, View } from 'react-native';
 
-import { colors, radius } from '@/theme';
+import { colors, monogram, radius, themedSheet } from '@/theme';
 
 // Two letters in a coloured square, for anybody who has no picture.
 //
@@ -11,17 +11,22 @@ import { colors, radius } from '@/theme';
 // as it survives. `BotIcon` still owns the order of preference — drawn portrait,
 // owner-supplied PNG, then this.
 
-// Hues spread far enough apart that two names in the same list are easy to tell
-// apart at a glance.
-const HUES = ['#5b8266', '#7a5c9e', '#b5763f', '#3f7b91', '#9e5c6b', '#6b7a3f'];
-
-/** A stable colour per name, so a given player always looks the same. */
+/**
+ * A stable colour per name, so a given player always looks the same.
+ *
+ * The hues are the theme's — they used to be a literal here, which made this
+ * the last file in the app writing its own colours and meant an avatar kept
+ * Forest's palette on every other theme. They are spread far enough apart that
+ * two names in the same list are easy to tell apart at a glance, and each theme
+ * picks six that clear its own surfaces.
+ */
 const hueFor = (seed: string) => {
   let hash = 0;
   for (let index = 0; index < seed.length; index += 1) {
     hash = (hash * 31 + seed.charCodeAt(index)) % 100003;
   }
-  return HUES[hash % HUES.length];
+  const hues = monogram.hues;
+  return hues[hash % hues.length];
 };
 
 const monogramOf = (name: string) => {
@@ -64,11 +69,11 @@ export default function Monogram({ name, size = 52, round = false }: MonogramPro
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   monogram: { alignItems: 'center', justifyContent: 'center' },
   monogramText: {
     color: colors.textStrong,
     fontWeight: '700',
     letterSpacing: 1,
   },
-});
+}));

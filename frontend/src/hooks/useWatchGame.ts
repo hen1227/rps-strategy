@@ -1,7 +1,7 @@
-import { usePathname, useRouter } from 'expo-router';
 import { useCallback } from 'react';
 
 import { links } from '@/navigation/links';
+import { useGoTo } from '@/navigation/stack';
 
 /**
  * Go and watch a live game.
@@ -13,25 +13,26 @@ import { links } from '@/navigation/links';
  * appeared in the store and dragging the browser to `/play`, which is exactly
  * how watching ended up with no address of its own.
  *
- * Arriving at a game is a step forward. Changing which board you are watching —
- * from the rail over a series, or from a tournament's other boards — is not: it
- * replaces, so the back button returns to wherever you came in from rather than
- * walking back through every board you looked at.
+ * How that lands on the stack is `useGoTo`'s decision rather than this hook's.
+ * It used to be written here: arriving from a list was a step forward and
+ * changing boards was a `replace`, so that going back left by the door you came
+ * in rather than walking back through every board you had looked at. Both of
+ * those still happen, and the second is still a `replace` for a reason more
+ * particular than tidiness — see the note on `stackMove`. What that rule adds is
+ * the case this could not see, because it is about the page being *left* rather
+ * than the game being opened: a watched game reached from a review, from a
+ * board, or from any other full-screen page now takes that page's place instead
+ * of covering it over.
  */
 export const useWatchGame = () => {
-  const router = useRouter();
-  const pathname = usePathname();
+  const go = useGoTo();
 
   return useCallback(
     (gameId: string) => {
       if (!gameId) return;
-      if (pathname === '/watch') {
-        router.replace(links.watch(gameId));
-        return;
-      }
-      router.push(links.watch(gameId));
+      go(links.watch(gameId));
     },
-    [pathname, router],
+    [go],
   );
 };
 

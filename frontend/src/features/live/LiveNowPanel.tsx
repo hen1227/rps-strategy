@@ -8,11 +8,12 @@ import MiniBoard from '@/features/board/MiniBoard';
 import { useWatchGame } from '@/hooks/useWatchGame';
 import { useGameStore } from '@/store/gameStore';
 import { playerName, titledName } from '@/store/spectateSelectors';
-import { colors, space, type } from '@/theme';
+import { colors, space, themedSheet, type } from '@/theme';
 import type { ModeDefinition } from '@/types/game';
 import type { LiveGameSummary } from '@/types/protocol';
 import ListRow from '@/ui/ListRow';
 import { GhostButton, Panel, SectionHeading } from '@/ui/primitives';
+import PlayerLink from '@/ui/PlayerLink';
 import TitleTag from '@/ui/TitleTag';
 
 // The live boards, on a screen with no room for the rail.
@@ -62,14 +63,20 @@ function WatchRow({ busy, divided, game, mode, onWatch }: WatchRowProps) {
       title={
         <View style={styles.rowNames}>
           <TitleTag title={game.redPlayer?.title} />
-          <Text numberOfLines={1} style={styles.rowName}>
-            {redName}
-          </Text>
+          <PlayerLink
+            handle={game.redPlayer?.username ?? ''}
+            name={redName}
+            numberOfLines={1}
+            style={styles.rowName}
+          />
           <Text style={styles.dim}>vs</Text>
           <TitleTag title={game.bluePlayer?.title} />
-          <Text numberOfLines={1} style={styles.rowName}>
-            {blueName}
-          </Text>
+          <PlayerLink
+            handle={game.bluePlayer?.username ?? ''}
+            name={blueName}
+            numberOfLines={1}
+            style={styles.rowName}
+          />
         </View>
       }
       trailing={
@@ -147,10 +154,10 @@ export default function LiveNowPanel() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   body: { marginTop: space.medium, gap: space.small },
   rowNames: { flexDirection: 'row', alignItems: 'center', gap: space.tight, minWidth: 0 },
   rowName: { ...type.rowTitle, color: colors.text, flexShrink: 1 },
   dim: { color: colors.textFaint, fontSize: 10, fontWeight: '600' },
   footnote: { ...type.meta, color: colors.textFaint, marginTop: space.tight },
-});
+}));

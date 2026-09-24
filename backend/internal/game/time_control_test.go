@@ -236,3 +236,84 @@ func TestInvalidTimeControlsAreRejected(t *testing.T) {
 		}
 	}
 }
+
+// A hold is time neither player spends. What comes before it is still theirs:
+// an engine that thought for forty milliseconds is charged forty, and the pause
+// that follows costs it nothing.
+func TestAHeldClockChargesNeitherPlayer(t *testing.T) {
+	subject := testGame(t, ModeTotalWar)
+	now := time.Date(2026, time.September, 11, 12, 0, 0, 0, time.UTC)
+	useFakeGameTime(subject, &now)
+
+	now = now.Add(40 * time.Millisecond)
+	if _, expired := subject.HoldClock(160 * time.Millisecond); expired {
+		t.Fatal("a five-minute clock expired inside a 160ms hold")
+	}
+	now = now.Add(160 * time.Millisecond)
+
+	from, to := anyLegalMove(t, subject)
+	state, err := subject.Move(Blue, from, to)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spent := DefaultInitialTimeMs + DefaultIncrementMs - state.Clock.BlueRemainingMs
+	if spent != 40 {
+		t.Fatalf("expected the mover to be charged the 40ms it spent, got %d", spent)
+	}
+	if state.Clock.RedRemainingMs != DefaultInitialTimeMs {
+		t.Fatalf("the waiting player paid for the hold: %d", state.Clock.RedRemainingMs)
+	}
+	// The record has to agree, or a replay of this game reproduces different
+	// clocks from the ones it was played with. See Event.ElapsedMs.
+	if elapsed := subject.Record().Events[0].ElapsedMs; elapsed != 40 {
+		t.Fatalf("the move recorded %dms elapsed, not the 40ms its player spent", elapsed)
+	}
+}
+
+// The hold is a stretch of time and not a state, so nothing has to release it.
+// Once it is over the clocks run again, which is what stops a caller that never
+// comes back from leaving a game nobody can lose on time.
+func TestTimePastAHoldIsChargedNormally(t *testing.T) {
+	subject := testGame(t, ModeTotalWar)
+	now := time.Date(2026, time.September, 11, 12, 0, 0, 0, time.UTC)
+	useFakeGameTime(subject, &now)
+
+	if _, expired := subject.HoldClock(160 * time.Millisecond); expired {
+		t.Fatal("a five-minute clock expired inside a 160ms hold")
+	}
+	state, _ := subject.Tick(now.Add(500 * time.Millisecond))
+	if spent := DefaultInitialTimeMs - state.Clock.BlueRemainingMs; spent != 340 {
+		t.Fatalf("expected 500ms less the 160ms held, got %d", spent)
+	}
+}
+
+// A hold cannot rescue a clock that has already run out: settling it is the
+// first thing that happens, and an engine whose time went while it was thinking
+// loses the game rather than the pause.
+func TestHoldingAnExhaustedClockReportsTheTimeout(t *testing.T) {
+	control := TimeControl{InitialTimeMs: 100, IncrementMs: 0}
+	subject, err := NewGameWithTimeControl(
+		"held-timeout",
+		ModeTotalWar,
+		PlayerProfile{UserID: "red"},
+		PlayerProfile{UserID: "blue"},
+		control,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, time.September, 11, 12, 0, 0, 0, time.UTC)
+	useFakeGameTime(subject, &now)
+
+	now = now.Add(150 * time.Millisecond)
+	state, expired := subject.HoldClock(50 * time.Millisecond)
+	if !expired {
+		t.Fatalf("expected the timeout to be reported, got %#v", state.Clock)
+	}
+	if state.Status != Finished || state.EndReason != EndReasonTimeout {
+		t.Fatalf("expected a game lost on time, got %#v", state)
+	}
+	if err := Verify(subject.Record()); err != nil {
+		t.Fatalf("a game held past its own clock does not replay: %v", err)
+	}
+}

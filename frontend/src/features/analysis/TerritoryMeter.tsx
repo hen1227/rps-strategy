@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
 import TileMark from '@/features/board/TileMark';
-import { colors, players, radius } from '@/theme';
+import { colors, players, radius, themedSheet } from '@/theme';
 import type { Grid, SideColor } from '@/types/game';
 
 function TerritoryKey({ count, owner }: { count: number; owner: SideColor }) {
@@ -122,7 +122,7 @@ export default function TerritoryMeter({ grid }: TerritoryMeterProps) {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   card: {
     width: '100%',
     paddingHorizontal: 10,
@@ -193,4 +193,4 @@ const styles = StyleSheet.create({
     fontSize: 7,
     fontWeight: '900',
   },
-});
+}));

@@ -37,10 +37,10 @@ export const REACH_VIEW_LABELS: Record<ReachView, string> = {
 
 export const REACH_VIEW_BLURBS: Record<ReachView, string> = {
   piece: 'Every square one piece can stand on, and how many moves it takes.',
-  side: 'The whole side at once, kind by kind — R3 P4 S5, not one merged number.',
+  side: "Distances for each piece type: R3 P4 S5.",
   contest: 'Both sides together. One line each: whose kind gets here, and in how many.',
   threat: 'The focused piece against the kind that captures it, both numbers on every square.',
-  run: 'The shortest route to the goal nothing can cut off.',
+  run: "The shortest safe route to the goal.",
 };
 
 /** A piece that is not on the board, put somewhere to ask what it would do. */
@@ -122,9 +122,9 @@ export const OBSTACLE_LABELS: Record<ObstacleModel, string> = {
 };
 
 export const OBSTACLE_BLURBS: Record<ObstacleModel, string> = {
-  open: 'Ignore every piece. Pure geometry, and the floor under every other reading.',
-  static: 'Believe the board: friends block, and so does any enemy this kind cannot take.',
-  friendlyVacates: 'Assume your own pieces step out of the way. Enemies still block.',
+  open: "Distance ignoring all pieces.",
+  static: "Friendly pieces and uncapturable enemies block the route.",
+  friendlyVacates: "Ignore friendly blockers. Enemies still block.",
 };
 
 export const SAFETY_LABELS: Record<SafetyRule, string> = {

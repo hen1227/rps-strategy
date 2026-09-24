@@ -1,25 +1,37 @@
-import { useRouter } from 'expo-router';
 import { useCallback, useMemo, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import EngineLinesCard from './EngineLinesCard';
+import EngineSwitch from './EngineSwitch';
 import EvalBar from './EvalBar';
 import MoveQualityBadge from './MoveQualityBadge';
+import QuietMoveMeter from './QuietMoveMeter';
 import TerritoryMeter from './TerritoryMeter';
 import {
   applyAnalysisMove,
   createAnalysisGame,
+  createAnalysisGameOn,
   moveLabel,
+  ownerRowsFrom,
+  sideToMove,
   startingPositionFromGrid,
   type AnalysisGame,
+  type StartingBoard,
 } from '@/engine/analysisGame';
-import { reviewSourceFromPGN, type GradedMove, type ReviewMove } from '@/engine/gameReview';
-import { engineUnavailableMessage } from '@/engine/rpsfish/client';
+import {
+  formatLoss,
+  reviewSourceFromPGN,
+  type GradedMove,
+  type ReviewMove,
+} from '@/engine/gameReview';
+import { engineSupportsMode, engineUnavailableMessage } from '@/engine/rpsfish/client';
 import { interactiveLimits, type AnalysisEffort } from '@/engine/analysisBudget';
 import type { RefinePass } from '@/engine/gameAnalysis';
 import type { Analysis } from '@/engine/rpsfish/protocol';
 import Board from '@/features/board/Board';
+import BoardExportButton from '@/features/board/BoardExportButton';
+import type { ShareCardInput } from '@/features/board/export/shareCard';
 import { usePieceDrag } from '@/features/board/pieceDrag';
 import PGNImportModal from '@/features/pgn/PGNImportModal';
 import PositionSetupModal from '@/features/pgn/PositionSetupModal';
@@ -31,12 +43,15 @@ import useGameAnalysis from '@/hooks/useGameAnalysis';
 import { usePositionAnalysis, type SearchStatus } from '@/hooks/usePositionAnalysis';
 import useReplayKeyboard from '@/hooks/useReplayKeyboard';
 import { links } from '@/navigation/links';
+import { useGoTo } from '@/navigation/stack';
 import { up } from '@/navigation/upFrom';
 import { useSettledSearchParams } from '@/navigation/useSettledSearchParams';
 import BackLink from '@/ui/BackLink';
+import { arrows } from '@/ui/arrows';
+import { toggleEngineAnalysis, useEngineAnalysis } from '@/store/enginePreference';
 import { useGameStore } from '@/store/gameStore';
 import { useReviewHandoff } from '@/store/reviewHandoff';
-import { colors, players, radius } from '@/theme';
+import { colors, players, radius, themedSheet } from '@/theme';
 import type {
   ModeDefinition,
   Move,
@@ -77,11 +92,13 @@ const lastMoveVerdict = (entry: ReviewMove<BoardPlay>) => {
   if (entry.pending) return 'RPSFish is grading this move…';
   const best = entry.bestMove ? moveLabel(entry.bestMove) : 'not available';
   if (entry.grade.key === 'great') {
-    return 'The only move that stayed within the Good threshold.';
+    return `At depth ${entry.depth} every other move the engine could see was a mistake.`;
   }
   if (entry.isTopMove) return `The engine's own choice at depth ${entry.depth}.`;
   if (entry.lossPercent < 0.05) return `As strong as ${best}.`;
-  return `Best was ${best} · ${entry.lossPercent.toFixed(1)} points of expected score lost`;
+  return `Best was ${best} at depth ${entry.depth} · ${formatLoss(
+    entry.lossPercent,
+  )} of expected score lost`;
 };
 
 interface AnalysisPanelProps {
@@ -89,18 +106,46 @@ interface AnalysisPanelProps {
   canMakeBestMove: boolean;
   /** Whether the grades may still be replaced by a deeper pass. */
   deeperToCome: boolean;
+  /**
+   * Whether RPSFish is being asked about this board at all.
+   *
+   * Off, everything on this panel that is the engine's opinion is gone rather
+   * than blank — the coach, the ranked lines, the move grades — and what is
+   * left is the board's own account of itself: whose turn it is, how the
+   * territory stands, how near the quiet-move draw is, and the tools for
+   * setting a position up and walking a line out.
+   */
+  engineOn: boolean;
   engineState: SearchStatus;
+  /**
+   * The board as the export dialog needs it: the position, plus the little the
+   * picture can honestly say about it. Built by the board rather than here,
+   * because the last move played is the line's, not the position's.
+   */
+  exportBoard: ShareCardInput;
   game: AnalysisGame;
   gradeError: string | null;
   gradedMoves: ReviewMove<BoardPlay>[];
   /** The depth the grades below were measured at. */
   gradeDepth: number;
   onMakeBestMove: () => void;
+  onToggleEngine: () => void;
   onToggleQuick: () => void;
   quick: boolean;
   /** A deeper grading pass in flight, and how far through the line it is. */
   refining: RefinePass | null;
   onSetPosition: () => void;
+  /** Play the board on screen out, against a bot or somebody next to you. */
+  onPlayOut: (against: 'bot' | 'friend') => void;
+  /**
+   * Whether a bot may be offered this mode.
+   *
+   * The same question the engine is asked, and asked rather than assumed: a bot
+   * handed a mode RPSFish refuses does not fail loudly, it quietly plays at
+   * random, and a position somebody built deserves better than that. A shared
+   * board needs no such check — two people can play anything.
+   */
+  playBotOffered: boolean;
   /** Absent in a mode with no goal row for the reach tool to measure against. */
   onToggleReach?: () => void;
   reachShowing?: boolean;
@@ -110,13 +155,18 @@ function AnalysisPanel({
   analysis,
   canMakeBestMove,
   deeperToCome,
+  engineOn,
   engineState,
+  exportBoard,
   game,
   gradeDepth,
   gradeError,
   gradedMoves,
   onMakeBestMove,
+  onPlayOut,
   onSetPosition,
+  playBotOffered,
+  onToggleEngine,
   onToggleQuick,
   onToggleReach,
   quick,
@@ -131,7 +181,7 @@ function AnalysisPanel({
       <View style={styles.coachCard}>
         <View style={styles.cardHeader}>
           <View>
-            <Text style={styles.cardEyebrow}>RPSFISH COACH</Text>
+            <Text style={styles.cardEyebrow}>{engineOn ? 'RPSFISH COACH' : 'ANALYSIS BOARD'}</Text>
             <Text style={styles.cardTitle}>
               {game.status === 'Finished'
                 ? game.winner === 'Neutral'
@@ -140,42 +190,52 @@ function AnalysisPanel({
                 : `${activeColor} to move`}
             </Text>
           </View>
-          {engineState === 'thinking' && <ActivityIndicator color={colors.accent} size="small" />}
+          {engineOn && engineState === 'thinking' && (
+            <ActivityIndicator color={colors.accent} size="small" />
+          )}
         </View>
         <Text style={styles.cardBody}>
-          {engineState === 'thinking'
-            ? analysis
-              ? `Searching deeper from depth ${analysis.depth}. The arrows and the scores below are redrawn after each completed iteration, and go on getting better while you look at them.`
-              : quick
-                ? 'Calculating the three strongest continuations…'
-                : 'Starting a three-line search that deepens until this device runs out of headroom…'
-            : game.status === 'Finished'
-              ? 'Review the move grades below or reset the board for another line.'
-              : 'The arrows match the ranked engine lines below. You control both sides.'}
+          {!engineOn
+            ? game.status === 'Finished'
+              ? "Undo to try another line, or reset the board."
+              : "Play both sides or set up a position. Turn on the engine for analysis."
+            : engineState === 'thinking'
+              ? analysis
+                ? `Searching beyond depth ${analysis.depth}. Scores and arrows update as results arrive.`
+                : quick
+                  ? 'Calculating the three strongest continuations…'
+                  : "Analyzing three lines…"
+              : game.status === 'Finished'
+                ? 'Review the move grades below or reset the board for another line.'
+                : 'The arrows match the ranked engine lines below. You control both sides.'}
         </Text>
         <View style={styles.analysisModeRow}>
-          <Text style={styles.analysisModeLabel}>SEARCH</Text>
-          <Pressable
-            accessibilityHint="A quick search grades the line once at a shallow depth and stops. Off, the search keeps deepening for as long as this device and a reasonable wait allow."
-            accessibilityLabel="Quick analysis"
-            accessibilityRole="switch"
-            accessibilityState={{ checked: quick }}
-            onPress={onToggleQuick}
-            style={({ pressed }) => [
-              styles.analysisModeButton,
-              quick && styles.analysisModeButtonActive,
-              pressed && styles.buttonPressed,
-            ]}
-          >
-            <Text
-              style={[
-                styles.analysisModeButtonText,
-                quick && styles.analysisModeButtonTextActive,
+          <Text style={styles.analysisModeLabel}>ANALYSIS</Text>
+          <EngineSwitch enabled={engineOn} offDetail="YOUR BOARD" onToggle={onToggleEngine} />
+          {/* How hard to think, asked only once there is something thinking. */}
+          {engineOn ? (
+            <Pressable
+              accessibilityHint="Quick search uses a shallow depth. Turn it off for deeper analysis."
+              accessibilityLabel="Quick analysis"
+              accessibilityRole="switch"
+              accessibilityState={{ checked: quick }}
+              onPress={onToggleQuick}
+              style={({ pressed }) => [
+                styles.analysisModeButton,
+                quick && styles.analysisModeButtonActive,
+                pressed && styles.buttonPressed,
               ]}
             >
-              QUICK
-            </Text>
-          </Pressable>
+              <Text
+                style={[
+                  styles.analysisModeButtonText,
+                  quick && styles.analysisModeButtonTextActive,
+                ]}
+              >
+                QUICK
+              </Text>
+            </Pressable>
+          ) : null}
           <Pressable
             accessibilityLabel="Set up a custom analysis position"
             accessibilityRole="button"
@@ -187,9 +247,35 @@ function AnalysisPanel({
           >
             <Text style={styles.setPositionButtonText}>SET POSITION</Text>
           </Pressable>
+          {/*
+            The other direction through the same door: SET POSITION draws a
+            board, this hands the one already drawn to anybody — or back to the
+            PGN box on this screen, which reads what it writes.
+          */}
+          <BoardExportButton board={exportBoard} />
+          {playBotOffered && (
+            <Pressable
+              accessibilityHint={`You take ${activeColor}, the side to move.`}
+              accessibilityLabel="Play this position out against a bot"
+              accessibilityRole="button"
+              onPress={() => onPlayOut('bot')}
+              style={({ pressed }) => [styles.setPositionButton, pressed && styles.buttonPressed]}
+            >
+              <Text style={styles.setPositionButtonText}>PLAY A BOT</Text>
+            </Pressable>
+          )}
+          <Pressable
+            accessibilityHint="Play together on this device."
+            accessibilityLabel="Play this position out with somebody next to you"
+            accessibilityRole="button"
+            onPress={() => onPlayOut('friend')}
+            style={({ pressed }) => [styles.setPositionButton, pressed && styles.buttonPressed]}
+          >
+            <Text style={styles.setPositionButtonText}>SHARED BOARD</Text>
+          </Pressable>
           {onToggleReach && (
             <Pressable
-              accessibilityHint="Shows how far every piece is from every square, and which runs to the goal cannot be cut off."
+              accessibilityHint="Show travel distances and safe routes to the goal."
               accessibilityLabel={reachShowing ? 'Hide the reach maps' : 'Show the reach maps'}
               accessibilityRole="switch"
               accessibilityState={{ checked: reachShowing }}
@@ -211,32 +297,36 @@ function AnalysisPanel({
             </Pressable>
           )}
         </View>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityState={{ disabled: !canMakeBestMove }}
-          disabled={!canMakeBestMove}
-          onPress={onMakeBestMove}
-          style={({ pressed }) => [
-            styles.bestMoveButton,
-            !canMakeBestMove && styles.bestMoveButtonDisabled,
-            pressed && canMakeBestMove && styles.buttonPressed,
-          ]}
-        >
-          <View style={styles.bestMoveButtonCopy}>
-            <Text style={styles.bestMoveButtonText}>Make Best Move</Text>
-            <Text style={styles.bestMoveButtonDetail}>
-              {analysis?.lines[0]
-                ? `${moveLabel(analysis.lines[0])} · depth ${analysis.depth}`
-                : engineState === 'thinking'
-                  ? 'Waiting for RPSFish…'
-                  : 'No move available'}
-            </Text>
-          </View>
-          <Text style={styles.bestMoveButtonArrow}>→</Text>
-        </Pressable>
+        {/* Nothing to press when nothing has named a best move. */}
+        {engineOn ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ disabled: !canMakeBestMove }}
+            disabled={!canMakeBestMove}
+            onPress={onMakeBestMove}
+            style={({ pressed }) => [
+              styles.bestMoveButton,
+              !canMakeBestMove && styles.bestMoveButtonDisabled,
+              pressed && canMakeBestMove && styles.buttonPressed,
+            ]}
+          >
+            <View style={styles.bestMoveButtonCopy}>
+              <Text style={styles.bestMoveButtonText}>Make Best Move</Text>
+              <Text style={styles.bestMoveButtonDetail}>
+                {analysis?.lines[0]
+                  ? `${moveLabel(analysis.lines[0])} · depth ${analysis.depth}`
+                  : engineState === 'thinking'
+                    ? 'Waiting for RPSFish…'
+                    : 'No move available'}
+              </Text>
+            </View>
+            <Text style={styles.bestMoveButtonArrow}>→</Text>
+          </Pressable>
+        ) : null}
       </View>
 
       {game.mode.features?.includes('territory') && <TerritoryMeter grid={game.grid} />}
+      <QuietMoveMeter game={game} />
 
       {lastMove && (
         <View style={styles.lastMoveCard}>
@@ -247,39 +337,53 @@ function AnalysisPanel({
                 {lastMove.index + 1}. {moveLabel(lastMove)}
               </Text>
             </View>
-            {lastMove.pending ? (
+            {/*
+              With the engine off the card keeps its one true half — which move
+              was last played — and drops the half that was a verdict on it.
+            */}
+            {!engineOn ? null : lastMove.pending ? (
               <ActivityIndicator color={colors.textMuted} size="small" />
             ) : (
               <MoveQualityBadge grade={lastMove.grade} />
             )}
           </View>
-          <Text style={styles.bestMoveCopy}>{lastMoveVerdict(lastMove)}</Text>
+          {engineOn ? (
+            <Text style={styles.bestMoveCopy}>{lastMoveVerdict(lastMove)}</Text>
+          ) : null}
         </View>
       )}
 
-      <EngineLinesCard
-        analysis={analysis}
-        emptyMessage={
-          engineState === 'error' ? 'Engine analysis unavailable.' : 'No legal continuation.'
-        }
-        meta={
-          analysis
-            ? `DEPTH ${analysis.depth}/${analysis.selectiveDepth} · ${analysis.nodes.toLocaleString()} NODES · ${confidenceLabel(analysis.confidence)} CONFIDENCE`
-            : null
-        }
-        turn={activeColor}
-      />
+      {engineOn ? (
+        <EngineLinesCard
+          analysis={analysis}
+          emptyMessage={
+            engineState === 'error' ? 'Engine analysis unavailable.' : 'No legal continuation.'
+          }
+          meta={
+            analysis
+              ? `DEPTH ${analysis.depth}/${analysis.selectiveDepth} · ${analysis.nodes.toLocaleString()} NODES · ${confidenceLabel(analysis.confidence)} CONFIDENCE`
+              : null
+          }
+          turn={activeColor}
+        />
+      ) : null}
 
+      {/*
+        The line walked out on this board, graded or not. With the engine off it
+        is a plain list of what has been played — still the thing you steer by
+        when you have taken a position apart four moves deep and want to see how
+        you got there — and it says so rather than promising a report.
+      */}
       <View style={styles.historyCard}>
         <View style={styles.cardHeader}>
-          <Text style={styles.cardEyebrow}>MOVE QUALITY</Text>
+          <Text style={styles.cardEyebrow}>{engineOn ? 'MOVE QUALITY' : 'MOVES'}</Text>
           {/*
             What the grades below currently mean. Worth saying out loud because
             they move: a grade written at depth 6 can become a different grade
             at depth 12, and a reviewer who saw one change should be able to see
             why rather than doubt what they read the first time.
           */}
-          {gradedMoves.length > 0 ? (
+          {engineOn && gradedMoves.length > 0 ? (
             <Text style={styles.historyMeta}>
               {refining
                 ? `REGRADING AT DEPTH ${refining.limits.maxDepth} · ${refining.done}/${refining.total}`
@@ -291,7 +395,11 @@ function AnalysisPanel({
         </View>
         {gradeError ? <Text style={styles.historyEmpty}>{gradeError}</Text> : null}
         {gradedMoves.length === 0 ? (
-          <Text style={styles.historyEmpty}>Your move-by-move report will appear here.</Text>
+          <Text style={styles.historyEmpty}>
+            {engineOn
+              ? 'Your move-by-move report will appear here.'
+              : "Your moves will appear here."}
+          </Text>
         ) : (
           <View style={styles.historyList}>
             {[...gradedMoves].reverse().map((entry) => (
@@ -299,7 +407,7 @@ function AnalysisPanel({
                 <Text style={styles.historyNumber}>{entry.index + 1}</Text>
                 <View style={[styles.historyColor, entry.player === 'Red' ? styles.redDot : styles.blueDot]} />
                 <Text style={styles.historyMove}>{moveLabel(entry)}</Text>
-                {entry.pending ? (
+                {!engineOn ? null : entry.pending ? (
                   <Text style={styles.historyQuality}>Analyzing</Text>
                 ) : (
                   <MoveQualityBadge compact grade={entry.grade} />
@@ -374,21 +482,33 @@ export default function AnalysisScreen() {
 }
 
 function AnalysisBoard({ mode }: { mode: ModeDefinition }) {
-  const router = useRouter();
+  // The analysis board is full-screen, so a record opened from it takes its
+  // place rather than covering it over. See `navigation/stack`.
+  const go = useGoTo();
   const modes = useGameStore((state) => state.modes);
   const draggingPiece = usePieceDrag((state) => state.dragging);
+  const startBotGame = useGameStore((state) => state.startBotGame);
+  const startLocalGame = useGameStore((state) => state.startLocalGame);
   const [game, setGame] = useState(() => createAnalysisGame(mode));
+  // Whether this board asks RPSFish anything. Off by default — see
+  // `store/enginePreference.ts` — which turns this screen into what it is
+  // underneath: a board you play both sides of, with the position setup, the
+  // reach maps and the meters, and no opinions on it.
+  const engineOn = useEngineAnalysis();
   const [effort, setEffort] = useState<AnalysisEffort>('full');
   const [history, setHistory] = useState<BoardMove[]>([]);
   const [pastGames, setPastGames] = useState<AnalysisGame[]>([]);
   const [redoMoves, setRedoMoves] = useState<RedoStep[]>([]);
-  const [startingPosition, setStartingPosition] = useState<StartingPosition>(
-    () => mode.startingPosition,
-  );
+  // The whole board this line began on, not just its pieces: the side to move
+  // and the territory are part of the position somebody set up, and Reset has
+  // to put all three back.
+  const openingBoard = (): StartingBoard => {
+    const opening = createAnalysisGame(mode);
+    return { currentTurn: opening.currentTurn, era: opening.era, grid: opening.grid };
+  };
+  const [startingBoard, setStartingBoard] = useState<StartingBoard>(openingBoard);
   const [positionModalOpen, setPositionModalOpen] = useState(false);
-  const [positionModalInitial, setPositionModalInitial] = useState<StartingPosition>(
-    () => mode.startingPosition,
-  );
+  const [positionModalInitial, setPositionModalInitial] = useState<StartingBoard>(openingBoard);
   const [pgnModalOpen, setPgnModalOpen] = useState(false);
   const handReview = useReviewHandoff((state) => state.hand);
 
@@ -404,6 +524,7 @@ function AnalysisBoard({ mode }: { mode: ModeDefinition }) {
     position: game,
     history: pastGames,
     limits: interactiveLimits({ effort }),
+    enabled: engineOn,
   });
   const analysis = positionAnalysis.analysis;
   const engineState = positionAnalysis.status;
@@ -419,6 +540,7 @@ function AnalysisBoard({ mode }: { mode: ModeDefinition }) {
     [history],
   );
   const gradeAnalysis = useGameAnalysis({
+    enabled: engineOn,
     mode: game.mode,
     moves,
     positions,
@@ -437,14 +559,17 @@ function AnalysisBoard({ mode }: { mode: ModeDefinition }) {
     sidePanel: 430,
     narrowHeightShare: 0.55,
   });
-  const canMove = engineState === 'ready' && game.status === 'InProgress';
+  // A search in flight is never a reason to hold a move back. The engine is
+  // answering a question about the board; the board is not waiting on the
+  // answer. Playing on abandons the search for the position just left and
+  // starts one for the position arrived at — the same thing undo and redo have
+  // always done, and the same thing `usePositionAnalysis` does on any position
+  // change. Grades are unaffected: they come from the walk below, which
+  // searches each position itself rather than reading this one.
+  const canMove = game.status === 'InProgress';
 
-  const performMove = (
-    from: Position,
-    to: Position,
-    { allowWhileThinking = false }: { allowWhileThinking?: boolean } = {},
-  ) => {
-    if ((!canMove && !allowWhileThinking) || game.status !== 'InProgress' || !analysis) return;
+  const performMove = (from: Position, to: Position) => {
+    if (!canMove) return;
     const result = applyAnalysisMove(game, from, to);
     if (!result) return;
 
@@ -507,32 +632,50 @@ function AnalysisBoard({ mode }: { mode: ModeDefinition }) {
   const makeBestMove = () => {
     const bestMove = analysis?.lines[0];
     if (game.status !== 'InProgress' || !bestMove) return;
-    performMove(bestMove.from, bestMove.to, { allowWhileThinking: true });
+    performMove(bestMove.from, bestMove.to);
   };
 
-  const startFromPosition = (position: StartingPosition) => {
+  const startFromPosition = (board: StartingBoard) => {
     clearSelection();
     setHistory([]);
     setPastGames([]);
     setRedoMoves([]);
-    setStartingPosition(position);
-    setGame(createAnalysisGame(mode, position));
+    setStartingBoard(board);
+    setGame(createAnalysisGameOn(mode, board));
     setPositionModalOpen(false);
   };
 
-  const reset = () => startFromPosition(startingPosition);
+  const reset = () => startFromPosition(startingBoard);
+
+  /**
+   * Hand the board on screen to a real game.
+   *
+   * The player takes the side to move. A position is set up to be played
+   * *from* — the decision in front of whoever is on move is the whole of it —
+   * so dealing that seat at random would hand it to the other person half the
+   * time. Neither game is announced anywhere; `app/_layout` routes to the board
+   * on its own once one exists.
+   */
+  const playOut = (against: 'bot' | 'friend') => {
+    const seat = sideToMove(game.currentTurn);
+    const start: StartingBoard = { currentTurn: seat, era: game.era, grid: game.grid };
+    if (against === 'bot') startBotGame({ mode, playerColor: seat, start });
+    else startLocalGame({ mode, start, viewColor: seat });
+  };
 
   const board = (
     <View style={styles.boardWithEval}>
-      <EvalBar height={boardSize} redScore={analysis?.redScore} />
+      {/* The bar, the arrows and the grade are the engine drawing on the board. */}
+      {engineOn ? <EvalBar height={boardSize} redScore={analysis?.redScore} /> : null}
       <Board
-        analysisArrows={analysis?.lines ?? []}
+        analysisArrows={engineOn ? analysis?.lines ?? [] : []}
         boardSize={boardSize}
         canMove={canMove}
         grid={game.grid}
         lastMove={history[history.length - 1]?.move ?? null}
-        lastMoveGrade={lastGradedMove?.grade ?? null}
+        lastMoveGrade={engineOn ? lastGradedMove?.grade ?? null : null}
         modeId={game.mode.id}
+        era={game.era}
         movableColor={game.currentTurn}
         onPieceDrop={performMove}
         onTilePress={(square) => {
@@ -553,16 +696,42 @@ function AnalysisBoard({ mode }: { mode: ModeDefinition }) {
         analysis={analysis}
         canMakeBestMove={game.status === 'InProgress' && Boolean(analysis?.lines[0])}
         deeperToCome={gradeAnalysis.deeperToCome}
+        engineOn={engineOn}
         engineState={engineState}
+        exportBoard={{
+          grid: game.grid,
+          currentTurn: game.currentTurn,
+          mode,
+          era: game.era,
+          lastMove: history[history.length - 1]?.move ?? null,
+          detail: {
+            heading: 'ANALYSIS',
+            caption:
+              game.status === 'Finished'
+                ? game.winner === 'Neutral'
+                  ? 'Drawn'
+                  : `${game.winner} wins`
+                : `${game.currentTurn} to move · move ${game.moveNumber + 1}`,
+          },
+        }}
         game={game}
         gradeDepth={gradeAnalysis.depth}
         gradeError={gradeAnalysis.error}
         gradedMoves={gradedMoves}
         onMakeBestMove={makeBestMove}
+        onPlayOut={playOut}
+        playBotOffered={engineSupportsMode(mode.id)}
         onSetPosition={() => {
-          setPositionModalInitial(startingPositionFromGrid(game.grid));
+          // The board as it stands, whose move it is included — opening the
+          // editor part-way down a line should not silently hand the move back.
+          setPositionModalInitial({
+            currentTurn: game.currentTurn,
+            era: game.era,
+            grid: game.grid,
+          });
           setPositionModalOpen(true);
         }}
+        onToggleEngine={toggleEngineAnalysis}
         onToggleQuick={() => setEffort((current) => (current === 'quick' ? 'full' : 'quick'))}
         onToggleReach={reachTool.available ? reachTool.toggle : undefined}
         quick={effort === 'quick'}
@@ -608,7 +777,7 @@ function AnalysisBoard({ mode }: { mode: ModeDefinition }) {
                 pressed && canUndo && styles.buttonPressed,
               ]}
             >
-              <Text style={styles.historyButtonArrow}>←</Text>
+              <Text style={styles.historyButtonArrow}>{arrows.back}</Text>
               <Text style={styles.historyButtonText}>Undo</Text>
             </Pressable>
             <Pressable
@@ -625,7 +794,7 @@ function AnalysisBoard({ mode }: { mode: ModeDefinition }) {
               ]}
             >
               <Text style={styles.historyButtonText}>Redo</Text>
-              <Text style={styles.historyButtonArrow}>→</Text>
+              <Text style={styles.historyButtonArrow}>{arrows.forward}</Text>
             </Pressable>
             <Pressable
               accessibilityRole="button"
@@ -668,21 +837,48 @@ function AnalysisBoard({ mode }: { mode: ModeDefinition }) {
         )}
       </View>
       <PositionSetupModal
-        initialPosition={positionModalInitial}
+        describes="position"
+        initialOwners={ownerRowsFrom(positionModalInitial.grid)}
+        initialPosition={startingPositionFromGrid(positionModalInitial.grid)}
+        initialTurn={sideToMove(positionModalInitial.currentTurn)}
         mode={mode}
-        onApply={startFromPosition}
+        onApply={({ board }) => startFromPosition(board)}
         onClose={() => setPositionModalOpen(false)}
         visible={positionModalOpen}
       />
       <PGNImportModal
         onClose={() => setPgnModalOpen(false)}
+        // A bare position is read against this board's mode, which is the one
+        // thing a FEN cannot say for itself. See `PGNImportModal`.
+        positionMode={mode}
         onLoad={(pgn) => {
           // Parsed here so an unreadable record fails in the modal rather than
           // on the next page.
-          reviewSourceFromPGN(pgn, modes);
+          const source = reviewSourceFromPGN(pgn, modes);
+          // A record with no moves in it is a position rather than a game —
+          // which is exactly what COPY POSITION writes — and a game review of
+          // one would be an empty score sheet and an accuracy nobody played
+          // for. It belongs on the board that is already open behind this
+          // modal, which is the board somebody pasting it into *this* screen is
+          // looking at.
+          const position = source.moves.length === 0 ? source.positions[0] : null;
+          if (position) {
+            if (position.mode.id !== mode.id) {
+              throw new Error(
+                `This position is a ${source.mode.name} board. Open the ${source.mode.name} analysis board to paste it.`,
+              );
+            }
+            startFromPosition({
+              currentTurn: position.currentTurn,
+              era: position.era,
+              grid: position.grid,
+            });
+            setPgnModalOpen(false);
+            return;
+          }
           setPgnModalOpen(false);
           handReview({ pgn, playerColor: null });
-          router.push(links.review());
+          go(links.review());
         }}
         visible={pgnModalOpen}
       />
@@ -690,7 +886,7 @@ function AnalysisBoard({ mode }: { mode: ModeDefinition }) {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   safeArea: { flex: 1, backgroundColor: colors.background },
   screen: {
     flex: 1,
@@ -852,4 +1048,4 @@ const styles = StyleSheet.create({
   historyQuality: { color: colors.textMuted, fontSize: 9, fontWeight: '900' },
   errorBanner: { position: 'absolute', right: 12, bottom: 12, left: 12, padding: 11, borderRadius: radius.medium, backgroundColor: colors.dangerSurface },
   errorText: { color: colors.dangerText, fontSize: 10, fontWeight: '700', textAlign: 'center' },
-});
+}));

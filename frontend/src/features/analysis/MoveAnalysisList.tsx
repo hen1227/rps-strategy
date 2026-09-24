@@ -4,7 +4,7 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import MoveQualityBadge from './MoveQualityBadge';
 import type { GradableMove, ReviewMove } from '@/engine/gameReview';
 import { formatMove, type NotatedMove } from '@/engine/pgn';
-import { colors, radius } from '@/theme';
+import { colors, radius, themedSheet } from '@/theme';
 
 // A compact two-column score sheet. Both post-game review and a running bot
 // battle feed it the same move shape, so grades and replay selection cannot
@@ -19,6 +19,15 @@ type ListedMove = GradableMove & NotatedMove;
 
 export interface MoveAnalysisListProps<TMove extends ListedMove = ListedMove> {
   emptyText?: string;
+  /**
+   * Whether the moves are being graded at all.
+   *
+   * Off, this is a plain score sheet: the moves that were played, and which one
+   * you are standing on. Not the same as every move being `pending`, which is
+   * what an ungraded report looks like from here — a pending pip is a promise
+   * that a grade is coming, and with the engine switched off none is.
+   */
+  graded?: boolean;
   moves: ReviewMove<TMove>[];
   /** Called with the *position* index the move leads to, not the move index. */
   onSelect: (positionIndex: number) => void;
@@ -48,6 +57,16 @@ export interface MoveAnalysisListProps<TMove extends ListedMove = ListedMove> {
    * forty — so the controls are always in the same place.
    */
   footer?: ReactNode;
+  /**
+   * Drawn at the right-hand end of the title row, level with the eyebrow.
+   *
+   * For something that is about the position the list is standing on rather
+   * than about the list — copying that board. It goes up here rather than in
+   * the `footer` because the footer is the bar the list is *steered* with, and
+   * because the title row already exists: a board with a score sheet beside it
+   * is short of height on every screen that draws one, and this costs none.
+   */
+  titleAccessory?: ReactNode;
 }
 
 /** One numbered row of the score sheet: Red's move, then Blue's reply. */
@@ -60,11 +79,13 @@ interface MoveRow<TMove extends ListedMove> {
 export default function MoveAnalysisList<TMove extends ListedMove>({
   emptyText = 'This game has no moves yet.',
   footer,
+  graded = true,
   moves,
   onSelect,
   selectedIndex,
   scroll = false,
   title = 'MOVES',
+  titleAccessory,
 }: MoveAnalysisListProps<TMove>) {
   const rows: MoveRow<TMove>[] = [];
   for (let index = 0; index < moves.length; index += 2) {
@@ -94,11 +115,13 @@ export default function MoveAnalysisList<TMove extends ListedMove>({
                 move ? (
                   <Pressable
                     accessibilityLabel={`Move ${move.index + 1}, ${formatMove(move)}${
-                      move.isBook
-                        ? ', opening book'
-                        : move.pending
-                          ? ''
-                          : `, ${move.grade.symbol}, ${move.grade.label}`
+                      !graded
+                        ? ''
+                        : move.isBook
+                          ? ', opening book'
+                          : move.pending
+                            ? ''
+                            : `, ${move.grade.symbol}, ${move.grade.label}`
                     }`}
                     accessibilityRole="button"
                     accessibilityState={{ selected: selectedIndex === move.index + 1 }}
@@ -121,7 +144,7 @@ export default function MoveAnalysisList<TMove extends ListedMove>({
                     */}
                     {move.isBook ? (
                       <Text style={styles.bookMark}>book</Text>
-                    ) : move.pending ? (
+                    ) : !graded ? null : move.pending ? (
                       <View style={styles.pipPending} />
                     ) : (
                       <MoveQualityBadge
@@ -143,7 +166,10 @@ export default function MoveAnalysisList<TMove extends ListedMove>({
 
   return (
     <View style={[styles.card, scroll && styles.cardBounded]}>
-      <Text style={styles.eyebrow}>{title}</Text>
+      <View style={styles.titleRow}>
+        <Text style={styles.eyebrow}>{title}</Text>
+        {titleAccessory}
+      </View>
       {scroll ? (
         <ScrollView
           contentContainerStyle={styles.scrollerContent}
@@ -161,7 +187,7 @@ export default function MoveAnalysisList<TMove extends ListedMove>({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   card: {
     padding: 13,
     borderRadius: radius.large,
@@ -195,7 +221,21 @@ const styles = StyleSheet.create({
     borderBottomRightRadius: radius.large - 1,
     backgroundColor: colors.surfaceSunken,
   },
-  eyebrow: { color: colors.textFaint, fontSize: 8, fontWeight: '900', letterSpacing: 1.2 },
+  // The accessory is pushed to the far end and the title keeps whatever is
+  // left, so a long one wraps rather than shoving the button off the card.
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  eyebrow: {
+    flexShrink: 1,
+    color: colors.textFaint,
+    fontSize: 8,
+    fontWeight: '900',
+    letterSpacing: 1.2,
+  },
   empty: { color: colors.textFaint, fontSize: 9, marginTop: 9 },
   rows: { marginTop: 9, gap: 3 },
   row: { minHeight: 31, flexDirection: 'row', alignItems: 'center', gap: 4 },
@@ -224,4 +264,4 @@ const styles = StyleSheet.create({
   pipPending: { width: 7, height: 7, borderRadius: 4, backgroundColor: colors.borderLight },
   bookMark: { color: colors.textFaint, fontSize: 9, fontStyle: 'italic' },
   pressed: { opacity: 0.68 },
-});
+}));

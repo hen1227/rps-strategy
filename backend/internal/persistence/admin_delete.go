@@ -540,6 +540,16 @@ WHERE player1_id IN (SELECT player_id FROM tournament_players WHERE user_id = ?1
 		purge.TournamentEntries = int(affected)
 	}
 
+	// The feedback board keeps its posts and loses its author, which is the
+	// one thing here that is not simply deleted. A thread belongs to everybody
+	// in it — see AnonymizeFeedbackAuthorshipTx — and the votes go, because a
+	// tally counts people who are still here.
+	if err := AnonymizeFeedbackAuthorshipTx(
+		ctx, transaction, userID, "Deleted player",
+	); err != nil {
+		return AccountPurge{}, err
+	}
+
 	// game_accuracy is keyed by game, and the loop above cleared the games this
 	// account played. This catches reviews it filed on somebody else's game.
 	if _, err := transaction.ExecContext(ctx,

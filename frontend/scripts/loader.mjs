@@ -72,7 +72,22 @@ export const load = async (url, context, next) => {
     return {
       format: 'module',
       shortCircuit: true,
-      source: 'export const Platform = { OS: "node" };',
+      // `StyleSheet` joined `Platform` here when the theme became swappable:
+      // `theme/sheet.ts` needs a real `create` to compile its containers, and
+      // the tests that read a colour out of `@/theme` now import it through
+      // that. React Native's own `create` is the identity function plus a
+      // freeze in development, and a stylesheet is never rendered here, so
+      // identity is the whole of what this needs to be.
+      source: [
+        'export const Platform = { OS: "node" };',
+        'export const StyleSheet = {',
+        '  create: (styles) => styles,',
+        '  flatten: (style) => Object.assign({}, ...[style].flat(Infinity).filter(Boolean)),',
+        '  absoluteFill: {},',
+        '  absoluteFillObject: {},',
+        '  hairlineWidth: 1,',
+        '};',
+      ].join('\n'),
     };
   }
   if (url === KV_STORE_STUB) {

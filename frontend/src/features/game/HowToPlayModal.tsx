@@ -11,7 +11,7 @@ import {
 import ModePreview from './ModePreview';
 import PieceIcon from '@/features/board/PieceIcon';
 import TileMark from '@/features/board/TileMark';
-import { board, colors, players, radius } from '@/theme';
+import { board, colors, players, radius, themedSheet } from '@/theme';
 import ModalCard from '@/ui/ModalCard';
 
 // Small rules card for a single mode. Everything the two playable modes share
@@ -59,7 +59,7 @@ const WIN_CONDITIONS: Record<string, WinCondition> = {
     rows: ['.#...', '.s...', '...R.', '..++.'],
     territory: true,
     caption:
-      'Every square you land on turns your colour for good. Take all of their pieces to win — or own more of the board once no neutral squares are left.',
+      "Claim each square you land on. Win by capturing every enemy piece or owning more territory when the board is full.",
   },
   // Infiltration: the tinted rank is the finish line, one step above the
   // runner. Drawn from the point of view of the side that opens, which is the
@@ -69,7 +69,7 @@ const WIN_CONDITIONS: Record<string, WinCondition> = {
     goalRow: 0,
     topLabel: 'THEIR BOUNDARY',
     caption:
-      'Land any piece on their far row and you win on the spot. They are racing for yours too, so every attacker you send is one less defender.',
+      "Reach the far row with any piece to win. Defend your own row.",
   },
   // Intransitive: the same finish line shrunk to the one corner, with the
   // runner on the diagonal it is reached along.
@@ -78,7 +78,7 @@ const WIN_CONDITIONS: Record<string, WinCondition> = {
     goalTile: { x: 4, y: 0 },
     topLabel: 'THEIR CORNER',
     caption:
-      'Land any piece on the corner their army started in and you win on the spot. One square, not a whole row — and they are running at yours down the same diagonal.',
+      "Reach the corner where the enemy army started to win. Defend your own corner.",
   },
 };
 
@@ -98,13 +98,13 @@ const fallbackWinCondition = (mode: ModeDefinition | null | undefined): WinCondi
 const setupSentence = (mode: ModeDefinition): string => {
   const rows = mode.startingPosition?.rows;
   if (!isBoardRows(rows)) {
-    return `Nothing is hidden. You take one turn at a time and ${FIRST_TO_MOVE} starts.`;
+    return `Players take turns. ${FIRST_TO_MOVE} moves first.`;
   }
   const layout = rows.join('');
   const red = layout.replace(/[^rps]/g, '').length;
   const blue = layout.replace(/[^RPS]/g, '').length;
   const armies = red === blue ? `${red} pieces each` : `${red} red pieces against ${blue} blue`;
-  return `A ${rows[0].length}×${rows.length} board, ${armies}, nothing hidden. You take one turn at a time and ${FIRST_TO_MOVE} starts.`;
+  return `A ${rows[0].length}×${rows.length} board with ${armies}. ${FIRST_TO_MOVE} moves first.`;
 };
 
 interface MiniBoardProps {
@@ -263,15 +263,17 @@ export default function HowToPlayModal({ mode, onClose, visible }: HowToPlayModa
             </Section>
 
             <Text style={styles.footnote}>
-              No legal move, or the same position three times over, is a draw. You can also
-              offer a draw or resign from the game screen.
+              {mode.id === 'V6'
+                ? 'No legal moves means a loss in Intransitive.'
+                : 'No legal moves means a draw.'}{' '}
+              All modes draw after 100 moves per side without a capture. Repetition is not a draw.
             </Text>
       </ScrollView>
     </ModalCard>
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
 
 
   scroll: { marginTop: 4 },
@@ -373,4 +375,4 @@ const styles = StyleSheet.create({
   doneText: { color: colors.textStrong, fontSize: 10, fontWeight: '900', letterSpacing: 0.9 },
 
   pressed: { opacity: 0.7 },
-});
+}));

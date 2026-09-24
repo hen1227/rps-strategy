@@ -420,3 +420,107 @@ func mustParse(t *testing.T, text string) ParsedGame {
 	}
 	return parsed
 }
+
+// The scale the rating tags are written on travels with them.
+//
+// RedElo and BlueElo are standard PGN tag names and the numbers under them are
+// not comparable across the change: the archive is published, and 200 is a
+// plausible rating on both the old 1200-centred scale and the anchored one —
+// a weak player on the first and a strong one on the second. Nothing in a file
+// would look wrong to a reader that mixed them.
+func TestAStoredGameSaysWhichRatingScaleItsNumbersAreOn(t *testing.T) {
+	played := newTestGame(t, game.ModeInfiltration)
+	if _, err := played.Move(
+		game.Blue, game.Position{X: 3, Y: 2}, game.Position{X: 3, Y: 3},
+	); err != nil {
+		t.Fatal(err)
+	}
+	record := played.Record()
+	text := Encode(record, Metadata{
+		Event:        "Ranked",
+		Ranked:       true,
+		RedEloBefore: 40, RedEloAfter: 45,
+		BlueEloBefore: 38, BlueEloAfter: 36,
+	})
+	if !strings.Contains(text, `[RatingSystem "`+RatingSystem+`"]`) {
+		t.Fatalf("the scale did not reach the file:\n%s", text)
+	}
+
+	parsed, err := Parse(text)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if parsed.Metadata.RatingScale != RatingSystem {
+		t.Fatalf("the scale did not survive the round trip: %q", parsed.Metadata.RatingScale)
+	}
+
+	// A game with no ratings on it does not carry the tag, because there is
+	// nothing for it to qualify.
+	plain := Encode(record, Metadata{Event: "Casual"})
+	if strings.Contains(plain, "RatingSystem") {
+		t.Fatalf("an unrated game claimed a rating scale:\n%s", plain)
+	}
+
+	// And a file from before the tag existed parses as the old scale rather than
+	// as this one, which is the whole point of reading it off the file.
+	older := strings.ReplaceAll(text, `[RatingSystem "`+RatingSystem+`"]`+"\n", "")
+	was, err := Parse(older)
+	if err != nil {
+		t.Fatalf("parse older: %v", err)
+	}
+	if was.Metadata.RatingScale != "" {
+		t.Fatalf("a file with no tag claimed a scale: %q", was.Metadata.RatingScale)
+	}
+}
+
+// Which build of an engine played a game is a fact about that game, and the
+// archive is the only place it can be kept: a bot's current build is whatever
+// it happens to be running today rather than what played this.
+func TestAStoredGameSaysWhichEngineBuildsPlayedIt(t *testing.T) {
+	played := newTestGame(t, game.ModeInfiltration)
+	if _, err := played.Move(
+		game.Blue, game.Position{X: 3, Y: 2}, game.Position{X: 3, Y: 3},
+	); err != nil {
+		t.Fatal(err)
+	}
+	record := played.Record()
+
+	text := Encode(record, Metadata{
+		Event:      "Bot Match",
+		RedEngine:  "RPSFish 0.4.1",
+		BlueEngine: "Chomper build 77",
+	})
+	if !strings.Contains(text, `[RedEngine "RPSFish 0.4.1"]`) ||
+		!strings.Contains(text, `[BlueEngine "Chomper build 77"]`) {
+		t.Fatalf("the builds did not reach the file:\n%s", text)
+	}
+	// A new tag may not disturb the moves or anything else a reader depends
+	// on, so the record still has to come back out intact.
+	if _, err := Parse(text); err != nil {
+		t.Fatalf("parse a game carrying engine builds: %v", err)
+	}
+
+	// A game with no engine in it says nothing about engines. Two people
+	// playing each other must archive exactly as they did before this existed.
+	human := Encode(record, Metadata{Event: "Casual"})
+	if strings.Contains(human, "Engine") {
+		t.Fatalf("a human game claimed an engine build:\n%s", human)
+	}
+
+	// One engine against a person names the one seat that had an engine in it,
+	// rather than writing an empty tag for the other.
+	mixed := Encode(record, Metadata{Event: "Casual", BlueEngine: "Chomper 2.0"})
+	if strings.Contains(mixed, "RedEngine") {
+		t.Fatalf("an empty seat was given a build:\n%s", mixed)
+	}
+	if !strings.Contains(mixed, `[BlueEngine "Chomper 2.0"]`) {
+		t.Fatalf("the engine that did play was left out:\n%s", mixed)
+	}
+
+	// And a record from before the tags existed still parses, which is the
+	// property that matters: the archive is not migrated and cannot be.
+	older := Encode(record, Metadata{Event: "Bot Match"})
+	if _, err := Parse(older); err != nil {
+		t.Fatalf("parse a record from before the tags: %v", err)
+	}
+}

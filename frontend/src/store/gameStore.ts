@@ -306,6 +306,19 @@ export interface LobbyState {
    */
   restrictions: Restriction[];
   /**
+   * Whose messages this account is hiding, as account ids.
+   *
+   * The server already withholds them — it filters both live delivery and the
+   * history it hands a joining client — so nothing here is what makes a block
+   * work. This is the copy the *interface* needs: to label the block button on
+   * a player's page, and to leave a message out that arrived before the block
+   * did, in the tab that placed it.
+   *
+   * Sent whole on connect and again whenever it changes, so nothing has to
+   * merge deltas across tabs.
+   */
+  blockedUserIds: string[];
+  /**
    * The last graceful shutdown one of this account's own bots reported.
    *
    * A signal rather than a copy of the state: the owner's page fetches the
@@ -353,6 +366,15 @@ export interface LobbyState {
    * and comes back as it should.
    */
   dismissedNoticeId: string | null;
+  /**
+   * The `fromUnixMs` of the bench window whose heads-up this browser closed.
+   *
+   * Keyed on the instant rather than a flag because the banner is about one
+   * window: closing September's must not keep October's down. `botBench`
+   * itself is deliberately left alone — it is a live server fact that other
+   * screens read, and a browser closing a banner is not a statement about it.
+   */
+  dismissedBenchFrom: number | null;
   modePlayerCounts: ModeCounts;
   modeQueueCounts: ModeCounts;
   botPlayerCount: number;
@@ -495,6 +517,7 @@ export interface LobbyActions {
   challengeBot: (botId: string, modeId: ModeID, seat?: SeatChoice) => void;
   dismissBotFault: () => void;
   dismissServerNotice: () => void;
+  dismissBotBench: () => void;
   spectateGame: (gameId: string) => void;
   /** The other half of `spectateGame`: put the watched board down. */
   stopSpectating: () => void;
@@ -538,11 +561,13 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
   botBench: null,
   botFault: null,
   restrictions: [],
+  blockedUserIds: [],
   lastBotDrain: null,
   serverUpdate: null,
   serverNotice: null,
   standingNotice: null,
   dismissedNoticeId: null,
+  dismissedBenchFrom: null,
   modePlayerCounts: {},
   // Players waiting in matchmaking right now, per mode. The bot board watches
   // this so someone practising against a bot still hears the door knock.
@@ -740,6 +765,7 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
             engineBots: message.engineBots ?? [],
             botBench: message.botBench ?? null,
             restrictions: message.restrictions ?? [],
+            blockedUserIds: message.blockedUserIds ?? [],
             gameSessionId,
             spectatedGameId,
             modes,
@@ -825,6 +851,10 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
         // the server sends the complete set in force, so an absent kind means
         // lifted, and merging would leave a lifted mute on screen for ever.
         set({ restrictions: message.restrictions ?? [] });
+        break;
+
+      case 'blocked_players':
+        set({ blockedUserIds: message.blockedUserIds ?? [] });
         break;
       case 'moderator_notice':
         // Its own message type rather than an error, because it is not this
@@ -1459,6 +1489,11 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
     set((state) => ({
       serverNotice: null,
       dismissedNoticeId: state.serverNotice?.id ?? state.dismissedNoticeId,
+    })),
+
+  dismissBotBench: () =>
+    set((state) => ({
+      dismissedBenchFrom: state.botBench?.fromUnixMs ?? state.dismissedBenchFrom,
     })),
 
   spectateGame: (gameId) => {

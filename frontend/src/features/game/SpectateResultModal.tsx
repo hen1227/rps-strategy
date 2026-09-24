@@ -1,7 +1,7 @@
 import { StyleSheet, Text, View } from 'react-native';
 
 import { endReasonPhrase } from './resultLabels';
-import { colors, radius, space, type } from '@/theme';
+import { colors, radius, space, themedSheet, type } from '@/theme';
 import type { GameEndReason, PlayerColor } from '@/types/game';
 import ModalCard from '@/ui/ModalCard';
 import { GhostButton, PrimaryButton } from '@/ui/primitives';
@@ -100,7 +100,7 @@ export default function SpectateResultModal({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   side: { flexDirection: 'row', marginTop: space.medium },
   tag: {
     paddingHorizontal: space.small,
@@ -113,4 +113,4 @@ const styles = StyleSheet.create({
   tagRedText: { color: colors.dangerSoft },
   tagBlue: { backgroundColor: colors.accentSurface, borderColor: colors.accentBorder },
   tagBlueText: { color: colors.accentSoft },
-});
+}));

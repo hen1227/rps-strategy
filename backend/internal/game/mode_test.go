@@ -127,3 +127,141 @@ func TestEveryRegisteredModeDatesItsRules(t *testing.T) {
 		}
 	}
 }
+
+// Infiltration's goal ranks come off the board, not off BoardSize.
+//
+// The mode is nine by nine everywhere a live game can reach -- ValidateForMode
+// refuses any other shape -- so comparing against the constant was right for
+// every game this server plays. It was wrong for a *record*, which is replayed
+// on the board its own FEN describes and may be any rectangle, and the review
+// screen replays records people paste. Blue's goal has to be the last rank of
+// this board, not the ninth rank of some other one.
+//
+// Eleven ranks, so the two answers differ: the constant would have ended the
+// game two ranks early for Blue and not at all for a runner standing there.
+func TestInfiltrationGoalRanksFollowTheBoardItIsPlayedOn(t *testing.T) {
+	const height = 11
+
+	for _, runner := range []struct {
+		name   string
+		player PlayerColor
+		rows   []string
+		from   Position
+		// step is the direction this side advances: up the ranks for Blue,
+		// down for Red.
+		step int
+	}{
+		{
+			// Blue opens on rank 1 and runs at rank 11 -- y = 10 here, where
+			// the constant said y = 8.
+			name:   "Blue runs at the last rank of this board",
+			player: Blue,
+			rows: []string{
+				"....R....",
+				".........", ".........", ".........", ".........",
+				".........", ".........", ".........", ".........",
+				".........",
+				"r........",
+			},
+			from: Position{X: 4, Y: 0},
+			step: 1,
+		},
+		{
+			// Red's goal is rank 1 in every era and on every board, so this
+			// half is the control: it passed before the change too.
+			name:   "Red runs at rank 1",
+			player: Red,
+			rows: []string{
+				"R........",
+				".........", ".........", ".........", ".........",
+				".........", ".........", ".........", ".........",
+				".........",
+				"....r....",
+			},
+			from: Position{X: 4, Y: height - 1},
+			step: -1,
+		},
+	} {
+		t.Run(runner.name, func(t *testing.T) {
+			position := MustStartingPosition(runner.rows...)
+			game, err := NewGameWithRegistryTimeControlAndStartingPosition(
+				DefaultModeRegistry,
+				"tall",
+				ModeInfiltration,
+				PlayerProfile{UserID: "red"},
+				PlayerProfile{UserID: "blue"},
+				DefaultTimeControl(),
+				&position,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// The runner walks its own file; the other side shuffles a lone
+			// piece in the far corner, which is only there to hand the turn
+			// back. They never meet, so nothing here depends on a capture.
+			state := game.Snapshot()
+			at := runner.from
+			for ply := 0; ply < height*3; ply++ {
+				if state.Status != InProgress {
+					break
+				}
+				if state.CurrentTurn != runner.player {
+					from, to := anyLegalMoveFor(t, game, state.CurrentTurn)
+					if state, err = game.Move(state.CurrentTurn, from, to); err != nil {
+						t.Fatal(err)
+					}
+					continue
+				}
+				next := Position{X: at.X, Y: at.Y + runner.step}
+				if !state.Grid.Contains(next) {
+					t.Fatalf("the runner reached %v without the game ending", at)
+				}
+				if state, err = game.Move(runner.player, at, next); err != nil {
+					t.Fatalf("move %v to %v: %v", at, next, err)
+				}
+				at = next
+			}
+
+			boundary := height - 1
+			if runner.player == Red {
+				boundary = 0
+			}
+			if at.Y != boundary {
+				t.Fatalf(
+					"the game ended with the runner on rank %d, want the boundary at rank %d",
+					at.Y+1, boundary+1,
+				)
+			}
+			if state.Status != Finished || state.Winner != runner.player {
+				t.Fatalf(
+					"reaching rank %d left the game %s with winner %q",
+					boundary+1, state.Status, state.Winner,
+				)
+			}
+			if state.EndReason != EndReasonInfiltration {
+				t.Fatalf("end reason is %q, want %q", state.EndReason, EndReasonInfiltration)
+			}
+		})
+	}
+}
+
+// anyLegalMoveFor finds a move for a side that is only being asked to hand the
+// turn back.
+func anyLegalMoveFor(t *testing.T, game *Game, player PlayerColor) (Position, Position) {
+	t.Helper()
+	state := game.Snapshot()
+	for y, row := range state.Grid {
+		for x, tile := range row {
+			if tile.OccupantOwner != player {
+				continue
+			}
+			from := Position{X: x, Y: y}
+			if moves := game.ValidMoves(player, from); len(moves) > 0 {
+				return from, moves[0]
+			}
+		}
+	}
+	t.Fatalf("%s has no legal move", player)
+	return Position{}, Position{}
+}

@@ -2,9 +2,12 @@ package server
 
 import (
 	"errors"
+	"log"
 	"net/http"
 	"strconv"
+	"strings"
 
+	"rps-strategy/backend/internal/game"
 	"rps-strategy/backend/internal/persistence"
 )
 
@@ -83,6 +86,86 @@ func (server *Server) deleteAdminBot(writer http.ResponseWriter, request *http.R
 	writeJSON(writer, http.StatusOK, deletion)
 }
 
+// getBenchmarkDrift reports every declared rung beside what the record makes of
+// it, for one mode or for all of them.
+//
+// The other half of a declared scale, and the reason declaring one is safe. The
+// fit holds each rung at its declaration and has no way to disagree, so a rung
+// that has drifted away from what it was declared to be would silently bias
+// every rating measured through it; this is where that is visible. See
+// persistence.BenchmarkDrift for what "freed" means and why it is done one rung
+// at a time.
+//
+// Administrator-only, because it is a tool for deciding what the scale should
+// say rather than a statement of what it does say. A reading with two games
+// behind it is noise, and noise published beside a rating reads as a correction
+// somebody forgot to make.
+func (server *Server) getBenchmarkDrift(writer http.ResponseWriter, request *http.Request) {
+	modes := server.ratedModeIDs()
+	if requested := strings.TrimSpace(request.URL.Query().Get("mode")); requested != "" {
+		if !server.registry.Has(game.ModeID(requested)) {
+			writeAPIError(writer, http.StatusBadRequest, "unknown game mode")
+			return
+		}
+		modes = []game.ModeID{game.ModeID(requested)}
+	}
+	byMode := make(map[string][]persistence.BenchmarkReading, len(modes))
+	for _, modeID := range modes {
+		readings, err := server.data.BenchmarkDrift(request.Context(), modeID)
+		if err != nil {
+			log.Printf("benchmark drift for %s: %v", modeID, err)
+			writeAPIError(writer, http.StatusInternalServerError, "could not read the benchmark ladder")
+			return
+		}
+		byMode[string(modeID)] = readings
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{
+		"modes": byMode,
+		// The declared ladder itself, so a caller can render the slots that
+		// nobody holds without a second request.
+		"ladder": persistence.Benchmarks(),
+	})
+}
+
+// setBotReference puts a bot in one of the scale's benchmark slots, or takes it
+// out of one.
+//
+// Administrator-only, and it has no owner-facing counterpart on purpose. A slot
+// is a declared rating, so whoever can fill one can restate every number on the
+// board — an owner able to declare their own engine to be chance itself would be
+// handed the top of the ladder and everybody else the bottom.
+//
+// The slot is named in the body as `kind`, which is what the field has always
+// been called on the wire and what the admin screen sends. It now carries a
+// benchmark slot rather than "anchor" or "rung"; see benchmarks.go.
+//
+// One engine per slot is enforced in the store, in a transaction, rather than by
+// looking first here — two administrators can both pass a check in a handler.
+func (server *Server) setBotReference(writer http.ResponseWriter, request *http.Request) {
+	var input struct {
+		Kind string `json:"kind"`
+	}
+	if err := decodeAPIRequest(writer, request, &input); err != nil {
+		writeAPIError(writer, http.StatusBadRequest, err.Error())
+		return
+	}
+	botID := request.PathValue("botID")
+	if err := server.data.SetBotBenchmarkSlot(request.Context(), botID, input.Kind); err != nil {
+		writeBotError(writer, err)
+		return
+	}
+	// The scale just moved, or the set of bots exempt from the opponent prune
+	// did. Either way every published rating is a different number now.
+	server.forgetYardsticks()
+	for _, modeID := range server.ratedModeIDs() {
+		if err := server.data.RefitBotLadder(request.Context(), modeID); err != nil {
+			log.Printf("refit bot ladder for %s: %v", modeID, err)
+		}
+	}
+	server.republishBotLadder(request.Context(), server.ratedModeIDs()...)
+	writeJSON(writer, http.StatusOK, map[string]string{"botId": botID, "kind": input.Kind})
+}
+
 // purgeAccount is the hard delete, beside the anonymize on the same screen.
 func (server *Server) purgeAccount(writer http.ResponseWriter, request *http.Request) {
 	userID := request.PathValue("userID")
@@ -97,7 +180,14 @@ func (server *Server) purgeAccount(writer http.ResponseWriter, request *http.Req
 		return
 	}
 	server.disconnectAccount(userID, "this account has been removed")
+	// The block rows went with the account, through the foreign key. The cache
+	// they are enforced from did not, and every path that hides a message reads
+	// the cache — so leaving it would hide a stranger and would put the account
+	// screen's list (which reads the store) out of step with what the client
+	// believes it is hiding. Same reasoning as deleteOwnAccount.
+	server.forgetBlocksOf(userID)
 	for _, bot := range bots {
+		server.forgetBlocksOf(bot.UserID)
 		server.disconnectBot(bot.BotID, "this bot's owner account has been removed")
 		if bot.UserID != "" {
 			server.disconnectAccount(bot.UserID, "this bot has been deleted")

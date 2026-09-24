@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import type { Href } from 'expo-router';
 
-import { colors, radius, space, type } from '@/theme';
+import { colors, radius, space, themedSheet, type } from '@/theme';
 
 // The one navigation control, in the one place people reach for it.
 //
@@ -24,6 +24,16 @@ import { colors, radius, space, type } from '@/theme';
 // middle-click, copy-link, and an address a crawler can follow. `onPress` is
 // the exception, for the board — leaving a game has to close its chat room and
 // drop the spectator's seat before it can navigate.
+//
+// It is a `dismissTo` link, unconditionally, which is the one thing here that
+// is not about how the button looks. Every page that draws this is a page
+// underneath another one, and until this said so pressing it *added* the page
+// above: the lobby slid in over the board rather than the board being put down,
+// so the app kept both, the swipe gesture had somewhere to go, and a second
+// press of "‹ Lobby" from the next board added a third. `dismissTo` pops back
+// to the page named if it is already underneath and replaces the current one if
+// it is not — the latter is what a link opened cold, from a notification or a
+// pasted address, needs. See `navigation/stack` for the rule and the pile.
 
 export interface BackLinkProps {
   /** The page this returns to, by name. */
@@ -75,7 +85,7 @@ export default function BackLink({ label, href, onPress, disabled, hint }: BackL
       // One resolved style object, and no `({ pressed }) => [...]`: `Link
       // asChild` clones this into a real anchor and drops anything else. See
       // the longer note in SidebarNav.
-      <Link asChild href={href}>
+      <Link asChild dismissTo href={href}>
         <Pressable
           accessibilityHint={hint}
           accessibilityLabel={`Back to ${label}`}
@@ -101,7 +111,7 @@ export default function BackLink({ label, href, onPress, disabled, hint }: BackL
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   // A row around the pill, so one control fits both places it is drawn without
   // a prop deciding which. In a column — a `ScreenShell` page, a `PageHeading`
   // — this takes the full width and the pill inside it takes only its content,
@@ -136,4 +146,4 @@ const styles = StyleSheet.create({
   dim: { color: colors.textFaint },
   disabled: { opacity: 0.55 },
   pressed: { opacity: 0.68 },
-});
+}));

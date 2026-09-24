@@ -1,0 +1,27 @@
+[Unit]
+Description=Daily Hugging Face export of the RPS Strategy game archive
+Documentation=https://huggingface.co/datasets/Henhen1227/rps-strategy-games
+
+[Timer]
+# 04:17 rather than 04:00, because a job that fires on a round number is one
+# that will eventually share its minute with something else that does too.
+#
+# UTC explicitly. The files are named by UTC date and the naming cutoff in
+# PRIVACY.md is a UTC instant, so running the timer on the same clock keeps a
+# day's file covering the day it claims, whatever the box's timezone is set to.
+OnCalendar=*-*-* 04:17:00 UTC
+
+# Jitter, so the upload does not start at the same second every night. Fifteen
+# minutes is far inside the gap to the next run and costs nothing: the file is
+# named for the date, not the minute.
+RandomizedDelaySec=900
+
+# A run missed because the box was off happens at the next boot instead of
+# being skipped. This is the whole reason a timer is worth having over the
+# server's in-process ticker: that ticker restarts with the process, so
+# "daily" quietly drifts every deploy. Production's opening statistics were
+# 32.8 hours stale on 2026-09-08 for exactly that reason.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

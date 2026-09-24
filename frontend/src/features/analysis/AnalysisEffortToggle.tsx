@@ -1,7 +1,7 @@
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import type { RefinePass } from '@/engine/gameAnalysis';
-import { colors, radius } from '@/theme';
+import { colors, radius, themedSheet } from '@/theme';
 
 /**
  * The one thing left to say about how hard a review is thinking.
@@ -51,7 +51,7 @@ export default function AnalysisEffortToggle({
   return (
     <View style={styles.row}>
       <Pressable
-        accessibilityHint="A quick review grades once at a shallow depth and does not deepen. Off, the review keeps regrading deeper for as long as this device and a reasonable wait allow."
+        accessibilityHint="Quick review uses a shallow search. Turn it off for deeper analysis."
         accessibilityLabel="Quick review"
         accessibilityRole="switch"
         accessibilityState={{ checked: quick }}
@@ -71,7 +71,7 @@ export default function AnalysisEffortToggle({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   // `minWidth: 0` is what lets the status line shorten instead of pushing the
   // matchup beside it off a phone's header.
   row: { flexDirection: 'row', alignItems: 'center', gap: 6, minWidth: 0, flexShrink: 1 },
@@ -89,4 +89,4 @@ const styles = StyleSheet.create({
   buttonTextActive: { color: colors.accentSoft },
   status: { color: colors.textMuted, fontSize: 7, fontWeight: '900', flexShrink: 1, minWidth: 0 },
   pressed: { opacity: 0.68 },
-});
+}));

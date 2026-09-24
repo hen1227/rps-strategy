@@ -12,8 +12,9 @@ import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-nati
 import type { OpeningLine, OpeningName, OpeningNamePage, OpeningNameSource } from '@/engine/openingBook';
 import { failureMessage } from '@/errors';
 import { browseOpeningNames } from '@/store/api/openings';
-import { colors, radius, space } from '@/theme';
+import { colors, radius, space, themedSheet } from '@/theme';
 import type { ModeID } from '@/types/game';
+import { arrows } from '@/ui/arrows';
 import { Badge, GhostButton, LabeledInput, OptionChips, Panel } from '@/ui/primitives';
 
 import { publishedOn, ui } from './openingsUi';
@@ -128,9 +129,7 @@ export default function NameIndexPanel({ modeId, onOpenLine }: NameIndexPanelPro
         ) : null}
       </View>
       <Text style={styles.sectionCopy}>
-        Anyone can name an opening a few moves deep, whether or not RPSFish has analyzed it. Those
-        names are kept here rather than listed above, because naming a line is not the same claim
-        as certifying one.
+        Player-named openings, including lines RPSFish has not analyzed.
       </Text>
 
       <LabeledInput
@@ -152,7 +151,7 @@ export default function NameIndexPanel({ modeId, onOpenLine }: NameIndexPanelPro
         <Text style={styles.emptyCopy}>
           {query.trim()
             ? `Nothing is called “${query.trim()}” yet.`
-            : 'No openings have been named in this mode yet. Walk into a line below and name it.'}
+            : "No named openings yet. Play a line below to name one."}
         </Text>
       ) : (
         <>
@@ -169,13 +168,13 @@ export default function NameIndexPanel({ modeId, onOpenLine }: NameIndexPanelPro
               <GhostButton
                 compact
                 disabled={offset === 0 || loading}
-                label="← NEWER"
+                label={`${arrows.back} NEWER`}
                 onPress={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
               />
               <GhostButton
                 compact
                 disabled={offset + showing >= total || loading}
-                label="OLDER →"
+                label={`OLDER ${arrows.forward}`}
                 onPress={() => setOffset(offset + PAGE_SIZE)}
               />
             </View>
@@ -186,7 +185,7 @@ export default function NameIndexPanel({ modeId, onOpenLine }: NameIndexPanelPro
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   panel: { gap: space.small },
   header: {
     alignItems: 'flex-start',
@@ -228,4 +227,4 @@ const styles = StyleSheet.create({
   loading: { alignItems: 'center', paddingVertical: space.medium },
   error: { color: colors.danger, fontSize: 13 },
   emptyCopy: { color: colors.textMuted, fontSize: 13, lineHeight: 19 },
-});
+}));

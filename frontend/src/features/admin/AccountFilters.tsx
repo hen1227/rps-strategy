@@ -2,7 +2,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { adminStyles } from './adminStyles';
 import type { AccountQuery, AccountSort } from '@/store/api/bots';
-import { colors, radius, space, type } from '@/theme';
+import { colors, radius, space, themedSheet, type } from '@/theme';
 import { GhostButton, LabeledInput, OptionChips } from '@/ui/primitives';
 
 // Narrowing the account browser.
@@ -222,7 +222,7 @@ export default function AccountFilters({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   block: { gap: space.small },
   row: { flexDirection: 'row', flexWrap: 'wrap', gap: space.snug },
   toggle: {
@@ -242,4 +242,4 @@ const styles = StyleSheet.create({
   disabled: { opacity: 0.45 },
   pressed: { opacity: 0.7 },
   count: { ...type.meta, color: colors.textFaint },
-});
+}));

@@ -42,6 +42,21 @@ const (
 	// the point of the setting is that its owner knows, and the point of the
 	// ceiling is that a bot cannot take an unbounded share of the lobby.
 	botMaxConcurrentGames = 5
+	// botMoveInterval is the least wall time between one move of a game and the
+	// next, where an engine is playing them. An engine that answers sooner than
+	// that has its move held until the interval is up.
+	//
+	// Two engines left to themselves play a five-minute game in a second or so
+	// of real time, and every one of those moves is a record appended, a PGN
+	// rendered, a position broadcast and a lobby view republished. A machine
+	// running several such games spends all of itself on boards nobody is
+	// watching yet. Five moves a second per game is still faster than anyone
+	// can read, and a twentieth of the work.
+	//
+	// Neither clock pays for the wait, so pacing cannot decide a game: an
+	// engine is charged for the time it spent thinking and for nothing else.
+	// See game.HoldClock.
+	botMoveInterval = 200 * time.Millisecond
 )
 
 // botClient is the engine session hanging off one connection.
@@ -64,9 +79,32 @@ type botClient struct {
 	// retriedGameID is the game an illegal or unreadable move has already been
 	// forgiven once in, so the second one is a fault rather than a loop.
 	retriedGameID string
+	// heldGameID is the game this engine has already given a move in, until
+	// that move is played or given up on. Empty the rest of the time.
+	//
+	// The second half of `pending` above, and what keeps promptBot safe to call
+	// redundantly across a paced move. A question is outstanding from the ask
+	// until the reply is read; the answer is then in hand until it reaches the
+	// board, which with a pace on it is a fifth of a second later. Through all
+	// of that the position still shows this engine on move, so a prompt that
+	// found neither field set would ask it for a move it has already given --
+	// and two copies of that move arrive, the second of them out of turn and
+	// faulted as illegal.
+	//
+	// Set by handleEngineReply under the lock that clears `pending`, so there
+	// is no instant in which the engine holds neither, and cleared by whoever
+	// deals with the answer. See releaseBotMove and botMoveInterval.
+	heldGameID string
 	// clientVersion is the rpsbot.py this bot is running, for the roster and
 	// for the owner to see when something misbehaves.
-	clientVersion    string
+	//
+	// Not to be confused with the engine's own build, which is engineVersion
+	// below. These move independently and mean different things: one is the
+	// script this site publishes, the other is the program its owner wrote.
+	clientVersion string
+	// engineVersion is a build declared in rpsbot.conf, which overrides nothing
+	// unless the engine declined to declare one itself. See beginBotHandshake.
+	engineVersion    string
 	upgradeAvailable bool
 	// publicBase is the origin this connection arrived on, kept because the
 	// upgrade notice is sent after the handshake request is gone. Set once and
@@ -208,6 +246,16 @@ type BotPresence struct {
 	Modes        []game.ModeID       `json:"modes,omitempty"`
 	Elo          int                 `json:"elo"`
 	ModeRatings  map[game.ModeID]int `json:"modeRatings,omitempty"`
+	// ModeRatingStates says which of those numbers are measurements. A mode
+	// missing from it is unrated, which is also what an older server sending
+	// neither map means, so a client reading this cannot mistake silence for
+	// confidence. See persistence.RatingState.
+	ModeRatingStates map[game.ModeID]persistence.RatingState `json:"modeRatingStates,omitempty"`
+	// Title is the tag this engine wears, and empty for most of them. Read from
+	// the cached account rather than from the connection's profile, which is
+	// frozen at connect and so would never show a crown won since — the same
+	// reason Elo above is. See republishBotTitles.
+	Title persistence.TitleID `json:"title,omitempty"`
 	// IconSHA256 is empty for a bot with no picture, which is every bot whose
 	// owner has not given it one. See persistence.Bot.IconSHA256.
 	IconSHA256 string `json:"iconSha256,omitempty"`
@@ -226,8 +274,13 @@ type BotPresence struct {
 	ActiveGames int  `json:"activeGames"`
 	Slots       int  `json:"slots"`
 
-	AllowPublicPlay bool   `json:"allowPublicPlay"`
-	ClientVersion   string `json:"clientVersion,omitempty"`
+	AllowPublicPlay bool `json:"allowPublicPlay"`
+	// EnterLadder is whether this engine is in the ranked pool, which is the
+	// only place a rating now comes from. Published so the lobby can say which
+	// engines on the board are actually competing and which are here to be
+	// challenged, and so an owner can see at a glance that the switch took.
+	EnterLadder   bool   `json:"enterLadder"`
+	ClientVersion string `json:"clientVersion,omitempty"`
 	// Draining is an engine on its way out: it is playing what it already owes
 	// and will take nothing new. Published rather than merely enforced, so the
 	// lobby says "shutting down" instead of offering a button that refuses.
@@ -281,6 +334,7 @@ func (server *Server) acceptBotConnection(
 		Description:      strings.TrimSpace(message.Description),
 		AllowPublicPlay:  message.PublicPlay,
 		EnterTournaments: message.EnterTournaments,
+		EnterLadder:      message.EnterLadder,
 	})
 	if err != nil {
 		// The reasons here are all things the owner can fix from their own
@@ -297,6 +351,11 @@ func (server *Server) acceptBotConnection(
 			reject("that bot name is already taken; choose another in rpsbot.conf")
 		case errors.Is(err, persistence.ErrInvalidUsername):
 			reject(err.Error())
+		case errors.Is(err, persistence.ErrInvalidBotDescription):
+			// Named as the file it comes from, like the username case above:
+			// the description is a line in rpsbot.conf, and "invalid bot
+			// description" alone leaves the owner hunting for where.
+			reject("this server will not publish that description; edit it in rpsbot.conf")
 		default:
 			log.Printf("claim bot: %v", err)
 			reject("could not register this bot")
@@ -328,6 +387,7 @@ func (server *Server) acceptBotConnection(
 			botID:            bot.BotID,
 			record:           bot,
 			clientVersion:    message.ClientVersion,
+			engineVersion:    strings.TrimSpace(message.EngineVersion),
 			upgradeAvailable: upgradeAvailable,
 			publicBase:       publicBase,
 			iconWarning:      iconWarning,
@@ -619,7 +679,7 @@ func (server *Server) botRoster() []BotPresence {
 	// The two halves of botIsDraining, read apart: a bench applies to every
 	// engine at once and is not something any of them asked for, so it is
 	// published as itself rather than as a shutdown each of them is having.
-	benched := botsAreBenched(time.Now())
+	benched := server.botsAreBenched(time.Now())
 
 	roster := make([]BotPresence, 0, len(bots))
 	for _, connections := range bots {
@@ -677,6 +737,7 @@ func (server *Server) botRoster() []BotPresence {
 			EngineAuthor:    handshake.Author,
 			Modes:           handshake.Modes,
 			Elo:             client.account.Elo,
+			Title:           client.account.Title,
 			Busy:            !free,
 			ActiveGames:     active,
 			Slots:           slots,
@@ -684,13 +745,18 @@ func (server *Server) botRoster() []BotPresence {
 			Benched:         benched,
 			ReservedFor:     server.botReservation(record.UserID),
 			AllowPublicPlay: record.AllowPublicPlay,
+			EnterLadder:     record.EnterLadder,
 			ClientVersion:   clientVersion,
 			IconSHA256:      record.IconSHA256,
 		}
 		if len(client.account.ModeRatings) > 0 {
 			presence.ModeRatings = make(map[game.ModeID]int, len(client.account.ModeRatings))
+			presence.ModeRatingStates = make(
+				map[game.ModeID]persistence.RatingState, len(client.account.ModeRatings),
+			)
 			for modeID, rating := range client.account.ModeRatings {
 				presence.ModeRatings[modeID] = rating.Elo
+				presence.ModeRatingStates[modeID] = rating.State
 			}
 		}
 		roster = append(roster, presence)
@@ -699,7 +765,7 @@ func (server *Server) botRoster() []BotPresence {
 }
 
 func (server *Server) broadcastBots() {
-	bench := botBenchState(time.Now())
+	bench := server.botBenchState(time.Now())
 	server.broadcastToClients(ServerMessage{
 		Type:       "engine_bots",
 		EngineBots: server.botRoster(),
@@ -761,7 +827,14 @@ func (server *Server) ask(
 	}
 	bot := client.bot
 	bot.mu.Lock()
-	if bot.pending != nil {
+	// One question at a time, and an answer already given counts as one: this
+	// engine owes the server a move in that game until the move is on the
+	// board, which with a pace on it is a fifth of a second after it was given.
+	// Both halves are read here, under the lock the send is decided by, because
+	// a caller that checked either of them first would be acting on an answer
+	// that could arrive in between -- which is exactly how the same move came
+	// to be asked for, given, and played twice. See botClient.heldGameID.
+	if bot.pending != nil || (expect == "bestmove" && bot.heldGameID == gameID) {
 		bot.mu.Unlock()
 		return
 	}
@@ -801,6 +874,14 @@ func (server *Server) handleEngineReply(client *Client, message ClientMessage) {
 		bot.mu.Unlock()
 		return
 	}
+	// A move is not answered until it is on the board. Handed over here, under
+	// the lock that clears `pending`, because the two are one exclusivity and a
+	// gap between them is a gap in which this engine is asked for a move it has
+	// already given. Every other exchange ends here, its continuation's whole
+	// job being to ask the next question. See botClient.heldGameID.
+	if pending.expect == "bestmove" {
+		bot.heldGameID = pending.gameID
+	}
 	bot.pending = nil
 	bot.mu.Unlock()
 
@@ -811,6 +892,31 @@ func (server *Server) handleEngineReply(client *Client, message ClientMessage) {
 	pending.onReply(message.Lines)
 }
 
+// releaseBotMove ends an engine's hold on the move it gave in one named game,
+// whether that move was played, refused or dropped. A no-op for a connection
+// holding nothing, which is every connection most of the time.
+//
+// Named, for the reason gameParticipant is: by the time a paced move is dealt
+// with, the engine may be in a different game. A series seats the next one
+// within a second of the last, so a move dropped because its board is gone can
+// arrive to find the engine already holding an answer in the game after it —
+// and a release that cleared whatever it found would take that one off, leaving
+// the new game open to exactly the duplicate this field prevents.
+//
+// Called by whoever deals with the answer rather than deferred by whoever
+// received it, because two of those callers ask the engine again as they go —
+// and a question asked while the hold is still on is a question dropped.
+func (server *Server) releaseBotMove(client *Client, gameID string) {
+	if !client.isBot() {
+		return
+	}
+	client.bot.mu.Lock()
+	if client.bot.heldGameID == gameID {
+		client.bot.heldGameID = ""
+	}
+	client.bot.mu.Unlock()
+}
+
 // beginBotHandshake runs `rpsi` then `isready`, then publishes the bot.
 func (server *Server) beginBotHandshake(client *Client) {
 	server.ask(client, "", []string{"rpsi"}, "rpsiok", botHandshakeTimeout, func(lines []string) {
@@ -818,7 +924,18 @@ func (server *Server) beginBotHandshake(client *Client) {
 		client.bot.mu.Lock()
 		client.bot.handshake = handshake
 		botID := client.bot.botID
+		declared := client.bot.engineVersion
 		client.bot.mu.Unlock()
+
+		// The engine's own word first, and the conf line only when it said
+		// nothing. An author who rebuilds gets the new number reported without
+		// having to remember to edit a file, which is the case a stale version
+		// string is most likely to be wrong in; the conf line is there for
+		// somebody wrapping a binary they cannot change.
+		engineVersion := handshake.Version
+		if engineVersion == "" {
+			engineVersion = declared
+		}
 
 		if handshake.Protocol != 0 && handshake.Protocol != rpsi.ProtocolVersion {
 			client.Send(ServerMessage{
@@ -833,9 +950,10 @@ func (server *Server) beginBotHandshake(client *Client) {
 		if err := server.data.RecordBotEngineIdentity(
 			context.Background(), botID,
 			persistence.BotEngineIdentity{
-				Name:   handshake.Name,
-				Author: handshake.Author,
-				Modes:  handshake.Modes,
+				Name:    handshake.Name,
+				Author:  handshake.Author,
+				Version: engineVersion,
+				Modes:   handshake.Modes,
 			},
 		); err != nil {
 			log.Printf("record engine identity for %s: %v", botID, err)
@@ -986,7 +1104,7 @@ func (server *Server) challengeBot(
 	// The bench first, because it is the reason that is true of every engine
 	// at once: "Fishy is shutting down" is a plainly wrong thing to say about a
 	// bot whose owner has not touched it and which is back in play at six.
-	if window := botBenchAt(time.Now()); window != nil {
+	if window := server.botBenchAt(time.Now()); window != nil {
 		refuse(botBenchRefusal(window))
 		return
 	}
@@ -1015,10 +1133,25 @@ func (server *Server) challengeBot(
 	}
 
 	server.releaseFromLobby(client)
-	// Unranked: an engine must never move a person's rating, which is what
-	// keeps the bot ladder and the human ladder separate without any extra
-	// machinery.
-	setup := game.GameSetup{ModeID: modeID, TimeControl: control, Casual: true}
+	// Casual against a community engine, ranked against one of the server's own.
+	//
+	// The first half is the old rule and still the right one: an engine's author
+	// can tune it to lose, so a rating handed out by somebody's bot is a rating
+	// its owner controls. That has to stay casual however tempting it looks.
+	//
+	// The second half is what puts people and engines on one scale. A yardstick
+	// is frozen, server-run and owned by nobody, so it cannot be tuned to lose
+	// and there is no author to benefit — and it is the fixed point every bot
+	// rating is a distance from. A person who plays one is therefore measured
+	// against the same object the whole engine ladder is measured against, which
+	// makes "about as strong as a 90-rated engine" a fact rather than a
+	// comparison of two unrelated numbers. It costs one exception here and no
+	// human-versus-community-bot ranked play at all.
+	//
+	// Not rated for an account that cannot play ranked, the same as any other
+	// game: rankedAllowed covers the unregistered and the sanctioned.
+	calibration := server.botIsYardstick(record.BotID) && server.rankedAllowed(client)
+	setup := game.GameSetup{ModeID: modeID, TimeControl: control, Casual: !calibration}
 	human := QueueEntry{
 		Client:   client,
 		Setup:    setup,
@@ -1066,8 +1199,9 @@ func botFullRefusal(name string, active int) string {
 // already in flight.
 //
 // Called after every change to a game a bot is in. It is safe to call
-// redundantly: `ask` drops a second question while one is outstanding, and the
-// turn check drops it when it is the opponent's move.
+// redundantly: the turn check drops it when it is the opponent's move, and
+// `ask` drops it while this engine still owes the server an answer -- either a
+// question it has not replied to or a move on its way to the board.
 func (server *Server) promptBot(session *GameSession, state game.GameState) {
 	if state.Status != game.InProgress {
 		return
@@ -1076,7 +1210,6 @@ func (server *Server) promptBot(session *GameSession, state game.GameState) {
 	if !client.isBot() {
 		return
 	}
-
 	record := session.game.Record()
 	moves := session.game.LegalMoves()
 	lines := []string{
@@ -1097,20 +1230,32 @@ func (server *Server) promptBot(session *GameSession, state game.GameState) {
 		timeout = botMinimumMoveTimeout
 	}
 
+	// The pace is measured from here rather than from the move this position
+	// came out of, because this is the instant the server can be sure of and
+	// the two are the same instant in the ordinary case: a bot is asked from
+	// inside the broadcast of the move before it. Where they differ -- a
+	// reconnect, a retry, an engine asked after its own handshake -- asking is
+	// the later of the two, so measuring from it paces the move by at least as
+	// long as it would have been paced anyway.
+	askedAt := time.Now()
 	gameID := session.gameID
 	server.ask(client, gameID, lines, "bestmove", timeout, func(lines []string) {
-		server.applyBotMove(client, gameID, lines)
+		server.applyBotMove(client, gameID, lines, askedAt)
 	})
 }
 
-// applyBotMove plays the move an engine returned.
+// applyBotMove reads the move an engine returned and plays it, waiting out the
+// pace first if the engine answered sooner than botMoveInterval allows.
 //
-// A refused move must be answered here. `makeMove` replies `move_rejected` and
-// stops, which is right for a person — their client shows the error and they
-// try again — but a bot has no such loop, so the game would sit there looking
-// alive until the engine flagged. One retry covers a garbled reply; a second
-// refusal is the engine disagreeing with the rules, and is a fault.
-func (server *Server) applyBotMove(client *Client, gameID string, lines []string) {
+// The reply is read before anything waits, so an engine that said something
+// unusable is told so at once rather than a fifth of a second later. Only a
+// move is paced; a fault is not a move.
+func (server *Server) applyBotMove(
+	client *Client,
+	gameID string,
+	lines []string,
+	askedAt time.Time,
+) {
 	var bestmove string
 	for _, line := range lines {
 		if strings.HasPrefix(strings.TrimSpace(line), "bestmove") {
@@ -1129,22 +1274,90 @@ func (server *Server) applyBotMove(client *Client, gameID string, lines []string
 	// A move chosen for one position must not be played into another. An engine
 	// that answers after its game has ended is answering in good faith — the
 	// search was already running — but the board it was asked about is gone.
+	participant := server.gameParticipant(client, gameID)
+	if participant == nil {
+		server.releaseBotMove(client, gameID)
+		return
+	}
+	pause := server.botMovePace() - time.Since(askedAt)
+	if pause <= 0 {
+		server.playBotMove(client, gameID, from, to, bestmove)
+		return
+	}
+	// Stopped before anything waits on it, so that the engine is charged for
+	// the thinking it did and the wait is charged to nobody. An engine that had
+	// already run out of time while it thought loses the game rather than the
+	// pause: the same ending `makeMove` would have reached below.
+	if state, expired := participant.session.game.HoldClock(pause); expired {
+		server.releaseBotMove(client, gameID)
+		server.finishSession(participant.session, state)
+		return
+	}
+	// On its own goroutine because this one is the engine's socket being read.
+	// Nothing else it sends can be dealt with while this function runs, and a
+	// connection that cannot be read is a connection that cannot be seen to
+	// have dropped.
+	go func() {
+		time.Sleep(pause)
+		server.playBotMove(client, gameID, from, to, bestmove)
+	}()
+}
+
+// botMovePace is how long a game an engine is playing leaves between moves.
+func (server *Server) botMovePace() time.Duration {
+	if server.movePaceOverride > 0 {
+		return server.movePaceOverride
+	}
+	return botMoveInterval
+}
+
+// playBotMove plays a move an engine has already chosen and answers a refusal
+// on its behalf.
+//
+// A refused move must be answered here. `makeMove` replies `move_rejected` and
+// stops, which is right for a person — their client shows the error and they
+// try again — but a bot has no such loop, so the game would sit there looking
+// alive until the engine flagged. One retry covers a garbled reply; a second
+// refusal is the engine disagreeing with the rules, and is a fault.
+func (server *Server) playBotMove(
+	client *Client,
+	gameID string,
+	from game.Position,
+	to game.Position,
+	bestmove string,
+) {
+	// Asked again, because a paced move waited and a game can end in the wait:
+	// an opponent resigns, a clock runs out, a series seats the next pair.
 	if server.gameParticipant(client, gameID) == nil {
+		server.releaseBotMove(client, gameID)
 		return
 	}
 	// Deliberately the same entry point a person's move takes, so a bot cannot
 	// reach a code path with different rules.
 	if server.makeMove(client, from, to) {
+		// Released once the move is on the board and not a moment before. The
+		// board is what a prompt reads, so an engine let go of while its move
+		// is still on its way there can be asked for that move a second time --
+		// and the second copy arrives out of turn. Releasing after makeMove is
+		// safe for the opposite reason: what it prompts on the way out is the
+		// opponent, and this hold is only ever read against this engine.
+		server.releaseBotMove(client, gameID)
 		client.bot.mu.Lock()
 		client.bot.retriedGameID = ""
 		client.bot.mu.Unlock()
 		return
 	}
+	// Before the retry rather than after, this function's whole purpose from
+	// here being to ask the same engine again.
+	server.releaseBotMove(client, gameID)
 	server.retryOrFault(client, gameID, "the engine played "+bestmove+", which is not legal here")
 }
 
 // retryOrFault asks the engine once more for the same position, then gives up.
 func (server *Server) retryOrFault(client *Client, gameID string, reason string) {
+	// Whatever it said is dealt with, and this function's whole purpose is to
+	// ask again. See releaseBotMove.
+	server.releaseBotMove(client, gameID)
 	client.bot.mu.Lock()
 	alreadyRetried := client.bot.retriedGameID == gameID
 	client.bot.retriedGameID = gameID
@@ -1158,7 +1371,7 @@ func (server *Server) retryOrFault(client *Client, gameID string, reason string)
 	if participant == nil {
 		return
 	}
-	server.notifyBotOwner(client, gameID, reason+" — asking again")
+	server.notifyBotOwner(client, gameID, reason+". Asking again.")
 	server.promptBot(participant.session, participant.session.game.Snapshot())
 }
 
@@ -1194,6 +1407,9 @@ func (server *Server) gameParticipant(client *Client, gameID string) *Participan
 // all. A handshake fault names no game and so ends none, which is right — an
 // engine that cannot say `readyok` has not lost anything yet.
 func (server *Server) faultBot(client *Client, gameID string, reason string) {
+	// Nothing is owed on a move that ends the game it was given in. See
+	// releaseBotMove.
+	server.releaseBotMove(client, gameID)
 	log.Printf("bot fault (%s): %s", gameID, reason)
 	server.notifyBotOwner(client, gameID, reason)
 

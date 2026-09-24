@@ -286,10 +286,10 @@ export const QUEUE_COPY: Record<QueueCallKind, QueueCopy> = {
  * queue, and reading the platform would make it a function of the build too.
  */
 export const ALERTS_PITCH = {
-  line: 'Turn on alerts and you can close the tab — we will call you back.',
-  nativeLine: 'Turn on alerts and you can leave the app — we will call you back.',
+  line: "Turn on alerts to stay queued with the tab closed.",
+  nativeLine: "Turn on alerts to stay queued with the app closed.",
   action: 'TURN ON ALERTS ▶',
-  dismissLabel: 'Not now — hide the alerts offer',
+  dismissLabel: "Not now. Hide the alerts offer.",
 };
 
 /* ----------------------------------------------------------------- gate -- */
@@ -356,8 +356,8 @@ export const lobbyGate = (source: {
  * how long this is for, which is the half that stops "paused" reading as broken.
  */
 export const updatePausedReason = (note?: string): string =>
-  `${note?.trim() || 'The server is restarting.'} New games are paused until it is back — ` +
-  'this page will reconnect on its own.';
+  `${note?.trim() || 'The server is restarting.'} New games are paused.  ` +
+  'This page reconnects automatically.';
 
 /* -------------------------------------------------------- lobby counting -- */
 

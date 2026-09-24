@@ -1,12 +1,19 @@
 import { Link } from 'expo-router';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
+import ReignNote from './ReignNote';
 import { RatioBar, ladderRecord, recordLine, winRateLabel } from './ladderRecord';
 import BotIcon from '@/features/bots/BotIcon';
+import {
+  RATING_UNRATED_LABEL,
+  ratingCaveat,
+  ratingIsRankable,
+  ratingLabel,
+} from '@/features/ratings/scale';
 import { links } from '@/navigation/links';
 import { botIconUrl } from '@/store/api/bots';
 import { useGameStore } from '@/store/gameStore';
-import { colors, radius, space, type } from '@/theme';
+import { colors, radius, space, themedSheet, type } from '@/theme';
 import ListRow from '@/ui/ListRow';
 import Monogram from '@/ui/Monogram';
 import TitleTag from '@/ui/TitleTag';
@@ -71,7 +78,11 @@ export default function LadderRows({
         return (
           <Link asChild href={links.player(entry.username)} key={entry.userId}>
             <Pressable
-              accessibilityLabel={`${entry.username}, rated ${entry.elo}. Open their page.`}
+              accessibilityLabel={
+                ratingIsRankable(entry.ratingState)
+                  ? `${entry.username}, rated ${entry.elo}. Open their page.`
+                  : `${entry.username}, ${RATING_UNRATED_LABEL}. Open their page.`
+              }
               accessibilityRole="link"
               // One resolved style object, not an array and not the usual
               // `({ pressed })` function: `Link asChild` clones this child into
@@ -102,6 +113,20 @@ export default function LadderRows({
                       {recordLine(result)}
                     </Text>
                     {/*
+                      The words, where the dash on the right is only a gap.
+                      A row with a long record and no rating is the confusing
+                      case — it looks like a rating of nothing rather than the
+                      absence of one — so the reason sits under the record it
+                      appears to contradict. Provisional says the softer version
+                      of the same thing: there is a number, and it is still
+                      moving.
+                    */}
+                    {ratingCaveat(entry.ratingState) ? (
+                      <Text numberOfLines={1} style={styles.caveat}>
+                        {ratingCaveat(entry.ratingState)}
+                      </Text>
+                    ) : null}
+                    {/*
                       Who to talk to about this engine, and which build the
                       record belongs to. Both only when the server sent them: a
                       server older than the fields sends neither, and "by —"
@@ -113,6 +138,7 @@ export default function LadderRows({
                         {entry.engineName ? ` · ${entry.engineName}` : ''}
                       </Text>
                     ) : null}
+                    <ReignNote entry={entry} isBot={entry.kind === 'bot'} />
                   </View>
                 }
                 title={
@@ -137,7 +163,15 @@ export default function LadderRows({
                         <RatioBar result={result} />
                       </View>
                     ) : null}
-                    <Text style={styles.elo}>{entry.elo}</Text>
+                    {/*
+                      A dash rather than the number, when the number is not one.
+                      The floor of this scale means "plays no better than
+                      chance", so printing it for an account nobody has managed
+                      to measure would be making a claim about them — see
+                      ratingLabel. The row keeps its place and its record; what
+                      it loses is a figure it has not earned.
+                    */}
+                    <Text style={styles.elo}>{ratingLabel(entry.elo, entry.ratingState)}</Text>
                     <Text style={styles.chevron}>›</Text>
                   </View>
                 }
@@ -150,7 +184,7 @@ export default function LadderRows({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   list: { marginTop: space.small },
   pressable: { width: '100%' },
   leading: { flexDirection: 'row', alignItems: 'center', gap: space.snug, minWidth: 34 },
@@ -162,6 +196,9 @@ const styles = StyleSheet.create({
   metaBlock: { marginTop: space.hair },
   meta: { ...type.meta, color: colors.textFaint },
   byline: { ...type.meta, color: colors.textDim },
+  // Dimmer than the record above it: this is the row explaining itself, not a
+  // second fact about the player.
+  caveat: { ...type.meta, color: colors.textFaint },
   you: {
     borderRadius: radius.small,
     backgroundColor: colors.accentSurfaceQuiet,
@@ -172,4 +209,4 @@ const styles = StyleSheet.create({
   rate: { ...type.meta, color: colors.textMuted },
   elo: { ...type.cardTitle, color: colors.textStrong, minWidth: 46, textAlign: 'right' },
   chevron: { color: colors.textFaint, fontSize: 18, paddingLeft: space.tight },
-});
+}));

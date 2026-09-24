@@ -1,8 +1,9 @@
 import { memo } from 'react';
 import { StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
 
-import { board, players } from '@/theme';
+import { board, players, themedSheet } from '@/theme';
 import type { PlayerColor } from '@/types/game';
+import { useAppearanceGeneration } from '@/appearance/store';
 
 // What a tile is marked with, drawn as outlines rather than fills.
 //
@@ -139,6 +140,11 @@ export interface TileMarkProps {
 }
 
 export default memo(function TileMark({ compact = false, owner, style, variant }: TileMarkProps) {
+  // This component wears `memo()`, and none of its props move when the look
+  // does — so without a subscription of its own it would keep the previous
+  // theme's colours while the page around it changed. See `appearance/store`.
+  useAppearanceGeneration();
+
   const playerMark = owner === 'Red' || owner === 'Blue' ? players[owner].territoryMark : undefined;
   const markColor =
     variant === 'territory' || variant === 'goal'
@@ -171,7 +177,7 @@ export default memo(function TileMark({ compact = false, owner, style, variant }
   );
 });
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   mark: {
     ...StyleSheet.absoluteFill,
     overflow: 'hidden',
@@ -207,4 +213,4 @@ const styles = StyleSheet.create({
     left: 3,
     borderWidth: 1,
   },
-});
+}));

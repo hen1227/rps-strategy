@@ -5,15 +5,16 @@ import { Linking, StyleSheet, Text, View } from 'react-native';
 import BotManagerPanel from './BotManagerPanel';
 import { failureMessage } from '@/errors';
 import { links } from '@/navigation/links';
-import { up } from '@/navigation/upFrom';
+import { up, useUpTarget } from '@/navigation/upFrom';
 import {
   botClientScriptUrl,
   botGuide,
   exampleEngineUrl,
+  loadedBotGuide,
   type BotGuide,
 } from '@/store/api/bots';
 import { useGameStore } from '@/store/gameStore';
-import { colors, contentWidth, radius, space, type } from '@/theme';
+import { colors, contentWidth, radius, space, themedSheet, type } from '@/theme';
 import LinkRow from '@/ui/LinkRow';
 import Markdown from '@/ui/Markdown';
 import PageHeading from '@/ui/PageHeading';
@@ -36,8 +37,15 @@ import { Badge, Banner, GhostButton, Panel, PrimaryButton, SectionHeading } from
 
 export default function MyBotsScreen() {
   const router = useRouter();
+  // A trail out only while this page is not itself in the navigation, which
+  // here means only while it is not listed: the row appears once Discord has
+  // vouched for the account. See `useUpTarget`.
+  const back = useUpTarget(up.myBots);
   const sessionToken = useGameStore((state) => state.sessionToken);
-  const [guide, setGuide] = useState<BotGuide | null>(null);
+  // Seeded with the document set if it has already been fetched, so arriving
+  // here again — the next tab, or back from the registry — is not a page that
+  // says "Loading…" first. See `loadedBotGuide`.
+  const [guide, setGuide] = useState<BotGuide | null>(loadedBotGuide);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -56,13 +64,13 @@ export default function MyBotsScreen() {
 
   // The commands table out of the guide, rather than a second copy of it here.
   // A renamed section costs this card and nothing else.
-  const answers = findSection(docSections(guide?.guide, 3), /what your bot has to do/i);
+  const answers = findSection(docSections(guide?.guide, 3), /engine basics/i);
 
   return (
     <ScreenShell width={contentWidth.standard}>
       <PageHeading
-        back={up.myBots}
-        detail="A bot is a program on your machine that plays through a small client. It gets its own name, its own rating, and its own place on the ladder."
+        back={back}
+        detail="Register and manage engines running on your machine."
         eyebrow="YOUR ENGINES"
         title="Your bots"
         trailing={
@@ -81,8 +89,7 @@ export default function MyBotsScreen() {
         <Panel>
           <SectionHeading eyebrow="YOUR BOTS" title="Sign in first" />
           <Text style={styles.help}>
-            A bot belongs to an account, so a token cannot be minted for a browser that has not
-            signed in. Everything you have played so far comes with it.
+            Sign in to register a bot. Your games and rating come with you.
           </Text>
           <View style={styles.actions}>
             <PrimaryButton
@@ -96,8 +103,7 @@ export default function MyBotsScreen() {
       <Panel tone="accent">
         <SectionHeading eyebrow="GET STARTED" title="Three commands" />
         <Text style={styles.help}>
-          Your engine reads and writes lines; the client does the network, the account and
-          the clock. Paste a bot&apos;s token when it asks.
+          Run these commands, then paste your bot token when prompted.
         </Text>
         <Text selectable style={styles.commands}>
           {`curl -O ${botClientScriptUrl}\npip install websockets\npython3 rpsbot.py -- ./your-engine`}
@@ -120,29 +126,29 @@ export default function MyBotsScreen() {
       </Panel>
 
       <Panel>
-        <SectionHeading eyebrow="THE SHORT VERSION" title="What an engine answers" />
+        <SectionHeading eyebrow="QUICK REFERENCE" title="What an engine answers" />
         {answers ? (
           <View style={styles.answers}>
             <Markdown source={answers.body} />
           </View>
         ) : (
           <Text style={styles.help}>
-            {error ? 'The handout could not be loaded.' : 'Loading…'}
+            {error ? "Could not load the guide." : 'Loading…'}
           </Text>
         )}
         <View style={styles.reading}>
           <LinkRow
-            detail="The walkthrough: a working bot in twenty lines, then how to connect it."
+            detail="Build a simple bot and connect it."
             href={links.botGuide()}
             title="Connect your bot"
           />
           <LinkRow
-            detail="RPSI in full — every command, every reply, and the three easy mistakes."
+            detail="Commands, replies, and common mistakes."
             href={links.botProtocol()}
             title="The engine protocol"
           />
           <LinkRow
-            detail="How a stored game is written down: the PGN record, and the FEN inside it."
+            detail="PGN game records and FEN positions."
             href={links.botNotation()}
             title="Records and notation"
           />
@@ -152,7 +158,7 @@ export default function MyBotsScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   help: { ...type.body, color: colors.textMuted, marginTop: space.small },
   actions: {
     flexDirection: 'row',
@@ -185,4 +191,4 @@ const styles = StyleSheet.create({
   },
   answers: { marginTop: space.medium },
   reading: { marginTop: space.medium },
-});
+}));

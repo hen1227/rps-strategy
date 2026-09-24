@@ -2,7 +2,7 @@ import { StyleSheet, Text } from 'react-native';
 
 import DiscordSignInButton from './DiscordSignInButton';
 import { Panel, SectionHeading } from '@/ui/primitives';
-import { colors } from '@/theme';
+import { colors, themedSheet } from '@/theme';
 
 // The nudge shown to an account that still signs in with a password.
 //
@@ -20,14 +20,13 @@ export default function DiscordLinkPrompt() {
     <Panel tone="accent">
       <SectionHeading eyebrow="ACTION NEEDED" title="Link your Discord" />
       <Text style={styles.help}>
-        This account still signs in with a password. Link your Discord and you will not need one
-        any more — your username, rating and games all stay exactly as they are.
+        Link Discord to sign in without a password. Keep your username, rating, and games.
       </Text>
       <DiscordSignInButton label="LINK DISCORD" />
     </Panel>
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   help: { color: colors.textMuted, fontSize: 11, lineHeight: 17, marginTop: 8, marginBottom: 6 },
-});
+}));

@@ -3,10 +3,12 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import BotIcon from './BotIcon';
 import { engineElo, engineIsAvailable, engineStatus } from '@/features/live/liveSelectors';
 import { botIconUrl } from '@/store/api/bots';
-import { colors, radius, space, type } from '@/theme';
+import { colors, radius, space, themedSheet, type } from '@/theme';
 import type { ModeID } from '@/types/game';
 import type { BotPresence } from '@/types/protocol';
-import { Badge, PrimaryButton } from '@/ui/primitives';
+import PlayerLink from '@/ui/PlayerLink';
+import TitleTag from '@/ui/TitleTag';
+import { Badge, GhostButton } from '@/ui/primitives';
 
 // One connected engine, as a card.
 //
@@ -40,6 +42,12 @@ export interface EngineBotCardProps {
   mine?: boolean;
   /** Which side of the pit form this engine is on, or absent for neither. */
   pitRole?: 'first' | 'second' | null;
+  /**
+   * The engine already in the form, when this card is not one of the two. Named
+   * on the button, so the press that completes a pairing says who it is
+   * against rather than repeating what the control is called.
+   */
+  pitOpponentName?: string | null;
   /** True while a challenge cannot be sent at all — disconnected, or mid-game. */
   challengeDisabled?: boolean;
   onChallenge: (bot: BotPresence) => void;
@@ -47,22 +55,34 @@ export interface EngineBotCardProps {
 }
 
 /**
- * The pit toggle.
+ * The pit button, which is what this card is mostly for.
  *
- * Its own pressable rather than a `GhostButton`, because it is the one control
- * on the card with a selected state, and a ghost button has no way to look
- * chosen. Reads FIRST or SECOND once it is, so the card says which side of the
- * run it is on without anybody having to look back at the form.
+ * Its own pressable rather than a `PrimaryButton` for two reasons. It is the
+ * one control on the card with a selected state, and a primary button has no
+ * way to look chosen — filled while it is an invitation, outlined in the same
+ * accent once the engine is in. And its label carries another engine's name,
+ * which has to be allowed to truncate: `mocca-v2-20260907-g1360` would
+ * otherwise widen the card it is sitting on.
+ *
+ * That label is relational, and it is the half of the change that is not about
+ * size. `VS` alone names the button rather than saying what pressing it does,
+ * so once one side is taken every other card names the engine its press would
+ * fight. The question "how do I put two of these against each other" is
+ * answered on the control, at the moment it becomes the question, instead of in
+ * a sentence above the grid that nobody reads.
  */
-function PitToggle({
+function PitButton({
   disabled,
   label,
   onPress,
+  opponent,
   role,
 }: {
   disabled?: boolean;
   label: string;
   onPress: () => void;
+  /** The engine a press would enter this one against, when a side is taken. */
+  opponent?: string | null;
   role: 'first' | 'second' | null;
 }) {
   return (
@@ -79,8 +99,14 @@ function PitToggle({
         pressed && styles.pressed,
       ]}
     >
-      <Text style={[styles.pitText, Boolean(role) && styles.pitTextOn]}>
-        {role === 'first' ? 'FIRST' : role === 'second' ? 'SECOND' : 'VS'}
+      <Text numberOfLines={1} style={[styles.pitText, Boolean(role) && styles.pitTextOn]}>
+        {role === 'first'
+          ? 'FIRST ✓'
+          : role === 'second'
+            ? 'SECOND ✓'
+            : opponent
+              ? `VS ${opponent.toUpperCase()}`
+              : 'PICK FOR VS'}
       </Text>
     </Pressable>
   );
@@ -91,6 +117,7 @@ export default function EngineBotCard({
   modeId,
   mine,
   pitRole = null,
+  pitOpponentName = null,
   challengeDisabled,
   onChallenge,
   onPit,
@@ -118,11 +145,27 @@ export default function EngineBotCard({
           it gets pushed off the card instead.
         */}
         <View style={styles.copy}>
-          <Text numberOfLines={1} style={styles.name}>
-            {bot.name}
-          </Text>
+          {/*
+            The engine's own tag, in the row with its name rather than down
+            among the badges below. It is an identity mark and not a status: a
+            crown says which engine this is, the way a title in front of a
+            player's name does, and the badges say what it is doing right now.
+
+            The name beside it leads to the engine's own page, which is where
+            its rating history, its games and its owner are. It is the only
+            thing on the card that could honestly lead there — the two buttons
+            below are both about starting a game.
+          */}
+          <View style={styles.nameRow}>
+            <TitleTag title={bot.title} />
+            <PlayerLink name={bot.name} numberOfLines={1} style={styles.name} />
+          </View>
+          {/* The build after the name, and only when the engine declared one:
+              most do not, and an empty separator would read as a missing
+              value rather than as an absent one. */}
           <Text numberOfLines={1} style={styles.meta}>
             {bot.engineName || 'engine'}
+            {bot.engineVersion ? ` ${bot.engineVersion}` : ''}
           </Text>
           <Text numberOfLines={1} style={styles.author}>
             {bot.engineAuthor ? `by ${bot.engineAuthor}` : 'author unknown'}
@@ -142,33 +185,42 @@ export default function EngineBotCard({
         {playsThisMode ? null : <Badge label={(bot.modes ?? []).join(' · ')} tone="neutral" />}
       </View>
 
+      {/*
+        Two actions, and the wide one is the series. Pitting two engines against
+        each other is what this page has a panel for and what most of the people
+        on it came to do; challenging one yourself is the errand that can also be
+        run from the lobby. The card used to give the whole width to PLAY and 54
+        points to VS, which said the opposite loudly enough that the sentence
+        above the grid — the one explaining which button did what — was doing
+        work the buttons should have been doing themselves.
+      */}
       <View style={styles.actions}>
-        <View style={styles.play}>
-          <PrimaryButton
-            accessibilityLabel={`Challenge ${bot.name}`}
-            compact
-            disabled={challengeDisabled || unavailable}
-            fullWidth
-            label="PLAY ▶"
-            onPress={() => onChallenge(bot)}
-          />
-        </View>
-        <PitToggle
+        <PitButton
           disabled={!pittable}
           label={
             pitRole
               ? `Take ${bot.name} out of the series`
-              : `Put ${bot.name} in a series against another engine`
+              : pitOpponentName
+                ? `Put ${bot.name} in a series against ${pitOpponentName}`
+                : `Put ${bot.name} in a series against another engine`
           }
           onPress={() => onPit(bot)}
+          opponent={pitOpponentName}
           role={pitRole}
+        />
+        <GhostButton
+          accessibilityLabel={`Challenge ${bot.name} yourself`}
+          compact
+          disabled={challengeDisabled || unavailable}
+          label="PLAY ▶"
+          onPress={() => onChallenge(bot)}
         />
       </View>
     </View>
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   card: {
     // Three or four across a desktop page, two on a tablet, one on a phone,
     // without a breakpoint: the basis is the width a card wants and `flexGrow`
@@ -193,27 +245,40 @@ const styles = StyleSheet.create({
   cardPitted: { borderColor: colors.accent, backgroundColor: colors.accentSurfaceQuiet },
   head: { flexDirection: 'row', alignItems: 'center', gap: space.small },
   copy: { flex: 1, minWidth: 0 },
-  name: { ...type.rowTitle, color: colors.text },
+  // `minWidth: 0` again on the row and on the name inside it, for the reason
+  // the copy column has it: the tag is fixed width and the name is one long
+  // unbreakable word, so without it the name pushes the tag out of the card
+  // rather than truncating.
+  nameRow: { flexDirection: 'row', alignItems: 'center', gap: space.hair, minWidth: 0 },
+  name: { ...type.rowTitle, color: colors.text, flexShrink: 1, minWidth: 0 },
   meta: { ...type.meta, fontSize: 10, color: colors.textDim, marginTop: space.hair },
   author: { ...type.meta, fontSize: 10, color: colors.textFaint },
   rating: { fontSize: 15, fontWeight: '900', color: colors.textSubtle },
   ratingMine: { color: colors.goldSoft },
   badges: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: space.tight },
   actions: { flexDirection: 'row', alignItems: 'center', gap: space.tight },
-  play: { flex: 1, minWidth: 0 },
+  // A filled accent button, taking whatever PLAY leaves. Its height is
+  // `GhostButton`'s compact 34 rather than `PrimaryButton`'s 36: these two sit
+  // side by side on a card, and lining up with the button it is next to matters
+  // more than lining up with a button on another panel.
   pit: {
-    minWidth: 54,
-    paddingHorizontal: space.small,
-    paddingVertical: space.snug,
+    flex: 1,
+    minWidth: 0,
+    minHeight: 34,
+    paddingHorizontal: space.medium,
     alignItems: 'center',
-    borderRadius: radius.small,
+    justifyContent: 'center',
+    borderRadius: radius.medium,
     borderWidth: 1,
-    borderColor: colors.borderStrong,
-    backgroundColor: colors.surfaceMuted,
+    borderColor: colors.accent,
+    backgroundColor: colors.accent,
   },
+  // Chosen rather than offered: the same accent, drawn as an outline. The card
+  // around it is tinted too (see cardPitted), so all this has to do is stop
+  // looking like something asking to be pressed.
   pitOn: { borderColor: colors.accent, backgroundColor: colors.accentSurfaceStrong },
-  pitText: { ...type.label, color: colors.textMuted },
+  pitText: { fontSize: 10, fontWeight: '900', letterSpacing: 0.9, color: colors.textStrong },
   pitTextOn: { color: colors.accentTextStrong },
   faded: { opacity: 0.4 },
   pressed: { opacity: 0.7 },
-});
+}));

@@ -300,3 +300,136 @@ func TestAnonymizeClearsTheDiscordIdentity(t *testing.T) {
 		t.Fatalf("the Discord identity survived anonymization: %v", err)
 	}
 }
+
+// The path the naming step needs: a legacy account holder, with no session,
+// proving which account is theirs with the password they already have.
+func TestLinkingWithAPasswordFindsTheAccountAndKeepsIt(t *testing.T) {
+	store := authTestStore(t)
+	ctx := t.Context()
+
+	legacyPasswordAccount(t, store, "legacy", "Ada", authTestPassword)
+
+	linked, err := store.LinkDiscordIdentityWithPassword(
+		ctx, "Ada", authTestPassword, "80351110224678912", "yuki",
+	)
+	if err != nil {
+		t.Fatalf("link with password: %v", err)
+	}
+	// The account they already had, not a new one beside it.
+	if linked.UserID != "legacy" {
+		t.Fatalf("linking landed on a different account: %q", linked.UserID)
+	}
+	if linked.Username != "Ada" {
+		t.Fatalf("linking renamed the account: %q", linked.Username)
+	}
+	if !linked.DiscordVerified {
+		t.Fatalf("linking did not record the identity: %+v", linked)
+	}
+	// Same trade LinkDiscordIdentity makes: the password is spent, not kept.
+	if _, err := store.AuthenticateAccount(ctx, "Ada", authTestPassword); !errors.Is(
+		err, ErrInvalidCredentials,
+	) {
+		t.Fatalf("the password still works after linking: %v", err)
+	}
+}
+
+// The username is not the proof. Somebody who knows a name — and every name is
+// on the leaderboard — must not be able to attach their Discord to it.
+func TestLinkingWithAPasswordRefusesTheWrongPassword(t *testing.T) {
+	store := authTestStore(t)
+	ctx := t.Context()
+
+	legacyPasswordAccount(t, store, "legacy", "Ada", authTestPassword)
+
+	_, err := store.LinkDiscordIdentityWithPassword(
+		ctx, "Ada", "not-"+authTestPassword, "80351110224678912", "yuki",
+	)
+	if !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("a wrong password linked an identity: %v", err)
+	}
+	account, err := store.Account(ctx, "legacy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if account.DiscordVerified {
+		t.Fatal("a refused attempt still wrote the identity")
+	}
+}
+
+// An account that already signs in with Discord has no password left, so this
+// door cannot be used to take one over.
+func TestLinkingWithAPasswordCannotReachADiscordAccount(t *testing.T) {
+	store := authTestStore(t)
+	ctx := t.Context()
+
+	legacyPasswordAccount(t, store, "legacy", "Ada", authTestPassword)
+	if _, err := store.LinkDiscordIdentity(ctx, "legacy", "111", "ada"); err != nil {
+		t.Fatalf("first link: %v", err)
+	}
+
+	_, err := store.LinkDiscordIdentityWithPassword(
+		ctx, "Ada", authTestPassword, "222", "someone-else",
+	)
+	if !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("a linked account was reachable by password: %v", err)
+	}
+}
+
+// UsernameCanLinkWithPassword decides whether the naming step offers a password
+// box, so the three answers it can give are worth pinning down together.
+func TestUsernameCanLinkWithPasswordOnlyForLegacyAccounts(t *testing.T) {
+	store := authTestStore(t)
+	ctx := t.Context()
+
+	legacyPasswordAccount(t, store, "legacy", "Ada", authTestPassword)
+	legacyPasswordAccount(t, store, "moved-on", "Bex", authTestPassword)
+	if _, err := store.LinkDiscordIdentity(ctx, "moved-on", "111", "bex"); err != nil {
+		t.Fatalf("link Bex: %v", err)
+	}
+	anonymousAccount(t, store, "guest", "Guest")
+
+	for _, probe := range []struct {
+		username string
+		want     bool
+		why      string
+	}{
+		{username: "Ada", want: true, why: "a legacy password account is the whole point"},
+		{username: "ada", want: true, why: "names are matched case-insensitively"},
+		{username: "Bex", want: false, why: "already signs in with Discord: no password to offer"},
+		{username: "Guest", want: false, why: "an anonymous account holds no name to claim"},
+		{username: "Nobody", want: false, why: "a free name is claimed, not linked"},
+	} {
+		got, err := store.UsernameCanLinkWithPassword(ctx, probe.username)
+		if err != nil {
+			t.Fatalf("probe %q: %v", probe.username, err)
+		}
+		if got != probe.want {
+			t.Errorf("%q: got %v, want %v — %s", probe.username, got, probe.want, probe.why)
+		}
+	}
+}
+
+// A disabled account must not be linkable, or a ban is one Discord sign-in away
+// from being undone.
+func TestLinkingWithAPasswordRefusesADisabledAccount(t *testing.T) {
+	store := authTestStore(t)
+	ctx := t.Context()
+
+	legacyPasswordAccount(t, store, "legacy", "Ada", authTestPassword)
+	if err := store.SetAccountDisabled(ctx, "legacy", true); err != nil {
+		t.Fatalf("disable: %v", err)
+	}
+
+	if _, err := store.LinkDiscordIdentityWithPassword(
+		ctx, "Ada", authTestPassword, "111", "ada",
+	); !errors.Is(err, ErrAccountDisabled) {
+		t.Fatalf("a disabled account was linked: %v", err)
+	}
+	offered, err := store.UsernameCanLinkWithPassword(ctx, "Ada")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if offered {
+		t.Fatal("a disabled account was offered a password box")
+	}
+}

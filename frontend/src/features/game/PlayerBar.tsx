@@ -3,8 +3,9 @@ import { Animated as NativeAnimated, Easing, StyleSheet, Text, View } from 'reac
 
 import CapturedPieces, { type CaptureTray } from '@/features/board/CapturedPieces';
 import type { TimeExtension } from '@/store/clockSelectors';
+import PlayerLink from '@/ui/PlayerLink';
 import TitleTag from '@/ui/TitleTag';
-import { clock as clockColors, colors, players, radius } from '@/theme';
+import { clock as clockColors, colors, players, radius, themedSheet } from '@/theme';
 import {
   opposingColor,
   type ClockState,
@@ -218,6 +219,19 @@ export interface PlayerBarProps {
   fallbackLabel?: string;
   gameStatus: GameStatus;
   isYou?: boolean;
+  /**
+   * Draw the name as a link to that player's page.
+   *
+   * For a spectator, who came to watch two other people and has every reason
+   * to ask who they are. Off by default, and deliberately so for the two
+   * people playing: the app holds a player at their own live board — see the
+   * rule in `app/_layout.tsx` — so a link out of it would navigate and be
+   * bounced straight back, which reads as a name that does nothing. A bot game
+   * and a shared board leave it off too, because the names there are a
+   * practice-ladder profile and whoever is sitting at this browser, and
+   * neither has a page.
+   */
+  linkName?: boolean;
   /** Replaces the `Thinking`/colour line under the name. */
   metaOverride?: string | null;
   profile?: BarProfile | null;
@@ -234,6 +248,7 @@ export default function PlayerBar({
   fallbackLabel,
   gameStatus,
   isYou,
+  linkName,
   metaOverride,
   profile,
   turnColor,
@@ -257,9 +272,19 @@ export default function PlayerBar({
             nothing when there is no title, which is most players.
           */}
           <TitleTag size="medium" title={profile?.title} />
-          <Text style={styles.playerName} numberOfLines={1}>
-            {profileName(profile, label)}
-          </Text>
+          {/*
+            Addressed by the username rather than by the name on screen: the
+            fallback label is `Red player` or `You`, and an unnamed guest reads
+            as one of those. `PlayerLink` draws a name with no account behind
+            it as the plain text it already was.
+          */}
+          <PlayerLink
+            handle={profile?.username ?? ''}
+            name={profileName(profile, label)}
+            numberOfLines={1}
+            plain={!linkName}
+            style={styles.playerName}
+          />
           {isYou && <Text style={styles.youLabel}>YOU</Text>}
           {Boolean(badge) && <Text style={styles.botLabel}>{badge}</Text>}
         </View>
@@ -279,7 +304,7 @@ export default function PlayerBar({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   playerBar: {
     width: '100%',
     minHeight: 50,
@@ -382,4 +407,4 @@ const styles = StyleSheet.create({
   },
   clockTextActive: { color: clockColors.activeText },
   clockTextLow: { color: clockColors.lowText },
-});
+}));

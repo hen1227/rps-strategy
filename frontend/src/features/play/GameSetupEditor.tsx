@@ -6,7 +6,7 @@ import {
   timeControlLabel,
   withMode,
 } from '@/store/setupSelectors';
-import { colors, radius, space, type } from '@/theme';
+import { colors, radius, space, themedSheet, type } from '@/theme';
 import { Checkbox, GhostButton, OptionChips } from '@/ui/primitives';
 import {
   FIRST_TO_MOVE,
@@ -194,12 +194,12 @@ export default function GameSetupEditor({
         <Text style={styles.rulesLabel}>RULES TO DROP</Text>
         <Checkbox
           checked={Boolean(rules.noDrawOffers)}
-          label="No draw offers — the game ends on the board"
+          label="Disable draw offers"
           onToggle={() => setRules({ noDrawOffers: !rules.noDrawOffers || undefined })}
         />
         <Checkbox
           checked={Boolean(rules.noTimeExtensions)}
-          label="No extra time — neither of you can top the clocks up"
+          label="Disable time extensions"
           onToggle={() => setRules({ noTimeExtensions: !rules.noTimeExtensions || undefined })}
         />
       </View>
@@ -207,7 +207,7 @@ export default function GameSetupEditor({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   // flexGrow rather than flex, so the groups spread to fill a column that has
   // been stretched to the preview beside them and behave exactly as before in a
   // container that has no height to give.
@@ -234,4 +234,4 @@ const styles = StyleSheet.create({
 
   rules: { gap: space.hair },
   rulesLabel: { ...type.eyebrow, color: colors.textFaint },
-});
+}));

@@ -65,6 +65,29 @@ func connectLadderBot(t *testing.T, server *Server, name string) (persistence.Bo
 	return bot, client
 }
 
+// markLadderAnchor makes a connected engine the yardstick the scale is measured
+// from. One column on an otherwise ordinary bot row, which is all a yardstick is
+// as far as the database is concerned.
+func markLadderAnchor(t *testing.T, server *Server, bot persistence.Bot) {
+	t.Helper()
+	if err := server.data.SetBotBenchmarkSlot(
+		t.Context(), bot.BotID, persistence.BenchmarkRandom,
+	); err != nil {
+		t.Fatalf("mark anchor: %v", err)
+	}
+}
+
+// settleLadder runs the refit the completion path asked for.
+//
+// A finished engine game no longer fits the ladder itself — it flags the mode
+// and the lobby ticker picks it up, for the reasons in ladder_refit.go — so a
+// test that wants to see the ladder move has to let that tick happen. The clock
+// is pushed past the debounce rather than slept through.
+func settleLadder(t *testing.T, server *Server) {
+	t.Helper()
+	server.runLadderRefits(time.Now().Add(2 * ladderRefitDebounce))
+}
+
 // finishLadderGame plays one ranked engine-versus-engine game to a resignation
 // through the server's own completion path, so everything a finished game sets
 // off runs the way it does in production.
@@ -119,13 +142,22 @@ func TestAFinishedBotGameRestatesEveryConnectedEngine(t *testing.T) {
 	beta, betaClient := connectLadderBot(t, server, "Beta")
 	gamma, gammaClient := connectLadderBot(t, server, "Gamma")
 
+	// The yardstick, underneath the board. Every rating the fit publishes is a
+	// distance from this engine, so a board it has never played is one the fit
+	// declines to rate at all — see the anchor note in bot_rating.go.
+	anchorBot, anchorClient := connectLadderBot(t, server, "Anchor")
+	markLadderAnchor(t, server, anchorBot)
+
 	// A graded round robin: the first of each pair takes six of every eight. Not
-	// a sweep, which has no finite fit and collapses to the default — see the
+	// a sweep, which has no finite fit and collapses to the floor — see the
 	// note on the shrinkage in bot_rating.go.
 	pairs := [][2]*Client{
 		{alphaClient, betaClient},
 		{alphaClient, gammaClient},
 		{betaClient, gammaClient},
+		{alphaClient, anchorClient},
+		{betaClient, anchorClient},
+		{gammaClient, anchorClient},
 	}
 	counter := 0
 	for _, pair := range pairs {
@@ -137,13 +169,15 @@ func TestAFinishedBotGameRestatesEveryConnectedEngine(t *testing.T) {
 		}
 	}
 
+	settleLadder(t, server)
+
 	// The record has to place them apart, or this proves nothing.
 	if ladderRating(t, server, alpha.UserID) <= ladderRating(t, server, gamma.UserID) {
 		t.Fatalf("expected a graded board, got alpha %d and gamma %d",
 			ladderRating(t, server, alpha.UserID), ladderRating(t, server, gamma.UserID))
 	}
 
-	for _, bot := range []persistence.Bot{alpha, beta, gamma} {
+	for _, bot := range []persistence.Bot{alpha, beta, gamma, anchorBot} {
 		stored := ladderRating(t, server, bot.UserID)
 		var published int
 		var listed bool
@@ -201,11 +235,16 @@ func TestMatchmakingReadsABotsCurrentLadderRating(t *testing.T) {
 	alpha, alphaClient := connectLadderBot(t, server, "Alpha")
 	_, betaClient := connectLadderBot(t, server, "Beta")
 	_, gammaClient := connectLadderBot(t, server, "Gamma")
+	anchorBot, anchorClient := connectLadderBot(t, server, "Anchor")
+	markLadderAnchor(t, server, anchorBot)
 
 	pairs := [][2]*Client{
 		{alphaClient, betaClient},
 		{alphaClient, gammaClient},
 		{betaClient, gammaClient},
+		{alphaClient, anchorClient},
+		{betaClient, anchorClient},
+		{gammaClient, anchorClient},
 	}
 	counter := 0
 	for _, pair := range pairs {
@@ -217,8 +256,10 @@ func TestMatchmakingReadsABotsCurrentLadderRating(t *testing.T) {
 		}
 	}
 
+	settleLadder(t, server)
+
 	stored := ladderRating(t, server, alpha.UserID)
-	if stored == persistence.DefaultElo {
+	if stored == persistence.RatingFloor {
 		t.Fatalf("the board did not move, so this proves nothing: %d", stored)
 	}
 	if seated := matchmakingElo(alphaClient, game.ModeTotalWar); seated != stored {

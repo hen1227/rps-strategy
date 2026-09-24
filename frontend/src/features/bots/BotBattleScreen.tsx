@@ -8,7 +8,12 @@ import { playBotGame } from '@/engine/bots/arena';
 import { createBot, createSeededRandom } from '@/engine/bots/engine';
 import { botProfile, type BotProfile } from '@/engine/bots/profiles';
 import type { AnalysisEffort } from '@/engine/analysisBudget';
-import { expectedScoreCurve, type GradableMove, type ReviewMove } from '@/engine/gameReview';
+import {
+  expectedScoreCurve,
+  formatLoss,
+  type GradableMove,
+  type ReviewMove,
+} from '@/engine/gameReview';
 import { encodePGN, encodePosition, formatMove, resultFor } from '@/engine/pgn';
 import { failureMessage } from '@/errors';
 import AccuracyCard from '@/features/analysis/AccuracyCard';
@@ -19,8 +24,10 @@ import EvalChart from '@/features/analysis/EvalChart';
 import MoveAnalysisList from '@/features/analysis/MoveAnalysisList';
 import MoveQualityBadge from '@/features/analysis/MoveQualityBadge';
 import ReplayControls from '@/features/analysis/ReplayControls';
+import QuietMoveMeter from '@/features/analysis/QuietMoveMeter';
 import TerritoryMeter from '@/features/analysis/TerritoryMeter';
 import Board from '@/features/board/Board';
+import BoardExportButton from '@/features/board/BoardExportButton';
 import { capturedPieces } from '@/features/board/CapturedPieces';
 import PlayerBar from '@/features/game/PlayerBar';
 import { colourResultLabel } from '@/features/game/resultLabels';
@@ -31,7 +38,7 @@ import { useReplayCursor } from '@/hooks/useReplayCursor';
 import { useSettledSearchParams } from '@/navigation/useSettledSearchParams';
 import { up } from '@/navigation/upFrom';
 import { useGameStore } from '@/store/gameStore';
-import { colors, players, radius } from '@/theme';
+import { colors, players, radius, themedSheet } from '@/theme';
 import BackLink from '@/ui/BackLink';
 import type {
   GameEndReason,
@@ -120,7 +127,7 @@ const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ?
 
 const ORDINAL_SUFFIXES: Record<number, string> = { 1: 'st', 2: 'nd', 3: 'rd' };
 const ordinal = (value: number | null) => {
-  if (typeof value !== 'number') return '—';
+  if (typeof value !== 'number') return '–';
   const teen = value % 100 >= 11 && value % 100 <= 13;
   return `${value}${teen ? 'th' : ORDINAL_SUFFIXES[value % 10] ?? 'th'}`;
 };
@@ -138,7 +145,7 @@ const moveExplanation = (
   botName: string,
   analysis: GameAnalysisResult<BattleMove>,
 ) => {
-  if (!move) return 'Use the arrow keys or the controls below the board to inspect the match.';
+  if (!move) return "Use the arrows to replay the match.";
 
   const chose: string =
     {
@@ -155,9 +162,9 @@ const moveExplanation = (
     // position — a terminal or repeated one — so there is nothing to measure
     // the move against rather than nothing measured yet.
     if (analysis.behind === 0) {
-      return `${bot} RPSFish found no line to compare it with, so it is not graded.`;
+      return `${bot} No grade available for this move.`;
     }
-    return `${bot} The analysis has not reached it yet — it is ${plural(
+    return `${bot} Analysis is ${plural(
       analysis.behind,
       'move',
     )} behind the board.`;
@@ -165,13 +172,13 @@ const moveExplanation = (
 
   const best = move.bestMove ? moveLabel(move.bestMove) : 'unavailable';
   if (move.grade.key === 'great') {
-    return `${bot} At depth ${move.depth} it was the only move that stayed within the Good threshold.`;
+    return `${bot} At depth ${move.depth} every other move it could see was a mistake.`;
   }
   if (move.isTopMove) return `${bot} It is the analysis's own choice at depth ${move.depth}.`;
   if (move.lossPercent < 0.05) return `${bot} It scores as strongly as ${best}.`;
-  return `${bot} Best was ${best}; the move gave up ${move.lossPercent.toFixed(
-    1,
-  )} points of expected score.`;
+  return `${bot} Best was ${best} at depth ${move.depth}; the move gave up ${formatLoss(
+    move.lossPercent,
+  )} of expected score.`;
 };
 
 /** How far behind the board the analysis is, in a sentence. */
@@ -179,10 +186,10 @@ const analysisProgress = (analysis: GameAnalysisResult<BattleMove>, running: boo
   if (analysis.status === 'error') return analysis.error;
   const { depth, refining } = analysis;
   if (analysis.behind > 0) {
-    return `Grading at depth ${depth} — ${plural(
+    return `Grading at depth ${depth} · ${plural(
       analysis.behind,
       'move',
-    )} behind the board. Every grade appears as it lands.`;
+    )} behind live play.`;
   }
   // A deeper pass regrades the whole game rather than extending the report, so
   // it is worth distinguishing from the walk falling behind: nothing is
@@ -190,9 +197,9 @@ const analysisProgress = (analysis: GameAnalysisResult<BattleMove>, running: boo
   if (refining) {
     return `Every position graded at depth ${depth}. Regrading the game at depth ${
       refining.limits.maxDepth
-    } — ${refining.done} of ${refining.total} positions.`;
+    } · ${refining.done} of ${refining.total} positions.`;
   }
-  if (running) return `Grading at depth ${depth} — level with the board.`;
+  if (running) return `Grading at depth ${depth} · level with the board.`;
   return analysis.deeperToCome
     ? `Every position graded at depth ${depth}. A deeper pass is still to come.`
     : `Every position graded at depth ${depth}, as deep as this device goes.`;
@@ -548,7 +555,7 @@ function BotBattle({ blueProfile, mode, redProfile }: BotBattleProps) {
                 ? 'PGN copied to your clipboard.'
                 : copyState === 'error'
                   ? 'The PGN could not be copied.'
-                  : 'Copy this game to save it or analyze it again later.'}
+                  : "Copy the game to save or review it later."}
             </Text>
           </View>
           <Pressable
@@ -580,6 +587,7 @@ function BotBattle({ blueProfile, mode, redProfile }: BotBattleProps) {
       />
 
       {mode.features?.includes('territory') ? <TerritoryMeter grid={visibleGame.grid} /> : null}
+      <QuietMoveMeter game={visibleGame} />
 
       <View style={styles.currentCard}>
         <View style={styles.currentTop}>
@@ -623,6 +631,32 @@ function BotBattle({ blueProfile, mode, redProfile }: BotBattleProps) {
         onSelect={replay.goTo}
         selectedIndex={cursor}
         title="LIVE MOVE ANALYSIS"
+        // The position on the board, which is whichever move the timeline is
+        // standing on. COPY PGN below hands over the whole fight, and only once
+        // it is over; this works while the bots are still playing.
+        titleAccessory={
+          <BoardExportButton
+            board={{
+              grid: visibleGame.grid,
+              currentTurn: visibleGame.currentTurn,
+              mode,
+              era: visibleGame.era,
+              lastMove: visibleMove ? { from: visibleMove.from, to: visibleMove.to } : null,
+              detail: {
+                players: {
+                  Red: { name: redProfile.name, detail: `LEVEL ${redProfile.rating}` },
+                  Blue: { name: blueProfile.name, detail: `LEVEL ${blueProfile.rating}` },
+                },
+                captured: { Red: captures.Red.tally, Blue: captures.Blue.tally },
+                heading: 'BOT BATTLE',
+                caption:
+                  !running && result
+                    ? colourResultLabel(result.winner, result.endReason)
+                    : `Move ${cursor} · ${visibleGame.currentTurn} to move`,
+              },
+            }}
+          />
+        }
       />
     </View>
   );
@@ -689,7 +723,7 @@ function BotBattle({ blueProfile, mode, redProfile }: BotBattleProps) {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   safeArea: { flex: 1, backgroundColor: colors.background },
   screen: {
     flex: 1,
@@ -802,4 +836,4 @@ const styles = StyleSheet.create({
     backgroundColor: colors.dangerSurface,
   },
   errorText: { color: colors.dangerText, fontSize: 10, fontWeight: '800' },
-});
+}));

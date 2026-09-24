@@ -93,10 +93,13 @@ type botSeries struct {
 	// check on an abort — and neither wants a query.
 	requestedBy string
 	privileged  bool
-	pairs       int
-	plies       int
-	seed        uint64
-	gameNumber  int
+	// ladder marks a run the ranked pool arranged, which is what makes its games
+	// count. See BotSeriesRequest.Ladder.
+	ladder     bool
+	pairs      int
+	plies      int
+	seed       uint64
+	gameNumber int
 	// openings is one move list per pair, built up as pairs begin so that a
 	// swapped rematch replays exactly what its partner did.
 	openings map[int][]game.Move
@@ -173,6 +176,28 @@ type botSeriesRunner struct {
 	series map[string]*botSeries
 }
 
+// inLadderRun reports whether this engine is in a running ranked round.
+//
+// Only the pool asks, and what it is really asking is "have I already spent
+// this engine's budget". A round's pairing can start late — see
+// resumeHeldPairings — so "it is in a game" and "it is in a game I started" are
+// no longer the same question, and the second is the one that decides whether
+// to pair it again.
+func (runner *botSeriesRunner) inLadderRun(botID string) bool {
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	for _, run := range runner.series {
+		// `ladder`, `firstBot` and `secondBot` are set when the run is built and
+		// never reassigned, so they are read without taking run.step — which
+		// this must not do anyway, since it is called from the pairer with the
+		// runner's lock held.
+		if run.ladder && (run.firstBot == botID || run.secondBot == botID) {
+			return true
+		}
+	}
+	return false
+}
+
 func newBotSeriesRunner() *botSeriesRunner {
 	return &botSeriesRunner{series: make(map[string]*botSeries)}
 }
@@ -198,6 +223,19 @@ type BotSeriesRequest struct {
 	// Privileged lifts the public ceilings and the public-play requirement. True
 	// for an administrator, and for nobody else.
 	Privileged bool
+	// Ladder marks a run the ranked pool arranged, and it is the only thing that
+	// makes an engine game count.
+	//
+	// Set by seatLadderRound and by StartLadderMatch, and by nothing else — not
+	// by a request field anybody can send, not even on an administrator's
+	// series. Those two are one rule rather than two doors: both take the
+	// opponent from the field and the conditions from the rotation, and the only
+	// difference between them is whether the hour struck or somebody pressed a
+	// button. What stays impossible is the thing the complaint was about —
+	// choosing the opponent, the mode, the clock or the length of a run and then
+	// keeping the result. None of those four is reachable from outside, which is
+	// why the flag is set from inside the server or not at all.
+	Ladder bool
 }
 
 // StartBotSeries sets up a run and plays its first game.
@@ -274,7 +312,8 @@ func (server *Server) StartBotSeries(
 		seriesID: seriesID, modeID: ask.ModeID, control: ask.Control,
 		firstBot: ask.FirstBotID, secondBot: ask.SecondBotID,
 		requestedBy: ask.RequestedBy, privileged: ask.Privileged,
-		pairs: ask.Pairs, plies: ask.OpeningPlies, seed: seed,
+		ladder: ask.Ladder,
+		pairs:  ask.Pairs, plies: ask.OpeningPlies, seed: seed,
 		openings:     make(map[int][]game.Move),
 		openingSeeds: make(map[int]uint64),
 		counted:      make(map[int]bool),
@@ -308,6 +347,7 @@ func (server *Server) StartBotSeries(
 		Seed:              int64(seed),
 		InitialTimeMs:     ask.Control.InitialTimeMs,
 		IncrementMs:       ask.Control.IncrementMs,
+		Ladder:            ask.Ladder,
 	})
 	if err != nil {
 		server.releaseSeriesBots(run)
@@ -392,27 +432,39 @@ func (server *Server) playNextSeriesGame(run *botSeries) {
 		red, blue = second, first
 	}
 
-	// Ranked, because both sides are bots: this moves bot ratings and cannot
-	// touch a person's, which is the whole of the separate-pool design. Unless
-	// one person owns both engines, and then it is casual.
+	// Ranked only if the ranked pool arranged this run, and casual otherwise.
 	//
-	// Running your new version against your old one is the reason the five-bot
-	// allowance exists, and openToPublicSeries lets an owner do it with bots
-	// nobody else may challenge. A rating is the one thing it must not produce.
-	// Two accounts the same hand controls can be made to lose to each other on
-	// purpose, so their record says where those two stand against each other and
-	// nothing whatever about where either stands on the board.
+	// This used to be the other way round: an engine game was rated unless one
+	// person owned both sides. That is the rule the community complained about,
+	// from two directions at once. Whoever started the series chose the
+	// opponent, so the way to gain rating was to pick a weak one — or to
+	// register one, or to talk a friend into registering one. And they chose the
+	// mode, the clock and the number of pairs, so an engine that happened to be
+	// strong at one minute could be rated only ever at one minute.
+	//
+	// So a rating now comes from one shape of game: a pairing the server
+	// arranged, under conditions the server picked, against an opponent the
+	// server chose. See ladder_pool.go for the hourly one and ladder_match.go
+	// for the same thing on a button — an author may ask for it whenever they
+	// like, and still names nobody. Everything else an author can start — trying
+	// a new build against an old one, answering somebody's challenge, running a
+	// hundred games to test a change — still works and still shows up in the
+	// archive, and none of it moves a number.
+	//
+	// Same-owner is still refused on top, because a pair of engines one hand
+	// controls can be made to lose to each other on purpose. The pool will not
+	// choose such a pairing, so this is the belt to that braces; the fit drops
+	// the pair regardless, which is what covers the games recorded before either
+	// rule existed.
 	//
 	// Marked here, on the game, rather than filtered out further down, so that
 	// every place a game is shown reads it from the same flag: the history row,
 	// the archive, the PGN and the review screen all say casual without being
-	// told separately. The ladder does not depend on it — botHeadToHeadTx drops
-	// a same-owner pair whatever the flag says, which is what covers the games
-	// that were recorded before this rule existed.
+	// told separately.
 	setup := game.GameSetup{
 		ModeID:      run.modeID,
 		TimeControl: run.control,
-		Casual:      sameBotOwner(first, second),
+		Casual:      !run.ladder || sameBotOwner(first, second),
 	}
 	entry := func(client *Client) QueueEntry {
 		return QueueEntry{

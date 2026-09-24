@@ -1,6 +1,6 @@
 import { StyleSheet, Text, View } from 'react-native';
 
-import { colors, radius } from '@/theme';
+import { colors, radius, themedSheet } from '@/theme';
 import { useGameStore } from '@/store/gameStore';
 import { CALL_TO_ACTION_COPY, type TournamentCall } from '@/store/tournamentSelectors';
 import { GhostButton, PrimaryButton } from '@/ui/primitives';
@@ -56,7 +56,7 @@ export default function TournamentCallout({ call }: { call: TournamentCall }) {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   card: {
     width: '100%',
     maxWidth: 620,
@@ -86,4 +86,4 @@ const styles = StyleSheet.create({
   copy: { flex: 1 },
   title: { color: colors.textStrong, fontSize: 13, fontWeight: '900' },
   detail: { color: colors.textMuted, fontSize: 11, marginTop: 2 },
-});
+}));

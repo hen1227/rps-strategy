@@ -5,7 +5,7 @@ import { failureMessage } from '@/errors';
 import { getTitleCatalogue, setAccountTitle } from '@/store/api/accounts';
 import { isSignedIn } from '@/store/accountSession';
 import { useGameStore } from '@/store/gameStore';
-import { colors, radius, space, type } from '@/theme';
+import { colors, radius, space, themedSheet, type } from '@/theme';
 import TitleTag from '@/ui/TitleTag';
 import { Banner, Panel, SectionHeading } from '@/ui/primitives';
 import type { Account, Title, TitleAward, TitleID } from '@/types/protocol';
@@ -76,12 +76,18 @@ export default function TitlesPanel({ account, sessionToken }: TitlesPanelProps)
   const held = account?.titles ?? [];
   const worn = account?.title ?? NONE;
   const heldIds = new Set(held.map((award) => award.id));
-  // Granted titles are left out of the second list. Nothing a player does
-  // earns one, so a row promising "granted by the host" under a heading that
-  // says STILL TO EARN sets a goal that does not exist. They are in the list
+  // Two kinds of thing are left out of the second list, both because nothing a
+  // player does gets them.
+  //
+  // Granted titles: a row promising "granted by the host" under a heading that
+  // says STILL TO EARN sets a goal that does not exist. They appear in the list
   // above the moment somebody is given one, which is the only way to get one.
+  //
+  // And the engine pool, which is a catalogue for the bots themselves — nobody
+  // reading this page can win a weekend arena. An older server sends no pool at
+  // all, and everything it serves is a player's, so an absent one is kept.
   const unearned = catalogue.filter(
-    (title) => !heldIds.has(title.id) && title.kind !== 'granted',
+    (title) => !heldIds.has(title.id) && title.kind !== 'granted' && title.pool !== 'bot',
   );
   const canChoose = isSignedIn(sessionToken, account);
 
@@ -106,7 +112,7 @@ export default function TitlesPanel({ account, sessionToken }: TitlesPanelProps)
     <Panel>
       <SectionHeading eyebrow="TITLES" title="Your titles" />
       <Text style={styles.helper}>
-        {held.length === 0 && 'Titles are earned by playing! You have none yet.'}
+        {held.length === 0 && "Play games to earn titles."}
       </Text>
 
       {error ? <Banner message={error} onDismiss={() => setError(null)} tone="error" /> : null}
@@ -138,7 +144,7 @@ export default function TitlesPanel({ account, sessionToken }: TitlesPanelProps)
 
       {held.length > 0 && !canChoose ? (
         <Text style={styles.note}>
-          Claim a username to wear one. Everything you have earned stays with the account.
+          Choose a username to use your titles.
         </Text>
       ) : null}
 
@@ -214,7 +220,7 @@ function Choice({
         pressed && styles.pressed,
       ]}
     >
-      {tagId ? <TitleTag size="large" title={tagId} /> : <Text style={styles.noneTag}>—</Text>}
+      {tagId ? <TitleTag size="large" title={tagId} /> : <Text style={styles.noneTag}>–</Text>}
       <View style={styles.choiceCopy}>
         <Text style={styles.choiceLabel}>{label}</Text>
         <Text style={styles.choiceDetail}>{detail}</Text>
@@ -226,7 +232,7 @@ function Choice({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   helper: { ...type.body, color: colors.textMuted, marginTop: space.small },
   note: { ...type.meta, color: colors.textFaint, marginTop: space.small },
   list: { gap: space.snug, marginTop: space.medium },
@@ -280,4 +286,4 @@ const styles = StyleSheet.create({
   unearnedName: { ...type.body, color: colors.textMuted, fontWeight: '800' },
   unearnedRule: { ...type.meta, color: colors.textFaint },
   pressed: { opacity: 0.7 },
-});
+}));

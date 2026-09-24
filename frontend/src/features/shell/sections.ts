@@ -37,22 +37,23 @@ export interface NavContext {
 }
 
 export type SectionId =
+    | 'appearance'
     | 'play'
     | 'bots'
     | 'my-bots'
-    | 'bot-guide'
-    | 'bot-protocol'
-    | 'bot-notation'
+    | 'bot-docs'
     | 'analysis'
     | 'openings'
     | 'explorer'
     | 'leaderboard'
+    | 'rounds'
     | 'tournaments'
     | 'weekend'
     | 'tournament-info'
     | 'player'
     | 'account'
     | 'credits'
+    | 'feedback'
     | 'policy'
     | 'admin';
 
@@ -65,6 +66,21 @@ export interface Section {
     href: Href;
     /** The path this section owns, for deciding which entry is current. */
     path: string;
+    /**
+     * Further paths this one entry stands for.
+     *
+     * The three engine handouts are one row and three addresses. Each is worth
+     * an address of its own — the README hands two of them out, and a link to
+     * the protocol reference is a link somebody pastes -- but they are one
+     * thing to read rather than three places to be, so the page carries tabs
+     * and the navigation carries a single row. Listed separately they made a
+     * five-row group out of one subject, and on a phone they wrapped the strip
+     * onto a second line to do it.
+     *
+     * `sectionForPath` matches these exactly as it matches `path`, so standing
+     * on any of the three lights the one row. See `BotDocScreen` for the tabs.
+     */
+    covers?: readonly string[];
     /**
      * A page that is not listed, but still claims its path.
      *
@@ -125,7 +141,7 @@ export const SECTIONS: readonly Section[] = [
     {
         id: 'bots',
         group: 'bots',
-        label: 'Play a Bot',
+        label: 'Bots',
         href: links.bots(),
         path: '/bots',
     },
@@ -143,25 +159,14 @@ export const SECTIONS: readonly Section[] = [
         visible: ({account}) => Boolean(account?.discordVerified),
     },
     {
-        id: 'bot-guide',
+        id: 'bot-docs',
         group: 'bots',
-        label: 'Connect',
+        label: 'Docs',
         href: links.botGuide(),
         path: '/account/bots/connect',
-    },
-    {
-        id: 'bot-protocol',
-        group: 'bots',
-        label: 'Protocol',
-        href: links.botProtocol(),
-        path: '/account/bots/protocol',
-    },
-    {
-        id: 'bot-notation',
-        group: 'bots',
-        label: 'Notation',
-        href: links.botNotation(),
-        path: '/account/bots/notation',
+        // One row, three pages: the handout, the protocol and the notation are
+        // tabs of each other rather than neighbours in this list. See `covers`.
+        covers: ['/account/bots/protocol', '/account/bots/notation'],
     },
 
     {
@@ -196,6 +201,17 @@ export const SECTIONS: readonly Section[] = [
         label: 'Leaderboard',
         href: links.leaderboard(),
         path: '/leaderboard',
+    },
+    {
+        id: 'rounds',
+        group: 'compete',
+        label: 'Hourly Rounds',
+        href: links.rounds(),
+        path: '/rounds',
+        // Directly under Leaderboard, because it is the competition behind that
+        // board: a bot's rating comes from these rounds and from nothing else,
+        // so the page that explains where a number came from belongs next to
+        // the page that shows the number.
     },
     {
         id: 'tournaments',
@@ -246,6 +262,27 @@ export const SECTIONS: readonly Section[] = [
         label: 'Account',
         href: links.account(),
         path: '/account',
+    },
+    {
+        id: 'appearance',
+        group: 'you',
+        label: 'Appearance',
+        href: links.appearance(),
+        path: '/appearance',
+        // Under You rather than beside the board it changes, because it is a
+        // standing choice about this device and not a knob on one game.
+    },
+    {
+        id: 'feedback',
+        group: 'you',
+        label: 'Feedback',
+        href: links.feedback(),
+        path: '/feedback',
+        // Under You rather than in a group of its own. The five here are the
+        // platform's own ceiling before a phone grows a More menu — see GROUPS
+        // — and this is a page about the site rather than about a game, which
+        // is what You already means. Above Credits and Privacy because it is
+        // the one of the three somebody comes back to.
     },
     {
         id: 'credits',
@@ -300,6 +337,12 @@ export const groupHref = (group: GroupId, context: NavContext): Href | null =>
 export const visibleGroups = (context: NavContext): Group[] =>
     GROUPS.filter((group) => groupHref(group.id, context) !== null);
 
+/** Every path one entry answers for: its own, and anything it `covers`. */
+const ownedPaths = (section: Section): readonly string[] => [
+    section.path,
+    ...(section.covers ?? []),
+];
+
 /**
  * Which section a path belongs to.
  *
@@ -311,12 +354,53 @@ export const visibleGroups = (context: NavContext): Group[] =>
 export const sectionForPath = (pathname: string): Section | null => {
     if (pathname === '/') return SECTIONS.find((section) => section.path === '/') ?? null;
     return (
-        SECTIONS.filter((section) => section.path !== '/' && pathname.startsWith(section.path)).sort(
-            (first, second) => second.path.length - first.path.length,
-        )[0] ?? null
+        SECTIONS.flatMap((section) =>
+            ownedPaths(section)
+                .filter((path) => path !== '/' && pathname.startsWith(path))
+                .map((path) => ({section, path})),
+        ).sort((first, second) => second.path.length - first.path.length)[0]?.section ?? null
     );
 };
 
 /** Which group a path belongs to, which is the tab that lights up. */
 export const groupForPath = (pathname: string): GroupId | null =>
     sectionForPath(pathname)?.group ?? null;
+
+/** Two spellings of the same page, give or take a trailing slash. */
+const samePath = (first: string, second: string): boolean =>
+    first.replace(/\/+$/, '') === second.replace(/\/+$/, '');
+
+/**
+ * Whether the navigation on screen already has a row for this page.
+ *
+ * The question a back button has to ask before drawing itself. A page
+ * *underneath* a section — one run of a bot series, a player's profile, a board
+ * — has no row of its own, so it carries one line of trail out; a page that
+ * *is* a row has the way out on screen already, and a second copy of it is
+ * clutter at best. On a phone it is worse than clutter: the strip of pages sits
+ * at the top of the screen, so a back button lands directly beneath the very
+ * chip that navigates there, pointing somewhere else.
+ *
+ * Exact rather than by prefix, which is the difference from `sectionForPath`:
+ * `/bots/series` belongs to the Bots section for the purpose of lighting a tab,
+ * and is emphatically not the page that tab opens.
+ *
+ * Answered against the same list the sidebar and the strip render, so the two
+ * cannot disagree: a row that is gated off — the engines you own, before
+ * Discord has vouched for you; the official event, once it is over — is not on
+ * screen, and its page draws the trail again. Note the clock in `NavContext`,
+ * though. A time-gated row is absent until `now` arrives, so a trail can be in
+ * the pre-rendered HTML and gone a render later, which is the same bargain the
+ * front-page banner already makes.
+ *
+ * `external` counts as unlisted. `/analysis` is in the list, but pressing it
+ * takes both surfaces of navigation away with it, so the board it opens has
+ * nothing on it but its own way back.
+ */
+export const listedInNav = (pathname: string, context: NavContext): boolean =>
+    visibleSections(context).some(
+        (section) =>
+            !section.hidden &&
+            !section.external &&
+            ownedPaths(section).some((path) => samePath(path, pathname)),
+    );

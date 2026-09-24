@@ -1,7 +1,8 @@
 import { useState, type ReactNode } from 'react';
 import { Pressable, StyleSheet, Text, View, type LayoutChangeEvent } from 'react-native';
 
-import { colors, radius } from '@/theme';
+import { colors, radius, themedSheet } from '@/theme';
+import { arrows } from '@/ui/arrows';
 
 export interface ReplayControlsProps {
   /**
@@ -90,10 +91,10 @@ export default function ReplayControls({
         <View style={{ width: reserved }} />
       </View>
       <View style={styles.group}>
-        {control('Jump to the starting position', '⏮', onFirst, atFirst)}
+        {control('Jump to the starting position', arrows.jumpBack, onFirst, atFirst)}
         {control(
           'Previous position',
-          '←',
+          arrows.back,
           onPrevious,
           atFirst,
           'You can also press the left arrow key.',
@@ -106,12 +107,12 @@ export default function ReplayControls({
         </View>
         {control(
           'Next position',
-          '→',
+          arrows.forward,
           onNext,
           atLast,
           'You can also press the right arrow key.',
         )}
-        {control('Jump to the latest position', '⏭', onLast, atLast)}
+        {control('Jump to the latest position', arrows.jumpForward, onLast, atLast)}
       </View>
       <View style={[styles.side, styles.sideEnd]}>
         {accessory ? <View onLayout={measure}>{accessory}</View> : null}
@@ -120,7 +121,7 @@ export default function ReplayControls({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   controls: {
     width: '100%',
     flexDirection: 'row',
@@ -177,4 +178,4 @@ const styles = StyleSheet.create({
   },
   label: { color: colors.textFaint, fontSize: 7, fontWeight: '900', letterSpacing: 1 },
   value: { color: colors.textStrong, fontSize: 11, fontWeight: '900', marginTop: 1 },
-});
+}));

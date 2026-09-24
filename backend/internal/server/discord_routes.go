@@ -31,9 +31,12 @@ type discordStartReply struct {
 
 // discordExchangeReply is what redeeming a ticket returns.
 //
-// Two shapes in one struct rather than two endpoints, because the app cannot
-// know in advance which it will get: whether a username is needed depends on
-// facts only the server has. NeedsUsername is the discriminator.
+// Several shapes in one struct rather than several endpoints, because the app
+// cannot know in advance which it will get: whether a username is needed, and
+// whether the one offered turns out to name an account that already exists,
+// depend on facts only the server has. NeedsUsername and NeedsPassword are the
+// discriminators, and a session plus an account is the answer when neither is
+// set.
 type discordExchangeReply struct {
 	Account *persistence.Account `json:"account,omitempty"`
 	Token   string               `json:"token,omitempty"`
@@ -42,11 +45,20 @@ type discordExchangeReply struct {
 	NeedsUsername     bool   `json:"needsUsername,omitempty"`
 	SuggestedUsername string `json:"suggestedUsername,omitempty"`
 	DiscordHandle     string `json:"discordHandle,omitempty"`
+	// NeedsPassword says the name just offered already belongs to an account
+	// that predates Discord sign-in. It is not a refusal: if the account is
+	// theirs, its password links it and they sign in as it, keeping the name and
+	// everything attached to it. The ticket stays live for that.
+	NeedsPassword bool `json:"needsPassword,omitempty"`
 }
 
 type discordCompleteRequest struct {
 	Ticket   string `json:"ticket"`
 	Username string `json:"username"`
+	// Password claims an account that already holds this username, rather than
+	// creating one. Empty for an ordinary signup, which is the common case; see
+	// completeDiscordSignup for why both live on one route.
+	Password string `json:"password"`
 	// ReservationToken carries the host secret for a reserved name, pasted into
 	// the form rather than sent as a header — there is no session yet at this
 	// point, so the Authorization slot has nothing to carry it in.
@@ -88,7 +100,7 @@ func (server *Server) startDiscordAuth(writer http.ResponseWriter, request *http
 	// checked on the way back would have to survive the trip through Discord in
 	// the state or a cookie, which means handing a long-lived device credential
 	// to a third party. Reduced to a user ID here, it never leaves.
-	linkUserID, ok := server.resolveDiscordLinkTarget(writer, request, input.UserID)
+	linkUserID, fromSession, ok := server.resolveDiscordLinkTarget(writer, request, input.UserID)
 	if !ok {
 		return
 	}
@@ -104,9 +116,10 @@ func (server *Server) startDiscordAuth(writer http.ResponseWriter, request *http
 		return
 	}
 	server.discordFlows.put(state, discordFlow{
-		verifier:   verifier,
-		returnTo:   returnTo,
-		linkUserID: linkUserID,
+		verifier:        verifier,
+		returnTo:        returnTo,
+		linkUserID:      linkUserID,
+		linkFromSession: fromSession,
 	})
 
 	query := url.Values{}
@@ -123,9 +136,16 @@ func (server *Server) startDiscordAuth(writer http.ResponseWriter, request *http
 }
 
 // resolveDiscordLinkTarget works out which account, if any, this sign-in should
-// attach to. Returning ("", true) means "nobody proved anything", which is a
-// legitimate way to sign in — it just creates a new account rather than
-// upgrading one.
+// attach to, and by what proof. Returning ("", false, true) means "nobody proved
+// anything", which is a legitimate way to sign in — it just creates a new
+// account rather than upgrading one.
+//
+// The middle result is the one to read carefully. A session says the player is
+// already in an account and is asking for the identity to be attached to *that*
+// one; a device key says only that this browser owns an anonymous account which
+// may as well be upgraded. The two want opposite things when the identity turns
+// out to belong to somebody else — the first must be refused, the second may be
+// ignored — so which proof arrived has to survive the trip to redemption.
 //
 // A credential that is present but wrong is a 401 rather than a silent fall
 // through to "create a new account". Quietly handing somebody a second account
@@ -135,27 +155,27 @@ func (server *Server) resolveDiscordLinkTarget(
 	writer http.ResponseWriter,
 	request *http.Request,
 	userID string,
-) (string, bool) {
+) (string, bool, bool) {
 	if token := sessionToken(request); token != "" {
 		account, err := server.data.SessionAccount(request.Context(), token)
 		if err != nil {
 			writer.Header().Set("WWW-Authenticate", `Bearer realm="account"`)
 			writeAPIError(writer, http.StatusUnauthorized, "your session has expired")
-			return "", false
+			return "", false, false
 		}
-		return account.UserID, true
+		return account.UserID, true, true
 	}
 	key := profileKey(request)
 	userID = strings.TrimSpace(userID)
 	if key == "" || userID == "" {
-		return "", true
+		return "", false, true
 	}
 	if err := server.data.VerifyProfileKey(request.Context(), userID, key); err != nil {
 		writer.Header().Set("WWW-Authenticate", `Bearer realm="account-profile"`)
 		writeAPIError(writer, http.StatusUnauthorized, "that account key is not valid")
-		return "", false
+		return "", false, false
 	}
-	return userID, true
+	return userID, false, true
 }
 
 // discordCallback is where Discord sends the browser back.
@@ -202,6 +222,7 @@ func (server *Server) discordCallback(writer http.ResponseWriter, request *http.
 		discordUsername: identity.Username,
 		globalName:      identity.GlobalName,
 		linkUserID:      flow.linkUserID,
+		linkFromSession: flow.linkFromSession,
 	})
 	http.Redirect(writer, request,
 		returnWithParameters(flow.returnTo, url.Values{"ticket": {ticket}}),
@@ -237,8 +258,20 @@ func (server *Server) exchangeDiscordTicket(writer http.ResponseWriter, request 
 	existing, err := server.data.AccountForDiscordIdentity(request.Context(), pending.discordUserID)
 	switch {
 	case err == nil:
+		// A link asked for from a session is a request about one *named*
+		// account, so an identity that belongs to a different one is a conflict
+		// and has to be said out loud. Answering it the way a sign-in is
+		// answered would quietly move the player to the other account — they
+		// press "link Discord" on the account holding their rating and their
+		// games, and land in somebody else's, with their own still unlinked and
+		// nothing on screen saying so.
+		if pending.linkFromSession && existing.UserID != pending.linkUserID {
+			writeAuthError(writer, persistence.ErrIdentityAlreadyLinked)
+			return
+		}
 		// A returning player. Their account is whichever one holds the
-		// identity, regardless of what this browser happens to be signed in as.
+		// identity, regardless of what this browser happens to be signed in as
+		// — which is right here, where nothing but a device key was offered.
 		server.discordTickets.take(key)
 		existing = server.absorbGuestHistory(request, existing, pending.linkUserID)
 		server.finishDiscordSignIn(writer, request, existing, pending)
@@ -291,7 +324,13 @@ func (server *Server) exchangeDiscordTicket(writer http.ResponseWriter, request 
 	})
 }
 
-// completeDiscordSignup claims the chosen username and finishes the signup.
+// completeDiscordSignup finishes the naming step: it claims the chosen username
+// for a new account, or links the identity to an account that already holds it.
+//
+// Both on one route because from the player's side they are one step — they are
+// typing the name they want to be, and whether that name is new is a fact about
+// the database, not about their intent. The password, when there is one, is what
+// turns the second reading into a proof.
 func (server *Server) completeDiscordSignup(writer http.ResponseWriter, request *http.Request) {
 	var input discordCompleteRequest
 	if err := decodeAPIRequest(writer, request, &input); err != nil {
@@ -307,6 +346,29 @@ func (server *Server) completeDiscordSignup(writer http.ResponseWriter, request 
 		writeAPIError(writer, http.StatusUnauthorized, "that sign-in has expired; try again")
 		return
 	}
+
+	// A password says this name is an account they already have rather than one
+	// they are making, so it is answered first and on its own: claiming would
+	// refuse the name anyway, and with the wrong error.
+	//
+	// It runs before the reserved-name gate below, which has nothing to guard
+	// here. That gate protects *granting* a held name to somebody new; this
+	// grants nothing — the account already exists and already has the name, and
+	// its password is a better proof of holding it than the host token is.
+	if strings.TrimSpace(input.Password) != "" {
+		account, err := server.data.LinkDiscordIdentityWithPassword(
+			request.Context(), input.Username, input.Password,
+			pending.discordUserID, pending.discordUsername,
+		)
+		if err != nil {
+			writeAuthError(writer, err)
+			return
+		}
+		server.discordTickets.take(key)
+		server.finishDiscordSignIn(writer, request, account, pending)
+		return
+	}
+
 	// The same gate registration had. Holding the owner handle *is* the admin
 	// check, so the door that grants it has to keep asking for the host token.
 	if persistence.IsReservedUsername(input.Username) &&
@@ -323,11 +385,46 @@ func (server *Server) completeDiscordSignup(writer http.ResponseWriter, request 
 	if err != nil {
 		// The ticket survives a refused name so the player can pick another
 		// one without going back through Discord.
+		if errors.Is(err, persistence.ErrUsernameTaken) {
+			server.offerDiscordPasswordLink(writer, request, input.Username)
+			return
+		}
 		writeAuthError(writer, err)
 		return
 	}
 	server.discordTickets.take(key)
 	server.finishDiscordSignIn(writer, request, account, pending)
+}
+
+// offerDiscordPasswordLink answers a name collision with the question worth
+// asking instead of the refusal.
+//
+// A name that is taken is very often the player's own, from before Discord was
+// an option: they are typing what they have always been called. "That username
+// is already taken" is true and useless to them — it reads as somebody else
+// having their name, and the only door left is a password form folded away on
+// a different panel. So when the name belongs to an account a password would
+// link, ask for the password.
+func (server *Server) offerDiscordPasswordLink(
+	writer http.ResponseWriter,
+	request *http.Request,
+	username string,
+) {
+	linkable, err := server.data.UsernameCanLinkWithPassword(request.Context(), username)
+	if err != nil {
+		writePersistenceError(writer, err)
+		return
+	}
+	if !linkable {
+		// Held by somebody who signs in with Discord already, so there is no
+		// password to offer and it really is just taken.
+		writeAuthError(writer, persistence.ErrUsernameTaken)
+		return
+	}
+	// The flag alone. Which name is being asked about is the name the caller
+	// just sent, and echoing it back would only invite the app to read it from
+	// here instead of from what it asked.
+	writeJSON(writer, http.StatusOK, discordExchangeReply{NeedsPassword: true})
 }
 
 // absorbGuestHistory folds this browser's guest account into the one being

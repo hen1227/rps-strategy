@@ -37,6 +37,11 @@ func sessionMetadata(session *GameSession) notation.Metadata {
 		Ranked:        session.ranked,
 		RedEloBefore:  session.redElo,
 		BlueEloBefore: session.blueElo,
+		// Read off the session rather than off the seats' connections, because
+		// by the time a game is archived a seat may be empty — see the note on
+		// GameSession.redEngineVersion.
+		RedEngine:  session.redEngineVersion,
+		BlueEngine: session.blueEngineVersion,
 	}
 	if session.ranked {
 		metadata.Event = "Ranked"

@@ -3,10 +3,11 @@ import { send } from './socketSend';
 import type { ActiveGame, GameStore } from './types';
 import {
   applyAnalysisMove,
-  createAnalysisGame,
+  createAnalysisGameOn,
   enginePosition,
   validMovesFor,
   type AnalysisGame,
+  type StartingBoard,
 } from '@/engine/analysisGame';
 import { createBot, createSeededRandom, type Bot } from '@/engine/bots/engine';
 import { BOT_TUNING, botProfile } from '@/engine/bots/profiles';
@@ -172,6 +173,8 @@ export interface BotActions {
      * flipping a coin that can land the same way four times running.
      */
     after?: SideColor;
+    /** A board somebody set up. Absent is the mode's own opening. */
+    start?: StartingBoard | null;
   }) => void;
   restartBotGame: () => void;
   botSelectTile: (position: Position) => void;
@@ -343,7 +346,7 @@ export const createBotSlice: StateCreator<GameStore, [], [], BotSlice> = (set, g
      * Open a local game against a bot. The server is told only that this
      * player is busy with bots, never what is on the board.
      */
-    startBotGame: ({ mode, profileId, playerColor = 'random', after }) => {
+    startBotGame: ({ mode, profileId, playerColor = 'random', after, start }) => {
       if (!mode) {
         set({ error: 'Choose a game mode before playing a bot.' });
         return;
@@ -372,7 +375,7 @@ export const createBotSlice: StateCreator<GameStore, [], [], BotSlice> = (set, g
             : Math.random() < 0.5
               ? 'Red'
               : 'Blue';
-      const game = createAnalysisGame(mode);
+      const game = createAnalysisGameOn(mode, start);
       const session: BotSessionState = {
         botBlurb: profile.blurb,
         botColor: opposingColor(humanColor),
@@ -426,13 +429,18 @@ export const createBotSlice: StateCreator<GameStore, [], [], BotSlice> = (set, g
      * player who picked Red picked it for this bot, not for one game.
      */
     restartBotGame: () => {
-      const { botGame, botSession } = get();
+      const { botGame, botHistory, botSession } = get();
       if (!botSession || !botGame) return;
+      // The board this game opened on rather than the mode's, so a rematch of
+      // a position somebody set up replays that position. For an ordinary game
+      // the two are the same board.
+      const opened = botHistory[0] ?? botGame;
       get().startBotGame({
         after: botSession.playerColor,
         mode: botGame.mode,
         playerColor: botSession.colorChoice,
         profileId: botSession.profileId,
+        start: { currentTurn: opened.currentTurn, era: opened.era, grid: opened.grid },
       });
     },
 

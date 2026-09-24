@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { ScrollView, StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
 
-import { colors, contentWidth, space } from '@/theme';
+import { colors, contentWidth, space, themedSheet } from '@/theme';
 
 // The page frame, in one place.
 //
@@ -22,6 +22,11 @@ export interface ScreenShellProps {
   /**
    * False for a page that manages its own scrolling — a board, or anything with
    * a list that has to stay pinned.
+   *
+   * Such a page also opts out of the keyboard inset below, since there is no
+   * scroller here to put it on: a text field on one of these has to answer the
+   * question itself, the way the board screens' chat does. The explorer is the
+   * only page that passes this today and it has no field on it.
    */
   scroll?: boolean;
   /** Extra room at the bottom, for chrome floating over the page. */
@@ -46,6 +51,21 @@ export default function ScreenShell({
   }
   return (
     <ScrollView
+      // Every text field in the app that is not the chat's composer is on a page
+      // that scrolls inside here — the username you are challenging, a
+      // tournament sign-up, the whole of the admin section — and on a phone a
+      // field near the foot of one of those pages was simply behind the
+      // keyboard, with nothing left to scroll to. This hands the question to
+      // iOS, which pads the content by the room the keyboard takes and brings
+      // the focused field up out from under it.
+      //
+      // iOS is the only platform that needs telling. Android resizes the window
+      // instead — `adjustResize`, which is Expo's default — so the page has
+      // already been given a shorter window and has fitted itself into it. And
+      // react-native-web ignores the prop: `View` picks the props it forwards,
+      // so an unknown one is dropped before the DOM sees it rather than
+      // arriving as a React warning.
+      automaticallyAdjustKeyboardInsets
       contentContainerStyle={[styles.scroll, { paddingBottom: bottomInset }]}
       keyboardShouldPersistTaps="handled"
       showsVerticalScrollIndicator={false}
@@ -56,7 +76,7 @@ export default function ScreenShell({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   page: { flex: 1, backgroundColor: colors.background },
   scroll: { flexGrow: 1 },
   content: {
@@ -84,4 +104,4 @@ const styles = StyleSheet.create({
   // clipped. The same react-native-web trap the two `flexGrow: 0` comments in
   // `OpeningExplorerScreen` are about, one level further out.
   contentFlush: { flex: 1, minHeight: 0, paddingTop: 0, paddingBottom: 0 },
-});
+}));

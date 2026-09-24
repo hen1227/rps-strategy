@@ -11,7 +11,7 @@ import {
   type WeekendAdminView,
   type WeekendConfig,
 } from '@/store/api/weekend';
-import { colors, space, type } from '@/theme';
+import { colors, space, themedSheet, type } from '@/theme';
 import type { ModeID } from '@/types/game';
 import {
   Badge,
@@ -150,8 +150,7 @@ export default function WeekendAdminPanel({ admin }: WeekendAdminPanelProps) {
         }
       />
       <Text style={styles.help}>
-        A tournament a weekend, built from whatever engines are online. Nothing here changes
-        an event that has already opened its doors — the settings apply from the next one.
+        Weekly tournaments for online engines. Changes apply to the next event.
         {draft.lastRunDate ? ` Last opened ${draft.lastRunDate}.` : ''}
       </Text>
 
@@ -199,9 +198,7 @@ export default function WeekendAdminPanel({ admin }: WeekendAdminPanelProps) {
         value={draft.startDay}
       />
       <Text style={styles.detail}>
-        One event a week. The day and the hour both move on their own when the field votes
-        for a different slot — this is where they start from, and where they land back if
-        nobody votes.
+        Default weekly start time. Availability votes can move it.
       </Text>
 
       <OptionChips
@@ -251,7 +248,7 @@ export default function WeekendAdminPanel({ admin }: WeekendAdminPanelProps) {
       <View style={styles.row}>
         <View style={styles.field}>
           <LabeledInput
-            hint="Below this many engines online at the start, the event is called off."
+            hint="Cancel if fewer engines are online at the start."
             keyboardType="number-pad"
             label="MINIMUM FIELD"
             onChangeText={(text) => change({ minimumField: Number(text) || 0 })}
@@ -284,7 +281,7 @@ export default function WeekendAdminPanel({ admin }: WeekendAdminPanelProps) {
         </View>
         <View style={styles.field}>
           <LabeledInput
-            hint="Colours swap every game, so an even number is the fair one."
+            hint="Colours swap each game. Use an even number to balance them."
             keyboardType="number-pad"
             label="GAMES PER MATCH"
             onChangeText={(text) => change({ gamesPerMatch: Number(text) || 0 })}
@@ -313,8 +310,8 @@ export default function WeekendAdminPanel({ admin }: WeekendAdminPanelProps) {
       />
       <Text style={styles.detail}>
         {draft.pollEnabled
-          ? 'What plays when the ballot is thin or tied. A tie is not a mandate, so it falls back here rather than picking one.'
-          : 'What every weekend plays, since the vote is off.'}
+          ? "Used when votes tie or fall below the minimum."
+          : "Time control when voting is off."}
       </Text>
 
       <View style={styles.row}>
@@ -384,19 +381,18 @@ export default function WeekendAdminPanel({ admin }: WeekendAdminPanelProps) {
             run(async () => {
               await openWeekendNow(admin.token);
               await refresh();
-            }, "This weekend's event is open for entries. It still starts at its own hour — use the tournament board to start it early.")
+            }, "Event opened. It starts at the scheduled time unless started early from Tournaments.")
           }
         />
       </View>
       <Text style={styles.detail}>
-        Opening early is for testing the half that is hard to wait for. The event still waits
-        for its hour; the tournament board&apos;s own start button is how you skip that.
+        Open the event now for testing. Use Tournaments to start it early.
       </Text>
     </Panel>
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   help: { color: colors.textMuted, ...type.body, marginTop: space.small },
   detail: { color: colors.textFaint, ...type.meta, marginTop: space.snug },
   section: { marginTop: space.medium },
@@ -411,4 +407,4 @@ const styles = StyleSheet.create({
     gap: space.medium,
     marginTop: space.large,
   },
-});
+}));

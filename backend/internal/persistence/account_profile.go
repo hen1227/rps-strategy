@@ -36,6 +36,15 @@ func (store *Store) ensureAccountProfileColumns(ctx context.Context) error {
 		// `account_titles`. Empty means no tag, which is the default and stays
 		// allowed forever.
 		{name: "title", definition: "TEXT NOT NULL DEFAULT ''"},
+		// The look this player chose: a small JSON object of preset ids, or
+		// empty for an account that has never said. One column rather than a
+		// table for the same reason as the title above — every read of an
+		// account needs it and there is at most one — and opaque on purpose:
+		// the catalogue of themes, boards, piece sets and sound packs lives in
+		// the client, and a server that validated ids against its own copy
+		// would reject every look added by a build newer than itself. See
+		// SetAccountAppearance for the limits that are enforced.
+		{name: "appearance", definition: "TEXT NOT NULL DEFAULT ''"},
 	} {
 		if columns[migration.name] {
 			continue
@@ -106,7 +115,7 @@ INSERT INTO accounts (
     created_at_unix_ms, updated_at_unix_ms
 ) VALUES (?, ?, '', ?, ?, ?, ?)
 ON CONFLICT(user_id) DO NOTHING
-`, userID, username, profileKeyHash, DefaultElo, now, now); err != nil {
+`, userID, username, profileKeyHash, RatingFloor, now, now); err != nil {
 		return Account{}, fmt.Errorf("authenticate account: create account: %w", err)
 	}
 

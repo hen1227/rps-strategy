@@ -91,6 +91,11 @@ func seriesTestBots(t *testing.T) (*Server, persistence.Bot, persistence.Bot) {
 	// Long enough that the games are still sequenced, short enough that four
 	// of them do not take three seconds of wall clock to prove a pairing rule.
 	server.seriesDelay = time.Millisecond
+	// Same bargain for the pace between moves: a stub engine answers instantly,
+	// so the real fifth of a second would make every game of every series test
+	// take a minute. That the pace is applied at all is proved on its own, in
+	// bot_pace_test.go.
+	server.movePaceOverride = time.Millisecond
 
 	ctx := t.Context()
 	const key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -168,6 +173,22 @@ func addRivalSeriesBot(t *testing.T, server *Server, name string) persistence.Bo
 
 // playOneSeries runs a single pair to completion and hands back the games it
 // filed, which is where the ranked flag it seated them with ends up.
+// awaitSeriesFinished waits for the most recent run to stop running.
+func awaitSeriesFinished(t *testing.T, server *Server) {
+	t.Helper()
+	deadline := time.Now().Add(60 * time.Second)
+	for time.Now().Before(deadline) {
+		series, err := server.data.BotSeries(t.Context(), latestSeriesID(t, server))
+		if err != nil {
+			t.Fatalf("read series: %v", err)
+		}
+		if series.Status != persistence.BotSeriesRunning {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
 func playOneSeries(
 	t *testing.T,
 	server *Server,
@@ -180,17 +201,7 @@ func playOneSeries(
 	); err != nil {
 		t.Fatalf("start series: %v", err)
 	}
-	deadline := time.Now().Add(60 * time.Second)
-	for time.Now().Before(deadline) {
-		series, err := server.data.BotSeries(t.Context(), latestSeriesID(t, server))
-		if err != nil {
-			t.Fatalf("read series: %v", err)
-		}
-		if series.Status != persistence.BotSeriesRunning {
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
+	awaitSeriesFinished(t, server)
 	history, err := server.data.GameHistory(t.Context(), first.UserID, 10, 0)
 	if err != nil {
 		t.Fatalf("read history: %v", err)
@@ -230,31 +241,91 @@ func TestASeriesBetweenOneOwnersBotsIsCasual(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read ladder: %v", err)
 		}
-		if rating, rated := ratings[bot.UserID]; rated && rating != persistence.DefaultElo {
+		if rating, rated := ratings[bot.UserID]; rated && rating != persistence.RatingFloor {
 			t.Fatalf("%s came out of a private series rated %d", bot.Name, rating)
 		}
 	}
 }
 
-// The other half of the same rule, which is the one a too-broad check would
-// break: two people's engines playing is exactly what the ladder is for.
-func TestASeriesBetweenRivalBotsStaysRanked(t *testing.T) {
+// A series two rival owners' engines play is still casual, and this is the rule
+// the community asked for.
+//
+// It used to be ranked, and that was the hole. Whoever started the run chose the
+// opponent — so the way to gain rating was to pick a weak one, or register one,
+// or find a friend to register one — and chose the mode, the clock and the
+// length of the run besides. A rating now comes from a round the server
+// arranged and from nowhere else. Everything an author can start still plays,
+// still records, and still shows in the archive; none of it moves a number.
+func TestAHandStartedSeriesIsCasualHoweverManyOwnersAreInvolved(t *testing.T) {
 	server, _, _ := seriesTestBots(t)
 	first := addRivalSeriesBot(t, server, "Rival")
 	second := addRivalSeriesBot(t, server, "Challenger")
 
-	games := playOneSeries(t, server, first, second)
-	for _, played := range games {
-		if !played.Ranked {
-			t.Fatalf("game %s between rival owners' bots was seated casual", played.GameID)
+	for _, played := range playOneSeries(t, server, first, second) {
+		if played.Ranked {
+			t.Fatalf("a hand-started game %s was seated ranked", played.GameID)
 		}
 	}
 	series, err := server.data.BotSeries(t.Context(), latestSeriesID(t, server))
 	if err != nil {
 		t.Fatalf("read series: %v", err)
 	}
-	if series.Casual {
-		t.Fatal("a run between two owners' bots read as casual")
+	if !series.Casual || series.Ladder {
+		t.Fatalf("a hand-started run read as ranked: %#v", series)
+	}
+}
+
+// And the other half: a round the pool arranged is the one thing that counts.
+//
+// Seated through the same StartBotSeries with one field different, which is
+// deliberate — there is exactly one place a ranked engine game can come from,
+// and it is a flag no route can set.
+func TestAPoolRoundIsRanked(t *testing.T) {
+	server, _, _ := seriesTestBots(t)
+	first := addRivalSeriesBot(t, server, "Rival")
+	second := addRivalSeriesBot(t, server, "Challenger")
+
+	ask := hostSeries(first, second, game.ModeTotalWar, 1, 4, 99)
+	ask.Ladder = true
+	if _, err := server.StartBotSeries(t.Context(), ask); err != nil {
+		t.Fatalf("start series: %v", err)
+	}
+	awaitSeriesFinished(t, server)
+
+	history, err := server.data.GameHistory(t.Context(), first.UserID, 10, 0)
+	if err != nil {
+		t.Fatalf("read history: %v", err)
+	}
+	if len(history) == 0 {
+		t.Fatal("the round filed no games")
+	}
+	for _, played := range history {
+		if !played.Ranked {
+			t.Fatalf("a pool game %s was seated casual", played.GameID)
+		}
+	}
+}
+
+// Two of one person's engines stay casual even in a pool round. The pairer will
+// not choose such a pairing, so this is the belt to that braces.
+func TestAPoolRoundBetweenOneOwnersBotsIsStillCasual(t *testing.T) {
+	server, alpha, beta := seriesTestBots(t)
+
+	ask := hostSeries(alpha, beta, game.ModeTotalWar, 1, 4, 99)
+	ask.Ladder = true
+	if _, err := server.StartBotSeries(t.Context(), ask); err != nil {
+		t.Fatalf("start series: %v", err)
+	}
+	awaitSeriesFinished(t, server)
+
+	history, err := server.data.GameHistory(t.Context(), alpha.UserID, 10, 0)
+	if err != nil {
+		t.Fatalf("read history: %v", err)
+	}
+	for _, played := range history {
+		if played.Ranked {
+			t.Fatalf("one owner's two engines were rated in game %s", played.GameID)
+		}
 	}
 }
 
@@ -833,6 +904,7 @@ func TestOneSlowSearchDoesNotAbandonTheRestOfTheSeries(t *testing.T) {
 	t.Cleanup(func() { _ = data.Close() })
 	server := NewWithStore(data, nil)
 	server.seriesDelay = time.Millisecond
+	server.movePaceOverride = time.Millisecond
 
 	ctx := t.Context()
 	const key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"

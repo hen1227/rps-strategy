@@ -3,7 +3,9 @@ import test from 'node:test';
 
 import { createLocalSlice, type LocalSlice } from './localSession.ts';
 import type { ActiveGame } from './types.ts';
-import { testMode } from '../testing/modes.ts';
+import { createAnalysisGame, gridFromRows, type StartingBoard } from '../engine/analysisGame.ts';
+import { encodePosition } from '../engine/pgn.ts';
+import { STANDARD_OPENING_ROWS, testMode } from '../testing/modes.ts';
 import type { Move, Position } from '../types/game.ts';
 
 // The slice is exercised directly rather than through `useGameStore`, which
@@ -24,7 +26,7 @@ type Store = LocalSlice & Harness;
 type Setter = (patch: Partial<Store> | ((current: Store) => Partial<Store>)) => void;
 type Getter = () => Store;
 
-const openGame = () => {
+const openGame = (start?: StartingBoard) => {
   let state = {} as Store;
   const set: Setter = (patch) => {
     state = { ...state, ...(typeof patch === 'function' ? patch(state) : patch) };
@@ -44,7 +46,7 @@ const openGame = () => {
     validMoves: [],
     error: null,
   };
-  state.startLocalGame({ mode: testMode('V5') });
+  state.startLocalGame({ mode: testMode('V5'), start });
   return get;
 };
 
@@ -180,4 +182,67 @@ test('leaving takes the board off the screen and keeps nothing', () => {
   assert.equal(get().localGame, null);
   assert.deepEqual(get().localMoves, []);
   assert.deepEqual(get().localHistory, []);
+});
+
+
+// --- a board somebody set up ----------------------------------------------
+//
+// The claim: a local game started from a position keeps all three of that
+// position's parts — the pieces, whose move it is, and who owns what — and
+// writes the board it was actually played from into its own record, so the
+// review reads back the game that happened rather than the mode's opening.
+
+/** The standard pieces, Red to play, and one tile Blue holds with nothing on it. */
+const setUpBoard = (): StartingBoard => ({
+  currentTurn: 'Red',
+  grid: gridFromRows(STANDARD_OPENING_ROWS, undefined, [
+    '...bbb...', '...bbb...', '...bbb...',
+    '.........', '....b....', '.........',
+    '...rrr...', '...rrr...', '...rrr...',
+  ]),
+});
+
+test('a game started from a set-up board opens on it, Red to move', () => {
+  const get = openGame(setUpBoard());
+  const game = get().gameState;
+
+  assert.ok(game);
+  assert.equal(game.currentTurn, 'Red', 'the board said Red even though Blue opens');
+  assert.equal(game.status, 'InProgress');
+  assert.equal(
+    get().localGame?.grid[4]?.[4]?.ownerColor,
+    'Blue',
+    'e5 is Blue ground with no piece on it, which a layout string cannot say',
+  );
+});
+
+test('the record names the board it was played from, not the mode opening', () => {
+  const start = setUpBoard();
+  const get = openGame(start);
+  play(get(), RED_PAWN, RED_TARGET);
+  get().resignLocalGame();
+
+  const pgn = get().localGamePGN();
+  assert.ok(pgn, 'a game with a move in it has a record');
+  const fen = /\[FEN "([^"]+)"\]/.exec(pgn)?.[1];
+  assert.equal(fen, encodePosition(start.grid, 'Red'), 'the tag is the board set up');
+
+  const opening = createAnalysisGame(testMode('V5'));
+  assert.notEqual(
+    fen,
+    encodePosition(opening.grid, opening.currentTurn),
+    'and is not the board the mode would have opened on',
+  );
+  assert.match(pgn, /\[SetUp "1"\]/);
+});
+
+test('a rematch replays the position, not the mode opening', () => {
+  const get = openGame(setUpBoard());
+  play(get(), RED_PAWN, RED_TARGET);
+  get().restartLocalGame();
+
+  const game = get().gameState;
+  assert.equal(game?.currentTurn, 'Red', 'still Red to play');
+  assert.equal(get().localGame?.grid[4]?.[4]?.ownerColor, 'Blue', 'still Blue ground on e5');
+  assert.equal(get().localMoves.length, 0, 'and a fresh board');
 });

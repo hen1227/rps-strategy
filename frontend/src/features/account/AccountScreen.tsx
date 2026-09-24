@@ -13,7 +13,10 @@ import {
   PrimaryButton,
   SectionHeading,
 } from '@/ui/primitives';
+import { RATING_EXPLAINER, RATING_FLOOR } from '@/features/ratings/scale';
 import AccountSignInPanel from '@/features/account/AccountSignInPanel';
+import DeleteAccountPanel from '@/features/account/DeleteAccountPanel';
+import BlockedPlayersPanel from '@/features/moderation/BlockedPlayersPanel';
 import DiscordLinkPrompt from '@/features/account/DiscordLinkPrompt';
 import UsernameSetupPanel from '@/features/account/UsernameSetupPanel';
 import TitlesPanel from '@/features/account/TitlesPanel';
@@ -27,7 +30,7 @@ import { links } from '@/navigation/links';
 import type { ModeDefinition, ModeID } from '@/types/game';
 import type { Account } from '@/types/protocol';
 import TitleTag from '@/ui/TitleTag';
-import { colors, contentWidth, radius } from '@/theme';
+import { colors, contentWidth, radius, themedSheet } from '@/theme';
 
 // The account screen, which is now first and foremost where you get an
 // account. Everyone plays under a name the server gave them until they claim
@@ -57,7 +60,7 @@ const modeRatingRows = (
   account: Account | null | undefined,
   modes: ModeDefinition[],
 ): ModeRatingRow[] => {
-  const seedElo = account?.elo ?? 1200;
+  const seedElo = account?.elo ?? RATING_FLOOR;
   const ratings = account?.modeRatings ?? {};
   return modes
     .filter((mode) => mode.playable !== false || ratings[mode.id])
@@ -199,8 +202,8 @@ export default function AccountScreen() {
             <Text style={styles.title}>Your account</Text>
             <Text style={styles.subtitle}>
               {account?.registered
-                ? 'These details appear to your opponent in every online game.'
-                : 'Sign in with Discord and everything you have played so far comes with it.'}
+                ? "Your opponents see these details."
+                : "Sign in with Discord to keep your games and rating."}
             </Text>
           </View>
 
@@ -237,10 +240,10 @@ export default function AccountScreen() {
                 </View>
                 <View style={styles.eloBadge}>
                   <Text style={styles.eloLabel}>
-                    {featuredRating?.gamesPlayed ? `${featuredRating.shortCode} ELO` : 'ELO'}
+                    {featuredRating?.gamesPlayed ? `${featuredRating.shortCode} RATING` : 'RATING'}
                   </Text>
                   <Text style={styles.eloValue}>
-                    {featuredRating?.elo ?? account?.elo ?? 1200}
+                    {featuredRating?.elo ?? account?.elo ?? RATING_FLOOR}
                   </Text>
                 </View>
               </Panel>
@@ -253,8 +256,7 @@ export default function AccountScreen() {
                     trailing={<GhostButton compact label="SIGN OUT" onPress={signOut} />}
                   />
                   <Text style={styles.helper}>
-                    Your username is what opponents see, what challenges are addressed to,
-                    and what you sign in with.
+                    Players see this name and use it to challenge you.
                   </Text>
 
                   <LabeledInput
@@ -346,10 +348,6 @@ export default function AccountScreen() {
 
               <Panel>
                 <SectionHeading eyebrow="RANKED" title="Mode ratings" />
-                <Text style={styles.helper}>
-                  Each mode rates on its own. A mode you have not finished yet starts from
-                  your current {account?.elo ?? 1200}.
-                </Text>
                 <View style={styles.ratingList}>
                   {ratingRows.map((rating) => (
                     <View key={rating.id} style={styles.ratingRow}>
@@ -402,6 +400,14 @@ export default function AccountScreen() {
               */}
               <GameHistoryPanel title="Your games" userId={account?.userId ?? accountId} />
 
+              {/*
+                Two panels about other people and about leaving, at the bottom
+                of the screen rather than beside the identity form. Both are
+                things somebody comes here on purpose to do; neither is a
+                setting to be scrolled past on the way to something else.
+              */}
+              <BlockedPlayersPanel />
+
               <Panel style={styles.keyPanel}>
                 <View style={styles.keyIcon}>
                   <Text style={styles.keyIconText}>◆</Text>
@@ -420,9 +426,26 @@ export default function AccountScreen() {
                 style={({ pressed }) => [styles.policyLink, pressed && styles.pressed]}
               >
                 <Text style={styles.policyLinkText}>
-                  What gets stored about you, and the rules of online play ›
+                  Privacy and online play rules ›
                 </Text>
               </Pressable>
+
+              {/*
+                Last, and after the policy link on purpose: the page that says
+                what deletion actually keeps should be the thing somebody passes
+                on their way to the button.
+
+                `signOut` before navigating, because the credential this screen
+                holds now opens nothing — leaving it in place would leave the
+                app signed in to an account the server has forgotten.
+              */}
+              <DeleteAccountPanel
+                account={account}
+                onDeleted={() => {
+                  signOut();
+                  router.replace(links.lobby());
+                }}
+              />
 
             </View>
           )}
@@ -431,7 +454,7 @@ export default function AccountScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
 
   hero: { paddingTop: 24, paddingBottom: 22 },
   eyebrow: { color: colors.accent, fontSize: 10, fontWeight: '900', letterSpacing: 2.1 },
@@ -526,4 +549,4 @@ const styles = StyleSheet.create({
   policyLinkText: { color: colors.textMuted, fontSize: 10, fontWeight: '900', lineHeight: 16 },
 
   pressed: { opacity: 0.7 },
-});
+}));

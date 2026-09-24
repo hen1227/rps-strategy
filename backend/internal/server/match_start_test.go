@@ -129,7 +129,7 @@ func TestNoFirstMoveCancelsTheGameWithoutARating(t *testing.T) {
 	aliceSeek.JoinedAt = joined
 	aliceSeek.Setup.PreferredColor = game.OtherColor(game.FirstToMove)
 	widened := aliceSeek.SearchRange(time.Now())
-	if widened <= matchmakingInitialEloRange {
+	if widened <= matchmakingInitialRatingRange {
 		t.Fatalf("test setup: expected a widened search range, got %d", widened)
 	}
 
@@ -160,7 +160,7 @@ func TestNoFirstMoveCancelsTheGameWithoutARating(t *testing.T) {
 	}
 	// The assertion that actually proves the wait was preserved: a reset would
 	// snap the rating band back to its opening width.
-	if got := survivor.SearchRange(time.Now()); got <= matchmakingInitialEloRange {
+	if got := survivor.SearchRange(time.Now()); got <= matchmakingInitialRatingRange {
 		t.Fatalf("the widened search range should survive a cancellation, got %d", got)
 	}
 	if _, ok := messageOfType(drainChallengeTestMessages(t, alice), "game_cancelled"); !ok {

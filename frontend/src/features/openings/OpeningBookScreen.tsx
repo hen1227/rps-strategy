@@ -33,6 +33,7 @@ import {
 import type { OpeningStatsNode } from '@/engine/openingStats';
 import { failureMessage } from '@/errors';
 import EvalBar, { EVAL_BAR_WIDTH, formatScore } from '@/features/analysis/EvalBar';
+import BoardExportButton from '@/features/board/BoardExportButton';
 import MiniBoard from '@/features/board/MiniBoard';
 import { ApiError } from '@/store/api/http';
 import {
@@ -45,10 +46,11 @@ import {
   suggestOpeningName,
 } from '@/store/api/openings';
 import { useGameStore } from '@/store/gameStore';
-import { colors, contentWidth, radius, space } from '@/theme';
+import { colors, contentWidth, radius, space, themedSheet } from '@/theme';
 import type { ModeDefinition, ModeID } from '@/types/game';
 import ScreenShell from '@/ui/ScreenShell';
 import TabBar from '@/ui/TabBar';
+import { arrows } from '@/ui/arrows';
 import { Badge, Banner, GhostButton, Panel } from '@/ui/primitives';
 
 import CuratorPanel from './CuratorPanel';
@@ -112,7 +114,7 @@ function BookFacts({ book }: { book: OpeningBookBootstrap }) {
     <View style={styles.facts}>
       <Fact label="POSITIONS" value={book.positionCount.toLocaleString()} />
       {book.maxPly ? <Fact label="PLIES DEEP" value={String(book.maxPly)} /> : null}
-      <Fact label="ENGINE" value={`RPSFish ${book.engineVersion ?? '—'}`} />
+      <Fact label="ENGINE" value={`RPSFish ${book.engineVersion ?? '–'}`} />
       {book.updatedAtUnixMs ? (
         // Deliberately not a locale format: the pre-rendered build and the
         // browser would disagree, and React answers that by throwing the page
@@ -433,7 +435,7 @@ export default function OpeningBookScreen() {
         } catch {
           // The message below still says what happened.
         }
-        setNotice('Somebody named this line first — put your name forward as an alternative.');
+        setNotice("This line already has a name. Suggest an alternative.");
         return false;
       }
       setError(failureMessage(requestError));
@@ -501,7 +503,7 @@ export default function OpeningBookScreen() {
           <View style={styles.headerCopy}>
             <Text style={styles.brand}>RPS OPENINGS</Text>
             <Text style={styles.headerSubtitle}>
-              A living book, analyzed by RPSFish and named by players.
+              Openings analyzed by RPSFish and named by players.
             </Text>
           </View>
           {/* An administrator arrives already unlocked, so the switch — not a
@@ -562,8 +564,7 @@ export default function OpeningBookScreen() {
                   No {tab?.name ?? modeId} scan has been imported yet.
                 </Text>
                 <Text style={styles.emptyCopy}>
-                  This is the position it will start from. Run RPSFish’s book builder and publish
-                  it from the shell — `scripts/build_books.sh --publish` — and this page fills in.
+                  No opening analysis has been published for this mode yet.
                 </Text>
               </View>
             </View>
@@ -614,8 +615,7 @@ export default function OpeningBookScreen() {
                   {mirrorLine && (
                     <View style={styles.mirrorRow}>
                       <Text style={styles.mirrorText}>
-                        Mirror image of {mirrorLine.join('  ')} — one opening, two ways round, one
-                        name.
+                        Mirror image of {mirrorLine.join('  ')} (same opening and name).
                       </Text>
                       <GhostButton
                         compact
@@ -625,20 +625,40 @@ export default function OpeningBookScreen() {
                     </View>
                   )}
                   {line.length > 0 && (
-                    <>
-                      <LineTrail
-                        line={line}
-                        onJump={(ply) => setLine((current) => current.slice(0, ply))}
-                      />
-                      <View style={styles.heroActions}>
-                        <GhostButton
-                          compact
-                          label="← BACK"
-                          onPress={() => setLine((current) => current.slice(0, -1))}
-                        />
-                      </View>
-                    </>
+                    <LineTrail
+                      line={line}
+                      onJump={(ply) => setLine((current) => current.slice(0, ply))}
+                    />
                   )}
+                  {/*
+                    Always drawn, because the board above it always is: the
+                    opening position is as much a position as any other, and the
+                    only thing that comes and goes here is the way back up the
+                    line, which the first board has no need of.
+                  */}
+                  <View style={styles.heroActions}>
+                    {line.length > 0 && (
+                      <GhostButton
+                        compact
+                        label={`${arrows.back} BACK`}
+                        onPress={() => setLine((current) => current.slice(0, -1))}
+                      />
+                    )}
+                    {game && mode && (
+                      <BoardExportButton
+                        board={{
+                          grid: game.grid,
+                          currentTurn: game.currentTurn,
+                          mode,
+                          lastMove: lastStep?.move ?? null,
+                          detail: {
+                            heading: 'OPENING BOOK',
+                            caption: title.label,
+                          },
+                        }}
+                      />
+                    )}
+                  </View>
                   <BookFacts book={book} />
                 </View>
               </View>
@@ -657,9 +677,7 @@ export default function OpeningBookScreen() {
                   <Badge label={`${book.mainLine.length} PLIES`} tone="accent" />
                 </View>
                 <Text style={styles.sectionCopy}>
-                  RPSFish’s best continuation through the analyzed graph, board by board — followed
-                  as far as the scan goes rather than as far as it is certain. Tap any move to open
-                  that position.
+                  RPSFish’s suggested line from the available analysis. Tap a move to view the position.
                 </Text>
                 <MainLineStrip
                   mainLine={book.mainLine}
@@ -703,8 +721,7 @@ export default function OpeningBookScreen() {
                 <Panel style={styles.frontierPanel}>
                   <Text style={styles.frontierTitle}>The scan stops here for now.</Text>
                   <Text style={styles.frontierCopy}>
-                    This line can still be named. A later engine import can add responses without
-                    losing that name.
+                    You can name this line before engine analysis is available.
                   </Text>
                 </Panel>
               ) : (
@@ -794,7 +811,7 @@ export default function OpeningBookScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   header: { flexDirection: 'row', alignItems: 'center', gap: 14 },
   headerCopy: { flexGrow: 1, flexShrink: 1, minWidth: 0 },
   brand: { color: colors.accentBright, fontSize: 15, fontWeight: '900', letterSpacing: 1.2 },
@@ -918,4 +935,4 @@ const styles = StyleSheet.create({
 
   curateLink: { alignSelf: 'center', paddingHorizontal: 12, paddingVertical: 9, marginTop: 10 },
   curateLinkText: { color: colors.textFaint, fontSize: 8, fontWeight: '900', letterSpacing: 1 },
-});
+}));

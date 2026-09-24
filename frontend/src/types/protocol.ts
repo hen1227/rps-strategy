@@ -179,7 +179,25 @@ export interface ModeRating {
   draws: number;
   gamesPlayed: number;
   updatedAtUnixMs: number;
+  /** Whether `elo` is a measurement. Absent from a server older than the field. */
+  ratingState?: RatingState;
+  /** The share of the measurement that survived the shrinkage, 0 to 1. */
+  ratingConfidence?: number;
 }
+
+/**
+ * How much a published rating is worth reading.
+ *
+ * Decided on the server — see `RatingState` in
+ * backend/internal/persistence/rating_scale.go — because the thresholds belong
+ * beside the fit that produces them, and a client that disagreed with the board
+ * about whether a number was a guess would be worse than either answer.
+ *
+ * The floor of this scale, 1, is a real measurement: "plays no better than
+ * chance". It used to double as the value shown for anything unmeasured, which
+ * is what this exists to undo.
+ */
+export type RatingState = 'unrated' | 'provisional' | 'rated';
 
 export type AccountKind = 'human' | 'bot';
 
@@ -208,18 +226,35 @@ export type TitleID =
   | 'DEV'
   | 'MOD'
   | 'CON'
+  | 'PIO'
   | 'FND'
   | 'WGG'
+  | 'PIZ'
+  // The engine pool.
+  | 'RC'
+  | 'CUP'
   | (string & {});
 
 /** Where a title comes from, which is all a screen needs to explain one. */
 export type TitleKind = 'rating' | 'achievement' | 'granted';
+
+/**
+ * Who a title is for. People and engines collect from catalogues that share
+ * nothing, so a screen listing what there is to chase has to say which it is
+ * showing.
+ *
+ * Optional, because a server older than the split does not send it — and
+ * everything it serves is a player title, which is what an absent pool should
+ * be read as.
+ */
+export type TitlePool = 'player' | 'bot';
 
 /** One entry of the catalogue: everything there is to know about a title. */
 export interface Title {
   id: TitleID;
   name: string;
   kind: TitleKind;
+  pool?: TitlePool;
   /** How it is earned, in the words shown to the player. */
   requirement: string;
 }
@@ -252,6 +287,16 @@ export interface Account {
    * for the great majority of accounts, which hold none.
    */
   titles?: TitleAward[];
+  /**
+   * The look this player chose, as the JSON object the client sent: theme,
+   * board, piece set, sound pack. Absent for an account that has never chosen.
+   *
+   * A string rather than a parsed object because the server stores it opaquely
+   * and must: the catalogue of presets lives here, in the client, and a server
+   * that validated ids against its own copy would reject every look added by a
+   * build newer than itself. Read it through `appearanceFromAccount`.
+   */
+  appearance?: string;
   elo: number;
   wins: number;
   losses: number;
@@ -292,9 +337,23 @@ export interface BotPresence {
   description?: string;
   engineName?: string;
   engineAuthor?: string;
+  /**
+   * Which build of itself the engine declared on connect, absent for one that
+   * declares none — which is most engines. Not the rpsbot.py version: that is
+   * the script this site publishes, this is the program its owner wrote.
+   */
+  engineVersion?: string;
   modes?: ModeID[];
   elo: number;
   modeRatings?: Partial<Record<ModeID, number>>;
+  /** Which of those numbers are measurements. A mode missing from it is unrated. */
+  modeRatingStates?: Partial<Record<ModeID, RatingState>>;
+  /**
+   * The tag this engine wears, absent for most of them. Nobody chose it: an
+   * engine has no account page, so the server picks the best of what it
+   * currently deserves. See the bot pool in `TitleID`.
+   */
+  title?: TitleID;
   /** The digest of this bot's icon, or absent when it has none. Feed it to `botIconUrl`. */
   iconSha256?: string;
   /**
@@ -310,6 +369,7 @@ export interface BotPresence {
   /** Games it will take at once — 1 for almost every bot, at most 5. */
   slots?: number;
   allowPublicPlay: boolean;
+  enterLadder: boolean;
   /**
    * The tournament holding this engine, absent for the great majority of them.
    *
@@ -498,6 +558,17 @@ export interface LeaderboardEntry {
   /** The title worn in front of the name, absent on most rows. */
   title?: TitleID;
   elo: number;
+  /**
+   * Whether `elo` is worth reading. An `unrated` row has no meaningful number —
+   * it is the absence of a rating, not a low one — and the board is ordered with
+   * those rows last.
+   *
+   * Absent from a server older than the field, which readers should treat as
+   * `rated`: an old server has no way to say otherwise, and hiding every number
+   * on it would be worse than the ambiguity this replaces.
+   */
+  ratingState?: RatingState;
+  ratingConfidence?: number;
   wins: number;
   losses: number;
   draws: number;
@@ -513,6 +584,27 @@ export interface LeaderboardEntry {
    */
   ownerUsername?: string;
   engineName?: string;
+  /**
+   * When this engine took the top of this row's mode. Set only on the row that
+   * is currently holding it, so a row carrying it is the row in front.
+   *
+   * A timestamp rather than a count of days, because only this side knows what
+   * today is where the reader is sitting.
+   *
+   * Absent from a server older than the field.
+   */
+  leadingSinceUnixMs?: number;
+  /**
+   * Whether this engine has held the top of its mode at some point, which is
+   * true of the current leader too.
+   *
+   * Reigns are only recorded from the day the ledger shipped, so `false` means
+   * "not since then" rather than "never" — which is why nothing reading it
+   * should phrase the absence as a claim about an engine's whole history.
+   *
+   * Absent from a server older than the field.
+   */
+  heldTopSeat?: boolean;
 }
 
 /* ------------------------------------------------------------ tournaments -- */
@@ -708,6 +800,182 @@ export interface Restriction {
   expiresAtUnixMs?: number;
 }
 
+/**
+ * One entry of a player's own block list.
+ *
+ * Not a sanction and not related to one. A `Restriction` is the host acting on
+ * an account and applies to everybody; this is one person's own preference,
+ * invisible to the rest of the site and reversible by them alone. See
+ * backend/internal/persistence/blocks.go.
+ */
+export interface BlockedAccount {
+  userId: string;
+  username: string;
+  title?: TitleID;
+  kind: AccountKind;
+  blockedAtUnixMs: number;
+}
+
+/** Why somebody is being reported. Published by the server so this list and the
+ * server's cannot drift — see `/api/reports/categories`. */
+export type ReportCategoryID =
+  | 'harassment'
+  | 'hate'
+  | 'sexual'
+  | 'spam'
+  | 'cheating'
+  | 'name'
+  | 'other';
+
+export interface ReportCategory {
+  id: ReportCategoryID;
+  label: string;
+}
+
+/** What the report form needs to draw itself, straight from the server. */
+export interface ReportPolicy {
+  categories: ReportCategory[];
+  maxDetails: number;
+  /** Who to contact when the report queue is not the right place. */
+  contactName: string;
+}
+
+/** Where a filed report has got to. Only the admin queue sees this. */
+export type ReportStatus = 'open' | 'actioned' | 'dismissed';
+
+/** One filed report, as the admin queue shows it. */
+export interface Report {
+  reportId: string;
+  reporterUserId: string;
+  reporterName: string;
+  targetUserId?: string;
+  targetName: string;
+  category: ReportCategoryID;
+  details?: string;
+  gameId?: string;
+  /** The chat lines the reporter attached, copied at the time they filed. */
+  context?: string;
+  status: ReportStatus;
+  createdAtUnixMs: number;
+  resolvedAtUnixMs?: number;
+  resolvedByUserId?: string;
+  resolutionNote?: string;
+  /** Whether the reported account is already disabled, so the queue does not
+   * offer to act on somebody who has already been dealt with. */
+  targetIsDisabled?: boolean;
+  /** How many other open reports name the same account. A third report about
+   * one person is a different decision from a first. */
+  targetOpenReports?: number;
+}
+
+export interface ReportPage {
+  reports: Report[];
+  total: number;
+  /** Unread across every filter, for the badge on the tab. */
+  open: number;
+}
+
+/* --------------------------------------------------------- feedback board -- */
+
+/** Which of the two things a board item is. */
+export type FeedbackKind = 'bug' | 'suggestion';
+
+/**
+ * The host's answer, and the only field on an item a player cannot write.
+ *
+ * Five states shared by both kinds. What differs is the *wording*: `accepted`
+ * reads "Known issue" on a bug and "Planned" on a suggestion, which is why an
+ * item carries its own `statusLabel` from the server rather than the client
+ * keeping a table of its own. See backend/internal/persistence/feedback.go.
+ */
+export type FeedbackStatus = 'open' | 'accepted' | 'done' | 'declined' | 'duplicate';
+
+/** How the board is ordered. */
+export type FeedbackSort = 'top' | 'new';
+
+/** One post on the board. */
+export interface FeedbackItem {
+  itemId: string;
+  kind: FeedbackKind;
+  title: string;
+  body?: string;
+  /** Empty for a post whose author has deleted their account. */
+  authorUserId?: string;
+  authorName: string;
+  /** Posted by the host, as of when it was written rather than as of now. */
+  fromHost?: boolean;
+  status: FeedbackStatus;
+  /** The status in this item's own words. Resolved by the server — see above. */
+  statusLabel: string;
+  /** The host's sentence beside the status. */
+  statusNote?: string;
+  /** Somewhere else to look: an issue, a thread, a video of the bug. */
+  linkUrl?: string;
+  /** The game it happened in, when the report came from a board. */
+  gameId?: string;
+  appVersion?: string;
+  platform?: string;
+  /** The item this one was folded into, set with the `duplicate` status. */
+  duplicateOf?: string;
+  pinned?: boolean;
+  /** Off the public board. Only ever true on the host's copy. */
+  hidden?: boolean;
+  votes: number;
+  /** Whether the account asking is in the tally. */
+  youVoted?: boolean;
+  comments: number;
+  /** The replies. Present only on a single item, never on the list. */
+  thread?: FeedbackComment[];
+  createdAtUnixMs: number;
+  updatedAtUnixMs: number;
+}
+
+export interface FeedbackComment {
+  commentId: string;
+  itemId: string;
+  authorUserId?: string;
+  authorName: string;
+  fromHost?: boolean;
+  body: string;
+  hidden?: boolean;
+  createdAtUnixMs: number;
+}
+
+export interface FeedbackPage {
+  items: FeedbackItem[];
+  /** How many match the filter, for paging. */
+  total: number;
+  /** Live items of each kind, which do not move with the filter. */
+  openBugs: number;
+  openSuggestions: number;
+}
+
+/** What the compose form needs to draw itself, straight from the server. */
+export interface FeedbackPolicy {
+  kinds: { id: FeedbackKind; label: string }[];
+  /** One label per kind, for the host's status picker and the filter chips. */
+  statuses: {
+    id: FeedbackStatus;
+    bugLabel: string;
+    suggestionLabel: string;
+    settled?: boolean;
+  }[];
+  maxTitle: number;
+  maxBody: number;
+  maxComment: number;
+  /**
+   * Whether this visitor may post, and what to say when not.
+   *
+   * From the server because the client cannot work it out: signed out,
+   * unverified and muted are three different sentences, and only one side
+   * knows which applies.
+   */
+  mayPost: boolean;
+  postRefusal: string;
+  /** Who to contact when the board is not the right place. */
+  contactName: string;
+}
+
 /* -------------------------------------------------------- client messages -- */
 
 export type ClientMessage =
@@ -795,6 +1063,15 @@ export interface ConnectionReadyMessage {
    * the case for almost everybody. See `Restriction`.
    */
   restrictions?: Restriction[];
+  /**
+   * Who this connection is hiding, as account ids.
+   *
+   * Sent with the handshake so the client has it before the first message
+   * arrives rather than after it has already painted one. Ids rather than
+   * names, because a name goes stale the moment somebody renames themselves
+   * and a chat line carries the id. See `blocked_players` for the update.
+   */
+  blockedUserIds?: string[];
   /** This player's own invitations. */
   challenges?: Challenge[];
   /** The public board of challenges nobody has claimed yet. */
@@ -877,6 +1154,10 @@ export type ServerMessage =
    * something and being refused.
    */
   | { type: 'restrictions'; restrictions?: Restriction[] }
+  // The block list changed — from this tab or from another one. Whole list
+  // rather than a delta, for the same reason `restrictions` is: two tabs
+  // applying deltas out of order disagree, and the list is a dozen ids.
+  | { type: 'blocked_players'; blockedUserIds?: string[] }
   /**
    * A moderator did something to the game this client is in. Carried on its
    * own type rather than as an error, because it is not this client's mistake.

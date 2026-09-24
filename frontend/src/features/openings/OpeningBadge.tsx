@@ -10,12 +10,12 @@
 // one naming hierarchy the openings screen uses, so a line called "Skipping
 // Stone" there is called that here.
 
-import {useRouter} from 'expo-router';
 import {Pressable, StyleSheet, Text, View} from 'react-native';
 
 import {openingKind, type GameOpening} from '@/engine/openingBook';
 import {links} from '@/navigation/links';
-import {colors, radius, space, type} from '@/theme';
+import {useGoTo} from '@/navigation/stack';
+import { colors, radius, space, themedSheet, type } from '@/theme';
 import type {ModeID} from '@/types/game';
 
 export interface OpeningBadgeProps {
@@ -48,7 +48,9 @@ const spellLine = (line: readonly string[]) => line.join('  ');
  * book stays unnamed.
  */
 export function OpeningBadge({linked, modeId, opening}: LiveOpeningBadgeProps) {
-    const router = useRouter();
+    // The chip is drawn on a board, which is a full-screen page: opening the
+    // book puts the board down rather than covering it. See `navigation/stack`.
+    const go = useGoTo();
     if (!opening) return null;
 
     const published = opening.name;
@@ -86,7 +88,7 @@ export function OpeningBadge({linked, modeId, opening}: LiveOpeningBadgeProps) {
             accessibilityHint="Opens this opening in the book."
             accessibilityLabel={description}
             accessibilityRole="link"
-            onPress={() => router.push(links.openings({mode: modeId, line: opening.line}))}
+            onPress={() => go(links.openings({mode: modeId, line: opening.line}))}
             style={({pressed}) => [styles.badge, named && styles.badgeNamed, pressed && styles.pressed]}
         >
             {chip}
@@ -107,7 +109,7 @@ export function OpeningBadge({linked, modeId, opening}: LiveOpeningBadgeProps) {
  * never offers a line the book will refuse. See `openingOfGame`.
  */
 export function NameThisOpening({modeId, opening}: OpeningBadgeProps) {
-    const router = useRouter();
+    const go = useGoTo();
     const wants = opening?.wants;
     if (!opening || !wants?.length) return null;
 
@@ -121,15 +123,15 @@ export function NameThisOpening({modeId, opening}: OpeningBadgeProps) {
                 <Text style={styles.promptTitle}>{spellLine(wants)}</Text>
                 <Text style={styles.promptDetail}>
                     {under
-                        ? `You played an unnamed variation of the ${under.name}. Name it — it goes up straight away.`
-                        : `Nobody has named this ${kind} yet. Name it — it goes up straight away.`}
+                        ? `You played an unnamed variation of the ${under.name}. Name it now.`
+                        : `Nobody has named this ${kind} yet. Name it now.`}
                 </Text>
             </View>
             <Pressable
                 accessibilityHint="Opens this line in the opening book, where it is named."
                 accessibilityLabel={`Name the opening ${spellLine(wants)}`}
                 accessibilityRole="link"
-                onPress={() => router.push(links.openings({mode: modeId, line: wants}))}
+                onPress={() => go(links.openings({mode: modeId, line: wants}))}
                 style={({pressed}) => [styles.promptButton, pressed && styles.pressed]}
             >
                 <Text style={styles.promptButtonText}>Name it</Text>
@@ -138,7 +140,7 @@ export function NameThisOpening({modeId, opening}: OpeningBadgeProps) {
     );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
     badge: {
         alignSelf: 'flex-start',
         flexDirection: 'row',
@@ -185,4 +187,4 @@ const styles = StyleSheet.create({
         backgroundColor: colors.gold,
     },
     promptButtonText: {...type.label, fontSize: 11, color: colors.textInverse},
-});
+}));

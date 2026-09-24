@@ -15,6 +15,15 @@ import (
 // format change can be detected in an archive rather than guessed at.
 const Generator = "rps-strategy-pgn/2"
 
+// RatingSystem names the scale the Elo tags are written on.
+//
+// "anchored/1" is the scale in persistence/rating_scale.go: 1 is an engine that
+// plays a uniformly random legal move, and twenty points is a doubling of the
+// odds of winning. A file with no such tag was written under the previous
+// system, which was chess Elo centred on 1200, and the two sets of numbers
+// cannot be compared or averaged together.
+const RatingSystem = "anchored/1"
+
 // The numbered dialects, which differ in one thing: what "12." means.
 //
 // dialectByColor numbered move pairs by colour, so "12." was always Red and
@@ -77,6 +86,10 @@ type Metadata struct {
 	RedEloAfter   int
 	BlueEloBefore int
 	BlueEloAfter  int
+	// RatingScale is which scale the four numbers above are written on. Empty in
+	// a file from before the scale was named, which means the 1200-centred one.
+	// See the RatingSystem constant.
+	RatingScale string
 
 	// BookPlies counts opening moves that were dealt rather than chosen — the
 	// seeded random opening a bot series starts each pair from. Review tooling
@@ -87,6 +100,20 @@ type Metadata struct {
 	// surprising result can be reproduced rather than argued about.
 	OpeningSeed string
 	SeriesID    string
+
+	// RedEngine and BlueEngine are the builds the engines in each seat declared
+	// they were, and are empty for a human seat and for an engine that declares
+	// none — which is every engine written before the field existed.
+	//
+	// Their own tags rather than part of Generator, for the reason RatingSystem
+	// is its own tag: they are independent things that change independently,
+	// and an engine shipping a new build has not changed how the moves are
+	// numbered. This is what makes "which build played this game" answerable
+	// from the archive at all — the alternative is reading the bot's current
+	// build, which is whatever it happens to be running today rather than what
+	// played.
+	RedEngine  string
+	BlueEngine string
 
 	FinishedAt time.Time
 }
@@ -202,6 +229,23 @@ func buildTags(record game.Record, metadata Metadata) []Tag {
 		tags = append(tags, Tag{"BlueEloAfter", strconv.Itoa(metadata.BlueEloAfter)})
 		tags = append(tags, Tag{"BlueRatingDiff", signed(metadata.BlueEloAfter - metadata.BlueEloBefore)})
 	}
+	// The scale RedElo and BlueElo are written on, because the tag names are
+	// standard PGN and the numbers under them are not comparable across the
+	// change.
+	//
+	// This is not paranoia about a hypothetical reader. The archive is published
+	// and the two scales overlap: 200 is a plausible rating under both, a weak
+	// one on the old 1200-centred scale and a strong one on this. Nothing in the
+	// file would look wrong. A reader that averaged across the boundary would get
+	// an answer, and it would be meaningless.
+	//
+	// Named separately from Generator, which is about how the moves are
+	// numbered. Two independent things that can change independently, and folding
+	// them into one version number would mean a rating change silently claiming
+	// the moves had moved too.
+	if metadata.RedEloBefore > 0 || metadata.BlueEloBefore > 0 {
+		tags = append(tags, Tag{"RatingSystem", RatingSystem})
+	}
 	tags = append(tags, Tag{"Ranked", strconv.FormatBool(metadata.Ranked)})
 	tags = appendIfSet(tags, "TournamentId", metadata.TournamentID)
 	if metadata.BookPlies > 0 {
@@ -209,6 +253,11 @@ func buildTags(record game.Record, metadata Metadata) []Tag {
 	}
 	tags = appendIfSet(tags, "OpeningSeed", metadata.OpeningSeed)
 	tags = appendIfSet(tags, "SeriesId", metadata.SeriesID)
+	// Omitted rather than written empty, so a human game's record is byte for
+	// byte what it was before these existed and every archived game still
+	// parses.
+	tags = appendIfSet(tags, "RedEngine", metadata.RedEngine)
+	tags = appendIfSet(tags, "BlueEngine", metadata.BlueEngine)
 	tags = append(tags,
 		Tag{"Termination", Termination(final)},
 		Tag{"EndReason", string(final.EndReason)},

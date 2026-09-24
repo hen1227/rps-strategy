@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
-import { recordResultLabel, resultForPlayer } from './resultLabels';
+import ResultLine from './ResultLine';
+import { resultForPlayer } from './resultLabels';
 import { failureMessage } from '@/errors';
 import { relativeTime } from '@/features/bots/relativeTime';
 import { useWideScreen } from '@/hooks/useBoardLayout';
 import { gameReviewURL, links } from '@/navigation/links';
 import { getGameHistory } from '@/store/api/accounts';
-import { colors, radius, space, type } from '@/theme';
+import { colors, radius, space, themedSheet, type } from '@/theme';
 import type { GameRecord } from '@/types/protocol';
 import CopyLinkButton from '@/ui/CopyLinkButton';
 import ListRow from '@/ui/ListRow';
@@ -107,8 +108,7 @@ export default function GameHistoryPanel({
         }
       />
       <Text style={styles.help}>
-        Every finished online game is kept. Open one to have RPSFish grade it, or copy its
-        link to hand the same review to somebody else.
+        Replay your finished games or share a link.
       </Text>
 
       {error ? <Banner message={error} onDismiss={() => setError(null)} tone="error" /> : null}
@@ -118,7 +118,7 @@ export default function GameHistoryPanel({
           <Text style={styles.help}>Loading games…</Text>
         ) : (
           <EmptyState
-            detail="Finished online games appear here, each with a link anybody can open."
+            detail="Your finished online games will appear here."
             title="No games yet"
           />
         )
@@ -187,13 +187,13 @@ function GameHistoryRow({
         </View>
       }
       meta={`${game.modeName} · ${game.ranked ? 'ranked' : 'casual'} · ${game.moveNumber} moves · ${relativeTime(game.finishedAtUnixMs)}`}
-      title={recordResultLabel(game)}
+      title={<ResultLine record={game} />}
       trailing={wide ? actions : undefined}
     />
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   help: { ...type.body, color: colors.textMuted, marginTop: space.small },
   list: { marginTop: space.small },
   actions: { flexDirection: 'row', alignItems: 'center', gap: space.snug },
@@ -219,4 +219,4 @@ const styles = StyleSheet.create({
   drawText: { color: colors.textMuted },
   unknown: {},
   unknownText: {},
-});
+}));

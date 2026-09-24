@@ -204,7 +204,10 @@ func botIsDraining(client *Client) bool {
 	if client == nil || !client.isBot() {
 		return false
 	}
-	if botsAreBenched(time.Now()) {
+	// Through the client's own server, because the schedule is per-server
+	// state now rather than a package-level slice. Nil only in tests that build
+	// a bare Client, and a connection with no server has no game to be offered.
+	if client.server.botsAreBenched(time.Now()) {
 		return true
 	}
 	return botHasOwnDrain(client)

@@ -795,6 +795,38 @@ func (game *Game) Tick(now time.Time) (GameState, bool) {
 	return game.stateCopyLocked(), game.state.Status == Finished && game.state.EndReason == EndReasonTimeout
 }
 
+// HoldClock stops both clocks for a stretch of wall time that is to belong to
+// neither player, and reports a game that ended on time with the same meaning
+// Tick's boolean has.
+//
+// The clock is settled up to now before the hold begins, which is what makes
+// the hold honest: whoever is on the move is charged for the time they have
+// actually spent, and only what comes after is free. A move's recorded
+// ElapsedMs therefore still names the time its player spent choosing it, and a
+// replay -- which advances its own clock by exactly that and holds nothing --
+// reproduces both clocks to the millisecond.
+//
+// Expressed by moving the clock anchor into the future rather than by a flag,
+// because a flag is a thing that can be left set. updateClockLocked spends
+// nothing until now catches up to the anchor, and when it does the clocks
+// simply start again: a hold whose caller never comes back runs out by itself
+// instead of freezing a game nobody can lose.
+func (game *Game) HoldClock(hold time.Duration) (GameState, bool) {
+	game.mu.Lock()
+	defer game.mu.Unlock()
+	now := game.now()
+	game.updateClockLocked(now)
+	if game.state.Status != InProgress {
+		return game.stateCopyLocked(),
+			game.state.Status == Finished && game.state.EndReason == EndReasonTimeout
+	}
+	if until := now.Add(hold); hold > 0 && until.After(game.clockUpdatedAt) {
+		game.clockUpdatedAt = until
+		game.state.Clock.UpdatedAtUnixMs = until.UnixMilli()
+	}
+	return game.stateCopyLocked(), false
+}
+
 func (game *Game) updateClockLocked(now time.Time) bool {
 	if game.state.Status != InProgress || !now.After(game.clockUpdatedAt) {
 		return false

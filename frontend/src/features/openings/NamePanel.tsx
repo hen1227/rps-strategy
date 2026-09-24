@@ -12,7 +12,7 @@ import { useEffect, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
 import { PLAYER_NAME_PLY_LIMIT, type OpeningLine, type OpeningNaming } from '@/engine/openingBook';
-import { colors, radius, space } from '@/theme';
+import { colors, radius, space, themedSheet } from '@/theme';
 import { Badge, GhostButton, Panel, PrimaryButton } from '@/ui/primitives';
 
 import { NameInput, SuggestionRow, publishedOn, ui } from './openingsUi';
@@ -103,16 +103,15 @@ export default function NamePanel({
           </Text>
           <Text style={ui.hint}>
             {tooLong
-              ? `Names cover the first ${PLAYER_NAME_PLY_LIMIT} moves. Past that a line is a game rather than an opening, so there is no name to give it — walk back up and name the opening it came from.`
+              ? `Names cover the first ${PLAYER_NAME_PLY_LIMIT} moves. Go back to an earlier position to name it.`
               : title.namedAncestor
-                ? `It currently lives under ${title.namedAncestor.name}. Name a defense, gambit, variation—or something stranger.`
-                : 'Chess has openings, defenses, gambits, and systems. We can borrow the structure without borrowing the seriousness.'}
+                ? `It currently lives under ${title.namedAncestor.name}. Choose a name for this variation.`
+                : "Choose a name for this opening."}
             {!tooLong && mirror ? ` Naming it names its mirror, ${mirror.join('  ')}, too.` : ''}
           </Text>
           {canName ? (
             <Text style={ui.hint}>
-              Your name goes up straight away, whether or not RPSFish has analyzed this line. It
-              is listed under every named opening rather than beside the engine’s certified ones.
+              The name appears immediately under player-named openings.
             </Text>
           ) : null}
         </>
@@ -124,8 +123,7 @@ export default function NamePanel({
       {curator.active && line.length > 1 && !parentNamed && (
         <View style={styles.nudge}>
           <Text style={styles.nudgeText}>
-            {parent.join('  ')} has no name yet, so this would be a variation of nothing. Naming
-            that first is usually the better order.
+            {parent.join('  ')} has no name yet. Name it before this variation.
           </Text>
           <GhostButton compact label="NAME THAT FIRST" onPress={() => onOpenLine(parent)} />
         </View>
@@ -181,7 +179,7 @@ export default function NamePanel({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   panel: { marginTop: 2, padding: 18, gap: 8 },
   heading: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8 },
   publishedName: { color: colors.textStrong, fontSize: 20, fontWeight: '900' },
@@ -208,4 +206,4 @@ const styles = StyleSheet.create({
   },
   suggestions: { gap: 6, marginTop: 4 },
   form: { marginTop: 4 },
-});
+}));

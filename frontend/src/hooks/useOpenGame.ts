@@ -1,8 +1,8 @@
-import { useRouter } from 'expo-router';
 import { useCallback } from 'react';
 
 import { useWatchGame } from './useWatchGame';
 import { links } from '@/navigation/links';
+import { useGoTo } from '@/navigation/stack';
 import { useGameStore } from '@/store/gameStore';
 import { isGameLive } from '@/store/spectateSelectors';
 
@@ -26,7 +26,7 @@ import { isGameLive } from '@/store/spectateSelectors';
  * differs is what else has to happen around it.
  */
 export const useOpenGame = () => {
-  const router = useRouter();
+  const go = useGoTo();
   const watchGame = useWatchGame();
   const liveGames = useGameStore((state) => state.liveGames);
 
@@ -37,8 +37,8 @@ export const useOpenGame = () => {
         watchGame(gameId);
         return;
       }
-      router.push(links.review(gameId));
+      go(links.review(gameId));
     },
-    [liveGames, router, watchGame],
+    [go, liveGames, watchGame],
   );
 };

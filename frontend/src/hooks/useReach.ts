@@ -8,6 +8,7 @@ import { buildReachOverlay, type ReachOverlayResult } from '@/features/reach/rea
 import type { GhostPiece, ReachSettings } from '@/features/reach/settings';
 import { useGameStore } from '@/store/gameStore';
 import type { Position, SideColor } from '@/types/game';
+import { useAppearanceGeneration } from '@/appearance/store';
 
 // The reach tool, bound to a screen.
 //
@@ -74,9 +75,14 @@ export const useReach = (
   // exactly when the board does, it is cheaper to compare than a grid, and
   // `positionSignature` already caches one per position object.
   const signature = active && position ? positionSignature(position) : null;
+  // The generation is in here because `buildReachOverlay` bakes colours into
+  // what it returns — every band, ring and wash is a resolved string, not a
+  // token read later — so a memo keyed only on the position would hand the
+  // board the previous theme's overlay until somebody moved a piece.
+  const appearance = useAppearanceGeneration();
   const result = useMemo(
     () => buildReachOverlay(active ? position : null, settings),
-    [active, signature, settings],
+    [active, appearance, signature, settings],
   );
 
   const toggle = useCallback(() => {

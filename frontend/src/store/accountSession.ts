@@ -67,6 +67,16 @@ export interface PendingDiscordSignup {
   ticket: string;
   suggestedUsername: string;
   discordHandle: string;
+  /**
+   * Set once the server has said the name on the form belongs to an account
+   * made before Discord sign-in. The step is then no longer "pick a name" but
+   * "prove this one is yours", and the panel needs a password field.
+   *
+   * On the pending signup rather than in the panel's own state because the
+   * ticket is what it belongs to: it survives the panel remounting, and it is
+   * cleared by the next name the player tries.
+   */
+  claimingUsername?: string;
 }
 
 export interface SessionSlice {
@@ -86,12 +96,20 @@ export interface SessionSlice {
   signInWithDiscord: () => Promise<DiscordSignIn>;
   /** Redeem a ticket the browser came back with. The web half's second step. */
   redeemDiscordTicket: (ticket: string) => Promise<DiscordSignIn>;
-  /** Agree the username a brand-new account will hold. */
+  /**
+   * Finish the naming step.
+   *
+   * Resolves to the account when it is done. Resolves to null when the server
+   * has asked for a password instead — the name given is an older account's,
+   * and `pendingDiscordSignup.claimingUsername` now says which. The ticket is
+   * still live either way, so nothing is lost by answering.
+   */
   claimDiscordUsername: (
     ticket: string,
     username: string,
+    password?: string,
     reservationToken?: string,
-  ) => Promise<Account>;
+  ) => Promise<Account | null>;
   signIn: (username: string, password: string) => Promise<Account>;
   signOut: () => Promise<void>;
   adoptSession: (token: string, account: Account) => Account;
@@ -165,11 +183,23 @@ export const createSessionSlice: StateCreator<GameStore, [], [], SessionSlice> =
     return { kind: 'named', account: get().adoptSession(reply.token, reply.account) };
   },
 
-  claimDiscordUsername: (ticket, username, reservationToken = '') =>
-    completeDiscordSignup(ticket, username, reservationToken).then(({ token, account }) => {
-      set({ pendingDiscordSignup: null });
-      return get().adoptSession(token, account);
-    }),
+  claimDiscordUsername: async (ticket, username, password = '', reservationToken = '') => {
+    const reply = await completeDiscordSignup(ticket, username, password, reservationToken);
+    if (reply.needsPassword) {
+      // Not a failure, so not thrown: the name is an existing account's, and
+      // its password finishes the same step. Recorded against the pending
+      // signup so the panel can ask, and so a different name typed next clears
+      // it again.
+      const pending = get().pendingDiscordSignup;
+      if (pending) set({ pendingDiscordSignup: { ...pending, claimingUsername: username } });
+      return null;
+    }
+    if (!reply.token || !reply.account) {
+      throw new Error('That sign-in did not complete. Try again.');
+    }
+    set({ pendingDiscordSignup: null });
+    return get().adoptSession(reply.token, reply.account);
+  },
 
   signIn: (username, password) =>
     loginAccount(username, password).then(({ token, account }) =>

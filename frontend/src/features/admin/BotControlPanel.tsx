@@ -9,7 +9,7 @@ import type { AdminToken } from '@/hooks/useAdminToken';
 import { links } from '@/navigation/links';
 import { disconnectBot, listAdminBots, type AdminBot } from '@/store/api/admin';
 import { botIconUrl, shutdownBot } from '@/store/api/bots';
-import { colors, space, type } from '@/theme';
+import { colors, space, themedSheet, type } from '@/theme';
 import {
   Badge,
   Banner,
@@ -32,9 +32,11 @@ import {
 //
 //   1. **Drain** — it finishes what it is playing and then leaves. Almost
 //      always the right answer, and the button an owner has too.
-//   2. **Bench** — every engine stands down for a scheduled window. Declared in
-//      code, not from here, because it is a window rather than a switch: see
-//      bot_bench.go.
+//   2. **Bench** — every engine stands down for a scheduled window. Scheduled
+//      in the panel below this one rather than pressed here, because it is a
+//      window rather than a switch: one declared ahead of time ends by itself,
+//      and a switch has to be thrown a second time by somebody who remembers.
+//      See `BotBenchPanel` and bot_bench.go.
 //   3. **Reserve** — held for a tournament it has entered. Not an action at
 //      all; it happens by itself when an event starts and lifts when the event
 //      finishes. Shown here so that "why is Fishy refusing challenges" has a
@@ -118,7 +120,7 @@ export default function BotControlPanel({ admin }: BotControlPanelProps) {
       ) : (
         <>
           <LabeledInput
-            hint="Sent to the engine's client and to its owner. Optional, and worth writing."
+            hint="Optional message to the engine client and owner."
             label="REASON"
             maxLength={200}
             onChangeText={setReason}
@@ -203,8 +205,7 @@ export default function BotControlPanel({ admin }: BotControlPanelProps) {
                 .filter((bot) => bot.reservedFor)
                 .map((bot) => `${bot.name} (${bot.reservedFor})`)
                 .join(', ')}
-              . A reserved engine is healthy and idle, and is being kept for its own scheduled
-              matches until that event finishes — including after it has played its last one.
+              . Reserved engines only play scheduled matches until the event ends.
             </Text>
           ) : null}
         </>
@@ -213,6 +214,6 @@ export default function BotControlPanel({ admin }: BotControlPanelProps) {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   reserveNote: { ...type.body, color: colors.goldSoft, marginTop: space.small },
-});
+}));

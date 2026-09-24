@@ -1,18 +1,21 @@
 import { useEffect, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
+import EngineHistory from './EngineHistory';
 import ProfileBots from './ProfileBots';
 import ProfileTournaments from './ProfileTournaments';
 import { failureMessage } from '@/errors';
 import { relativeTime } from '@/features/bots/relativeTime';
 import GameHistoryPanel from '@/features/game/GameHistoryPanel';
+import { ratingCaveat, ratingIsRankable, ratingLabel } from '@/features/ratings/scale';
 import { links, shareURL } from '@/navigation/links';
 import { up } from '@/navigation/upFrom';
 import { playerProfile, type PlayerProfilePage } from '@/store/api/players';
 import { useGameStore } from '@/store/gameStore';
-import { colors, contentWidth, radius, space, type } from '@/theme';
+import { colors, contentWidth, radius, space, themedSheet, type } from '@/theme';
 import BackLink from '@/ui/BackLink';
 import CopyLinkButton from '@/ui/CopyLinkButton';
+import PlayerModerationRow from '@/features/moderation/PlayerModerationRow';
 import ScreenShell from '@/ui/ScreenShell';
 import TitleTag from '@/ui/TitleTag';
 import { Badge, Banner, EmptyState, Panel, SectionHeading } from '@/ui/primitives';
@@ -39,15 +42,30 @@ import { Badge, Banner, EmptyState, Panel, SectionHeading } from '@/ui/primitive
 //     identity called Guest, and the server answers 404 for them, which is
 //     what `notFound` below is showing.
 
-/** How a rating reads when the account has never played the mode. */
-const UNRATED = '—';
-
-/** One number with a word under it. The header is a row of these. */
-function Stat({ label, value, tone }: { label: string; value: string; tone?: 'gold' }) {
+/**
+ * One number with a word under it. The header is a row of these.
+ *
+ * `note` is a third line for a figure that needs qualifying, and it lives
+ * inside the column rather than under the row because the row wraps: a
+ * sentence under a wrapped row sits beneath whichever stat happened to land
+ * last, which on a narrow screen was TITLES explaining itself as unrated.
+ */
+function Stat({
+  label,
+  value,
+  tone,
+  note,
+}: {
+  label: string;
+  value: string;
+  tone?: 'gold';
+  note?: string | null;
+}) {
   return (
     <View style={styles.stat}>
       <Text style={[styles.statValue, tone === 'gold' && styles.statValueGold]}>{value}</Text>
       <Text style={styles.statLabel}>{label}</Text>
+      {note ? <Text style={styles.statNote}>{note}</Text> : null}
     </View>
   );
 }
@@ -132,10 +150,7 @@ export default function ProfileScreen({ handle, settled }: ProfileScreenProps) {
         <Panel>
           <SectionHeading eyebrow="PLAYER" title="No such player" />
           <Text style={styles.note}>
-            Nobody here goes by {handle.trim() ? `“${handle.trim()}”` : 'that name'}. Player
-            pages exist for accounts that have signed in with Discord, and for engines — an
-            anonymous guest has no page, because the name is this browser&apos;s rather than a
-            person&apos;s.
+            Nobody here goes by {handle.trim() ? `“${handle.trim()}”` : 'that name'}. Guest accounts do not have public profiles.
           </Text>
         </Panel>
       </ScreenShell>
@@ -157,11 +172,20 @@ export default function ProfileScreen({ handle, settled }: ProfileScreenProps) {
   const isBot = profile.kind === 'bot';
   const record = `${profile.wins}W ${profile.losses}L ${profile.draws}D`;
   // The modes they have actually played, strongest first. A mode somebody has
-  // never touched is not a row: it would read as a rating of 1200 rather than
-  // as an absence, which is the same mistake `accounts.elo` invites.
+  // never touched is not a row: it would read as a rating rather than as an
+  // absence, which is the same mistake `accounts.elo` invites — and a worse one
+  // than it used to be, because the number an unplayed mode shows is now the
+  // floor, and the floor means "plays no better than chance".
   const rated = Object.entries(profile.modeRatings ?? {})
     .filter(([, rating]) => Boolean(rating) && (rating?.gamesPlayed ?? 0) > 0)
-    .sort(([, first], [, second]) => (second?.elo ?? 0) - (first?.elo ?? 0));
+    // Measured first, and only then by the number — the board's own order. A
+    // mode nobody could be placed in does not head the list because the
+    // placeholder it shows happens to read high.
+    .sort(([, first], [, second]) => {
+      const firstRanked = ratingIsRankable(first?.ratingState);
+      if (firstRanked !== ratingIsRankable(second?.ratingState)) return firstRanked ? -1 : 1;
+      return (second?.elo ?? 0) - (first?.elo ?? 0);
+    });
 
   return (
     <ScreenShell width={contentWidth.standard}>
@@ -189,6 +213,19 @@ export default function ProfileScreen({ handle, settled }: ProfileScreenProps) {
                 ? ` · last played ${relativeTime(profile.lastSeenAtUnixMs)}`
                 : ''}
             </Text>
+            {/*
+              Under the name rather than beside the share button. Both are things
+              you do *about this person*, but one is an invitation and the other
+              is a complaint, and putting them in the same row would make the
+              second one as easy to press by accident as the first.
+
+              Renders nothing on your own page or on a bot's — see the component.
+            */}
+            <PlayerModerationRow
+              isBot={isBot}
+              userId={profile.userId}
+              username={profile.username}
+            />
           </View>
           {/*
             The page's own address, because the reason somebody is on it is
@@ -202,7 +239,20 @@ export default function ProfileScreen({ handle, settled }: ProfileScreenProps) {
         </View>
 
         <View style={styles.statRow}>
-          <Stat label="RATING" tone="gold" value={String(profile.elo)} />
+          {/*
+            A dash rather than the number, when the number is not one — the same
+            call the ladder row makes, through the same helper, because a page
+            reached *from* that row must not contradict it. The floor of this
+            scale means "plays no better than chance", so printing it for an
+            account nobody has managed to measure would be a claim about them
+            rather than a gap. See features/ratings/scale.
+          */}
+          <Stat
+            label="RATING"
+            note={ratingCaveat(profile.ratingState)}
+            tone="gold"
+            value={ratingLabel(profile.elo, profile.ratingState)}
+          />
           <Stat label="GAMES" value={String(profile.gamesPlayed)} />
           <Stat label="RECORD" value={record} />
           <Stat
@@ -229,7 +279,7 @@ export default function ProfileScreen({ handle, settled }: ProfileScreenProps) {
         <SectionHeading eyebrow="RATINGS" title="By game mode" />
         {rated.length === 0 ? (
           <EmptyState
-            detail="Every mode rates separately, and a rating appears once a ranked game in it has finished."
+            detail="Each mode has its own rating. Play a ranked game to get one."
             title="No rated games yet"
           />
         ) : (
@@ -239,7 +289,9 @@ export default function ProfileScreen({ handle, settled }: ProfileScreenProps) {
                 <Text numberOfLines={1} style={styles.modeName}>
                   {modes.find((mode) => mode.id === modeId)?.name ?? modeId}
                 </Text>
-                <Text style={styles.modeElo}>{rating?.elo ?? UNRATED}</Text>
+                <Text style={styles.modeElo}>
+                  {ratingLabel(rating?.elo ?? 0, rating?.ratingState)}
+                </Text>
                 <Text style={styles.modeRecord}>
                   {rating?.wins ?? 0}W {rating?.losses ?? 0}L {rating?.draws ?? 0}D
                 </Text>
@@ -252,6 +304,13 @@ export default function ProfileScreen({ handle, settled }: ProfileScreenProps) {
       <ProfileTournaments tournaments={profile.tournaments ?? []} />
 
       {/*
+        Above the games rather than below them: the reigns and the builds are
+        what the games underneath add up to, and a summary after the list it
+        summarises is one nobody scrolls back up to.
+      */}
+      <EngineHistory reigns={profile.reigns ?? []} versions={profile.engineVersions ?? []} />
+
+      {/*
         Unchanged from the account page's copy of it: the panel was written
         against this moment. See the note at the top of this file.
       */}
@@ -262,7 +321,7 @@ export default function ProfileScreen({ handle, settled }: ProfileScreenProps) {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   identity: { flexDirection: 'row', alignItems: 'flex-start', gap: space.small },
   // minWidth zero so a long username wraps rather than pushing the copy button
   // off the row — see the note in the react-native-web layout traps.
@@ -281,6 +340,7 @@ const styles = StyleSheet.create({
   statValue: { ...type.cardTitle, color: colors.text },
   statValueGold: { color: colors.goldBright },
   statLabel: { ...type.label, color: colors.textFaint },
+  statNote: { ...type.meta, color: colors.textFaint },
 
   titleRow: {
     flexDirection: 'row',
@@ -316,4 +376,4 @@ const styles = StyleSheet.create({
   modeRecord: { ...type.meta, color: colors.textFaint, minWidth: 110, textAlign: 'right' },
 
   note: { ...type.body, color: colors.textMuted },
-});
+}));

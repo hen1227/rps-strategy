@@ -5,10 +5,13 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "dark",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.henhen1227.rps-strategy"
+      "bundleIdentifier": "com.henhen1227.rps-strategy",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -32,11 +35,21 @@
       ],
       "expo-sqlite",
       "expo-notifications",
-      "expo-web-browser"
+      "expo-web-browser",
+      "expo-asset"
     ],
     "scheme": "rps-strategy",
     "experiments": {
       "typedRoutes": true
-    }
+    },
+    "extra": {
+      "router": {
+        "origin": "https://rps.henhen1227.com"
+      },
+      "eas": {
+        "projectId": "ac6d927c-3b51-4bb9-b68d-fa0f5dd36400"
+      }
+    },
+    "owner": "henhen1227"
   }
 }

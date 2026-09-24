@@ -13,7 +13,7 @@ import {
   type AdminLiveGame,
   type StopOutcome,
 } from '@/store/api/admin';
-import { colors, space, type } from '@/theme';
+import { colors, space, themedSheet, type } from '@/theme';
 import {
   Badge,
   Banner,
@@ -141,7 +141,7 @@ export default function LiveGamesPanel({ admin }: LiveGamesPanelProps) {
             value={outcome}
           />
           <LabeledInput
-            hint="Shown to both players and to anybody watching. A board that vanishes with no explanation reads as a crash."
+            hint="Shown to both players and spectators."
             label="REASON"
             maxLength={200}
             onChangeText={setReason}
@@ -194,6 +194,6 @@ export default function LiveGamesPanel({ admin }: LiveGamesPanelProps) {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   blocked: { ...type.meta, color: colors.textFaint, maxWidth: 140 },
-});
+}));

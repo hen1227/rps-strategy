@@ -5,7 +5,7 @@ import PieceIcon from '@/features/board/PieceIcon';
 import { predatorOf, squareLabel } from '@/engine/analysisGame';
 import { UNREACHABLE, type PieceReading, type ReachAnalysis } from '@/engine/reach';
 import type { ReachSettings } from './settings';
-import { colors, players, radius, reach, space } from '@/theme';
+import { colors, players, radius, reach, space, themedSheet } from '@/theme';
 import type { Position, SideColor } from '@/types/game';
 
 // What the distances add up to, in words.
@@ -19,7 +19,7 @@ import type { Position, SideColor } from '@/types/game';
 // a search, and there is one of those on the analysis board already.
 
 const moves = (value: number | null) =>
-  value === null || value === UNREACHABLE ? '—' : String(value);
+  value === null || value === UNREACHABLE ? '–' : String(value);
 
 function Stat({ label, value, tone }: { label: string; value: string; tone?: string }) {
   return (
@@ -238,14 +238,13 @@ export default function ReachSummary({
       )}
 
       <Text style={styles.caveat}>
-        A bound, not a proof: blockers are held still and the defender is credited with doing
-        nothing but intercepting. Only IMMORTAL is conclusive.
+        Estimates assume fixed blockers and a defender focused on interception. Only IMMORTAL guarantees a win.
       </Text>
     </View>
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   card: {
     width: '100%',
     gap: space.snug,
@@ -319,4 +318,4 @@ const styles = StyleSheet.create({
   moreText: { color: colors.accentText, fontSize: 8, fontWeight: '900', letterSpacing: 0.7 },
 
   caveat: { color: colors.textFaint, fontSize: 8, lineHeight: 12 },
-});
+}));

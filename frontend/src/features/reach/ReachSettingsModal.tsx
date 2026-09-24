@@ -15,7 +15,7 @@ import {
   type ReachSettings,
   type ReachView,
 } from './settings';
-import { colors, radius, space } from '@/theme';
+import { colors, radius, space, themedSheet } from '@/theme';
 import { PLAYABLE_PIECES, SIDE_COLORS, type PlayablePiece, type SideColor } from '@/types/game';
 
 // Every knob, with the sentence that says what it changes.
@@ -82,7 +82,7 @@ export default function ReachSettingsModal({
       footer={<GhostButton label="Reset to defaults" onPress={onReset} />}
       maxWidth={560}
       onClose={onClose}
-      subtitle="Every square a piece can stand on, and whether anything can stop it getting there."
+      subtitle="See where pieces can move and what can stop them."
       title="Reach settings"
       visible={visible}
     >
@@ -122,8 +122,7 @@ export default function ReachSettingsModal({
             value={settings.tempo}
           />
           <Text style={styles.blurb}>
-            One tempo is worth exactly one square of the chase, so a run that is safe on the
-            move is often lost off it. Force a side to see the other half of the answer.
+            Who moves first affects safe routes. Switch sides to compare.
           </Text>
           <Checkbox
             checked={settings.goalEndsGame}
@@ -131,8 +130,7 @@ export default function ReachSettingsModal({
             onToggle={() => onChange({ goalEndsGame: !settings.goalEndsGame })}
           />
           <Text style={styles.blurb}>
-            The rule as the game plays it. Turn it off to ask the stricter question: could the
-            piece stand on the goal square and survive?
+            Turn off to require the piece to survive a reply on the goal square.
           </Text>
         </Section>
 
@@ -154,9 +152,7 @@ export default function ReachSettingsModal({
 
         <Section title="A PIECE THAT IS NOT THERE">
           <Text style={styles.blurb}>
-            Put one anywhere and the whole reading is redone as though it were on the board —
-            the quickest way to ask what a square is worth before you spend four moves getting
-            to it.
+            Place a ghost piece to see how it changes the routes.
           </Text>
           <OptionChips<PlayablePiece>
             label="GHOST KIND"
@@ -227,7 +223,7 @@ export default function ReachSettingsModal({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   body: { gap: space.large },
   section: { gap: space.snug },
   sectionTitle: {
@@ -248,4 +244,4 @@ const styles = StyleSheet.create({
     borderRadius: radius.small,
     backgroundColor: colors.surfaceSunken,
   },
-});
+}));

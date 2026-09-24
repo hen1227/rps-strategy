@@ -145,8 +145,21 @@ func ParseMove(text string) (game.Position, game.Position, error) {
 
 // Handshake is what an engine reported in answer to `rpsi`.
 type Handshake struct {
-	Name     string
-	Author   string
+	Name   string
+	Author string
+	// Version is the build the engine says it is, from `id version`.
+	//
+	// A field of its own rather than a convention inside Name, which is how it
+	// was done before this existed: the protocol told authors that `id name` was
+	// free text and to include a version in it, so the name arrived as
+	// "RPSFish 0.1.0" and nothing could tell the two halves apart. A site that
+	// wants to say which build played a game, or when a build changed, cannot
+	// get there by splitting a string somebody else chose the shape of.
+	//
+	// Empty for every engine that has not been changed to send it, which is all
+	// of them today and is a fine answer: an engine that declares no build has
+	// none recorded, and nothing about it behaves differently.
+	Version  string
 	Protocol int
 	Rules    int
 	Modes    []game.ModeID
@@ -176,6 +189,8 @@ func ParseHandshake(lines []string) Handshake {
 				handshake.Name = value
 			case "author":
 				handshake.Author = value
+			case "version":
+				handshake.Version = value
 			}
 		case "protocol":
 			if len(fields) > 1 {

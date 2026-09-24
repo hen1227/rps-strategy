@@ -69,6 +69,28 @@ func registeredSQL(alias string) string {
 	return "(" + prefix + "password_hash <> '' OR " + prefix + "discord_user_id <> '')"
 }
 
+// awaitingDiscordLinkSQL is the *other* narrow question: an account that still
+// has a password and has not linked an identity.
+//
+// Not the negation of registeredSQL, and not derivable from it — a Discord
+// account is registered with no password at all, so "not registered" and "still
+// on a password" are different sets. This is the remainder of the password era:
+// the accounts the link paths exist for, and the count that has to reach zero
+// before password sign-in can be removed.
+//
+// It is a shared fragment for the same reason registeredSQL is. Two callers
+// want it — the boot-time count and the naming step deciding whether to offer a
+// password box — and this package has already been through what happens when a
+// predicate about credentials is written out by hand at several sites. See
+// registered_rule_test.go, which is what keeps both of these honest.
+func awaitingDiscordLinkSQL(alias string) string {
+	prefix := ""
+	if alias != "" {
+		prefix = alias + "."
+	}
+	return "(" + prefix + "password_hash <> '' AND " + prefix + "discord_user_id = '')"
+}
+
 // accountIsRegistered is the Go-side twin of registeredSQL, for the callers
 // that have already read the two columns and are deciding in Go. The two must
 // always agree: a rule enforced one way in SQL and another way in Go is the

@@ -3,7 +3,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { groupForPath, groupHref, visibleGroups } from './sections';
 import { useNavContext } from './useNavContext';
-import { colors, space, type } from '@/theme';
+import { colors, space, themedSheet, type } from '@/theme';
 
 // The phone's navigation.
 //
@@ -61,7 +61,7 @@ export default function BottomTabBar() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   bar: {
     flexDirection: 'row',
     alignItems: 'stretch',
@@ -88,4 +88,4 @@ const styles = StyleSheet.create({
   markerCurrent: { backgroundColor: colors.accent },
   label: { ...type.label, alignSelf: 'center', color: colors.textFaint, letterSpacing: 0.4 },
   labelCurrent: { color: colors.textStrong },
-});
+}));

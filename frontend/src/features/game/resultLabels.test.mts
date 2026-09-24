@@ -5,7 +5,9 @@ import {
   colourResultLabel,
   endReasonPhrase,
   namedResultLabel,
+  namedResultSegments,
   recordResultLabel,
+  recordResultSegments,
   resultForPlayer,
 } from './resultLabels.ts';
 import type { GameRecord } from '@/types/protocol';
@@ -76,6 +78,58 @@ test('a stored game reads the same way a named result does', () => {
     recordResultLabel(storedGame({ winnerUserId: null, endReason: 'move_limit' })),
     'Alpha and Beta drew by move limit',
   );
+});
+
+test('a result line is cut so that both names are pieces of their own', () => {
+  // The two names have to come out whole and separate: they are what a row
+  // links, and a name half-buried in a phrase cannot be one.
+  assert.deepEqual(
+    namedResultSegments({
+      redName: 'Alpha',
+      blueName: 'Beta',
+      winnerName: 'Beta',
+      endReason: 'territory',
+    }),
+    [
+      { text: 'Beta', isName: true },
+      { text: ' beat ', isName: false },
+      { text: 'Alpha', isName: true },
+      { text: ' by territory', isName: false },
+    ],
+  );
+  // A game that ended for no reason worth naming leaves no tail rather than an
+  // empty piece, which would draw as a `Text` with nothing in it.
+  assert.deepEqual(
+    namedResultSegments({
+      redName: 'Alpha',
+      blueName: 'Beta',
+      winnerName: 'Alpha',
+      endReason: 'game_rule',
+    }),
+    [
+      { text: 'Alpha', isName: true },
+      { text: ' beat ', isName: false },
+      { text: 'Beta', isName: true },
+    ],
+  );
+});
+
+test('the pieces of a result line join back into the sentence', () => {
+  // The drawn line and the read-out line come from one place, so a row cannot
+  // say something different from what it announces.
+  for (const record of [
+    storedGame(),
+    storedGame({ winnerUserId: 'blue-id', winnerColor: 'Blue' }),
+    storedGame({ winnerUserId: null, endReason: 'move_limit' }),
+    storedGame({ endReason: 'game_rule' }),
+  ]) {
+    assert.equal(
+      recordResultSegments(record)
+        .map((part) => part.text)
+        .join(''),
+      recordResultLabel(record),
+    );
+  }
 });
 
 test('a game is a win, a loss or a draw only for whoever was seated in it', () => {

@@ -1,7 +1,7 @@
 import { StyleSheet, Text, View } from 'react-native';
 
 import PieceIcon from './PieceIcon';
-import { colors } from '@/theme';
+import { colors, themedSheet } from '@/theme';
 import {
   PLAYABLE_PIECES,
   type Grid,
@@ -128,7 +128,7 @@ export default function CapturedPieces({ advantage = 0, color, tally }: Captured
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   tray: {
     flexShrink: 1,
     flexDirection: 'row',
@@ -147,4 +147,4 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     fontVariant: ['tabular-nums'],
   },
-});
+}));

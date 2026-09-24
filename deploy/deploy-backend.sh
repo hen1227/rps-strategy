@@ -28,12 +28,24 @@
 #
 # `--now` skips the waiting and restarts immediately, which is the old
 # behaviour, for the fix that cannot wait for a game to finish. Use
-# `--say "..."` with it: an apology posted before the plug is pulled is the
+# `--message "..."` with it: an apology posted before the plug is pulled is the
 # difference between a bug and a bad afternoon.
+#
+# Step 0, which is not in the list above because it produces no output when it
+# works: the admin token is read and *proved against the running server* before
+# anything is built. Everything from step 1 on takes minutes and ends by
+# replacing a binary on a production host, and a token that turns out to be
+# missing at step 3 leaves the deploy in the one state it should never be in —
+# new binary installed, old one still serving, nothing restarted.
 
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# This script lives in deploy/ and everything it builds is a sibling of that
+# directory rather than a child of it. Both are derived from the script's own
+# location rather than from the working directory, so it can be run from
+# anywhere — including from the repository root, which is how it is documented.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 BACKEND_DIR="${ROOT_DIR}/backend"
 # REMOTE_HOST="rangeley-loc-server"
 REMOTE_HOST="server2"
@@ -55,42 +67,133 @@ POLL_SECONDS=3
 # with RestartSec=3s, so this is generous by a wide margin.
 RESTART_TIMEOUT_SECONDS=90
 
+# Where the admin token is kept on *this* machine, on the deploys that keep it
+# here at all. Gitignored, and read by nothing else. See admin_token() for why
+# the server's own .env is still the source of truth and this is the exception
+# rather than the arrangement.
+CREDENTIALS_FILE="${RPS_DEPLOY_ENV:-${SCRIPT_DIR}/deploy.env}"
+
 IMMEDIATE=0
+CHECK_ONLY=0
 NOTE=""
 
 usage() {
   cat <<'USAGE'
-Usage: deploy-backend.sh [--now] [--say "message"]
+Usage: deploy-backend.sh [--now] [--message "text"]
 
-  --say "message"   What players are told, on the banner and in the refusal
-                    when they try to start a game. Defaults to a generic line.
+  --message "text"  What players are told, on the banner and in the refusal
+  -m "text"         when they try to start a game. Defaults to a generic line.
+                    --say is the older spelling and still works.
   --now             Do not wait for games to finish. Posts the message as an
                     announcement first, then restarts immediately. Games still
                     on the board are archived unfinished.
+  --check           Run only the preflight — find the admin token, prove it
+                    against the running server — and stop. Builds nothing,
+                    uploads nothing, changes nothing. This is the flag to reach
+                    for when a deploy has just told you it has no token.
+
+The drain is authorised by the server's admin token, which is looked for in
+$RPS_ADMIN_TOKEN, then in deploy/deploy.env, and failing both is read off the
+server's own .env over ssh — the ordinary case, which needs nothing set up
+here. It is checked against the running server before anything is built.
 USAGE
 }
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --now) IMMEDIATE=1; shift ;;
-    --say) NOTE="${2-}"; shift 2 ;;
+    --check|--dry-run) CHECK_ONLY=1; shift ;;
+    # Several spellings of one flag. `--say` came first and is still in muscle
+    # memory and in old shell history; `--message` is what everybody reaches for
+    # and is what the README now shows. Both cost a line each and save the deploy
+    # that dies on the wrong word at the exact moment somebody is trying to get a
+    # fix out.
+    --message|--say|-m) NOTE="${2-}"; shift 2 ;;
+    --message=*|--say=*) NOTE="${1#*=}"; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
 done
 
 # The admin token, which is how the drain and the announcement are authorised.
-# Read from the environment if it is there, and otherwise off the server's own
-# .env — the host running this deploy is the host that wrote that file, so
-# asking them to keep a second copy in their shell is a way to have the two
-# drift apart.
-admin_token() {
+#
+# Three places, in this order, and the order is a preference rather than three
+# equals. The server's own .env is the source of truth — it is the file systemd
+# hands the running process, so reading it back over ssh means there is exactly
+# one copy of the secret and nothing that can drift. The two ahead of it are for
+# the deploy run from somewhere that cannot read it: a second machine, or an ssh
+# key whose sudo is not passwordless.
+#
+# TOKEN_SOURCE names whichever answered. A refused token has an obvious first
+# question — which of the three was it — and printing the source rather than the
+# token is how that gets answered without a secret ending up in a terminal
+# scrollback or a pasted log.
+TOKEN=""
+TOKEN_SOURCE=""
+
+# unquote mirrors what systemd does to a line of an EnvironmentFile, and it has
+# to, because the running server got its token through exactly that path. A
+# value wrapped in quotes reaches the process unwrapped; one with a carriage
+# return on the end — a .env edited from a Windows machine, or pasted through
+# something helpful — reaches it without. Read the file more literally than
+# systemd did and the token is a few characters different from the one the
+# server is holding, which fails authentication looking precisely like a wrong
+# password rather than like a parsing bug.
+unquote() {
+  local value="$1"
+  value="${value%$'\r'}"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  case "${value}" in
+    \"*\") value="${value#\"}"; value="${value%\"}" ;;
+    \'*\') value="${value#\'}"; value="${value%\'}" ;;
+  esac
+  printf '%s' "${value}"
+}
+
+# load_admin_token fills TOKEN and TOKEN_SOURCE.
+#
+# It assigns rather than prints, which reads worse and is the only thing that
+# works: `TOKEN="$(admin_token)"` runs the function in a subshell, so everything
+# it learned along the way — which of the three sources answered, above all —
+# is discarded at the closing paren, and a refused token then cannot say where
+# it came from.
+load_admin_token() {
   if [ -n "${RPS_ADMIN_TOKEN:-}" ]; then
-    printf '%s' "${RPS_ADMIN_TOKEN}"
-    return
+    TOKEN="$(unquote "${RPS_ADMIN_TOKEN}")"
+    TOKEN_SOURCE="the RPS_ADMIN_TOKEN environment variable"
+    [ -n "${TOKEN}" ] && return 0
   fi
-  ssh "${REMOTE_HOST}" \
-    "sudo sed -n 's/^RPS_ADMIN_TOKEN=//p' ${REMOTE_DIR}/.env | tail -n 1 | tr -d '\"'"
+
+  if [ -f "${CREDENTIALS_FILE}" ]; then
+    # Sourced in a subshell, so a credentials file that sets something else by
+    # accident — REMOTE_HOST, say — cannot reach the rest of this script.
+    local from_file
+    from_file="$(set -a; . "${CREDENTIALS_FILE}"; printf '%s' "${RPS_ADMIN_TOKEN:-}")"
+    from_file="$(unquote "${from_file}")"
+    if [ -n "${from_file}" ]; then
+      TOKEN="${from_file}"
+      TOKEN_SOURCE="${CREDENTIALS_FILE}"
+      return 0
+    fi
+  fi
+
+  # `|| true` because coming up empty is one of this function's answers rather
+  # than an error, and under `set -e` a failed ssh would otherwise end the whole
+  # script with no output at all — the one failure mode a missing token must
+  # not have. The caller decides what empty means.
+  local from_server
+  from_server="$(ssh "${REMOTE_HOST}" \
+    "sudo sed -n 's/^[[:space:]]*RPS_ADMIN_TOKEN=//p' ${REMOTE_DIR}/.env | tail -n 1" \
+    2>/dev/null || true)"
+  from_server="$(unquote "${from_server}")"
+  if [ -n "${from_server}" ]; then
+    TOKEN="${from_server}"
+    TOKEN_SOURCE="${REMOTE_HOST}:${REMOTE_DIR}/.env"
+    return 0
+  fi
+
+  return 1
 }
 
 # Every call goes over the unix socket from the server itself, so nothing here
@@ -140,6 +243,93 @@ field() { sed -n "s/.*\"$2\":\"\([^\"]*\)\".*/\1/p" <<<"$1"; }
 number() { sed -n "s/.*\"$2\":\([0-9]*\).*/\1/p" <<<"$1"; }
 flag() { grep -q "\"$2\":true" <<<"$1" && echo true || echo false; }
 
+# Ask for the token, and prove it, before anything is built.
+#
+# This used to happen between installing the new binary and asking for the
+# drain, which is the worst place for it: by then the deploy has spent minutes
+# building and uploading, the new binary is on disk, the old one is still
+# serving it, and a bad token leaves the host in a state that is neither the old
+# deploy nor the new one. A GET changes nothing, so the whole check is free.
+#
+# A server that is not answering at all is deliberately not fatal here. It is
+# still a server worth deploying to — arguably the one most worth deploying to —
+# and the drain step below handles it by starting the service rather than
+# waiting for a game that nobody is playing.
+SERVER_ANSWERED=1
+preflight() {
+  if ! load_admin_token; then
+    cat >&2 <<EOF
+No admin token, so the drain cannot be authorised. Nothing has been built.
+
+The token belongs to the server: systemd hands it to the running process out of
+
+  ${REMOTE_HOST}:${REMOTE_DIR}/.env
+
+and that copy is the real one. Give this script a way to read it, whichever of
+these three suits.
+
+  1. Let it read the server's copy. This is the default, and it keeps no second
+     copy of the secret anywhere. It needs this to print the token:
+
+       ssh ${REMOTE_HOST} sudo grep RPS_ADMIN_TOKEN ${REMOTE_DIR}/.env
+
+     Printing nothing means the line is missing from that file. Asking for a
+     password means sudo there is not passwordless for this account, and one of
+     the two below is the answer instead.
+
+  2. Keep a copy on this machine, in deploy/deploy.env, which is gitignored:
+
+       printf 'RPS_ADMIN_TOKEN=%s\\n' '<the token>' > ${CREDENTIALS_FILE}
+       chmod 600 ${CREDENTIALS_FILE}
+
+  3. Export RPS_ADMIN_TOKEN for one run, which overrides both.
+EOF
+    exit 1
+  fi
+  echo "Admin token: ${TOKEN_SOURCE}"
+
+  api GET /api/admin/drain >/dev/null 2>&1 || true
+  case "${API_STATUS}" in
+    2*) echo "  accepted by the running server" ;;
+    404)
+      # The bootstrap deploy: the running build has no drain because the build
+      # about to be installed is the one that adds it. The token itself was
+      # never checked, which is the honest thing to say about it.
+      echo "  (the running build has no drain endpoint; this deploy adds it)"
+      ;;
+    503)
+      echo "The running server has no RPS_ADMIN_TOKEN of its own, so it refuses" >&2
+      echo "every admin command and cannot be asked to drain. Set it in" >&2
+      echo "  ${REMOTE_HOST}:${REMOTE_DIR}/.env" >&2
+      echo "and restart ${SERVICE} once — the unit reads that file at start, so" >&2
+      echo "a running process never picks up an edit to it." >&2
+      exit 1
+      ;;
+    401|403)
+      echo "The admin token from ${TOKEN_SOURCE} was refused (HTTP ${API_STATUS})." >&2
+      echo "Nothing has been built or installed." >&2
+      exit 1
+      ;;
+    000)
+      echo "  the server is not answering on ${SOCKET}" >&2
+      echo "  deploying anyway: there is nothing to drain, so this will install" >&2
+      echo "  the new binary and start ${SERVICE}." >&2
+      SERVER_ANSWERED=0
+      ;;
+    *)
+      echo "Unexpected answer from the server (HTTP ${API_STATUS}); stopping." >&2
+      exit 1
+      ;;
+  esac
+}
+
+preflight
+
+if [ "${CHECK_ONLY}" -eq 1 ]; then
+  echo "Preflight only; nothing built, nothing installed."
+  exit 0
+fi
+
 BUILD_DIR="$(mktemp -d)"
 LOCAL_BINARY="${BUILD_DIR}/rps-server-arm64"
 trap 'rm -rf -- "${BUILD_DIR}"' EXIT
@@ -183,12 +373,6 @@ ssh -t "${REMOTE_HOST}" \
    sudo install -o root -g www-data -m 0750 \
      ${REMOTE_UPLOAD} ${REMOTE_BINARY}.new
    sudo mv -f -- ${REMOTE_BINARY}.new ${REMOTE_BINARY}"
-
-TOKEN="$(admin_token)"
-if [ -z "${TOKEN}" ]; then
-  echo "Could not read RPS_ADMIN_TOKEN. Set it in the environment and retry." >&2
-  exit 1
-fi
 
 json_string() {
   printf '%s' "$1" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))'
@@ -242,8 +426,22 @@ else
         exit 1
         ;;
       000)
-        echo "The server did not answer. Is ${SERVICE} running?" >&2
-        exit 1
+        if [ "${SERVER_ANSWERED}" -eq 0 ]; then
+          # Already known to be down at preflight, and still down. Nothing is on
+          # the board, so there is nothing a drain could wait for; the deploy
+          # finishes by starting the service on the binary just installed.
+          echo "The server is still not answering; starting it on the new build."
+          restart_now
+          BOOTSTRAPPED=1
+        else
+          # It answered five minutes ago and does not now. Either it stopped in
+          # between — in which case systemd has already restarted it onto the
+          # new binary and the wait below will say so — or ssh broke. Neither is
+          # a thing to guess about while holding a half-finished deploy.
+          echo "The server answered at the start of this deploy and does not now." >&2
+          echo "The new binary is installed. Check ${SERVICE} on ${REMOTE_HOST}." >&2
+          exit 1
+        fi
         ;;
       *)
         echo "Could not start the drain (HTTP ${API_STATUS})." >&2

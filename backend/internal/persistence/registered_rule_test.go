@@ -28,21 +28,21 @@ import (
 // It inspects string literals through the AST rather than grepping the text, so
 // that prose about the rule does not trip it.
 //
-// Two sites are sanctioned, and the distinction between them and everybody else
-// is the point: these two are deliberately asking the *narrow* question — "does
-// this account have a password" — rather than the broad one this package means
-// by "registered". Everything else that has ever spelled the test out by hand
-// meant the broad one and got it wrong.
+// One file is sanctioned, and what makes it the only one is that the two
+// fragments in it are the definitions rather than copies of them. Both are
+// deliberately asking a *narrow* question about credentials — "does this account
+// have a password", "is it still on one and unlinked" — rather than the broad
+// one this package means by "registered". Everything else that has ever spelled
+// the test out by hand meant the broad one and got it wrong.
 func TestOnlyTheSharedHelpersDefineRegistered(t *testing.T) {
 	const rule = "password_hash <> ''"
 	sanctioned := map[string]int{
-		// registeredSQL, which builds the fragment everybody else asks for.
-		"account_auth.go": 1,
-		// reportPasswordAccountsRemaining, which counts how much of the
-		// password era is left. It genuinely wants accounts that have a
-		// password *and* no identity — the one question registeredSQL cannot
-		// answer, because it is the inverse of what registeredSQL is for.
-		"sqlite.go": 1,
+		// registeredSQL and awaitingDiscordLinkSQL, which build the two
+		// fragments everybody else asks for. The second used to be written out
+		// at its one call site, and stopped being allowed to be when a second
+		// caller wanted it: a predicate about credentials with two hand-written
+		// copies is the exact shape this test exists to catch.
+		"account_auth.go": 2,
 	}
 
 	entries, err := os.ReadDir(".")

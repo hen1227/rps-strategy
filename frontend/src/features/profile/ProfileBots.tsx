@@ -1,10 +1,12 @@
 import { StyleSheet, Text, View } from 'react-native';
 
 import BotIcon from '@/features/bots/BotIcon';
+import { ratingLabel } from '@/features/ratings/scale';
 import { botIconUrl } from '@/store/api/bots';
 import { links } from '@/navigation/links';
 import type { ProfileBot } from '@/store/api/players';
-import { colors, space, type } from '@/theme';
+import { colors, space, themedSheet, type } from '@/theme';
+import PlayerLink from '@/ui/PlayerLink';
 import { GhostLink, Panel, SectionHeading } from '@/ui/primitives';
 
 // The engines somebody wrote.
@@ -42,16 +44,25 @@ export default function ProfileBots({ bots, owner }: ProfileBotsProps) {
               uri={botIconUrl(bot.botId, bot.iconSha256)}
             />
             <View style={styles.copy}>
-              <Text numberOfLines={1} style={styles.name}>
-                {bot.name}
-              </Text>
+              <PlayerLink
+                handle={bot.username}
+                name={bot.name}
+                numberOfLines={1}
+                style={styles.name}
+              />
               {bot.description ? (
                 <Text numberOfLines={1} style={styles.meta}>
                   {bot.description}
                 </Text>
               ) : null}
             </View>
-            <Text style={styles.elo}>{bot.elo}</Text>
+            {/*
+              A dash where the engine has no measured rating, the same as its
+              own page and the same as the ladder: a column of ratings is
+              exactly where the floor and the absence of a number look most
+              alike. See features/ratings/scale.
+            */}
+            <Text style={styles.elo}>{ratingLabel(bot.elo, bot.ratingState)}</Text>
             <GhostLink compact href={links.player(bot.username)} label="OPEN" />
           </View>
         ))}
@@ -60,7 +71,7 @@ export default function ProfileBots({ bots, owner }: ProfileBotsProps) {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   help: { ...type.body, color: colors.textFaint, marginTop: space.tight },
   list: { marginTop: space.small },
   row: {
@@ -75,4 +86,4 @@ const styles = StyleSheet.create({
   name: { ...type.rowTitle, color: colors.text },
   meta: { ...type.meta, color: colors.textFaint, marginTop: 2 },
   elo: { ...type.body, color: colors.goldBright, fontWeight: '800' },
-});
+}));

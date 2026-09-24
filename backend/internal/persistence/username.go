@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"rps-strategy/backend/internal/textfilter"
 )
 
 // Everything that decides whether a name may be used lives here.
@@ -145,6 +147,20 @@ func ValidateBotUsername(username string) (string, error) {
 
 func validateUsername(username string, minimumLength int) (string, error) {
 	username = strings.TrimSpace(username)
+	// Before the character rule, so the refusal a player reads is about the
+	// thing that is actually wrong with the name.
+	//
+	// A name is worth filtering more than a message is: it is not a thing
+	// somebody said once in a room that empties, it is a label carried into
+	// every lobby list, every leaderboard, and the game record of everybody
+	// they play.
+	//
+	// CleanName rather than Clean, because a name is one word and the
+	// whole-word rule that keeps chat readable barely applies to it. See
+	// textfilter.CheckName.
+	if !textfilter.CleanName(username) {
+		return "", fmt.Errorf("%w: choose a different name", ErrInvalidUsername)
+	}
 	if len(username) < minimumLength || len(username) > MaximumUsernameLength {
 		return "", fmt.Errorf(
 			"%w: must be between %d and %d characters",

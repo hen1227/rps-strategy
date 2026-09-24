@@ -11,7 +11,7 @@ import {
 } from 'react-native';
 import { SafeAreaInsetsContext } from 'react-native-safe-area-context';
 
-import { colors, overlay, radius, shadows, space, type } from '@/theme';
+import { colors, radius, shadows, space, themedSheet, type } from '@/theme';
 
 // The shell every dialog in this app was writing out by hand.
 //
@@ -103,9 +103,9 @@ export default function ModalCard({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   root: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  backdrop: { ...StyleSheet.absoluteFill, backgroundColor: overlay },
+  backdrop: { ...StyleSheet.absoluteFill, backgroundColor: colors.overlay },
   card: {
     width: '100%',
     maxHeight: '94%',
@@ -139,4 +139,4 @@ const styles = StyleSheet.create({
     marginTop: space.medium,
   },
   pressed: { opacity: 0.7 },
-});
+}));

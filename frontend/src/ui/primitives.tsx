@@ -13,7 +13,8 @@ import {
 } from 'react-native';
 
 import type { BadgeTone, BannerTone, ButtonTone, PanelTone } from './tones';
-import { colors, players, radius, space, type } from '@/theme';
+import { useStackProps } from '@/navigation/stack';
+import { colors, players, radius, space, themedSheet, type } from '@/theme';
 
 // Shared building blocks for every surface in the app. Keeping them here means
 // a new panel matches the rest without copying styles.
@@ -180,8 +181,6 @@ export interface GhostLinkProps {
   compact?: boolean;
   /** `accent` for the one link on a card that is worth finding. */
   tone?: 'default' | 'accent';
-  /** Swap the current page rather than stacking on top of it. */
-  replace?: boolean;
 }
 
 /**
@@ -192,17 +191,23 @@ export interface GhostLinkProps {
  * be middle-clicked into a new tab and right-clicked to copy its address. That
  * is what `LinkRow` is built on and for the same reason: the pages this leads to
  * are meant to be handed to other people.
+ *
+ * What it does to the stack is not a prop. It carried a `replace` nobody ever
+ * passed, and that is not a decision a caller has the context for anyway: it
+ * depends on the page the link is drawn on rather than on the link.
+ * `useStackProps` reads that off the router — see `navigation/stack`.
  */
 export function GhostLink({
   href,
   label,
   accessibilityLabel,
   compact,
-  replace,
   tone = 'default',
 }: GhostLinkProps) {
+  const stack = useStackProps(href);
+
   return (
-    <Link asChild href={href} replace={replace}>
+    <Link asChild href={href} {...stack}>
       <Pressable
         accessibilityLabel={accessibilityLabel ?? label}
         accessibilityRole="link"
@@ -444,7 +449,7 @@ export function EmptyState({ title, detail }: EmptyStateProps) {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   panel: {
     padding: 15,
     borderRadius: radius.large,
@@ -620,4 +625,4 @@ const styles = StyleSheet.create({
 
   disabled: { opacity: 0.35 },
   pressed: { opacity: 0.7 },
-});
+}));

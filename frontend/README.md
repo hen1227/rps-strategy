@@ -52,15 +52,29 @@ They live in the route group `src/app/(shell)/`. A parenthesised directory
 contributes nothing to the URL, so every one of these pages keeps the address it
 already had — `/`, `/bots`, `/tournaments`, `/openings`, `/account`, `/admin` —
 and still exports as its own HTML file. A section may have pages *under* it:
-`/account/bots` is the engine registry and `/account/bots/connect` and
-`/account/bots/protocol` are the two documents behind it. Those are ordinary
-nested routes, so they export as their own files too and keep **Account** lit in
-the sidebar, and `PageHeading` gives them the one line of trail the sidebar
-cannot — nothing in a list of sections leads back from a reference page to the
-registry that sent you there. `(shell)/_layout.tsx` renders
-`features/shell/ShellLayout.tsx`, which uses `<Slot />` rather than a `Tabs`
-navigator: each section is a fresh mount with fresh data, which for a lobby is
-the behaviour you want, since the whole point of the page is what is true now.
+`/account/bots` is the engine registry, and `/bots/series` is one run of two
+engines. Those are ordinary nested routes, so they export as their own files
+too and still light the group they belong to, and `PageHeading` gives them the
+one line of trail the sidebar cannot — nothing in a list of sections leads back
+from one run to the runs.
+
+One row may also stand for several pages. The three engine handouts —
+`/account/bots/connect`, `/account/bots/protocol`, `/account/bots/notation` —
+are one document set rather than three places to be, so the navigation lists
+**Docs** once and the page itself carries tabs; `Section.covers` in
+`sections.ts` is what makes any of the three light that one row. Each keeps its
+own address, because each is a page worth linking to and pre-rendering on its
+own.
+
+Whether a page draws that trail is derived rather than declared. `useUpTarget`
+asks the same list the sidebar and the strip render — see `listedInNav` — and a
+page the navigation already has a row for draws nothing, which is what stops a
+back button from surviving the day its page becomes a section.
+
+`(shell)/_layout.tsx` renders `features/shell/ShellLayout.tsx`, which uses
+`<Slot />` rather than a `Tabs` navigator: each section is a fresh mount with
+fresh data, which for a lobby is the behaviour you want, since the whole point
+of the page is what is true now.
 The live board, the analysis board, the review screen and the bot battle stay
 outside the shell, full-bleed, because a board wants the whole window.
 
@@ -415,10 +429,33 @@ host controls are opened, and forgets it if verification fails or the host taps
 `EXPO_PUBLIC_WS_URL` by changing `ws(s)` to `http(s)` and removing the trailing
 `/ws`.
 
-Shared visual tokens live in `theme.ts` — colour, `radius`, and now `space`,
+Shared visual tokens live in `theme/` — colour, `radius`, and now `space`,
 `type` and `contentWidth`, which exist because font sizes, weights,
 letter-spacings, gaps and page widths were inline numbers in every file, and
-"what size is a section heading" had eleven answers. Shared controls are in
+"what size is a section heading" had eleven answers.
+
+Colour is chosen by the player, so those tokens are containers whose contents
+`applyAppearance` overwrites rather than constants: `import { colors } from
+'@/theme'` and `colors.surface` are written exactly as before and now follow
+whatever theme is on. Two rules follow from that and neither is optional.
+**Stylesheets are declared with `themedSheet(() => ({ … }))`, not
+`StyleSheet.create`** — a sheet reads its colours once, when the file is
+imported, and `themedSheet` is what lets it be refilled. And **nothing may hold
+a token in a module-level constant**: `const TINT = colors.accent` at the top of
+a file keeps the colour of whichever theme happened to load first, for ever, and
+no test will notice. Make it a function.
+
+Re-rendering after a change is a subscription, `useAppearanceGeneration()`,
+placed at the top of every route file in `src/app/` and inside the handful of
+components wearing `memo()`. A route file is the seam because expo-router puts
+each route behind a `React.memo` that skips `children`, so a re-render above
+never reaches in. A new page needs that one line; see any existing route file.
+
+`src/appearance/` owns the rest: the four catalogues, the device preference, and
+the browser's pre-paint script. `src/theme/spec.ts` explains what a theme is and
+why the roles are authored rather than derived from a ramp.
+
+Shared controls are in
 `ui/primitives.tsx`, alongside three that earned their place by removing real
 duplication: `ModalCard` (the backdrop, card and close button that three dialogs
 each wrote out), `ScreenShell` (page padding and width, replacing eleven
@@ -582,6 +619,15 @@ on `typeof window` alone is how that hook came to throw on a phone.
 Android alerts are the other gap. `activePushTransport()` answers `null` there
 rather than guessing: an FCM token posted to the APNs route would store cleanly
 and never deliver.
+
+Saving a board as a picture is the third. `features/board/export` lays the card
+out on every platform — that half is plain arithmetic and is tested in Node —
+but painting it needs a canvas and handing the file over needs a share sheet,
+and `react-native-view-shot`, `expo-file-system` and `expo-sharing` are all
+absent. Adding any of them is a native rebuild rather than a JavaScript change,
+so `shareImage.ts` reports `PNG_SUPPORTED: false` and the export dialog draws
+no picture section on a phone. The position text, which is what most people
+want from that dialog anyway, works everywhere.
 
 ## Publish the web build
 

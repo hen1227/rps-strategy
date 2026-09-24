@@ -3,6 +3,7 @@ import type { ModeID } from '@/types/game';
 import type {
   GameRecord,
   ModeRating,
+  RatingState,
   TitleAward,
   TitleID,
   TournamentFormat,
@@ -44,8 +45,31 @@ export interface ProfileBot {
   description?: string;
   iconSha256?: string;
   elo: number;
+  /** Whether `elo` is a measurement. Absent from a server older than the field. */
+  ratingState?: RatingState;
   username: string;
   userId: string;
+}
+
+/**
+ * One spell an engine spent at the top of one mode.
+ *
+ * `endedAtUnixMs` is absent while the reign is the one in progress, which
+ * `current` also says; read the age of a current reign against now.
+ */
+export interface BotReign {
+  userId: string;
+  modeId: ModeID | string;
+  startedAtUnixMs: number;
+  endedAtUnixMs?: number;
+  current: boolean;
+}
+
+/** One build an engine has been seen running. */
+export interface BotEngineVersion {
+  version: string;
+  firstSeenAtUnixMs: number;
+  lastSeenAtUnixMs: number;
 }
 
 export interface PlayerProfilePage {
@@ -56,8 +80,13 @@ export interface PlayerProfilePage {
   titles?: TitleAward[];
   /** `human` or `bot`. Engines get pages too. */
   kind: string;
-  /** Their strongest mode rating, matching what the ladder shows. */
+  /**
+   * The mode they are strongest in, matching the row the ladder lists them by:
+   * the best *measured* one, and only then the best number.
+   */
   elo: number;
+  /** Whether `elo` is a measurement. Absent from a server older than the field. */
+  ratingState?: RatingState;
   wins: number;
   losses: number;
   draws: number;
@@ -74,6 +103,19 @@ export interface PlayerProfilePage {
   recentGames: GameRecord[];
   tournaments?: ProfileTournament[];
   bots?: ProfileBot[];
+  /**
+   * Every spell this engine has spent top of a mode, newest first. Bot pages
+   * only, and absent for an engine that has never led — which is most of them.
+   *
+   * Reigns are only recorded from the day the ledger shipped, so an empty list
+   * means "not since then" rather than "never".
+   */
+  reigns?: BotReign[];
+  /**
+   * The builds this engine has been seen running, newest first. Bot pages
+   * only, and absent for an engine that declares no build.
+   */
+  engineVersions?: BotEngineVersion[];
 }
 
 /** One row of the directory. */

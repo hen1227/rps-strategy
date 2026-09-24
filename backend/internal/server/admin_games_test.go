@@ -103,7 +103,7 @@ func TestAdminGameBrowserListsAndDeletes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loser.GamesPlayed != 0 || loser.ModeElo(game.ModeTotalWar) != persistence.DefaultElo {
+	if loser.GamesPlayed != 0 || loser.ModeElo(game.ModeTotalWar) != persistence.RatingFloor {
 		t.Fatalf("the deleted game left its result behind: %#v", loser)
 	}
 

@@ -57,11 +57,13 @@ export const startDiscordAuth = (
   });
 
 /**
- * What redeeming a ticket produced: a session, or a request for a username.
+ * What redeeming a ticket produced: a session, a request for a username, or a
+ * request for the password of an account that already holds the name offered.
  *
  * Which one depends on facts only the server has — whether this Discord account
- * has been seen before — so the app cannot know in advance and has to branch on
- * `needsUsername`.
+ * has been seen before, and whether the name typed is already somebody's — so
+ * the app cannot know in advance and has to branch on `needsUsername` and
+ * `needsPassword`.
  */
 export interface DiscordExchangeReply {
   account?: Account;
@@ -69,6 +71,13 @@ export interface DiscordExchangeReply {
   needsUsername?: boolean;
   suggestedUsername?: string;
   discordHandle?: string;
+  /**
+   * The name just offered belongs to an account made before Discord sign-in.
+   * Not a refusal: its password links it, and the player signs in as that
+   * account rather than as something new. Which name is the one that was just
+   * sent — the server does not echo it back.
+   */
+  needsPassword?: boolean;
 }
 
 export const exchangeDiscordTicket = (ticket: string) =>
@@ -78,15 +87,24 @@ export const exchangeDiscordTicket = (ticket: string) =>
     what: 'Finishing Discord sign-in',
   });
 
+/**
+ * Finish the naming step: claim a new name, or claim an existing account.
+ *
+ * A password means the second. The reply can still be a question rather than a
+ * session — a name that turns out to be somebody's older account comes back
+ * with `needsPassword` — so this is typed as the exchange reply and not as a
+ * `SessionReply`.
+ */
 export const completeDiscordSignup = (
   ticket: string,
   username: string,
+  password = '',
   reservationToken = '',
 ) =>
-  request<SessionReply>('/api/auth/discord/complete', {
+  request<DiscordExchangeReply>('/api/auth/discord/complete', {
     method: 'POST',
-    body: { ticket, username, reservationToken },
-    what: 'Claiming your username',
+    body: { ticket, username, password, reservationToken },
+    what: password ? 'Signing in to your account' : 'Claiming your username',
   });
 
 /**
@@ -143,8 +161,21 @@ export interface Bot {
   description: string;
   allowPublicPlay: boolean;
   enterTournaments: boolean;
+  /**
+   * Whether this engine is in the ranked pool. The only place a rating comes
+   * from, and the only one of the three switches that costs its owner anything
+   * on a schedule: the server pairs an entered engine roughly once an hour for
+   * as long as it stays connected.
+   */
+  enterLadder: boolean;
   engineName?: string;
   engineAuthor?: string;
+  /**
+   * Which build of itself the engine declared on connect, absent for one that
+   * declares none — which is most engines. Not the rpsbot.py version: that is
+   * the script this site publishes, this is the program its owner wrote.
+   */
+  engineVersion?: string;
   engineModes?: ModeID[];
   /** The digest of the icon its client sent, or absent when it sent none. */
   iconSha256?: string;
@@ -153,6 +184,12 @@ export interface Bot {
   retired: boolean;
   createdAtUnixMs: number;
   lastSeenAtUnixMs?: number;
+  /**
+   * The tag this engine wears, absent for most of them and for every unclaimed
+   * slot. Nobody chose it: an engine has no account page, so the server picks
+   * the best of what it currently deserves out of the bot pool. See `TitleID`.
+   */
+  title?: TitleID;
 }
 
 /** A bot in the public directory, with whether it is connected right now. */
@@ -184,6 +221,7 @@ export interface BotSettings {
   description?: string;
   allowPublicPlay?: boolean;
   enterTournaments?: boolean;
+  enterLadder?: boolean;
 }
 
 export const listBots = () =>
@@ -202,6 +240,28 @@ export const updateBot = (token: string, botId: string, settings: BotSettings) =
     token,
     body: settings,
     what: 'Saving the bot',
+  });
+
+/** One of the three standing switches on a bot. */
+export type BotSwitch = 'allowPublicPlay' | 'enterTournaments' | 'enterLadder';
+
+/**
+ * Flips one switch, leaving the other two and the description as they were.
+ *
+ * Here rather than at the call sites because the endpoint is a whole-record
+ * write despite its verb: a switch left out of the body arrives as `false` and
+ * is turned off. Every caller therefore has to send all four fields, and the
+ * screens that toggle a bot are no longer one — the bots page has all three, the
+ * tournament panel has the middle one. Two copies of "remember to send the other
+ * two" is one copy too many.
+ */
+export const setBotSwitch = (token: string, bot: Bot, field: BotSwitch, value: boolean) =>
+  updateBot(token, bot.botId, {
+    description: bot.description ?? '',
+    allowPublicPlay: bot.allowPublicPlay,
+    enterTournaments: bot.enterTournaments,
+    enterLadder: bot.enterLadder,
+    [field]: value,
   });
 
 export const rotateBotToken = (token: string, botId: string) =>
@@ -244,6 +304,26 @@ export const resumeBot = (token: string, botId: string) =>
     method: 'DELETE',
     token,
     what: 'Putting the bot back in play',
+  });
+
+/**
+ * Play this bot's hourly round now, against an opponent the server draws.
+ *
+ * Takes no options, and that is the feature rather than an omission: the
+ * opponent, the mode and the clock are the server's to pick, and a rated game
+ * whose conditions the requester chose is the thing the ladder was rebuilt to
+ * get rid of. What the press supplies is the timing. See
+ * backend/internal/server/ladder_match.go.
+ *
+ * Answers with the run, so a caller can link to its score table. 409 is the
+ * ordinary failure — the engine is in a game, or nobody else is free — and its
+ * message is written to be shown as it stands.
+ */
+export const startRankedMatch = (token: string, botId: string) =>
+  request<BotSeries>(`/api/bots/${botId}/ranked-match`, {
+    method: 'POST',
+    token,
+    what: 'Starting a ranked match',
   });
 
 /* ----------------------------------------------------------------- series -- */
@@ -479,7 +559,45 @@ export interface BotGuide {
   notation: string;
 }
 
-export const botGuide = () => request<BotGuide>('/api/bot/guide', { what: 'Loading the guide' });
+/**
+ * Everything the bot pages read, fetched once and held.
+ *
+ * Held rather than re-requested because of what it is: some six hundred lines
+ * of Markdown that change when the server is deployed, not while somebody is
+ * reading them. Four screens ask for it, and three of those are the handouts —
+ * which are three addresses, and therefore a fresh mount per tab press. Without
+ * this, moving between the tabs of one document set would re-fetch the whole
+ * bundle and flash a loading state on every press.
+ *
+ * A failure is not kept, so a reader who was offline for the first attempt gets
+ * a real second one rather than the same error for ever.
+ */
+let guidePromise: Promise<BotGuide> | null = null;
+let guideAnswer: BotGuide | null = null;
+
+export const botGuide = () => {
+  guidePromise ??= request<BotGuide>('/api/bot/guide', { what: 'Loading the guide' })
+    .then((next) => {
+      guideAnswer = next;
+      return next;
+    })
+    .catch((caught: unknown) => {
+      guidePromise = null;
+      throw caught;
+    });
+  return guidePromise;
+};
+
+/**
+ * The same answer, synchronously, for a screen that is mounting again.
+ *
+ * Awaiting the promise above is a render with nothing in it, however fast it
+ * resolves — which on the handouts is a page that flashes "Loading…" on every
+ * tab press, because each tab is its own address and therefore its own mount.
+ * Null before the first answer has arrived, so a caller seeds its state with
+ * this and fetches as it always did.
+ */
+export const loadedBotGuide = (): BotGuide | null => guideAnswer;
 
 /** Where the client script and the example engine are served from. */
 export const botClientScriptUrl = `${API_URL}/api/bot/rpsbot.py`;

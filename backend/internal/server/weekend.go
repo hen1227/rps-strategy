@@ -147,8 +147,8 @@ func (server *Server) openWeekendDoors(
 	settings := persistence.DefaultTournamentConfig(config.ModeID, modeName)
 	settings.Name = fmt.Sprintf("Weekend Bot Arena #%d", number)
 	settings.Description =
-		"Every engine that is online and set to enter tournaments, once a weekend. " +
-			"Entered automatically at the start — nothing to sign up for."
+		"A weekly event for online engines. " +
+			"Enable Tournaments to enter automatically."
 	settings.Field = persistence.FieldBots
 	settings.Seeding = persistence.SeedByRating
 	settings.GamesPerMatch = config.GamesPerMatch
@@ -247,10 +247,21 @@ func (server *Server) beginWeekend(
 	server.freezeNextWeekendSlot(ctx, config)
 
 	enrolled, skipped := server.enrolOnlineBots(ctx, tournament)
-	if len(enrolled) < config.MinimumField {
+	// The size of the field, rather than the size of what the sweep just added
+	// to it. Those are two different numbers the moment anything else has put an
+	// engine in — the host's own enrolment button pressed while the doors were
+	// open, an entry added by hand, a sweep that a restart made run twice.
+	//
+	// An engine that is already in is skipped by the sweep as "already signed
+	// up", which is correct and which used to make it invisible here: an arena
+	// with thirteen engines in its bracket was called off for want of six,
+	// because none of the thirteen had been *newly* enrolled. What the minimum
+	// is a rule about is who is playing, so that is what is counted.
+	field := server.weekendFieldSize(ctx, tournament, len(enrolled))
+	if field < config.MinimumField {
 		reason := fmt.Sprintf(
-			"only %d engine%s were online, and %s needs %d",
-			len(enrolled), pluralSuffix(len(enrolled)), tournament.Name, config.MinimumField,
+			"only %d engine%s were in the field, and %s needs %d",
+			field, pluralSuffix(field), tournament.Name, config.MinimumField,
 		)
 		if _, err := server.data.CancelTournament(ctx, tournament.TournamentID, reason); err != nil {
 			log.Printf("weekend: cancel %s: %v", tournament.Name, err)
@@ -265,7 +276,7 @@ func (server *Server) beginWeekend(
 	// table and the best ladder signal. Above that it is a Swiss — the right
 	// tool for a big field rather than a round robin with rounds cut off it.
 	format := persistence.FormatRoundRobin
-	if len(enrolled) > config.RoundRobinMax {
+	if field > config.RoundRobinMax {
 		format = persistence.FormatSwiss
 	}
 	if _, err := server.data.ConfigureWeekendStart(
@@ -291,6 +302,26 @@ func (server *Server) beginWeekend(
 		log.Printf("weekend: %s skipped %d engines", started.Name, len(skipped))
 	}
 	server.broadcastTournaments()
+}
+
+// weekendFieldSize is how many entrants an event holds, after the sweep.
+//
+// Re-read rather than counted from the sweep's own return, because the sweep
+// reports what it did and this question is about what is there. The fallback is
+// the sweep's count: a read that failed is not a reason to call off an event
+// that may well have a field, and the worst it can do is let one through to
+// StartTournament, which refuses an empty bracket itself.
+func (server *Server) weekendFieldSize(
+	ctx context.Context,
+	tournament persistence.Tournament,
+	enrolled int,
+) int {
+	reread, err := server.data.Tournament(ctx, tournament.TournamentID)
+	if err != nil {
+		log.Printf("weekend: count the field for %s: %v", tournament.Name, err)
+		return enrolled
+	}
+	return len(reread.Players)
 }
 
 // freezeNextWeekendSlot moves the schedule to whatever slot is leading.
@@ -323,7 +354,7 @@ func (server *Server) freezeNextWeekendSlot(
 	// the weekend page prints the same slot in each reader's own time, on each
 	// reader's own day.
 	server.postWeekendNotice(fmt.Sprintf(
-		"The weekend arena moves to %s %s from next weekend — %d of %d people can make it.",
+		"Next weekend starts %s %s. Available: %d of %d players.",
 		weekendSlotLabel(moved), shortZone(moved.Zone), counts[slot], answered,
 	))
 }

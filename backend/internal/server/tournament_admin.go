@@ -279,6 +279,11 @@ func (server *Server) deleteTournament(writer http.ResponseWriter, request *http
 	if len(deletion.ChampionUserIDs) > 0 {
 		server.awardTitles(request.Context(), deletion.ChampionUserIDs...)
 	}
+	// Unconditionally, unlike the line above: an engine's crown is a reflection
+	// of the archive rather than something it keeps, so deleting an event can
+	// hand the crown back to whoever won the one before — an engine that is not
+	// in this deletion's champion list. See bot_titles.go.
+	server.syncBotTitles(request.Context())
 	server.broadcastTournaments()
 	writeJSON(writer, http.StatusOK, deletion)
 }

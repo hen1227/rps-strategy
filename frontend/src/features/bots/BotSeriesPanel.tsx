@@ -1,23 +1,15 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import BotHistoryFeed from './BotHistoryFeed';
 import BotIcon from './BotIcon';
-import { failureMessage } from '@/errors';
+import { seriesSettingsLine } from './pitSelection';
+import { MIN_MINUTES, type BotSeriesForm } from './useBotSeriesForm';
 import { engineElo } from '@/features/live/liveSelectors';
-import { useAdminToken } from '@/hooks/useAdminToken';
-import { useRequestIdentity } from '@/hooks/useRequestIdentity';
 import { links } from '@/navigation/links';
-import {
-  abortAdminBotSeries,
-  abortBotSeries,
-  botIconUrl,
-  startAdminBotSeries,
-  startBotSeries,
-  type BotSeries,
-} from '@/store/api/bots';
+import { botIconUrl } from '@/store/api/bots';
 import { timeControlLabel } from '@/store/setupSelectors';
-import { colors, radius, space, type } from '@/theme';
+import { colors, radius, space, themedSheet, type } from '@/theme';
 import LinkRow from '@/ui/LinkRow';
 import {
   Banner,
@@ -28,7 +20,7 @@ import {
   PrimaryButton,
   SectionHeading,
 } from '@/ui/primitives';
-import type { ModeDefinition, TimeControl } from '@/types/game';
+import type { ModeDefinition } from '@/types/game';
 import type { BotPresence } from '@/types/protocol';
 
 // Pit two engine bots against each other.
@@ -58,45 +50,15 @@ import type { BotPresence } from '@/types/protocol';
 // their ratings, facing each other. Which side is which still matters (the first
 // engine opens the first game of every pair), so the slots are labelled and
 // there is a button to exchange them.
-
-/** What the public form may ask for. The server enforces the same numbers. */
-const PUBLIC_MAX_PAIRS = 3;
-const PUBLIC_MAX_MINUTES = 10;
-/**
- * An opening is a handful of moves off the book, not a position somebody else
- * played into. The server allows up to botSeriesMaxOpeningPlies, which is what
- * the host form still offers.
- */
-const PUBLIC_MAX_PLIES = 6;
-/** What the host may ask for, matching the server's own ceilings. */
-const HOST_MAX_PAIRS = 100;
-const HOST_MAX_PLIES = 20;
-
-/**
- * The shortest clock the form will send: 0.1+1, six seconds each with a second
- * back every move.
- *
- * A bullet clock is not the degenerate setting between two engines that it is
- * between two people. Neither of them is going to fumble a mouse, the increment
- * is what carries a game this short, and six of them are over in less time than
- * one game at the default clock takes — which is the difference between
- * watching a run settle a question and starting one and coming back later.
- */
-const MIN_MINUTES = 0.1;
-
-const numeric = (value: string, fallback: number) => {
-  const parsed = Number.parseInt(value, 10);
-  return Number.isFinite(parsed) ? parsed : fallback;
-};
-
-/** Minutes alone may be fractional — see MIN_MINUTES — so they are not rounded. */
-const decimal = (value: string, fallback: number) => {
-  const parsed = Number.parseFloat(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
-};
-
-const clamp = (value: number, low: number, high: number) =>
-  Math.min(Math.max(value, low), high);
+//
+// And this panel no longer *starts* anything. The picks are made on the cards at
+// the top of the page, which on a phone with a dozen engines online is two or
+// three screens above here — so somebody who had just chosen two engines had
+// filled in a form and could not see its button. START moved to a bar pinned to
+// the foot of the page, next to where the choosing happens, and what is left
+// here is the fight at full size and the numbers behind it: this panel is what
+// the run *will be*, not the press that begins it. The state both of them read
+// is `useBotSeriesForm`, arriving as one `form` prop.
 
 /**
  * One side of the fight.
@@ -153,8 +115,14 @@ function PitSlot({
       </View>
       <View style={styles.slotCopy}>
         <Text style={[styles.slotRole, align]}>{role}</Text>
-        <Text numberOfLines={1} style={[styles.slotHint, align]}>
-          PRESS VS ON A CARD ABOVE
+        {/*
+          Two lines, for the same reason LinkRow's detail takes two: at 320
+          points this wants 158 and has 154, so a one-line clamp turned the
+          instruction into "PICK ONE ON A CARD ABO…" on the narrowest phones —
+          which is the one string on this panel that has to be readable.
+        */}
+        <Text numberOfLines={2} style={[styles.slotHint, align]}>
+          PICK ONE ON A CARD ABOVE
         </Text>
       </View>
     </>
@@ -210,6 +178,8 @@ export interface BotSeriesPanelProps {
   /** Exchange the two sides. */
   onSwap: () => void;
   onClear: (side: 'first' | 'second') => void;
+  /** The run being set up, shared with the bar that starts it. */
+  form: BotSeriesForm;
 }
 
 export default function BotSeriesPanel({
@@ -219,104 +189,19 @@ export default function BotSeriesPanel({
   mode,
   onSwap,
   onClear,
+  form,
 }: BotSeriesPanelProps) {
-  const identity = useRequestIdentity();
-  const admin = useAdminToken();
   const [hostFormOpen, setHostFormOpen] = useState(false);
   const [optionsOpen, setOptionsOpen] = useState(false);
   const [draft, setDraft] = useState('');
-
-  const [pairs, setPairs] = useState('2');
-  const [plies, setPlies] = useState('3');
-  const [seed, setSeed] = useState('');
-  const [minutes, setMinutes] = useState('1');
-
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   // Whether the two sides still fit beside each other, measured on the row
   // itself rather than on the window: this panel sits in a column between the
   // shell's sidebar and its live rail, and the window is a long way wider than
   // the space it actually has. Safe against oscillation because the row fills
   // its parent either way, so the flag cannot change the width it is read from.
   const [narrow, setNarrow] = useState(false);
-  // Bumped after starting or stopping a run, which is how the feed below is told
-  // to refetch now rather than on its own timer. The runs themselves are the
-  // feed's to hold: this panel is a form, and it kept a second copy of the list
-  // only because it used to draw one.
-  const [changed, setChanged] = useState(0);
 
-  const asHost = admin.unlocked;
-  const maxPairs = asHost ? HOST_MAX_PAIRS : PUBLIC_MAX_PAIRS;
-  const maxPlies = asHost ? HOST_MAX_PLIES : PUBLIC_MAX_PLIES;
-  const maxMinutes = asHost ? 60 : PUBLIC_MAX_MINUTES;
-
-  const refresh = useCallback(() => setChanged((count) => count + 1), []);
-
-  // The clock as the request will carry it, so the button underneath reports
-  // the number that will be sent rather than whatever is half-typed in the
-  // field. The increment is fixed at a second: it is what makes the shortest
-  // clock on offer playable at all, and nobody came here to choose it.
-  const clock = useMemo<TimeControl>(
-    () => ({
-      initialTimeMs: Math.round(
-        clamp(decimal(minutes, 1), MIN_MINUTES, maxMinutes) * 60_000,
-      ),
-      incrementMs: 1000,
-    }),
-    [minutes, maxMinutes],
-  );
-
-  const start = async () => {
-    if (!first || !second) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const options = {
-        firstBotId: first.botId,
-        secondBotId: second.botId,
-        modeId: mode.id,
-        pairs: clamp(numeric(pairs, 2), 1, maxPairs),
-        openingPlies: clamp(numeric(plies, 3), 0, maxPlies),
-        // Passed through as text rather than parsed: the value a person pastes
-        // here is one they copied off a finished run, and `Number.parseInt`
-        // would round it before it ever left the browser.
-        seed: seed.trim().replace(/\D/g, ''),
-        timeControl: clock,
-      };
-      if (asHost) await startAdminBotSeries(admin.token, options);
-      else await startBotSeries(identity, options);
-      refresh();
-    } catch (caught) {
-      setError(failureMessage(caught, 'The series could not be started.'));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const stop = async (run: BotSeries) => {
-    setError(null);
-    try {
-      if (asHost) await abortAdminBotSeries(admin.token, run.seriesId);
-      else await abortBotSeries(identity, run.seriesId);
-      refresh();
-    } catch (caught) {
-      setError(failureMessage(caught, 'The series could not be stopped.'));
-    }
-  };
-
-  // Whether the two chosen engines belong to one person, which is what decides
-  // whether the run is casual. The server settles it — see sameBotOwner in
-  // bot_series.go — and this is the form saying so in advance rather than a
-  // second opinion about it.
-  //
-  // The empty check is the whole of the care needed: `ownerUserId` is absent for
-  // an engine whose owner the roster does not carry, and two absent owners
-  // compared as strings would read as one person owning both.
-  const sameOwner =
-    Boolean(first?.ownerUserId) && first?.ownerUserId === second?.ownerUserId;
-  const canStart = !busy && Boolean(first) && Boolean(second) && first !== second;
-  const mine = (run: BotSeries) =>
-    Boolean(run.requestedByUserId) && run.requestedByUserId === identity.userId;
+  const { admin, asHost } = form;
 
   return (
     <>
@@ -355,14 +240,22 @@ export default function BotSeriesPanel({
           </>
         ) : null}
 
-        {error ? <Banner message={error} onDismiss={() => setError(null)} tone="error" /> : null}
+        {/*
+          The same error the bar shows, in the other place a request can fail
+          from: a stop has to explain itself next to the STOP button that caused
+          it. They are never both in view — the bar is at the foot of the screen
+          and this is two screens down — and dismissing either clears it.
+        */}
+        {form.error ? (
+          <Banner message={form.error} onDismiss={form.dismissError} tone="error" />
+        ) : null}
 
         {available < 2 ? (
           <EmptyState
             detail={
               available === 1
-                ? 'One engine is free. A run needs two, so wait for another to finish its game or come online.'
-                : 'No engine is free. A run needs two, so wait for one to finish its game or come online.'
+                ? "One engine is available. A series needs two."
+                : "No engines are available. A series needs two."
             }
             title="Not enough free engines"
           />
@@ -370,8 +263,8 @@ export default function BotSeriesPanel({
           <>
         {/*
           The fight itself, at the size of the decision. Both slots and the SWAP
-          between them are the same control the cards above are — press VS there
-          to fill a side, press a portrait here to empty one.
+          between them are the same control the cards above are — press a card's
+          green button to fill a side, press a portrait here to empty one.
         */}
         <View
           onLayout={(event) => setNarrow(event.nativeEvent.layout.width < 520)}
@@ -409,65 +302,69 @@ export default function BotSeriesPanel({
           />
         </View>
 
+        {/*
+          The same sentence the bar carries, from the same place, so the two
+          cannot describe one run differently.
+        */}
         <Text style={styles.summary}>
           {first && second
-            ? `${mode.name} · ${pairs} pairs, colours swapped each time · ${timeControlLabel(clock)}`
-            : `Pick two engines above. They will play ${mode.name} and the ladder will rate the result.`}
+            ? seriesSettingsLine({ clock: form.clock, mode, pairs: form.pairs })
+            : `Pick two engines to play a casual ${mode.name} series.`}
         </Text>
 
-        {sameOwner ? (
+        {/*
+          Where the button is. This panel describes a run and no longer starts
+          one, and a settings form with no action in it is a form somebody will
+          hunt for the action in.
+        */}
+        <Text style={styles.help}>Press START SERIES below when ready.</Text>
+
+        {form.sameOwner ? (
           <Text style={styles.help}>
-            Both engines have the same owner, so this run is casual — the ladder does
-            not rate a pair of bots one person registered. Pick engines from different
-            owners for a rated run.
+            These are both your engines. Series are casual and do not affect ratings.
           </Text>
         ) : null}
 
         {optionsOpen ? (
           <View style={styles.fields}>
             <LabeledInput
-              hint={`Played twice each, colours swapped · max ${maxPairs}`}
+              hint={`Played twice each, colours swapped · max ${form.maxPairs}`}
               keyboardType="number-pad"
               label="PAIRS"
-              onChangeText={setPairs}
-              value={pairs}
+              onChangeText={form.setPairs}
+              value={form.pairs}
             />
             <LabeledInput
-              hint={`Random moves both bots start from · max ${maxPlies}`}
+              hint={`Random moves both bots start from · max ${form.maxPlies}`}
               keyboardType="number-pad"
               label="OPENING PLIES"
-              onChangeText={setPlies}
-              value={plies}
+              onChangeText={form.setPlies}
+              value={form.plies}
             />
             <LabeledInput
               hint="Blank picks one"
               keyboardType="number-pad"
               label="SEED"
-              onChangeText={setSeed}
-              value={seed}
+              onChangeText={form.setSeed}
+              value={form.seed}
             />
             <LabeledInput
-              hint={`${MIN_MINUTES} is a six-second bullet clock · max ${maxMinutes}`}
+              hint={`${MIN_MINUTES} is a six-second bullet clock · max ${form.maxMinutes}`}
               keyboardType="decimal-pad"
               label="MINUTES EACH"
-              onChangeText={setMinutes}
-              value={minutes}
+              onChangeText={form.setMinutes}
+              value={form.minutes}
             />
           </View>
         ) : null}
 
         <View style={styles.actions}>
-          <PrimaryButton
-            disabled={!canStart}
-            label={sameOwner ? 'START CASUAL SERIES ▶' : 'START SERIES ▶'}
-            onPress={start}
-          />
           <GhostButton
             compact
             label={
               optionsOpen
                 ? 'HIDE OPTIONS'
-                : `${pairs} PAIRS · ${plies} PLIES · ${timeControlLabel(clock)}`
+                : `${form.pairs} PAIRS · ${form.plies} PLIES · ${timeControlLabel(form.clock)}`
             }
             onPress={() => setOptionsOpen(!optionsOpen)}
           />
@@ -490,16 +387,16 @@ export default function BotSeriesPanel({
       {/*
       The same feed the Leaderboard carries, because it is the same question.
       What this page adds is the one thing only it can: a STOP button on a run
-      you started, which needs the identity and the admin token this panel is
+      you started, which needs the identity and the admin token the form is
       already holding.
     */}
       <BotHistoryFeed
-        emptyDetail="Pick two engines above and press START SERIES."
+        emptyDetail="Pick two engines above, then press START SERIES."
         eyebrow="RESULTS"
-        refreshKey={changed}
+        refreshKey={form.changed}
         seriesAction={(run) =>
-          String(run.status).toLowerCase() === 'running' && (asHost || mine(run)) ? (
-            <GhostButton compact label="STOP" onPress={() => stop(run)} />
+          String(run.status).toLowerCase() === 'running' && (asHost || form.mine(run)) ? (
+            <GhostButton compact label="STOP" onPress={() => form.stop(run)} />
           ) : null
         }
         title="Recent runs"
@@ -508,7 +405,7 @@ export default function BotSeriesPanel({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   adminPanel: { borderColor: colors.goldBorder, backgroundColor: colors.goldSurfaceDeep },
   help: { ...type.body, color: colors.textMuted, marginTop: space.small },
   summary: { ...type.body, color: colors.textDim, marginTop: space.medium },
@@ -576,4 +473,4 @@ const styles = StyleSheet.create({
     marginTop: space.medium,
   },
   pressed: { opacity: 0.7 },
-});
+}));

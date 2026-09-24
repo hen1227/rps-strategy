@@ -41,12 +41,34 @@ func (mode *InfiltrationMode) Move(
 	if err := mode.rules.movePiece(state, player, from, to); err != nil {
 		return err
 	}
-	if (player == Red && to.Y == 0) || (player == Blue && to.Y == BoardSize-1) {
+	if to.Y == goalRank(state.Grid, player) {
 		mode.rules.finish(state, player, EndReasonInfiltration)
 	} else {
 		mode.rules.passTurn(state, player)
 	}
 	return nil
+}
+
+// goalRank is the rank a side wins by reaching: the opponent's home boundary.
+//
+// Blue opens on rank 1 and Red on the last one, so Red runs at rank 1 and Blue
+// at the last -- the same way round as Intransitive's goal corners, which are
+// one end of these two ranks. See goalCorner in mode_intransitive.go.
+//
+// Taken off the grid rather than from BoardSize, for the reason board.go gives:
+// Contains is the only bounds check here, and a comparison against the constant
+// is wrong on any board that is not nine ranks tall. ValidateForMode keeps a
+// live game on this mode's own shape, so the constant was right for every game
+// this server plays -- but a record is replayed from the board its own FEN
+// describes, and the review screen replays records people paste. The frontend's
+// copy of this rule already measured from the board it was handed
+// (`goalOwnerAt` in `frontend/src/engine/goals.ts`), so the constant was also
+// the one place the two disagreed.
+func goalRank(grid Grid, player PlayerColor) int {
+	if player == Red {
+		return 0
+	}
+	return grid.Height() - 1
 }
 
 func init() {

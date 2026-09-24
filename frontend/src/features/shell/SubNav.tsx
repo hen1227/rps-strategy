@@ -3,7 +3,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { groupForPath, sectionForPath, sectionsInGroup } from './sections';
 import { useNavContext } from './useNavContext';
-import { colors, radius, space, type } from '@/theme';
+import { colors, radius, space, themedSheet, type } from '@/theme';
 
 // The pages inside the group the tab bar has open.
 //
@@ -63,7 +63,7 @@ export default function SubNav() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   strip: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -90,4 +90,4 @@ const styles = StyleSheet.create({
   label: { ...type.label, color: colors.textMuted, letterSpacing: 0.4 },
   labelCurrent: { color: colors.textStrong },
   away: { ...type.meta, color: colors.textFaint },
-});
+}));

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -125,6 +126,61 @@ func TestAWeekendWithoutAFieldIsCalledOff(t *testing.T) {
 	}
 	if events[0].CancelledAtUnixMs == nil {
 		t.Fatal("a cancelled event should carry the moment it was called off")
+	}
+}
+
+// Engines already in the bracket are a field, and are counted as one.
+//
+// The sweep skips an engine that is already entered, because there is nothing
+// to do for it — and counting only what the sweep *added* called off an arena
+// with thirteen engines in it for want of six. The minimum is a rule about who
+// is playing, so the number it is checked against has to be the field.
+func TestAWeekendCountsEnginesThatAreAlreadyIn(t *testing.T) {
+	server, config := weekendServer(t, func(config *persistence.WeekendConfig) {
+		config.MinimumField = 6
+	})
+	ctx := t.Context()
+	today := time.Now().Format("2006-01-02")
+	server.openWeekendDoors(ctx, config, today, time.Now().Add(-time.Minute))
+	open, err := server.data.OpenWeekend(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Seven engines in the bracket and none of them connected, which is what the
+	// sweep sees when the field was filled before it ran.
+	names := []string{"Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf"}
+	for _, name := range names {
+		owner := "owner-" + name
+		registeredSession(t, server.data, owner, "Author"+name)
+		bot := ownedEngine(t, server.data, owner, name, []game.ModeID{config.ModeID})
+		if _, err := server.data.HostSignupForTournament(
+			ctx, open.TournamentID, bot.UserID, bot.Name, "bot."+strings.ToLower(name),
+		); err != nil {
+			t.Fatalf("enter %s: %v", name, err)
+		}
+	}
+
+	server.beginWeekend(ctx, config, today)
+
+	events, err := server.data.RecentWeekends(ctx, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if events[0].Status == persistence.TournamentCancelled {
+		t.Fatalf(
+			"%d engines in the field and a minimum of %d, and it was called off anyway",
+			len(events[0].Players), config.MinimumField,
+		)
+	}
+	if events[0].Status != persistence.TournamentInProgress {
+		t.Fatalf("expected the arena to be under way, got %q", events[0].Status)
+	}
+	// Seven is under the round-robin ceiling, and the format is chosen from the
+	// same count. Reading it off the sweep's additions made every such event a
+	// round robin of nobody.
+	if events[0].Format != persistence.FormatRoundRobin {
+		t.Fatalf("a field of %d should play everybody, got %q", len(names), events[0].Format)
 	}
 }
 

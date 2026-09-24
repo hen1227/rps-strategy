@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"math"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -17,15 +16,12 @@ import (
 )
 
 const (
-	DefaultElo = 1200
-
 	// AccountKindHuman and AccountKindBot are the two values of accounts.kind.
 	// A bot is a full account so that ratings, history, the archive, and
 	// spectating all work through the paths they already work through; this
 	// column is the only thing that tells the two apart.
 	AccountKindHuman = "human"
 	AccountKindBot   = "bot"
-	EloKFactor       = 32
 )
 
 var (
@@ -68,8 +64,14 @@ type Account struct {
 	// the great majority of accounts, which wear none. Titles is everything
 	// this account has collected, in catalogue order, which is what the picker
 	// on the account page chooses from. See titles.go.
-	Title           TitleID                    `json:"title,omitempty"`
-	Titles          []TitleAward               `json:"titles,omitempty"`
+	Title  TitleID      `json:"title,omitempty"`
+	Titles []TitleAward `json:"titles,omitempty"`
+	// Appearance is the look this player chose — theme, board, piece set and
+	// sound pack — as the JSON object the client sent, verbatim. Empty for an
+	// account that has never chosen, which is the great majority. The server
+	// does not know what any of these ids mean and must not: see
+	// SetAccountAppearance.
+	Appearance      string                     `json:"appearance,omitempty"`
 	Elo             int                        `json:"elo"`
 	Wins            int                        `json:"wins"`
 	Losses          int                        `json:"losses"`
@@ -91,18 +93,27 @@ type ModeRating struct {
 	Draws           int         `json:"draws"`
 	GamesPlayed     int         `json:"gamesPlayed"`
 	UpdatedAtUnixMs int64       `json:"updatedAtUnixMs"`
+	// State is whether Elo is worth reading, and Confidence is the share of the
+	// measurement it kept. See RatingState.
+	State      RatingState `json:"ratingState"`
+	Confidence float64     `json:"ratingConfidence"`
 }
 
-// ModeElo is the rating that decides ranked play in one mode. A mode this
-// account has never finished a game in inherits the shared seed rating, so a
-// player's first game in a new mode starts where the rest of their play left
-// off instead of at the default.
+// ModeElo is the rating that decides ranked play in one mode.
+//
+// A mode this account has never finished a game in reads the account-level
+// number beside it, which for a person is what their strongest other mode
+// published as. What actually carries over when they first play the new mode is
+// the strength behind that, with the uncertainty of somebody who has proved
+// nothing here — see ensureModeRatingTx — so the number shown before the first
+// game and the number after it are talking about the same player rather than
+// about two different scales.
 func (account Account) ModeElo(modeID game.ModeID) int {
 	if rating, found := account.ModeRatings[modeID]; found {
 		return rating.Elo
 	}
 	if account.Elo <= 0 {
-		return DefaultElo
+		return RatingFloor
 	}
 	return account.Elo
 }
@@ -243,7 +254,7 @@ CREATE TABLE IF NOT EXISTS accounts (
     username TEXT NOT NULL,
     discord TEXT NOT NULL DEFAULT '',
     profile_key_hash TEXT NOT NULL DEFAULT '',
-    elo INTEGER NOT NULL DEFAULT 1200 CHECK (elo >= 0),
+    elo INTEGER NOT NULL DEFAULT 1 CHECK (elo >= 0),
     wins INTEGER NOT NULL DEFAULT 0 CHECK (wins >= 0),
     losses INTEGER NOT NULL DEFAULT 0 CHECK (losses >= 0),
     draws INTEGER NOT NULL DEFAULT 0 CHECK (draws >= 0),
@@ -293,10 +304,48 @@ CREATE TABLE IF NOT EXISTS account_mode_ratings (
     losses INTEGER NOT NULL DEFAULT 0 CHECK (losses >= 0),
     draws INTEGER NOT NULL DEFAULT 0 CHECK (draws >= 0),
     games_played INTEGER NOT NULL DEFAULT 0 CHECK (games_played >= 0),
+    -- A person's strength and how sure of it we are, in the natural log units
+    -- the rating scale is defined in. The elo column beside them is what those
+    -- two publish as, stored rather than derived because it is read on every
+    -- leaderboard row and an index cannot help with an expression. Unused for a
+    -- bot, whose rating is a fit over the whole board rather than a state it
+    -- carries -- see bot_rating.go.
+    theta REAL NOT NULL DEFAULT 0,
+    theta_variance REAL NOT NULL DEFAULT 0,
+    -- Whether the number in the elo column is a measurement, and how much of one.
+    --
+    -- Both systems computed these in order to publish and then dropped them,
+    -- which left RatingFloor standing for "we have not measured this" and for
+    -- "we measured this and it plays no better than chance" at once. See
+    -- RatingState in rating_scale.go.
+    rating_placed INTEGER NOT NULL DEFAULT 0 CHECK (rating_placed IN (0, 1)),
+    rating_confidence REAL NOT NULL DEFAULT 0,
     created_at_unix_ms INTEGER NOT NULL,
     updated_at_unix_ms INTEGER NOT NULL,
     PRIMARY KEY (user_id, mode_id)
 );
+
+-- Where a rating has been, as opposed to what moved it.
+--
+-- game_history's four Elo columns cannot answer this any more. They record what
+-- a rating was when a game was played, and an engine's rating now also moves
+-- when nothing is played at all: evidence decays, so a bot that stops playing
+-- drifts back towards the floor with no game to hang the movement on. A series
+-- of its own is the only place that drift can be seen.
+--
+-- One row per bot per mode per change, written by the refit when a number
+-- actually moves. Not per refit: with decay the ladder is refitted on a clock,
+-- and a row per pass would be a row per bot per hour for ever.
+CREATE TABLE IF NOT EXISTS rating_history (
+    user_id TEXT NOT NULL REFERENCES accounts(user_id) ON DELETE CASCADE,
+    mode_id TEXT NOT NULL,
+    rating INTEGER NOT NULL CHECK (rating >= 0),
+    at_unix_ms INTEGER NOT NULL,
+    PRIMARY KEY (user_id, mode_id, at_unix_ms)
+);
+
+CREATE INDEX IF NOT EXISTS rating_history_series_idx
+    ON rating_history(user_id, mode_id, at_unix_ms DESC);
 
 CREATE TABLE IF NOT EXISTS tournaments (
     tournament_id TEXT PRIMARY KEY,
@@ -395,7 +444,31 @@ CREATE INDEX IF NOT EXISTS tournament_matches_tournament_idx
 	if err := store.ensureBotSchema(ctx); err != nil {
 		return err
 	}
+	// After the account and rating tables exist, and before anything reads a
+	// rating: this is what moves people off the 1200-centred scale.
+	if err := store.ensureRatingScaleColumns(ctx); err != nil {
+		return err
+	}
+	// After it, and for the same reason it runs before anything reads a rating:
+	// this is what lets a rating say it is not one.
+	if err := store.ensureRatingStateColumns(ctx); err != nil {
+		return err
+	}
+	if err := store.ensureLadderPoolSchema(ctx); err != nil {
+		return err
+	}
+	// After ensureBotSchema, whose `accounts` rows the ledger's foreign key
+	// points at, and beside the pool because both are the ranked ladder's own
+	// memory. See bot_reigns.go.
+	if err := store.ensureBotReignSchema(ctx); err != nil {
+		return err
+	}
 	if err := store.ensureBotSeriesSchema(ctx); err != nil {
+		return err
+	}
+	// Anywhere at all: the bench schedule references nothing and nothing
+	// references it. See bot_bench.go.
+	if err := store.ensureBotBenchSchema(ctx); err != nil {
 		return err
 	}
 	// After the tournament config migration, which is what adds the `kind`
@@ -411,6 +484,23 @@ CREATE INDEX IF NOT EXISTS tournament_matches_tournament_idx
 	if err := store.ensureModerationSchema(ctx); err != nil {
 		return err
 	}
+	// Beside it, and for the same reason: both ends of a block are accounts.
+	if err := store.ensureBlockSchema(ctx); err != nil {
+		return err
+	}
+	// Anywhere at all. A report references nobody — deliberately, so that a
+	// report about an account somebody later purges survives the purge. See
+	// ensureReportSchema.
+	if err := store.ensureReportSchema(ctx); err != nil {
+		return err
+	}
+	// Beside the report queue, and for the same reason: the feedback board
+	// references nobody either. A deleted account's posts stay and are
+	// rewritten to "Deleted player" — see AnonymizeFeedbackAuthorshipTx — so a
+	// cascade here would remove half of every conversation that account was in.
+	if err := store.ensureFeedbackSchema(ctx); err != nil {
+		return err
+	}
 	store.reportPasswordAccountsRemaining(ctx)
 	return nil
 }
@@ -424,9 +514,9 @@ CREATE INDEX IF NOT EXISTS tournament_matches_tournament_idx
 // then either missed or acted on too early.
 func (store *Store) reportPasswordAccountsRemaining(ctx context.Context) {
 	var remaining int
-	if err := store.db.QueryRowContext(ctx, `
-SELECT COUNT(*) FROM accounts WHERE password_hash <> '' AND discord_user_id = ''
-`).Scan(&remaining); err != nil {
+	if err := store.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM accounts WHERE `+awaitingDiscordLinkSQL(""),
+	).Scan(&remaining); err != nil {
 		// Not worth failing a boot over a status line.
 		return
 	}
@@ -459,7 +549,7 @@ ON CONFLICT(user_id) DO UPDATE SET
         ELSE excluded.username
     END,
     updated_at_unix_ms = excluded.updated_at_unix_ms
-`, userID, username, DefaultElo, now, now)
+`, userID, username, RatingFloor, now, now)
 	if err != nil {
 		return Account{}, fmt.Errorf("ensure account: %w", err)
 	}
@@ -494,7 +584,8 @@ func (store *Store) modeRatings(
 	userID string,
 ) (map[game.ModeID]ModeRating, error) {
 	rows, err := store.db.QueryContext(ctx, `
-SELECT mode_id, elo, wins, losses, draws, games_played, updated_at_unix_ms
+SELECT mode_id, elo, wins, losses, draws, games_played, updated_at_unix_ms,
+       rating_placed, rating_confidence
 FROM account_mode_ratings
 WHERE user_id = ?
 `, userID)
@@ -506,6 +597,7 @@ WHERE user_id = ?
 	ratings := make(map[game.ModeID]ModeRating)
 	for rows.Next() {
 		var rating ModeRating
+		var placed bool
 		if err := rows.Scan(
 			&rating.ModeID,
 			&rating.Elo,
@@ -514,9 +606,12 @@ WHERE user_id = ?
 			&rating.Draws,
 			&rating.GamesPlayed,
 			&rating.UpdatedAtUnixMs,
+			&placed,
+			&rating.Confidence,
 		); err != nil {
 			return nil, fmt.Errorf("read account mode ratings: %w", err)
 		}
+		rating.State = RatingStateOf(placed, rating.Confidence)
 		ratings[rating.ModeID] = rating
 	}
 	if err := rows.Err(); err != nil {
@@ -593,51 +688,47 @@ func (store *Store) RecordCompletedGame(
 		return RatingUpdate{}, err
 	}
 
-	// Two rating systems, and who played decides which one applies. A game
-	// between two engines moves the bot ladder, which is a fit over every pair's
-	// head-to-head record rather than a transfer between these two — see
-	// bot_rating.go for why an engine cannot be rated the way a person is.
-	// Anything else is per-game Elo.
+	// Two rating systems, and who played decides which one applies.
 	//
-	// The fit runs before the history row is inserted, with this game folded
-	// into the record by hand, so that the after-ratings written onto the row
-	// are the ones it produced. Inserting first and going back to fill them in
-	// would be the same work in three statements instead of one.
+	// A person's rating is a transfer between the two seats, applied here, in the
+	// order games finish. An engine's is not a per-game quantity at all: it is a
+	// fit over every pair's head-to-head record, so one game restates the whole
+	// mode and there is no delta belonging to these two seats to write down.
+	//
+	// This used to run that fit inline and record its answer as the game's
+	// before-and-after. It does not any more, for two reasons. The fit is now a
+	// function of the clock as well as of the games — evidence decays, see
+	// bot_rating.go — so a number computed at the moment a game ended is already
+	// slightly wrong by the time anybody reads it, and refitting on a clock is
+	// the honest model. And the fit costs a Cholesky inverse, on a database
+	// pinned to one connection, which is a thing to do on a schedule rather than
+	// while holding the transaction every finished game goes through.
+	//
+	// So an engine's row records the rating as it stood, the same number on both
+	// sides, and the ladder moves when RefitBotLadder next runs — which the
+	// server schedules within seconds of this returning. The alternative was to
+	// keep manufacturing a per-game delta for a system that does not have one.
 	redAfter, blueAfter := redElo, blueElo
-	var botLadder map[string]int
+	var redStrength, blueStrength *humanRating
 	if ranked {
 		bothBots, err := bothBotsTx(ctx, transaction, redID, blueID)
 		if err != nil {
 			return RatingUpdate{}, err
 		}
-		sameOwner := false
-		if bothBots {
-			sameOwner, err = sameBotOwnerTx(ctx, transaction, redID, blueID)
+		if !bothBots {
+			redStrength, blueStrength, err = rateHumanGameTx(
+				ctx, transaction, redID, blueID, state.Mode.ID,
+				redScore, finishedAt.UnixMilli(),
+			)
 			if err != nil {
 				return RatingUpdate{}, err
 			}
-		}
-		switch {
-		case bothBots && sameOwner:
-			// One person's two engines. The ladder does not hear about this
-			// game — botHeadToHeadTx drops the pair — so folding it in here
-			// would move both ratings until the next refit quietly took them
-			// back. A series between two of an owner's own bots is seated
-			// casual and never arrives here at all; this branch is what keeps
-			// the invariant true for any path that forgets to.
-		case bothBots:
-			pairs, err := botHeadToHeadTx(ctx, transaction, state.Mode.ID)
-			if err != nil {
-				return RatingUpdate{}, err
+			if redStrength != nil {
+				redAfter = redStrength.published()
 			}
-			addBotResult(pairs, redID, blueID, redScore)
-			botLadder = fitBotRatings(pairs)
-			// Not botLadder[redID] directly: the fit leaves out bots whose
-			// record cannot place them, and a missing key would read as a
-			// rating of zero rather than as an unrated bot.
-			redAfter, blueAfter = botRatingOr(botLadder, redID), botRatingOr(botLadder, blueID)
-		default:
-			redAfter, blueAfter = calculateElo(redElo, blueElo, redScore)
+			if blueStrength != nil {
+				blueAfter = blueStrength.published()
+			}
 		}
 	}
 	rankedInteger := 0
@@ -689,13 +780,20 @@ INSERT INTO game_history (
 			return RatingUpdate{}, err
 		}
 	}
-	// The fit moved every bot in the mode, not only the two that just played, so
-	// the rest of the ladder is written here. These two are written a second
-	// time with the number the loop above already gave them, which is cheaper
-	// than excluding them and impossible to get out of step.
-	if botLadder != nil {
-		if err := storeBotRatingsTx(
-			ctx, transaction, state.Mode.ID, botLadder, finishedAt.UnixMilli(),
+	// And the strength behind the number, for whichever seats were people. The
+	// loop above writes what a rating publishes as; this writes what it is.
+	for _, side := range []struct {
+		userID   string
+		strength *humanRating
+	}{
+		{userID: redID, strength: redStrength},
+		{userID: blueID, strength: blueStrength},
+	} {
+		if side.strength == nil {
+			continue
+		}
+		if err := writeHumanRatingTx(
+			ctx, transaction, side.userID, state.Mode.ID, *side.strength,
 		); err != nil {
 			return RatingUpdate{}, err
 		}
@@ -816,8 +914,8 @@ func normalizeIdentity(userID string, username string) (string, string, error) {
 // places and they have already drifted apart once.
 var accountSelect = `
 SELECT user_id, kind, username, ` + registeredSQL("") + `, is_admin, disabled,
-       discord, discord_user_id <> '', title, elo, wins, losses, draws,
-       games_played, created_at_unix_ms, updated_at_unix_ms
+       discord, discord_user_id <> '', title, appearance, elo, wins, losses,
+       draws, games_played, created_at_unix_ms, updated_at_unix_ms
 FROM accounts`
 
 func scanAccount(scanner interface{ Scan(...any) error }) (Account, error) {
@@ -832,6 +930,7 @@ func scanAccount(scanner interface{ Scan(...any) error }) (Account, error) {
 		&account.Discord,
 		&account.DiscordVerified,
 		&account.Title,
+		&account.Appearance,
 		&account.Elo,
 		&account.Wins,
 		&account.Losses,
@@ -861,7 +960,7 @@ INSERT INTO accounts (
     user_id, username, elo, created_at_unix_ms, updated_at_unix_ms
 ) VALUES (?, ?, ?, ?, ?)
 ON CONFLICT(user_id) DO NOTHING
-`, userID, username, DefaultElo, now, now)
+`, userID, username, RatingFloor, now, now)
 	if err != nil {
 		return fmt.Errorf("record game: ensure account: %w", err)
 	}
@@ -878,16 +977,54 @@ func ensureModeRatingTx(
 	modeID game.ModeID,
 	now int64,
 ) error {
-	_, err := transaction.ExecContext(ctx, `
-INSERT INTO account_mode_ratings (
-    user_id, mode_id, elo, created_at_unix_ms, updated_at_unix_ms
-)
-SELECT user_id, ?, elo, ?, ?
-FROM accounts
-WHERE user_id = ?
-ON CONFLICT(user_id, mode_id) DO NOTHING
-`, modeID, now, now, userID)
+	// The new row starts from whichever mode this account is best established
+	// in, with the uncertainty of somebody who has proved nothing here.
+	//
+	// Both halves matter. Carrying the strength over is the existing intent —
+	// a player's first game in a new mode should start where the rest of their
+	// play left off rather than from scratch — and it is a good guess, because
+	// somebody strong at one mode is rarely hopeless at another. Carrying the
+	// full initial variance with it is what stops that guess from being a claim:
+	// the shrinkage publishes the new mode near the floor until it has been
+	// played, so what actually transfers is a head start on converging rather
+	// than a rating.
+	//
+	// Best established rather than highest, deliberately. Seeding from the
+	// player's best number would let somebody manufacture a flattering start in
+	// every mode by getting lucky in one, which is the same farm this whole
+	// system exists to close, just wearing a different hat.
+	// The strength carried over from whichever mode this account is best
+	// established in.
+	//
+	// Read first and inserted second rather than done in one statement, because
+	// what goes in the published column has to be the shrunk value of what goes
+	// in the strength column, and that shrink is a formula this package owns
+	// rather than something to restate in SQL. It used to copy `accounts.elo`
+	// straight across, which on this scale would put a number in front of a
+	// player that no strength of theirs backs — the first game in the mode would
+	// then appear to move them from 130 to 18 for winning.
+	var carried float64
+	err := transaction.QueryRowContext(ctx, `
+SELECT COALESCE((SELECT r.theta FROM account_mode_ratings r
+                  WHERE r.user_id = ? AND r.theta_variance > 0
+                  ORDER BY r.theta_variance ASC, r.mode_id ASC
+                  LIMIT 1), 0)
+`, userID).Scan(&carried)
 	if err != nil {
+		return fmt.Errorf("record game: read carried strength: %w", err)
+	}
+	seeded := humanRating{theta: carried, variance: humanInitialVariance}
+
+	if _, err := transaction.ExecContext(ctx, `
+INSERT INTO account_mode_ratings (
+    user_id, mode_id, elo, theta, theta_variance, created_at_unix_ms, updated_at_unix_ms
+)
+SELECT a.user_id, ?, ?, ?, ?, ?, ?
+FROM accounts a
+WHERE a.user_id = ?
+ON CONFLICT(user_id, mode_id) DO NOTHING
+`, modeID, seeded.published(), seeded.theta, seeded.variance, now, now, userID,
+	); err != nil {
 		return fmt.Errorf("record game: ensure mode rating: %w", err)
 	}
 	return nil
@@ -967,23 +1104,90 @@ func gameOutcome(
 	}
 }
 
-// calculateElo is the human rating system: a fixed-K transfer between the two
-// players of one game, applied in the order games finish.
+// rateHumanGameTx applies a ranked game that had at least one person in it,
+// returning the new strength of each seat that was one.
 //
-// Bots do not use it. Their opponents are chosen rather than dealt by a queue,
-// which turns "beating a new account pays points" from a curiosity into an
-// exploit; bot_rating.go has the rating that answers it, and the reasoning for
-// leaving people on this one.
-func calculateElo(redElo int, blueElo int, redScore float64) (int, int) {
-	expectedRed := 1 / (1 + math.Pow(10, float64(blueElo-redElo)/400))
-	delta := int(math.Round(EloKFactor * (redScore - expectedRed)))
-	if delta > blueElo {
-		delta = blueElo
+// Three shapes reach this, and the third is the interesting one.
+//
+// Two people is the ordinary case: a mutual Bayesian update, both sides computed
+// from the other's pre-game state. See human_rating.go for why it is not the
+// fixed-K transfer this replaced — briefly, a transfer needs a reservoir of
+// points and a scale everybody starts at the bottom of does not have one.
+//
+// A person against one of the server's yardstick engines is the case that makes
+// the two boards comparable at all. The engine's rating is a fixed point that
+// also fixes every bot rating, so a person measured against it is measured on
+// the same scale as the engines without any human-versus-community-bot ranked
+// play having to exist. Only the person moves: a yardstick is frozen by
+// definition, and a bot's rating comes from the ladder fit rather than from
+// anything that happens here.
+//
+// A person against somebody else's engine does not reach this at all — those
+// games are casual, because an author can tune an engine to lose and a rating
+// that could be handed out by its owner is not one.
+func rateHumanGameTx(
+	ctx context.Context,
+	transaction *sql.Tx,
+	redID string,
+	blueID string,
+	modeID game.ModeID,
+	redScore float64,
+	now int64,
+) (*humanRating, *humanRating, error) {
+	redIsBot, err := accountIsBotTx(ctx, transaction, redID)
+	if err != nil {
+		return nil, nil, err
 	}
-	if -delta > redElo {
-		delta = -redElo
+	blueIsBot, err := accountIsBotTx(ctx, transaction, blueID)
+	if err != nil {
+		return nil, nil, err
 	}
-	return redElo + delta, blueElo - delta
+
+	side := func(userID string, isBot bool) (humanRating, error) {
+		if !isBot {
+			return humanRatingTx(ctx, transaction, userID, modeID)
+		}
+		// The engine's side of a calibration game: exactly where the ladder puts
+		// it, with no uncertainty. See anchoredRating.
+		rating, err := modeEloTx(ctx, transaction, userID, modeID)
+		if err != nil {
+			return humanRating{}, err
+		}
+		return anchoredRating(rating), nil
+	}
+	red, err := side(redID, redIsBot)
+	if err != nil {
+		return nil, nil, err
+	}
+	blue, err := side(blueID, blueIsBot)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	updatedRed, updatedBlue := updateHumanRatings(red, blue, redScore, now)
+	var redResult, blueResult *humanRating
+	if !redIsBot {
+		redResult = &updatedRed
+	}
+	if !blueIsBot {
+		blueResult = &updatedBlue
+	}
+	return redResult, blueResult, nil
+}
+
+// accountIsBotTx reports whether one account is an engine.
+func accountIsBotTx(
+	ctx context.Context,
+	transaction *sql.Tx,
+	userID string,
+) (bool, error) {
+	var kind string
+	if err := transaction.QueryRowContext(ctx,
+		"SELECT kind FROM accounts WHERE user_id = ?", userID,
+	).Scan(&kind); err != nil {
+		return false, fmt.Errorf("record game: read account kind: %w", err)
+	}
+	return kind == AccountKindBot, nil
 }
 
 func updateAccountResult(

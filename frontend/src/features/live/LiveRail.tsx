@@ -3,7 +3,9 @@ import { type ReactNode } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import LiveBoardCard from './LiveBoardCard';
+import { ladderConditionsLine, type LadderRoundView } from './ladderRound';
 import { liveGameMeta, waitingCount, type EngineSeat, type LiveSnapshot } from './liveSelectors';
+import { useLadderRound } from './useLadderRound';
 import { useLiveSnapshot } from './useLiveSnapshot';
 import BotIcon from '@/features/bots/BotIcon';
 import { links } from '@/navigation/links';
@@ -11,8 +13,10 @@ import { botIconUrl } from '@/store/api/bots';
 import { useWatchGame } from '@/hooks/useWatchGame';
 import { useGameStore } from '@/store/gameStore';
 import { playerName, titledName } from '@/store/spectateSelectors';
-import { colors, radius, space, type } from '@/theme';
-import { Badge, GhostButton, PrimaryButton } from '@/ui/primitives';
+import { colors, radius, shadows, space, themedSheet, type } from '@/theme';
+import type { LiveGameSummary } from '@/types/protocol';
+import { Badge, GhostButton, GhostLink, PrimaryButton } from '@/ui/primitives';
+import PlayerLink from '@/ui/PlayerLink';
 import TitleTag from '@/ui/TitleTag';
 
 // What is happening right now.
@@ -42,14 +46,25 @@ function Block({ title, count, action, children }: BlockProps) {
   );
 }
 
+/**
+ * An engine seat the rail will draw, which is one at a board.
+ *
+ * Narrowed rather than checked twice: the rail only lists engines that are
+ * playing, so the board is there and the row does not have to carry a shape for
+ * a case it is never handed.
+ */
+type PlayingEngine = EngineSeat & { game: LiveGameSummary };
+
+const isPlaying = (seat: EngineSeat): seat is PlayingEngine => Boolean(seat.game);
+
 interface EngineLineProps {
   busy: boolean;
   onWatch: (gameId: string) => void;
-  seat: EngineSeat;
+  seat: PlayingEngine;
 }
 
 /**
- * One connected engine, and the board it is on.
+ * One engine at a board, and the board it is on.
  *
  * A playing engine gets the same card a playing person gets, rather than a line
  * of text about it — an engine game is the thing most often worth watching here
@@ -66,25 +81,21 @@ function EngineLine({ busy, onWatch, seat }: EngineLineProps) {
           <Text numberOfLines={1} style={styles.rowTitle}>
             {bot.name}
           </Text>
-          {game ? (
-            <View style={styles.engineMeta}>
-              <Text style={styles.engineMetaText}>vs</Text>
-              <TitleTag title={seat.opponentTitle} />
-              <Text numberOfLines={1} style={styles.engineOpponent}>
-                {seat.opponentName}
-              </Text>
-              <Text numberOfLines={1} style={styles.engineMetaText}>
-                · {game.modeName}
-              </Text>
-            </View>
-          ) : (
-            // The modes it plays are no longer worth spelling out here: the
-            // ratings line below names every one of them, and with a number
-            // against each.
-            <Text numberOfLines={1} style={styles.rowMeta}>
-              {bot.engineName || 'engine'}
+          <View style={styles.engineMeta}>
+            <Text style={styles.engineMetaText}>vs</Text>
+            <TitleTag title={seat.opponentTitle} />
+            <Text numberOfLines={1} style={styles.engineOpponent}>
+              {seat.opponentName}
             </Text>
-          )}
+            <Text numberOfLines={1} style={styles.engineMetaText}>
+              · {game.modeName}
+            </Text>
+          </View>
+          {/*
+            One number, and the mode of this board rather than every mode the
+            engine plays: a rating is only worth reading against the game it is
+            being earned in. See `EngineSeat.ratings`.
+          */}
           {ratings.length > 0 ? (
             <Text numberOfLines={1} style={styles.ratings}>
               {ratings.map((rating, index) => (
@@ -98,10 +109,56 @@ function EngineLine({ busy, onWatch, seat }: EngineLineProps) {
         </View>
         <Badge label={status.label} tone={status.tone} />
       </View>
-      {game && seat.showsBoard ? (
+      {seat.showsBoard ? (
         <LiveBoardCard busy={busy} game={game} mode={seat.mode} onWatch={onWatch} size="inset" />
       ) : null}
     </View>
+  );
+}
+
+/**
+ * The next ranked round: when it is, and the way in.
+ *
+ * The pool is the only thing that moves an engine's rating, and this is the
+ * appointment — a countdown and the conditions, so that somebody with an engine
+ * knows to have it online at the top of the hour and somebody without one knows
+ * there is something to watch.
+ *
+ * It used to list the lineup here too, six rows of it, and that was the wrong
+ * place for it twice over. A rail 296 points wide could not say *why* an engine
+ * was or was not in the list, so the one question an owner actually has — "is
+ * mine in the next one" — got a partial answer that read as a complete one: an
+ * engine that was entered but not running was simply absent, indistinguishable
+ * from one that was never entered. And the count above it said "7 engines
+ * entered" using a different definition of entered from the switch in the
+ * owner's own settings. All of that now has a page, and what is left here is
+ * the clock and the door to it.
+ */
+function LadderRoundBlock({ round }: { round: LadderRoundView }) {
+  const live = round.phase === 'live';
+
+  return (
+    // The badge belongs on the heading rather than beside the clock, and the
+    // reason is that they say opposite things about time. A round takes a good
+    // part of its hour at the slower clocks, so hiding the countdown while one
+    // runs would hide the next start for a third of every hour — but "41:52"
+    // next to "ON NOW" reads as a round *ending* in 41:52. Up here the badge is
+    // about the block, the clock underneath is unambiguously the next one, and
+    // "Next:" on the conditions closes the last of it.
+    <Block action={live ? <Badge label="ON NOW" tone="live" /> : undefined} title="Ranked round">
+      <View style={styles.roundHead}>
+        <Text style={styles.roundClock}>{round.countdown}</Text>
+        <Text numberOfLines={1} style={styles.roundConditions}>
+          {live ? `Next: ${ladderConditionsLine(round)}` : ladderConditionsLine(round)}
+        </Text>
+      </View>
+      <GhostLink
+        accessibilityLabel="Open the hourly rounds: who is entered, and the last round's results"
+        compact
+        href={links.rounds()}
+        label="HOURLY ROUNDS ›"
+      />
+    </Block>
   );
 }
 
@@ -137,13 +194,29 @@ export default function LiveRail() {
     return `Looking for a game · ${here} here now`;
   };
   const engineCount = snapshot.engines.length;
+  // The engines at a board, and only those.
+  //
+  // This block used to be the whole roster, which on a quiet evening is a dozen
+  // rows of a name, an engine and a line of ratings — a directory, in the panel
+  // whose entire job is what is happening *now*, and it pushed the games worth
+  // watching off the bottom of a column 296 points wide. The directory has a
+  // page of its own, and it is a better one: `/bots` lists every engine online
+  // with a button to play it. What belongs here is the boards.
+  //
+  // The count in the header stays, because how many engines are connected is
+  // still worth a glance even when none of them is playing — it is the one part
+  // of the roster that reads as news rather than as a list.
+  const playingEngines = snapshot.engines.filter(isPlaying);
+  // Absent on the pre-rendered page and until the schedule arrives. See
+  // useLadderRound.
+  const round = useLadderRound();
   const nothingHappening =
     snapshot.playerGames.length === 0 &&
     snapshot.botFights.length === 0 &&
     waiting === 0 &&
-    engineCount === 0 &&
     snapshot.botPlayerCount === 0 &&
-    !snapshot.activeTournament;
+    !snapshot.activeTournament &&
+    !round;
 
   return (
     <View style={styles.rail}>
@@ -169,9 +242,17 @@ export default function LiveRail() {
       >
         {nothingHappening ? (
           <Text style={styles.quiet}>
-            No live boards yet. When a game starts, you can watch it and join the chat here.
+            No live games. Watch and chat here when one starts.
           </Text>
         ) : null}
+
+        {/*
+          Above the boards, and it is the one thing in this rail that earns that.
+          Everything below is what is happening; this is the only part that says
+          what is about to, and a countdown found by scrolling is a countdown
+          nobody sets their evening by.
+        */}
+        {round ? <LadderRoundBlock round={round} /> : null}
 
         {featuredGame ? (
           <Block count={liveGames.length} title="Watch live">
@@ -194,14 +275,20 @@ export default function LiveRail() {
                       <View style={styles.rowCopy}>
                         <View style={styles.rowNames}>
                           <TitleTag title={game.redPlayer?.title} />
-                          <Text numberOfLines={1} style={styles.rowName}>
-                            {redName}
-                          </Text>
+                          <PlayerLink
+                            handle={game.redPlayer?.username ?? ''}
+                            name={redName}
+                            numberOfLines={1}
+                            style={styles.rowName}
+                          />
                           <Text style={styles.dim}>vs</Text>
                           <TitleTag title={game.bluePlayer?.title} />
-                          <Text numberOfLines={1} style={styles.rowName}>
-                            {blueName}
-                          </Text>
+                          <PlayerLink
+                            handle={game.bluePlayer?.username ?? ''}
+                            name={blueName}
+                            numberOfLines={1}
+                            style={styles.rowName}
+                          />
                         </View>
                         <Text numberOfLines={1} style={styles.rowMeta}>
                           {liveGameMeta(game, red, blue)}
@@ -283,7 +370,7 @@ export default function LiveRail() {
           </Block>
         ) : null}
 
-        {engineCount > 0 ? (
+        {playingEngines.length > 0 ? (
           <View style={styles.engines}>
             {/*
               The engines are their own half of the room. The rule says so
@@ -293,10 +380,8 @@ export default function LiveRail() {
             {featuredGame || snapshot.activeTournament || waiting > 0 ? (
               <View style={styles.divider} />
             ) : null}
-            <Block
-              title="Engines"
-            >
-              {snapshot.engines.map((seat) => (
+            <Block title="Engines playing">
+              {playingEngines.map((seat) => (
                 <EngineLine busy={busy} key={seat.key} onWatch={watchGame} seat={seat} />
               ))}
             </Block>
@@ -316,7 +401,7 @@ export default function LiveRail() {
 
 export const RAIL_WIDTH = 296;
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   rail: {
     width: RAIL_WIDTH,
     alignSelf: 'stretch',
@@ -327,7 +412,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     // Raised rather than inset: this panel is about now, and should read as
     // sitting over the page rather than as part of it.
-    boxShadow: [{ offsetX: 0, offsetY: 6, blurRadius: 14, color: 'rgba(23, 22, 19, 0.34)' }],
+    boxShadow: shadows.rail,
   },
   header: {
     minHeight: 58,
@@ -355,6 +440,16 @@ const styles = StyleSheet.create({
 
   moreLive: { marginTop: space.tight },
   moreLiveTitle: { ...type.eyebrow, color: colors.textFaint, marginBottom: space.tight },
+
+  roundHead: { flexDirection: 'row', alignItems: 'center', gap: space.snug, minWidth: 0 },
+  // Tabular figures so a ticking countdown does not shuffle the line beside it
+  // every second as the digits change width.
+  roundClock: {
+    ...type.sectionTitle,
+    color: colors.textStrong,
+    fontVariant: ['tabular-nums'],
+  },
+  roundConditions: { ...type.meta, color: colors.textMuted, flexShrink: 1, minWidth: 0 },
 
   row: {
     minHeight: 42,
@@ -396,4 +491,4 @@ const styles = StyleSheet.create({
   divider: { height: 1, backgroundColor: colors.border },
   footnote: { ...type.meta, color: colors.textFaint },
   pressed: { opacity: 0.7 },
-});
+}));

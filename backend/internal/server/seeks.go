@@ -13,10 +13,24 @@ import (
 )
 
 const (
-	matchmakingTick            = 2 * time.Second
-	matchmakingInitialEloRange = 100
-	matchmakingMaximumEloRange = 10000
-	matchmakingFullyOpenAfter  = 2 * time.Minute
+	matchmakingTick = 2 * time.Second
+	// matchmakingInitialRatingRange is how far apart two searches may be at
+	// first, in rating points, widening to matchmakingMaximumRatingRange over
+	// matchmakingFullyOpenAfter.
+	//
+	// Twenty, because twenty points is a doubling of the odds on this scale —
+	// so the first thing the queue tries for is a game the favourite wins about
+	// two times in three. It was a hundred when a doubling was a hundred and
+	// twenty points, which meant the opening window was a shade under even
+	// money; a hundred here would be five doublings and the entire board.
+	//
+	// A constant that has to move with the scale and does not announce itself
+	// when it has not, which is the whole reason it is written up rather than
+	// left as a number: a matchmaker whose window is the width of the ladder
+	// still pairs people, it just stops meaning anything by it.
+	matchmakingInitialRatingRange = 20
+	matchmakingMaximumRatingRange = 10000
+	matchmakingFullyOpenAfter     = 2 * time.Minute
 	// awaySeekLifetime is how long a search survives with nobody behind it.
 	//
 	// Long enough that queueing at breakfast and playing at lunch works, which
@@ -216,20 +230,20 @@ func (seek *Seek) Challenge() Challenge {
 func (seek *Seek) SearchRange(now time.Time) int {
 	elapsed := now.Sub(seek.JoinedAt)
 	if elapsed <= 0 {
-		return matchmakingInitialEloRange
+		return matchmakingInitialRatingRange
 	}
 	if elapsed >= matchmakingFullyOpenAfter {
-		return matchmakingMaximumEloRange
+		return matchmakingMaximumRatingRange
 	}
 
 	// Expand slowly near the start, when a close opponent is most valuable,
 	// then accelerate as waiting time becomes the more important signal.
 	elapsedMilliseconds := elapsed.Milliseconds()
 	fullSearchMilliseconds := matchmakingFullyOpenAfter.Milliseconds()
-	additionalRange := int64(matchmakingMaximumEloRange-matchmakingInitialEloRange) *
+	additionalRange := int64(matchmakingMaximumRatingRange-matchmakingInitialRatingRange) *
 		elapsedMilliseconds * elapsedMilliseconds /
 		(fullSearchMilliseconds * fullSearchMilliseconds)
-	return matchmakingInitialEloRange + int(additionalRange)
+	return matchmakingInitialRatingRange + int(additionalRange)
 }
 
 func (seek *Seek) searchIsFullyOpen(now time.Time) bool {
@@ -659,7 +673,7 @@ func seatOrder(first, second *Seek) (opener, replier *Seek) {
 // results in one mode never decide who they meet in another.
 func matchmakingElo(client *Client, modeID game.ModeID) int {
 	if client.account.UserID == "" {
-		return persistence.DefaultElo
+		return persistence.RatingFloor
 	}
 	return client.account.ModeElo(modeID)
 }

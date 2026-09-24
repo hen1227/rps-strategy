@@ -124,12 +124,7 @@ export default function GamesPanel({ admin }: GamesPanelProps) {
           </View>
         )}
         <Text style={adminStyles.help}>
-          A deleted game leaves the history, the archive, and any review of it. With the box
-          above ticked — which is the default, since the usual reason to delete a game is that
-          its result should not stand — the Elo and the win counts it moved are reversed for
-          both players. That reversal is exact for the last game somebody played and an
-          approximation for an older one, because the games since were rated against a number
-          that has now changed.
+          Deletion removes the game from history, archives, and reviews. Keep the box checked to reverse rating and win-count changes for both players. Rating reversal is exact for their latest game and approximate for older games.
         </Text>
       </Panel>
     </>

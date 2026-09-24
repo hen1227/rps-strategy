@@ -8,7 +8,7 @@ import { links } from '@/navigation/links';
 import { useSettledSearchParams } from '@/navigation/useSettledSearchParams';
 import { discordRefusalMessage } from '@/store/discordAuth.types';
 import { useGameStore } from '@/store/gameStore';
-import { colors, contentWidth } from '@/theme';
+import { colors, contentWidth, themedSheet } from '@/theme';
 import ScreenShell from '@/ui/ScreenShell';
 import { Banner, Panel, SectionHeading } from '@/ui/primitives';
 
@@ -84,7 +84,7 @@ function CallbackCard({ children, title }: { children?: React.ReactNode; title: 
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   screen: { gap: 12 },
   help: { color: colors.textMuted, fontSize: 11, lineHeight: 17, marginTop: 8, marginBottom: 6 },
-});
+}));

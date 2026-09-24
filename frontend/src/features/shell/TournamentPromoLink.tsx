@@ -8,7 +8,7 @@ import {
 } from '@/features/tournaments/officialTournament';
 import { useNow } from '@/hooks/useNow';
 import { links } from '@/navigation/links';
-import { colors, radius, space, type } from '@/theme';
+import { colors, radius, space, themedSheet, type } from '@/theme';
 
 // The button in the navigation that leads to the official tournament.
 //
@@ -47,7 +47,7 @@ export default function TournamentPromoLink({ onPress }: TournamentPromoLinkProp
     // this one on the way through. See the note in MoreMenu.
     <Link asChild href={links.tournamentInfo()} onPress={onPress} replace>
       <Pressable
-        accessibilityLabel={`${officialTournament.name} — information`}
+        accessibilityLabel={`${officialTournament.name} · information`}
         accessibilityRole="link"
         // One resolved style object: see the note in SidebarNav.
         style={StyleSheet.flatten([styles.promo, live && styles.promoLive])}
@@ -66,7 +66,7 @@ export default function TournamentPromoLink({ onPress }: TournamentPromoLinkProp
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   promo: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -88,4 +88,4 @@ const styles = StyleSheet.create({
   label: { ...type.label, color: colors.goldBright, letterSpacing: 0.6 },
   labelLive: { color: colors.accentTextStrong },
   detail: { ...type.meta, color: colors.textMuted, marginTop: space.hair },
-});
+}));

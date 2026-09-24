@@ -3,7 +3,7 @@ import { ScrollView, StyleSheet, View } from 'react-native';
 import GameSetupEditor from './GameSetupEditor';
 import SetupPreview from '@/features/game/SetupPreview';
 import { useWideScreen } from '@/hooks/useBoardLayout';
-import { space } from '@/theme';
+import { space, themedSheet } from '@/theme';
 import ModalCard from '@/ui/ModalCard';
 import { GhostButton, PrimaryButton } from '@/ui/primitives';
 import type { GameSetup, ModeDefinition, TimeControl } from '@/types/game';
@@ -75,7 +75,7 @@ export default function GameSettingsModal({
       // taller for the sake of making the thing beside it smaller.
       maxWidth={820}
       onClose={onClose}
-      subtitle="Adjust only what you want to change. Everything starts at the standard rated game."
+      subtitle="Choose your game settings."
       title="Game settings"
       visible={visible}
     >
@@ -141,7 +141,7 @@ export default function GameSettingsModal({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   scroll: { flexShrink: 1 },
   content: { gap: space.large, paddingTop: space.small, paddingBottom: space.hair },
   contentWide: { flexDirection: 'row', alignItems: 'stretch' },
@@ -149,4 +149,4 @@ const styles = StyleSheet.create({
   editor: { alignSelf: 'stretch', minWidth: 280 },
   editorWide: { flex: 1 },
   banner: { marginTop: space.medium },
-});
+}));

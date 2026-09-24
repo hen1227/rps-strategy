@@ -15,7 +15,7 @@ import {
   type OpeningStatsNode,
 } from '@/engine/openingStats';
 import { links } from '@/navigation/links';
-import { colors, radius, space } from '@/theme';
+import { colors, radius, space, themedSheet } from '@/theme';
 import type { ModeID } from '@/types/game';
 import { Badge, Panel } from '@/ui/primitives';
 
@@ -39,7 +39,7 @@ export default function ExplorerLink({ line, modeId, stats }: ExplorerLinkProps)
   const teaser = !stats
     ? 'See what people actually play from any position.'
     : stats.games === 0
-      ? 'No games have been counted yet — the explorer fills in as they are played.'
+      ? "No game statistics yet."
       : top && hasEnoughGames(stats.games)
         ? `${formatShare(top.share)} of the ${stats.games.toLocaleString()} games counted open ${top.move}.`
         : top
@@ -60,8 +60,7 @@ export default function ExplorerLink({ line, modeId, stats }: ExplorerLinkProps)
           <Text style={styles.title}>Opening explorer</Text>
           <Text style={styles.detail}>{teaser}</Text>
           <Text style={styles.hint}>
-            A board you can move pieces on. It answers for the position rather than the move
-            order, so two ways to the same board share one set of numbers.
+            Explore game results by position, regardless of move order.
           </Text>
         </View>
         <View style={styles.action}>
@@ -75,7 +74,7 @@ export default function ExplorerLink({ line, modeId, stats }: ExplorerLinkProps)
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   panel: {
     alignItems: 'center',
     flexDirection: 'row',
@@ -89,4 +88,4 @@ const styles = StyleSheet.create({
   detail: { color: colors.text, fontSize: 13, lineHeight: 19 },
   hint: { color: colors.textMuted, fontSize: 11, lineHeight: 16 },
   action: { alignItems: 'flex-end', borderRadius: radius.small },
-});
+}));

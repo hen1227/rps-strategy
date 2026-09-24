@@ -16,6 +16,7 @@ type updateBotRequest struct {
 	Description      string `json:"description"`
 	AllowPublicPlay  bool   `json:"allowPublicPlay"`
 	EnterTournaments bool   `json:"enterTournaments"`
+	EnterLadder      bool   `json:"enterLadder"`
 }
 
 // mintedBotResponse carries the token exactly once. It is never readable
@@ -127,7 +128,8 @@ func (server *Server) updateBot(writer http.ResponseWriter, request *http.Reques
 	}
 	updated, err := server.data.UpdateBotSettings(
 		request.Context(), bot.BotID,
-		input.AllowPublicPlay, input.EnterTournaments, input.Description,
+		input.AllowPublicPlay, input.EnterTournaments, input.EnterLadder,
+		input.Description,
 	)
 	if err != nil {
 		writeBotError(writer, err)
@@ -260,7 +262,13 @@ func writeBotError(writer http.ResponseWriter, err error) {
 		writeAPIError(writer, http.StatusForbidden, "this account is disabled")
 	case errors.Is(err, persistence.ErrUsernameTaken):
 		writeAPIError(writer, http.StatusConflict, "that bot name is already taken")
-	case errors.Is(err, persistence.ErrInvalidUsername):
+	case errors.Is(err, persistence.ErrInvalidBotReference):
+		// Conflict rather than Bad Request: the commonest way to see this is
+		// designating a slot somebody already holds, and the fix is to clear the
+		// other engine rather than to correct the request.
+		writeAPIError(writer, http.StatusConflict, err.Error())
+	case errors.Is(err, persistence.ErrInvalidUsername),
+		errors.Is(err, persistence.ErrInvalidBotDescription):
 		writeAPIError(writer, http.StatusBadRequest, err.Error())
 	default:
 		writeAPIError(writer, http.StatusInternalServerError, "the bot registry is unavailable")
@@ -277,6 +285,22 @@ func (server *Server) getBotClientScript(writer http.ResponseWriter, _ *http.Req
 func (server *Server) getExampleEngine(writer http.ResponseWriter, _ *http.Request) {
 	body, sum := botclient.ExampleEngine()
 	serveBotFile(writer, "example_engine.py", body, sum)
+}
+
+// getYardstickEngine serves the anchor, which is the definition of rating 1.
+//
+// Downloadable by anyone, and that is the point: a scale is only worth anything
+// if you can see what it is measured from. An author who wants to know what
+// their engine's rating means can run this one and find out.
+func (server *Server) getYardstickEngine(writer http.ResponseWriter, _ *http.Request) {
+	body, sum := botclient.YardstickEngine()
+	serveBotFile(writer, "yardstick_random.py", body, sum)
+}
+
+// getGreedyEngine serves the rung above the anchor, for the same reason.
+func (server *Server) getGreedyEngine(writer http.ResponseWriter, _ *http.Request) {
+	body, sum := botclient.GreedyEngine()
+	serveBotFile(writer, "yardstick_greedy.py", body, sum)
 }
 
 func serveBotFile(writer http.ResponseWriter, name string, body string, sum string) {
@@ -350,6 +374,8 @@ func (server *Server) getBotClientVersion(writer http.ResponseWriter, request *h
 const (
 	botClientPath     = "/api/bot/rpsbot.py"
 	exampleEnginePath = "/api/bot/example_engine.py"
+	yardstickPath     = "/api/bot/yardstick_random.py"
+	greedyPath        = "/api/bot/yardstick_greedy.py"
 	botGuidePath      = "/api/bot/guide"
 )
 

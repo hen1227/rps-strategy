@@ -791,7 +791,7 @@ func (store *Store) seedField(ctx context.Context, tournament Tournament) ([]int
 	// a beginner and land in the bottom half of the bracket.
 	ratings := make(map[int64]int, len(players))
 	for _, player := range players {
-		ratings[player.PlayerID] = DefaultElo
+		ratings[player.PlayerID] = RatingFloor
 		account, err := store.Account(ctx, player.UserID)
 		if errors.Is(err, ErrAccountNotFound) {
 			continue

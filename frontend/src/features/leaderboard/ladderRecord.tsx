@@ -1,6 +1,6 @@
 import { StyleSheet, Text, View } from 'react-native';
 
-import { colors, record as recordTones, space, type } from '@/theme';
+import { colors, record as recordTones, space, themedSheet, type } from '@/theme';
 import type { LeaderboardEntry } from '@/types/protocol';
 
 // A row's record, in the two shapes every board on this page wants it: the
@@ -44,7 +44,7 @@ export const ladderRecord = (entry: LeaderboardEntry): LadderRecord => {
 
 /** `62%`, or a dash where there is nothing to take a percentage of. */
 export const winRateLabel = (result: LadderRecord) =>
-  result.winRate === null ? '—' : `${Math.round(result.winRate * 100)}%`;
+  result.winRate === null ? '–' : `${Math.round(result.winRate * 100)}%`;
 
 /** `96W · 0D · 2L · 98 games`. */
 export const recordLine = (result: LadderRecord) => {
@@ -104,7 +104,7 @@ export function RecordSummary({ result }: { result: LadderRecord }) {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   track: {
     flexDirection: 'row',
     overflow: 'hidden',
@@ -118,4 +118,4 @@ const styles = StyleSheet.create({
   rate: { ...type.rowTitle, color: colors.textSoft },
   rateLabel: { ...type.eyebrow, color: colors.textFaint },
   counters: { ...type.meta, color: colors.textFaint },
-});
+}));

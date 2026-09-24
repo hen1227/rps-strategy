@@ -8,9 +8,9 @@ import {
 } from './officialTournament';
 import {useNow} from '@/hooks/useNow';
 import {links} from '@/navigation/links';
-import {up} from '@/navigation/upFrom';
+import {up, useUpTarget} from '@/navigation/upFrom';
 import {useGameStore} from '@/store/gameStore';
-import {colors, contentWidth, radius, space, type} from '@/theme';
+import { colors, contentWidth, radius, space, themedSheet, type } from '@/theme';
 import BackLink from '@/ui/BackLink';
 import ScreenShell from '@/ui/ScreenShell';
 import LinkRow from '@/ui/LinkRow';
@@ -80,6 +80,11 @@ export default function OfficialTournamentScreen() {
     // actually refuses the games.
     const bench = useGameStore((state) => state.botBench);
     const local = now === null ? null : localTimeLabel(officialTournament.startsAtUnixMs);
+    // The way out, for as long as this page is not itself in the navigation.
+    // Its row is listed while there is an event to list and gone once this one
+    // is over — the same clock `phase` reads — so the trail comes back exactly
+    // when the row goes away. See `useUpTarget`.
+    const back = useUpTarget(up.tournamentInfo);
 
     const status =
         phase === 'live'
@@ -92,10 +97,11 @@ export default function OfficialTournamentScreen() {
         <ScreenShell width={contentWidth.reading}>
             {/*
               The events board, which is the section this page sits beside
-              rather than in — it is somebody else's event, so it is not on that
-              board, and the sidebar therefore lights nothing up here.
+              rather than in: it is somebody else's event, so it is not on that
+              board. Drawn only once the navigation has stopped listing this
+              page — while the event is on, its own row is up there.
             */}
-            <BackLink href={up.tournamentInfo.href} label={up.tournamentInfo.label} />
+            {back ? <BackLink href={back.href} label={back.label} /> : null}
             <View style={styles.hero}>
                 <Text style={styles.heroEyebrow}>NOT ON THIS SITE</Text>
                 <Text style={styles.heroTitle}>{officialTournament.name}</Text>
@@ -116,11 +122,11 @@ export default function OfficialTournamentScreen() {
                     </Text>
                 ) : null}
                 {phase === 'live' ? (
-                    <Text style={styles.countdown}>It is running right now — go and play.</Text>
+                    <Text style={styles.countdown}>The tournament is live. Join now.</Text>
                 ) : null}
                 {phase === 'over' ? (
                     <Text style={styles.body}>
-                        This one is over. The Discord below is where the next one will be announced.
+                        This tournament has ended. Join Discord for the next one.
                     </Text>
                 ) : null}
             </Panel>
@@ -140,8 +146,7 @@ export default function OfficialTournamentScreen() {
                 />
                 <Text style={styles.body}>
                     Every bot on this site stops taking games from{' '}
-                    <Text style={styles.emphasis}>{officialTournament.botsOfflineLabel}</Text> — half an
-                    hour before the first round until well after the last.
+                    <Text style={styles.emphasis}>{officialTournament.botsOfflineLabel}</Text> . This covers the tournament and time either side.
                 </Text>
                 {/*
           The server's own account of the same thing, which is the one that
@@ -166,7 +171,7 @@ export default function OfficialTournamentScreen() {
     );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
     hero: {paddingTop: space.xlarge, paddingBottom: space.snug},
     heroEyebrow: {...type.eyebrow, color: colors.gold, letterSpacing: 2.1},
     heroTitle: {
@@ -235,4 +240,4 @@ const styles = StyleSheet.create({
     rows: {marginTop: space.small},
 
     pressed: {opacity: 0.7},
-});
+}));

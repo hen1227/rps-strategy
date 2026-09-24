@@ -21,13 +21,13 @@ type tournamentSignupRequest struct {
 	Discord                string `json:"discord"`
 	AgreedToUnfilteredChat bool   `json:"agreedToUnfilteredChat"`
 	ReservationToken       string `json:"reservationToken"`
-	// BotID enters one of the caller's engines instead of the caller.
+	// BotID used to enter one of the caller's engines instead of the caller.
 	//
-	// Everything else in this struct is then ignored: an engine's name, the
-	// handle a host reaches it on, and its agreement to the chat rules are not
-	// things a form gets to assert about somebody else's program. They are read
-	// from the registry and from the owner's own account. See
-	// registerBotForTournament.
+	// It is kept only so that a client still sending it gets a sentence saying
+	// where the switch is, rather than the "unknown field botId" that
+	// DisallowUnknownFields would otherwise produce. An engine is not entered one
+	// event at a time any more — see enrolOnlineBots, and `enterTournaments` on
+	// the bot itself.
 	BotID string `json:"botId"`
 }
 
@@ -64,11 +64,20 @@ func (server *Server) getTournament(writer http.ResponseWriter, request *http.Re
 	writeJSON(writer, http.StatusOK, tournament)
 }
 
-// signupForTournament enters the caller, or one of the caller's engines.
+// signupForTournament enters the caller. People only.
 //
-// The two are one route because they are one decision — an entrant picks
-// themselves or a bot from the same list, and the server enforces that they
-// cannot have both: see tournamentPartyID for the rule and where it lives.
+// An engine is not entered here and is not entered anywhere else one event at a
+// time: it has a standing switch instead, and every online engine with that
+// switch on is swept into the field when an event it can play begins. See
+// enrolOnlineBots for the sweep and botTournamentSwitchHint for why this route
+// used to take a botId and now only explains itself.
+//
+// That is not a shortcut around the rules; it moves the choice to where it
+// reads the same on every screen. An author with three engines was choosing one
+// of them per event under a one-place-per-party rule, while the arena — the only
+// event most of them ever enter — swept in all three regardless. Two mechanisms
+// answering the same question differently is the whole of what was confusing,
+// and the switch is the one that was already deciding.
 func (server *Server) signupForTournament(writer http.ResponseWriter, request *http.Request) {
 	var signup tournamentSignupRequest
 	if err := decodeAPIRequest(writer, request, &signup); err != nil {
@@ -76,19 +85,14 @@ func (server *Server) signupForTournament(writer http.ResponseWriter, request *h
 		return
 	}
 	if strings.TrimSpace(signup.BotID) != "" {
-		server.registerBotForTournament(writer, request, strings.TrimSpace(signup.BotID))
+		writeAPIError(writer, http.StatusConflict, botTournamentSwitchHint)
 		return
 	}
-	// An engine is entered by its owner, through the branch above, and never by
-	// naming its account here. Without this the ownership check is decoration:
-	// bot account ids are on every game record and this route would take one
-	// from anybody, which is exactly the conscription the botId path exists to
-	// replace.
+	// An engine is never entered by naming its account here. Without this the
+	// rule above is decoration: bot account ids are on every game record, so this
+	// route would take one from anybody.
 	if _, err := server.data.BotForAccount(request.Context(), signup.UserID); err == nil {
-		writeAPIError(
-			writer, http.StatusForbidden,
-			"that account is an engine; its owner enters it from their own bots list",
-		)
+		writeAPIError(writer, http.StatusForbidden, botTournamentSwitchHint)
 		return
 	} else if !errors.Is(err, persistence.ErrBotNotFound) {
 		writeBotError(writer, err)
@@ -126,14 +130,14 @@ func (server *Server) signupForTournament(writer http.ResponseWriter, request *h
 	writeJSON(writer, http.StatusCreated, tournament)
 }
 
-// withdrawFromTournament takes the caller's entry back out, whoever is holding
-// it.
+// withdrawFromTournament takes the caller's own entry back out.
 //
-// Signed in rather than named in the body, and it removes whatever this account
-// is answerable for — themselves, or the engine they entered. That is what
-// makes "exactly one of your bots" a choice rather than a commitment: an owner
-// who picked the wrong engine withdraws and picks again, instead of messaging
-// the host.
+// Signed in rather than named in the body, and it removes the account that
+// asked and nothing else. An engine is not withdrawn here — it holds its own
+// entry under its own account, which nobody has a session for, and it leaves
+// events the way it enters them: its owner turns the switch off. See
+// WithdrawTournamentEntry for why this is the account rather than its party,
+// and botTournamentSwitchHint for what an owner looking for the button is told.
 //
 // Registration only. WithdrawTournamentEntry is where that rule is enforced and
 // explained.

@@ -57,6 +57,23 @@ func (client *Client) isBot() bool {
 	return client != nil && client.bot != nil
 }
 
+// engineVersion is the build this connection's engine declared, and "" for a
+// human seat, an empty one, or an engine that declared none.
+//
+// Nil-tolerant like isBot above, because both are asked about seats that may
+// have nobody in them.
+func (client *Client) engineVersion() string {
+	if !client.isBot() {
+		return ""
+	}
+	client.bot.mu.Lock()
+	defer client.bot.mu.Unlock()
+	if client.bot.handshake.Version != "" {
+		return client.bot.handshake.Version
+	}
+	return client.bot.engineVersion
+}
+
 func (client *Client) Send(payload any) {
 	encoded, err := json.Marshal(payload)
 	if err != nil {

@@ -137,6 +137,10 @@ func (server *Server) awardTournamentTitles(
 		entrants = append(entrants, player.UserID)
 	}
 	server.awardTitles(ctx, entrants...)
+	// And the engines' own tags, which this event may have moved for engines
+	// that were not in it: a crown handed over is a crown taken off somebody.
+	// See bot_titles.go.
+	server.syncBotTitles(ctx)
 }
 
 /* -------------------------------------------------------------- routes -- */

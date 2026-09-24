@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"testing"
 
 	"rps-strategy/backend/internal/game"
@@ -152,6 +153,68 @@ func TestGrantingAndRevokingTitlesIsAdministratorsOnly(t *testing.T) {
 	}
 	if held := heldTitles(decodeAccount(t, revoked.Body.Bytes())); len(held) != 0 {
 		t.Fatalf("expected the collection to be empty, got %v", held)
+	}
+}
+
+// A crown's id is the crown, so it reaches the admin routes percent-encoded.
+// That has to survive the round trip, or the two engine titles an administrator
+// most plausibly wants to hand out by hand are the two they cannot.
+func TestATitleWhoseIdIsAGlyphSurvivesTheURL(t *testing.T) {
+	data, err := persistence.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer data.Close()
+	registeredSession(t, data, "player", "Player")
+	handler := NewWithStoreAndAdminToken(data, nil, adminRouteToken).Routes()
+	path := "/api/admin/accounts/player/titles/" +
+		url.PathEscape(string(persistence.TitleReigningChampion))
+
+	granted := tournamentRequest(t, handler, http.MethodPut, path, nil, adminRouteToken)
+	if granted.Code != http.StatusOK {
+		t.Fatalf("expected the grant to succeed, got %d: %s", granted.Code, granted.Body)
+	}
+	held := heldTitles(decodeAccount(t, granted.Body.Bytes()))
+	if len(held) != 1 || held[0] != persistence.TitleReigningChampion {
+		t.Fatalf("expected the crown to be held, got %v", held)
+	}
+
+	revoked := tournamentRequest(t, handler, http.MethodDelete, path, nil, adminRouteToken)
+	if revoked.Code != http.StatusOK {
+		t.Fatalf("expected the revoke to succeed, got %d: %s", revoked.Code, revoked.Body)
+	}
+	if held := heldTitles(decodeAccount(t, revoked.Body.Bytes())); len(held) != 0 {
+		t.Fatalf("expected the collection to be empty, got %v", held)
+	}
+}
+
+// Every entry says which pool it belongs to, which is what lets the account
+// page leave the engine catalogue out of the list of things to go and earn.
+func TestTheCatalogueSaysWhichPoolEachTitleIsIn(t *testing.T) {
+	data, err := persistence.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer data.Close()
+	handler := NewWithStore(data, nil).Routes()
+
+	response := tournamentRequest(t, handler, http.MethodGet, "/api/titles", nil, "")
+	var catalogue []persistence.Title
+	if err := json.Unmarshal(response.Body.Bytes(), &catalogue); err != nil {
+		t.Fatalf("decode catalogue: %v", err)
+	}
+	pools := make(map[persistence.TitleID]persistence.TitlePool, len(catalogue))
+	for _, title := range catalogue {
+		if title.Pool == "" {
+			t.Errorf("title %q reached the wire with no pool", title.ID)
+		}
+		pools[title.ID] = title.Pool
+	}
+	if pools[persistence.TitleGrandmaster] != persistence.TitlePoolPlayer {
+		t.Error("GM belongs to the player pool")
+	}
+	if pools[persistence.TitleReigningChampion] != persistence.TitlePoolBot {
+		t.Error("the crown belongs to the engine pool")
 	}
 }
 

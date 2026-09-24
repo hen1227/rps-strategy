@@ -5,7 +5,7 @@ import TournamentCallout from '@/features/tournaments/TournamentCallout';
 import { useBottomInset } from '@/features/shell/bottomInset';
 import { useQueueCall } from '@/hooks/useQueueCall';
 import { useTournamentCall } from '@/hooks/useTournamentCall';
-import { space } from '@/theme';
+import { space, themedSheet } from '@/theme';
 
 // The one strip of screen that floats above everything, and who gets it.
 //
@@ -57,7 +57,25 @@ export default function CalloutLayer() {
  */
 export const CALLOUT_RESERVE = 140;
 
-const styles = StyleSheet.create({
+/**
+ * How much room the floating strip wants right now.
+ *
+ * The one-winner rule above is what makes this a single number rather than a
+ * sum, and it lives here rather than at the call sites so that a page never has
+ * to know which of the two cards is up. A page with chrome of its own at the
+ * bottom — the Bots page's START bar — reads it twice: once to lift itself
+ * clear, and once for the room it reserves at the end of its content.
+ */
+export const useCalloutReserve = (): number => {
+  // Both called, every render, before either is read: `||` short-circuits, and
+  // a hook that is only sometimes called is a hook order that changes between
+  // renders.
+  const queueCall = useQueueCall();
+  const tournamentCall = useTournamentCall();
+  return queueCall || tournamentCall ? CALLOUT_RESERVE : 0;
+};
+
+const styles = themedSheet(() => ({
   layer: {
     position: 'absolute',
     left: 0,
@@ -66,4 +84,4 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: space.medium,
   },
-});
+}));

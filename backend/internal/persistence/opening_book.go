@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"rps-strategy/backend/internal/textfilter"
 )
 
 var (
@@ -226,6 +228,14 @@ func normalizeOpeningName(name string) (string, error) {
 		if character < ' ' || character == '\u007f' {
 			return "", fmt.Errorf("%w: control characters are not allowed", ErrInvalidOpeningName)
 		}
+	}
+	// Anybody may name a line — that was the choice, and it is a good one — so
+	// a name is free text from a stranger that then appears on the opening
+	// explorer, in the book, and above the board of everybody who plays into
+	// that line. CleanName rather than Clean, because a name is read as one
+	// label: see textfilter.CheckName.
+	if !textfilter.CleanName(name) {
+		return "", fmt.Errorf("%w: choose a different name", ErrInvalidOpeningName)
 	}
 	return name, nil
 }

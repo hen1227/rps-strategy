@@ -1,9 +1,10 @@
 import type { ActiveGame, GameStore } from './types';
 import {
   applyAnalysisMove,
-  createAnalysisGame,
+  createAnalysisGameOn,
   validMovesFor,
   type AnalysisGame,
+  type StartingBoard,
 } from '@/engine/analysisGame';
 import { inferMoveBetweenGrids } from '@/engine/moveDiff';
 import { openingLineOf } from '@/engine/openingLine';
@@ -108,7 +109,12 @@ export interface LocalState {
 }
 
 export interface LocalActions {
-  startLocalGame: (options: { mode?: ModeDefinition | null; viewColor?: SideColor }) => void;
+  startLocalGame: (options: {
+    mode?: ModeDefinition | null;
+    /** A board somebody set up. Absent is the mode's own opening. */
+    start?: StartingBoard | null;
+    viewColor?: SideColor;
+  }) => void;
   restartLocalGame: () => void;
   localSelectTile: (position: Position) => void;
   localMovePiece: (from: Position, to: Position) => void;
@@ -210,7 +216,7 @@ export const createLocalSlice: StateCreator<GameStore, [], [], LocalSlice> = (se
      * Open a game both players share. Nothing is sent anywhere, which is what
      * lets this start — and finish — with no connection at all.
      */
-    startLocalGame: ({ mode, viewColor = FIRST_TO_MOVE }) => {
+    startLocalGame: ({ mode, start, viewColor = FIRST_TO_MOVE }) => {
       if (!mode) {
         set({ error: 'Choose a game mode before starting a local game.' });
         return;
@@ -222,7 +228,7 @@ export const createLocalSlice: StateCreator<GameStore, [], [], LocalSlice> = (se
         set({ error: 'Leave your current game before starting a local one.' });
         return;
       }
-      const game = createAnalysisGame(mode);
+      const game = createAnalysisGameOn(mode, start);
       const session: LocalSessionState = {
         // A fresh identifier per game so the board, the move sounds, and the
         // outcome card all treat a rematch as a new game.
@@ -258,11 +264,23 @@ export const createLocalSlice: StateCreator<GameStore, [], [], LocalSlice> = (se
       publish();
     },
 
-    /** Same mode, fresh board, and the orientation the last game ended on. */
+    /**
+     * Same mode, same board, and the orientation the last game ended on.
+     *
+     * The board is the one this game *began* on rather than the mode's opening,
+     * so a rematch of a position somebody set up replays that position. For an
+     * ordinary game the two are the same board, which is why this needs no
+     * "was it custom" question.
+     */
     restartLocalGame: () => {
-      const { localGame, localSession } = get();
+      const { localGame, localHistory, localSession } = get();
       if (!localSession || !localGame) return;
-      get().startLocalGame({ mode: localGame.mode, viewColor: localSession.viewColor });
+      const opened = localHistory[0] ?? localGame;
+      get().startLocalGame({
+        mode: localGame.mode,
+        start: { currentTurn: opened.currentTurn, era: opened.era, grid: opened.grid },
+        viewColor: localSession.viewColor,
+      });
     },
 
     localSelectTile: (position) => {

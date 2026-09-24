@@ -13,9 +13,15 @@ import {
   type WeekendView,
 } from '@/store/api/weekend';
 import { useGameStore } from '@/store/gameStore';
-import { matchesOf, playedMatchCount, statusOf } from '@/store/tournamentSelectors';
-import { colors, contentWidth, radius, space, type } from '@/theme';
+import {
+  entrantHandle,
+  matchesOf,
+  playedMatchCount,
+  statusOf,
+} from '@/store/tournamentSelectors';
+import { colors, contentWidth, radius, space, themedSheet, type } from '@/theme';
 import type { Tournament } from '@/types/protocol';
+import PlayerLink from '@/ui/PlayerLink';
 import ScreenShell from '@/ui/ScreenShell';
 import { Badge, Banner, EmptyState, Panel, SectionHeading } from '@/ui/primitives';
 import TournamentMatchRow from '@/features/tournaments/TournamentMatchRow';
@@ -40,7 +46,7 @@ import TournamentMatchRow from '@/features/tournaments/TournamentMatchRow';
  * file sat on a CDN — see useNow.
  */
 const countdown = (until: number, now: number | null): string => {
-  if (now === null) return '—';
+  if (now === null) return '–';
   const seconds = Math.max(0, Math.floor((until - now) / 1000));
   const hours = Math.floor(seconds / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
@@ -53,7 +59,7 @@ const countdown = (until: number, now: number | null): string => {
 const timeOfDay = (unixMs?: number) =>
   unixMs
     ? new Date(unixMs).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
-    : '—';
+    : '–';
 
 /**
  * A moment as a weekday and a time, both in the reader's own zone.
@@ -66,7 +72,7 @@ const timeOfDay = (unixMs?: number) =>
 const dayAndTime = (unixMs?: number) =>
   unixMs
     ? `${new Date(unixMs).toLocaleDateString(undefined, { weekday: 'long' })} ${timeOfDay(unixMs)}`
-    : '—';
+    : '–';
 
 /** The weekday name the host's schedule is written in, for the plan line. */
 const HOST_DAYS = [
@@ -243,7 +249,7 @@ export default function WeekendScreen() {
         {!view?.enabled ? (
           <Panel>
             <EmptyState
-              detail="The host has not switched the weekend arena on yet. When they do, this page is where it happens."
+              detail="The weekend arena is not enabled yet."
               title="No weekend arena scheduled"
             />
           </Panel>
@@ -329,9 +335,12 @@ export default function WeekendScreen() {
             {tournament.standings.slice(0, 12).map((standing) => (
               <View key={standing.playerId} style={styles.standing}>
                 <Text style={styles.rank}>{standing.rank}</Text>
-                <Text style={styles.standingName} numberOfLines={1}>
-                  {standing.ign}
-                </Text>
+                <PlayerLink
+                  handle={entrantHandle(tournament, standing.playerId)}
+                  name={standing.ign}
+                  numberOfLines={1}
+                  style={styles.standingName}
+                />
                 <Text style={styles.standingMeta}>
                   {standing.wins}–{standing.losses}–{standing.draws}
                 </Text>
@@ -393,9 +402,7 @@ export default function WeekendScreen() {
               }
             />
             <Text style={styles.pollNote}>
-              Both the day and the time are in YOUR time zone: {localZone()}. The same
-              slot is Saturday evening for some people and Sunday morning for others,
-              so tick the ones that work where you are.
+              Select the slots that work for you. Times are shown in {localZone()}.
             </Text>
             <SlotGrid
               busy={voting}
@@ -408,9 +415,7 @@ export default function WeekendScreen() {
               {view.availability.leadingAtUnixMs
                 ? `Leading: ${dayAndTime(view.availability.leadingAtUnixMs)} your time. `
                 : ''}
-              Whatever leads when this weekend&apos;s event starts becomes next
-              weekend&apos;s slot, so the schedule only ever moves a week ahead. A tie
-              holds it where it is.
+              The leading slot sets next weekend&apos;s start time. A tie keeps the current time.
             </Text>
           </Panel>
         ) : null}
@@ -428,9 +433,11 @@ export default function WeekendScreen() {
                   style={[styles.dot, engine.reason ? styles.dotOut : styles.dotIn]}
                 />
                 <View style={styles.engineCopy}>
-                  <Text style={styles.engineName} numberOfLines={1}>
-                    {engine.name}
-                  </Text>
+                  <PlayerLink
+                    name={engine.name}
+                    numberOfLines={1}
+                    style={styles.engineName}
+                  />
                   <Text style={styles.engineMeta} numberOfLines={1}>
                     {engine.reason
                       ? engine.reason
@@ -451,7 +458,7 @@ export default function WeekendScreen() {
               <View key={holder.userId} style={styles.engine}>
                 <Text style={styles.crown}>♛</Text>
                 <View style={styles.engineCopy}>
-                  <Text style={styles.engineName}>{holder.name}</Text>
+                  <PlayerLink name={holder.name} style={styles.engineName} />
                   <Text style={styles.engineMeta}>
                     {holder.wins} weekend{holder.wins === 1 ? '' : 's'} won
                   </Text>
@@ -647,7 +654,7 @@ function PollRows({ busy, kind, onVote, poll, signedIn }: PollRowsProps) {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   loading: { paddingVertical: 60, alignItems: 'center' },
   hero: { paddingTop: space.small, paddingBottom: space.medium },
   eyebrow: { color: colors.textFaint, ...type.eyebrow },
@@ -796,4 +803,4 @@ const styles = StyleSheet.create({
   },
   nightName: { color: colors.text, ...type.rowTitle, flexShrink: 1 },
   nightMeta: { color: colors.textFaint, ...type.meta, flexShrink: 1 },
-});
+}));

@@ -6,7 +6,7 @@ import { sendTestPush } from '@/store/api/push';
 import { getOrCreateProfileKey, getOrCreateUserId } from '@/store/localIdentity';
 import { useGameStore } from '@/store/gameStore';
 import { usePushStore, type PushStatus } from '@/store/push';
-import { colors, space, type } from '@/theme';
+import { colors, space, themedSheet, type } from '@/theme';
 import { Panel, PrimaryButton, SectionHeading } from '@/ui/primitives';
 
 // Match alerts, in the two places they are talked about.
@@ -49,7 +49,7 @@ const COPY: Record<PushStatus | 'server-off', PanelCopy> = {
     eyebrow: 'MATCH ALERTS',
     title: 'Alerts could not be turned on',
     body:
-      'Something went wrong the last time this browser tried. The reason is below; trying again is safe.',
+      "Could not enable alerts. Check the error below and try again.",
     action: 'TRY AGAIN ▶',
   },
   enabling: {
@@ -69,28 +69,28 @@ const COPY: Record<PushStatus | 'server-off', PanelCopy> = {
     eyebrow: 'MATCH ALERTS',
     title: 'Add RPS to your Home Screen first',
     body:
-      'iPhones and iPads only allow notifications from a site you have installed. Tap Share, then Add to Home Screen, and open RPS from the icon — the button appears there.',
+      "On iPhone or iPad, tap Share, then Add to Home Screen. Open RPS from that icon to enable alerts.",
     action: null,
   },
   unsupported: {
     eyebrow: 'MATCH ALERTS',
     title: 'This browser cannot receive alerts',
     body:
-      'It has no service worker or no push support, which is usually a private window or an older browser. Everything else works; the queue just cannot outlive this tab.',
+      "This browser cannot send alerts. Keep the tab open to stay in the queue.",
     action: null,
   },
   granted: {
     eyebrow: 'MATCH ALERTS',
     title: 'Match notifications are on',
     body:
-      'You get one notification when a game starts, and nothing else — no reminders, no "somebody is waiting", no news. Your place in the queue is held while the tab is closed.',
+      "Close the tab and keep your place in the queue. We only notify you when a game starts.",
     action: 'TURN OFF',
   },
   'server-off': {
     eyebrow: 'MATCH ALERTS',
     title: 'This server is not sending notifications',
     body:
-      'No notification keys are configured, so nobody can be called back and the offer is switched off everywhere. Matchmaking works exactly as it did before alerts existed: your place in the queue lasts as long as the tab.',
+      "Alerts are unavailable on this server. Keep the tab open to stay in the queue.",
     action: null,
   },
 };
@@ -102,14 +102,14 @@ const NATIVE_COPY: Partial<Record<PushStatus | 'server-off', PanelCopy>> = {
     eyebrow: 'MATCH ALERTS',
     title: 'Wait for a game with the app closed',
     body:
-      'Right now, leaving RPS takes you out of the queue. Let it send you one notification — only ever "your game has started", never anything else — and your place is held until somebody turns up.',
+      "Enable alerts to stay queued with the app closed. We only notify you when a game starts.",
     action: 'TURN ON ALERTS ▶',
   },
   error: {
     eyebrow: 'MATCH ALERTS',
     title: 'Alerts could not be turned on',
     body:
-      'Something went wrong the last time this device tried. The reason is below; trying again is safe.',
+      "Could not enable alerts. Check the error below and try again.",
     action: 'TRY AGAIN ▶',
   },
   enabling: {
@@ -122,28 +122,28 @@ const NATIVE_COPY: Partial<Record<PushStatus | 'server-off', PanelCopy>> = {
     eyebrow: 'MATCH ALERTS',
     title: 'Notifications are switched off',
     body:
-      'iOS is holding them back for RPS, and it only ever asks once — so there is no button here that could help. Settings › Notifications › RPS Strategy turns them back on. Until then, staying in the queue means leaving the app open.',
+      "Enable alerts in Settings › Notifications › RPS Strategy. Until then, keep the app open to stay queued.",
     action: null,
   },
   unsupported: {
     eyebrow: 'MATCH ALERTS',
     title: 'This device cannot receive alerts',
     body:
-      'Alerts need a real iPhone or iPad. A simulator is handed a token that only Xcode can deliver to, and Android notifications are not built yet — so the offer is switched off here rather than left looking like it works. Everything else works; the queue just cannot outlive the app.',
+      "Alerts are unavailable on this device. Keep the app open to stay in the queue.",
     action: null,
   },
   granted: {
     eyebrow: 'MATCH ALERTS',
     title: 'Match notifications are on',
     body:
-      'You get one notification when a game starts, and nothing else — no reminders, no "somebody is waiting", no news. Your place in the queue is held while the app is closed.',
+      "Close the app and keep your place in the queue. We only notify you when a game starts.",
     action: 'TURN OFF',
   },
   'server-off': {
     eyebrow: 'MATCH ALERTS',
     title: 'This server is not sending notifications',
     body:
-      'It holds no notification key for this app, so nobody can be called back and the offer is switched off everywhere. Matchmaking works exactly as it did before alerts existed: your place in the queue lasts as long as the app is open.',
+      "Alerts are unavailable on this server. Keep the app open to stay in the queue.",
     action: null,
   },
 };
@@ -291,7 +291,7 @@ function TestAlertButton() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   body: { ...type.body, color: colors.textMuted, marginTop: space.small },
   error: { ...type.meta, color: colors.danger, marginTop: space.snug },
   actions: {
@@ -303,4 +303,4 @@ const styles = StyleSheet.create({
   },
   test: { gap: space.snug },
   testResult: { ...type.meta, color: colors.textMuted, maxWidth: 360 },
-});
+}));

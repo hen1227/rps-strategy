@@ -6,7 +6,7 @@ import { useNavContext } from './useNavContext';
 import TournamentPromoLink from './TournamentPromoLink';
 import {links, webGoatGuy} from '@/navigation/links';
 import { useGameStore } from '@/store/gameStore';
-import { colors, radius, space, type } from '@/theme';
+import { colors, radius, space, themedSheet, type } from '@/theme';
 
 // The desktop navigation.
 //
@@ -25,12 +25,12 @@ import { colors, radius, space, type } from '@/theme';
 const BrandMark = () => (
   <View style={styles.brand}>
     <Image
-      source={require('../../../assets/pieces/blue_rock.png')}
+      source={require('../../../assets/pieces/classic/blue_rock.png')}
       style={styles.brandIcon}
       resizeMode="contain"
       accessibilityLabel="Blue rock"
     />
-    {/* <Text style={styles.brandName}>Stoneplay</Text> */}
+     <Text style={styles.brandName}>RPS Strategy</Text>
   </View>
 );
 
@@ -113,7 +113,7 @@ export default function SidebarNav() {
                 {account.username}
               </Text>
               <Text style={styles.identityMeta}>
-                {account.elo} ELO · {account.gamesPlayed} games
+                {account.elo} · {account.gamesPlayed} games
               </Text>
             </Pressable>
           </Link>
@@ -151,7 +151,7 @@ export default function SidebarNav() {
 
 export const SIDEBAR_WIDTH = 232;
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   sidebar: {
     width: SIDEBAR_WIDTH,
     alignSelf: 'stretch',
@@ -235,4 +235,4 @@ const styles = StyleSheet.create({
   },
   discordMark: { color: colors.accentSoft, fontSize: 10 },
   discordText: { ...type.label, color: colors.textSubtle, letterSpacing: 0.4 },
-});
+}));

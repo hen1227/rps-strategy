@@ -4,9 +4,10 @@ import { StyleSheet, Text, View, type LayoutChangeEvent } from 'react-native';
 import { liveGameGrid, liveMoveLabel } from './liveSelectors';
 import MiniBoard from '@/features/board/MiniBoard';
 import { playerName, titledName } from '@/store/spectateSelectors';
-import { colors, players, radius, space, type } from '@/theme';
+import { colors, players, radius, space, themedSheet, type } from '@/theme';
 import { FIRST_TO_MOVE, type ModeDefinition, type SideColor } from '@/types/game';
 import type { LiveGameSummary, TitleID } from '@/types/protocol';
+import PlayerLink from '@/ui/PlayerLink';
 import { Badge, PrimaryButton } from '@/ui/primitives';
 import TitleTag from '@/ui/TitleTag';
 
@@ -54,18 +55,29 @@ interface PlayerLineProps {
   color: SideColor;
   compact?: boolean;
   elo: number;
+  /**
+   * The account to address the page by, or empty for a guest. Separate from
+   * `name`, which is `Red` or `Blue` when there is no account to name.
+   */
+  handle: string;
   name: string;
   title?: TitleID | null;
 }
 
-function PlayerLine({ active, color, compact, elo, name, title }: PlayerLineProps) {
+function PlayerLine({ active, color, compact, elo, handle, name, title }: PlayerLineProps) {
   return (
     <View style={[styles.playerLine, compact && styles.playerLineCompact]}>
       <View style={[styles.playerDot, { backgroundColor: players[color].strong }]} />
       <View style={styles.playerNameRow}>
         <TitleTag title={title} />
+        {/*
+          The card is how somebody decides whether to watch this board, and who
+          is on it is most of that decision — so the name is a way to find out,
+          rather than a string to recognise or not. The WATCH button beside it
+          is the card's own action; these two are about the players.
+        */}
         <Text numberOfLines={1} style={styles.playerName}>
-          {name} <PlayerElo value={elo} />
+          <PlayerLink handle={handle} name={name} /> <PlayerElo value={elo} />
         </Text>
       </View>
       {active ? <Text style={styles.turn}>TO MOVE</Text> : null}
@@ -137,6 +149,7 @@ export default function LiveBoardCard({
       color="Blue"
       compact={!page}
       elo={game.blueElo}
+      handle={game.bluePlayer?.username ?? ''}
       name={blueName}
       title={game.bluePlayer?.title}
     />
@@ -147,6 +160,7 @@ export default function LiveBoardCard({
       color="Red"
       compact={!page}
       elo={game.redElo}
+      handle={game.redPlayer?.username ?? ''}
       name={redName}
       title={game.redPlayer?.title}
     />
@@ -211,7 +225,7 @@ export default function LiveBoardCard({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   card: {
     gap: space.snug,
     padding: CARD_PAD,
@@ -255,4 +269,4 @@ const styles = StyleSheet.create({
     paddingHorizontal: space.tight,
   },
   fact: { ...type.meta, color: colors.textFaint },
-});
+}));

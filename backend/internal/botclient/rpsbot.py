@@ -36,7 +36,7 @@ import time
 
 from websockets.sync.client import connect
 
-CLIENT_VERSION = "1.4"
+CLIENT_VERSION = "1.7"
 DEFAULT_SERVER = "wss://api-rps.henhen1227.com/ws"
 CONFIG_PATH = "rpsbot.conf"
 
@@ -55,6 +55,20 @@ MAX_ICON_BYTES = 64 * 1024
 # The one line an engine can print to take itself out of play. Everything else
 # it writes is passed on.
 ENGINE_SHUTDOWN = "shutdown"
+
+# What keeps the engine out of the terminal's reach.
+#
+# Ctrl-C goes to every process in the foreground group, the engine included, so
+# an engine started the ordinary way dies on the very keystroke that asks for a
+# graceful shutdown. The server then asks it for the move it has just promised
+# to let it finish, the pipe is broken, and the game is abandoned — the one
+# outcome the graceful path exists to avoid. In a group of its own the engine
+# hears nothing from the terminal and plays the drain out; this script is then
+# the only thing that ends it, which Engine.close and Stopping.kill_engines do.
+ENGINE_OWN_GROUP = (
+    {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+    if sys.platform == "win32" else {"start_new_session": True}
+)
 
 
 class GracefulExit(Exception):
@@ -94,10 +108,19 @@ def configure(path, server):
         "icon": ask("Icon: a square PNG up to 128x128, or blank for none", ""),
         "public_play": "yes" if ask_yes("Let other players challenge this bot?") else "no",
         "tournaments": "yes" if ask_yes("Enter tournaments automatically?") else "no",
+        "ladder": "yes" if ask_yes(
+            "Join the ranked ladder? The server pairs your bot with another "
+            "roughly every hour, and this is the only thing your rating comes from"
+        ) else "no",
         "max_games": str(ask_count(
             f"Games at once (1-{MAX_GAMES}; each one runs its own copy of your engine)",
             1, MAX_GAMES,
         )),
+        # Written down empty rather than asked about. Most engines report their
+        # own build through `id version`, which is the better source, and an
+        # author with no version scheme should not be made to invent one at the
+        # setup prompt. Filling it in later takes effect on the next connect.
+        "version": "",
         "token": ask("Paste your bot token (from your account page)"),
         # Written down rather than asked about: almost nobody wants a server
         # other than the default, and `--server` is there for those who do.
@@ -235,13 +258,19 @@ def read_icon(path):
 class Engine:
     """The engine subprocess, and the only thing this script executes."""
 
-    def __init__(self, argv, on_shutdown=None, label=""):
+    def __init__(self, argv, stopping, on_shutdown=None, label=""):
         self.argv = argv
+        self.stopping = stopping
         self.on_shutdown = on_shutdown
         self.process = subprocess.Popen(
             argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, text=True, bufsize=1,
+            **ENGINE_OWN_GROUP,
         )
+        # Out of the terminal's reach is out of everyone's reach but this
+        # script's, so the stop-now path has to be able to find it from the
+        # main thread. See ENGINE_OWN_GROUP and Stopping.kill_engines.
+        stopping.watch_engine(self)
         self.lines = queue.Queue()
         # stdout feeds the queue; stderr is copied to ours, labelled with the
         # slot, so a chatty engine cannot fill a pipe buffer and deadlock.
@@ -282,11 +311,34 @@ class Engine:
             del collected[:-64]
 
     def close(self):
+        """Stop the engine and let go of its stdin.
+
+        Closed here rather than left to the garbage collector, because a line
+        written to an engine that has already gone stays in the buffer, and
+        the collector flushes it much later from wherever the program happens
+        to be by then — which is how an engine that died during one game gets
+        reported as an ignored BrokenPipeError on the line that starts its
+        replacement. Closing it is also how an engine is told there is nothing
+        more coming: RPSI engines read until end of input.
+        """
+        self.stopping.forget_engine(self)
+        try:
+            self.process.stdin.close()
+        except OSError:
+            pass
         try:
             self.process.terminate()
             self.process.wait(timeout=5)
         except Exception:
             self.process.kill()
+
+    def kill(self):
+        """End the engine now, without waiting for it to tidy up."""
+        self.stopping.forget_engine(self)
+        try:
+            self.process.kill()
+        except OSError:
+            pass
 
 
 def serve(settings, argv, stopping, slot, claimed, note, config_path):
@@ -330,10 +382,18 @@ def serve(settings, argv, stopping, slot, claimed, note, config_path):
                 "name": settings["name"],
                 "publicPlay": settings.getboolean("public_play", True),
                 "enterTournaments": settings.getboolean("tournaments", True),
+                "enterLadder": settings.getboolean("ladder", True),
                 "maxGames": slot.count,
                 "sessionId": slot.session,
                 "slot": slot.index,
             }
+            # Which build of your engine this is. Only sent when the conf names
+            # one, and only used by the server when the engine itself did not
+            # answer `id version` — an engine that reports its own build is the
+            # better source, because it cannot be left behind by a rebuild.
+            version = settings.get("version", "").strip()
+            if version:
+                registration["engineVersion"] = version
             # Read every connect, so replacing the file and restarting is all
             # it takes to change the picture. Omitted when it could not be read
             # (see read_icon), and sent by slot 0 only.
@@ -407,7 +467,7 @@ def serve(settings, argv, stopping, slot, claimed, note, config_path):
                 # First frame the server sends is the engine handshake, so this
                 # is where the subprocess is actually needed.
                 engine = engine or Engine(
-                    argv,
+                    argv, stopping,
                     on_shutdown=lambda reason: request_drain(
                         f"the engine ({reason})" if reason else "the engine"
                     ),
@@ -430,7 +490,8 @@ def serve(settings, argv, stopping, slot, claimed, note, config_path):
                     on_shutdown = engine.on_shutdown
                     label = "" if slot.count == 1 else f" {slot.index + 1}"
                     engine.close()
-                    engine = Engine(argv, on_shutdown=on_shutdown, label=label)
+                    engine = Engine(argv, stopping, on_shutdown=on_shutdown,
+                                    label=label)
                 socket.send(json.dumps(reply))
     finally:
         stopping.unregister(slot.index)
@@ -448,7 +509,8 @@ class Stopping:
     and is what the next connection re-asserts. `requested` is "somebody at
     this machine asked", which a second Ctrl-C reads as meaning *now*. `fatal`
     is what ended the run for good, set on a slot's thread and printed by the
-    main one.
+    main one. The running engines are here for the same reason the senders
+    are: the thread that has to end them is not the thread that started them.
     """
 
     def __init__(self):
@@ -462,6 +524,10 @@ class Stopping:
         # handler on the main one is reading the lot.
         self._mutex = threading.Lock()
         self._senders = {}
+        # The engines running right now, under the same guard and for the same
+        # reason: a slot starts and replaces its own on its own thread, and the
+        # main one reads the lot when a second Ctrl-C ends the run.
+        self._engines = set()
 
     def register(self, index, sender):
         with self._mutex:
@@ -470,6 +536,29 @@ class Stopping:
     def unregister(self, index):
         with self._mutex:
             self._senders.pop(index, None)
+
+    def watch_engine(self, engine):
+        with self._mutex:
+            self._engines.add(engine)
+
+    def forget_engine(self, engine):
+        with self._mutex:
+            self._engines.discard(engine)
+
+    def kill_engines(self):
+        """End every engine still running: the Ctrl-C that means *now*.
+
+        Needed because an engine is out of the terminal's reach (see
+        ENGINE_OWN_GROUP) and the slots are daemon threads, so neither the
+        keystroke nor the cleanup in serve() is going to end one — and an
+        engine left behind would go on searching a game nobody is playing.
+        Killed rather than asked, this being the path that has already given up
+        on the board.
+        """
+        with self._mutex:
+            engines, self._engines = list(self._engines), set()
+        for engine in engines:
+            engine.kill()
 
     def request(self):
         """Ask for a graceful shutdown. False when there is nobody to ask.
@@ -619,6 +708,9 @@ def main():
         while any(worker.is_alive() for worker in slots):
             time.sleep(0.2)
     except KeyboardInterrupt:
+        # The second Ctrl-C, which the slots are daemons so as not to delay.
+        # Their engines outlive them, so they are ended here. See Engine.
+        stopping.kill_engines()
         return
     if stopping.fatal:
         raise SystemExit(stopping.fatal)

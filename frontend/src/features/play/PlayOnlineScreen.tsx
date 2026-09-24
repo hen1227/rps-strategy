@@ -1,6 +1,13 @@
 import { useRouter } from 'expo-router';
 import { useMemo, useState } from 'react';
-import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import {
+  Pressable,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+  type LayoutChangeEvent,
+} from 'react-native';
 
 import GameSettingsModal from './GameSettingsModal';
 import LocalPlayPanel from './LocalPlayPanel';
@@ -8,16 +15,16 @@ import LiveNowPanel from '@/features/live/LiveNowPanel';
 import MatchAlertsPanel from '@/features/queue/MatchAlertsPanel';
 import HowToPlayModal from '@/features/game/HowToPlayModal';
 import ModePreview from '@/features/game/ModePreview';
-import SetupPreview from '@/features/game/SetupPreview';
+import SetupPreview, { SETUP_CARD_WIDTH } from '@/features/game/SetupPreview';
 import PGNImportModal from '@/features/pgn/PGNImportModal';
 import PositionSetupModal from '@/features/pgn/PositionSetupModal';
 import OfficialTournamentBanner from '@/features/tournaments/OfficialTournamentBanner';
 import TournamentSpotlight from '@/features/tournaments/TournamentSpotlight';
 import { reviewSourceFromPGN } from '@/engine/gameReview';
 import { engineUnavailableMessage } from '@/engine/rpsfish/client';
-import { CALLOUT_RESERVE } from '@/features/shell/CalloutLayer';
+import { useCalloutReserve } from '@/features/shell/CalloutLayer';
 import { useWideScreen } from '@/hooks/useBoardLayout';
-import { useLobbyGate, useQueueCall } from '@/hooks/useQueueCall';
+import { useLobbyGate } from '@/hooks/useQueueCall';
 import { links } from '@/navigation/links';
 import { useGameStore } from '@/store/gameStore';
 import { updatePausedReason } from '@/store/queueSelectors';
@@ -29,7 +36,7 @@ import {
   standardSetup,
 } from '@/store/setupSelectors';
 import { titledName } from '@/store/spectateSelectors';
-import { colors, contentWidth, radius, space, type } from '@/theme';
+import { colors, contentWidth, radius, space, themedSheet, type } from '@/theme';
 import ListRow from '@/ui/ListRow';
 import ScreenShell from '@/ui/ScreenShell';
 import {
@@ -51,6 +58,31 @@ import type { GameSetup, ModeDefinition } from '@/types/game';
 // for somebody. The mode cards above are that with nothing filled in, the setup
 // panel is that with something filled in, and the open board is everybody
 // else's answer to it.
+
+/**
+ * The narrowest the challenge form is worth reading, and so the floor on its
+ * column when the preview card is standing beside it.
+ *
+ * A phone must not honour it: 300 points of minimum on a 320-point screen is an
+ * overflow, and there the form is the whole width anyway.
+ */
+const CHALLENGE_FORM_FLOOR = 300;
+
+/**
+ * How much room the challenge panel needs before the form and the game it
+ * describes can stand side by side.
+ *
+ * The form has a floor and the card has a fixed width, and neither shrinks —
+ * `flexShrink` is 0 by default in React Native — so a panel narrower than the
+ * two of them together does not squeeze, it overflows. That is how an iPad in
+ * landscape ended up drawing the board off the side of the page: the window is
+ * wide enough for the two-column lobby, but a 232-point sidebar and a
+ * 296-point live rail leave the middle column about 460 points to put 556
+ * points of columns in. Measured rather than derived from the window, because
+ * the middle column is what is actually at stake and only it knows how wide it
+ * has ended up.
+ */
+const CHALLENGE_TWO_COLUMNS = CHALLENGE_FORM_FLOOR + space.large + SETUP_CARD_WIDTH;
 
 export default function PlayOnlineScreen() {
   const router = useRouter();
@@ -102,8 +134,22 @@ export default function PlayOnlineScreen() {
   // it is the same act as being matched, only faster, and the server drops your
   // seek the moment a game starts.
   const gate = useLobbyGate();
-  const queueCall = useQueueCall();
   const wide = useWideScreen();
+  // Room at the foot of the page for the shell's floating card, whichever of
+  // the two is up. Asking `useQueueCall` here instead reserved nothing under a
+  // tournament call-out — and the tournament is the one that wins the layer.
+  const calloutReserve = useCalloutReserve();
+  // How wide the challenge panel has turned out, which is not something the
+  // window can be asked: the sidebar and the live rail take their width off the
+  // front of it. Zero until the first layout, which reads as the single-column
+  // shape — the same thing `wide` does on the first client render, and for the
+  // same reason.
+  const [challengeWidth, setChallengeWidth] = useState(0);
+  const measureChallenge = (event: LayoutChangeEvent) => {
+    const measured = Math.round(event.nativeEvent.layout.width);
+    setChallengeWidth((current) => (current === measured ? current : measured));
+  };
+  const challengeWide = wide && challengeWidth >= CHALLENGE_TWO_COLUMNS;
   // Empty is not a mistake here: it is what makes the game open to the lobby.
   const namedOpponent = challengeUsername.trim();
 
@@ -120,14 +166,14 @@ export default function PlayOnlineScreen() {
   const setupAudience = namedOpponent
     ? `Only ${namedOpponent} can take it.`
     : setupIsPlainSearch
-      ? 'Nothing is changed, so this is the standard rated game.'
+      ? 'Standard settings.'
       : 'Anyone in the lobby can take it.';
 
   const resetDraft = () => setDraft(null);
 
   // The game being written out, drawn once and hung in whichever place the
-  // width allows: its own column beside the form, or — on a phone, where there
-  // is no beside — straight under the heading, above the fields. Wrapping it to
+  // width allows: its own column beside the form, or — where there is no
+  // beside — straight under the heading, above the fields. Wrapping it to
   // the end of the column instead left it *below the button*, which is the one
   // position that makes a preview useless: the decision it exists to inform has
   // already been taken by the time you scroll to it.
@@ -138,7 +184,7 @@ export default function PlayOnlineScreen() {
       mode={setupMode}
       setup={setup}
       size="feature"
-      stretch={!wide}
+      stretch={!challengeWide}
     />
   ) : null;
 
@@ -149,7 +195,7 @@ export default function PlayOnlineScreen() {
   );
 
   return (
-    <ScreenShell bottomInset={queueCall ? CALLOUT_RESERVE : 0} width={contentWidth.page}>
+    <ScreenShell bottomInset={calloutReserve} width={contentWidth.page}>
       {/*
         Above the site's own tournaments, and above everything else, for the two
         days it is on screen at all: it is about an event that is not here and
@@ -265,7 +311,7 @@ export default function PlayOnlineScreen() {
         */}
         <SectionHeading
           eyebrow="RANKED PLAY"
-          title="Choose your battle"
+          title="Play online"
           trailing={
             <GhostButton
               accessibilityLabel="Load a game analysis from PGN"
@@ -293,7 +339,7 @@ export default function PlayOnlineScreen() {
                   <View style={styles.modeTopRow}>
                     <View style={styles.modeBadges}>
                       <Badge label={mode.shortCode} />
-                      {modeElo !== null ? <Badge label={`${modeElo} ELO`} tone="accent" /> : null}
+                      {modeElo !== null ? <Badge label={`RATING ${modeElo}`} tone="accent" /> : null}
                     </View>
                     <Badge
                       label={`${playerCount} PLAYING`}
@@ -329,7 +375,7 @@ export default function PlayOnlineScreen() {
                   <View style={styles.modeFooter}>
                     <View style={styles.modeButtons}>
                       <GhostButton
-                        accessibilityLabel={`Analyse ${mode.name} with RPSFish`}
+                        accessibilityLabel={`Open the ${mode.name} analysis board`}
                         compact
                         disabled={Boolean(engineUnavailable)}
                         label={engineUnavailable ? 'ANALYSIS LOCKED' : 'ANALYZE'}
@@ -404,20 +450,22 @@ export default function PlayOnlineScreen() {
             the card runs the full height of the panel instead of hanging off
             the top of a form that is shorter than it is.
           */}
-          <View style={[styles.challengeBody, wide && styles.challengeBodyWide]}>
-            <View style={[styles.challengeForm, wide && styles.challengeFormWide]}>
+          <View
+            onLayout={measureChallenge}
+            style={[styles.challengeBody, challengeWide && styles.challengeBodyWide]}
+          >
+            <View style={[styles.challengeForm, challengeWide && styles.challengeFormWide]}>
               <View>
                 <SectionHeading eyebrow="CUSTOM GAMES" title="Create a challenge" />
                 <Text style={styles.help}>
-                  Name a player to invite them directly, or leave it blank to make the game open
-                  to anyone.
+                  Enter a username to challenge someone. Leave blank for an open game.
                 </Text>
               </View>
 
-              {wide ? null : setupCard}
+              {challengeWide ? null : setupCard}
 
               <View style={styles.opponentField}>
-                <Text style={styles.groupLabel}>OPPONENT — OPTIONAL</Text>
+                <Text style={styles.groupLabel}>OPPONENT (OPTIONAL)</Text>
                 <TextInput
                   accessibilityLabel="Username to challenge, or leave blank to open the game to anyone"
                   autoCapitalize="none"
@@ -438,8 +486,7 @@ export default function PlayOnlineScreen() {
                 <View style={styles.settingsCopy}>
                   <Text style={styles.groupLabel}>GAME SETUP</Text>
                   <Text style={styles.settingsBlurb}>
-                    Mode, clock, stakes, which side you play, the opening position, and the rules
-                    you drop.
+                    Choose the mode, clock, side, and rules.
                   </Text>
                 </View>
                 <GhostButton
@@ -496,8 +543,8 @@ export default function PlayOnlineScreen() {
                       : namedOpponent
                         ? 'It waits ten minutes for them to answer.'
                         : setupIsPlainSearch
-                          ? 'You go straight into matchmaking.'
-                          : 'It sits on the open board for ten minutes, and pairs you at once with anybody waiting for the same game.'}
+                          ? 'Find an opponent.'
+                          : "Open for ten minutes. Matching players pair immediately."}
                   </Text>
                   {gate.needsAccount ? (
                     <Text style={styles.actionHint}>
@@ -508,7 +555,7 @@ export default function PlayOnlineScreen() {
               </View>
             </View>
 
-            {wide ? setupCard : null}
+            {challengeWide ? setupCard : null}
           </View>
         </Panel>
       ) : null}
@@ -516,7 +563,7 @@ export default function PlayOnlineScreen() {
       <Panel>
         <SectionHeading
           eyebrow="OPEN BOARD"
-          title="Games waiting to be taken"
+          title="Open games"
           trailing={
             <Badge
               label={`${otherOpenChallenges.length} OPEN`}
@@ -526,7 +573,7 @@ export default function PlayOnlineScreen() {
         />
         {otherOpenChallenges.length === 0 ? (
           <EmptyState
-            detail="Press play on a mode above, or set one up, and you will be the row in this list."
+            detail="Choose a mode above to find a game."
             title="Nobody is waiting for a game"
           />
         ) : (
@@ -609,7 +656,10 @@ export default function PlayOnlineScreen() {
         initialPosition={setup?.startingPosition ?? null}
         mode={setupMode}
         modes={playableModes}
-        onApply={(position) => {
+        onApply={({ position }) => {
+          // Pieces only: `GameSetup` compares whole setups to pair two seeks,
+          // so a side to move or a territory it cannot hold is one the other
+          // player could never agree to.
           if (setup) setDraft({ ...setup, startingPosition: position });
           setPositionOpen(false);
           setSettingsOpen(true);
@@ -637,7 +687,7 @@ export default function PlayOnlineScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   inbox: { gap: space.snug, marginTop: space.medium },
   inboxRow: {
     paddingHorizontal: space.medium,
@@ -682,17 +732,18 @@ const styles = StyleSheet.create({
   // The form and the game it describes, side by side. The panel used to run out
   // of things to say a third of the way across the page, which made writing a
   // game out look like a smaller act than pressing PLAY on a mode card.
-  // A column on a phone and two columns on a desktop, chosen rather than
-  // wrapped: the order of a wrapped row is the order of the source, and the
-  // source order that reads correctly beside the form — form, then game — is
-  // the wrong one underneath it.
+  // One column or two, chosen rather than wrapped: the order of a wrapped row
+  // is the order of the source, and the source order that reads correctly
+  // beside the form — form, then game — is the wrong one underneath it. Which
+  // of the two is a question about this panel's own width rather than the
+  // window's; see `CHALLENGE_TWO_COLUMNS`.
   challengeBody: { gap: space.large },
   challengeBodyWide: { flexDirection: 'row', alignItems: 'stretch' },
   challengeForm: { flex: 1, gap: space.medium },
   // A floor for the form's column, so the preview beside it cannot squeeze the
-  // fields down to a stack of labels — and a floor a phone must not honour,
-  // since 300 points of minimum on a 320-point screen is an overflow.
-  challengeFormWide: { minWidth: 300 },
+  // fields down to a stack of labels. Only ever applied where the panel has
+  // room for the pair, which is what keeps it from being an overflow of its own.
+  challengeFormWide: { minWidth: CHALLENGE_FORM_FLOOR },
   settingsRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -737,7 +788,7 @@ const styles = StyleSheet.create({
 
   disabled: { opacity: 0.35 },
   pressed: { opacity: 0.7 },
-});
+}));
 
 /**
  * The button on somebody else's game: play it, or go and get an account.

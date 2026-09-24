@@ -3,7 +3,7 @@ import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useGameStore } from '@/store/gameStore';
 import { usePushStore } from '@/store/push';
 import { ALERTS_PITCH, QUEUE_COPY, type QueueCall } from '@/store/queueSelectors';
-import { colors, radius, space, type } from '@/theme';
+import { colors, radius, space, themedSheet, type } from '@/theme';
 import { GhostButton, PrimaryButton } from '@/ui/primitives';
 
 // The queue, following you.
@@ -108,7 +108,7 @@ export default function QueueCallout({ call }: { call: QueueCall }) {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   card: {
     width: '100%',
     maxWidth: 620,
@@ -146,4 +146,4 @@ const styles = StyleSheet.create({
   dismiss: { paddingHorizontal: space.tight, paddingVertical: space.hair },
   dismissMark: { ...type.meta, color: colors.textFaint },
   pressed: { opacity: 0.7 },
-});
+}));

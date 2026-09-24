@@ -77,7 +77,7 @@ func TestDeleteGameRemovesEveryCopyAndRefundsTheRating(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read account: %v", err)
 	}
-	if before.ModeElo(game.ModeTotalWar) <= DefaultElo || before.Wins != 1 {
+	if before.ModeElo(game.ModeTotalWar) <= RatingFloor || before.Wins != 1 {
 		t.Fatalf("the game should have moved the rating first: %#v", before)
 	}
 
@@ -107,7 +107,7 @@ func TestDeleteGameRemovesEveryCopyAndRefundsTheRating(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read %s: %v", userID, err)
 		}
-		if account.ModeElo(game.ModeTotalWar) != DefaultElo {
+		if account.ModeElo(game.ModeTotalWar) != RatingFloor {
 			t.Fatalf("%s kept rating from a deleted game: %d",
 				userID, account.ModeElo(game.ModeTotalWar))
 		}
@@ -220,7 +220,7 @@ func TestPurgeAccountTakesItsGamesAndLeavesTheOpponentWhole(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the opponent must survive: %v", err)
 	}
-	if victim.GamesPlayed != 0 || victim.ModeElo(game.ModeTotalWar) != DefaultElo {
+	if victim.GamesPlayed != 0 || victim.ModeElo(game.ModeTotalWar) != RatingFloor {
 		t.Fatalf("the opponent kept a record of games that no longer exist: %#v", victim)
 	}
 	// And the name the purged account held is free again.
@@ -262,7 +262,7 @@ func TestDeleteBotRemovesTheBotItsAccountAndItsGames(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the opponent must survive: %v", err)
 	}
-	if human.GamesPlayed != 0 || human.ModeElo(game.ModeTotalWar) != DefaultElo {
+	if human.GamesPlayed != 0 || human.ModeElo(game.ModeTotalWar) != RatingFloor {
 		t.Fatalf("the opponent kept rating from a deleted bot's game: %#v", human)
 	}
 	// The slot is free again, which is the difference from retiring.

@@ -8,14 +8,20 @@ import (
 	"rps-strategy/backend/internal/game"
 )
 
-// The party rule, at the level that enforces it.
+// Whose place is whose, at the level that enforces it.
 //
-// The server decides *who may enter what* — see registerBotForTournament. This
-// is the other half: whatever route it arrives on, one owner cannot end up
-// holding two places in a field, and the entry they hold can be found and
-// removed from either end of the owner/engine pair.
+// One entry per *account*, on whatever route it arrives. It used to be one per
+// party — an owner and all their engines sharing a single place, so that an
+// author with four engines could not fill a field of six. Engines are entered by
+// their switch and a sweep now (see enrolOnlineBots), several at a time and
+// without anybody choosing, so the only thing the party version still did was
+// refuse a person a place because a bot of theirs had been swept into it.
+//
+// The read is still party-wide, and that is not an inconsistency: an owner is
+// answerable for their engine's entry — they are the one a host chases about it
+// — they simply cannot delete it. Turning the switch off is how it leaves.
 
-func TestOneEntryPerOwnerHoweverItArrives(t *testing.T) {
+func TestOneEntryPerAccountHoweverItArrives(t *testing.T) {
 	store := authTestStore(t)
 	ctx := t.Context()
 	registeredOwner(t, store, "owner", "Owner")
@@ -30,22 +36,33 @@ func TestOneEntryPerOwnerHoweverItArrives(t *testing.T) {
 		t.Fatalf("enter the first engine: %v", err)
 	}
 
-	// A second engine of the same owner, which is the case the rule exists for
-	// and the one a field of four all authored by the same person used to be.
-	_, err := store.SignupForTournament(ctx, "cup", chippy.UserID, "Chippy", "owner.discord", true)
+	// The same account twice is the rule, and the whole of it. The refusal says
+	// which name is already in, because "you are already in" is no help to
+	// somebody who has forgotten what they entered under.
+	_, err := store.SignupForTournament(ctx, "cup", fishy.UserID, "Fishy II", "owner.discord", true)
 	if !errors.Is(err, ErrTournamentAlreadyEntered) {
-		t.Fatalf("expected a second engine to be refused, got %v", err)
+		t.Fatalf("expected the same account to be refused twice, got %v", err)
 	}
-	// The refusal says which name is already in it.
 	if err == nil || !strings.Contains(err.Error(), "Fishy") {
 		t.Fatalf("expected the refusal to name Fishy, got %v", err)
 	}
 
-	// The owner in person is the same party as their engine.
+	// A second engine of the same owner is a second entrant, because a sweep
+	// that enters everything online will produce exactly this and nobody chose
+	// it. The old rule refused it.
+	if _, err := store.SignupForTournament(
+		ctx, "cup", chippy.UserID, "Chippy", "owner.discord", true,
+	); err != nil {
+		t.Fatalf("expected a second engine of the same owner to enter, got %v", err)
+	}
+
+	// And the owner in person, who is not competing with their own bots for a
+	// place. Being locked out of an event by a bot of yours that a sweep entered
+	// is what this is here to stop.
 	if _, err := store.SignupForTournament(
 		ctx, "cup", "owner", "Owner", "owner.discord", true,
-	); !errors.Is(err, ErrTournamentAlreadyEntered) {
-		t.Fatalf("expected the owner to be refused, got %v", err)
+	); err != nil {
+		t.Fatalf("expected the owner to enter beside their engines, got %v", err)
 	}
 
 	// Somebody else's engine is a different party and is unaffected.
@@ -57,7 +74,7 @@ func TestOneEntryPerOwnerHoweverItArrives(t *testing.T) {
 	}
 }
 
-func TestEntryLookupAndWithdrawalAnswerToEitherEndOfThePair(t *testing.T) {
+func TestEntryLookupAnswersEitherEndAndWithdrawalTakesYourOwn(t *testing.T) {
 	store := authTestStore(t)
 	ctx := t.Context()
 	registeredOwner(t, store, "owner", "Owner")
@@ -91,9 +108,20 @@ func TestEntryLookupAndWithdrawalAnswerToEitherEndOfThePair(t *testing.T) {
 		t.Fatalf("expected no entry for a stranger, got %v", err)
 	}
 
-	// Withdrawing by the owner's id removes the engine's row and leaves the
-	// other party's alone.
-	after, removed, err := store.WithdrawTournamentEntry(ctx, "cup", "owner")
+	// The withdrawal is the half that is *not* party-wide. The owner holds no
+	// entry of their own here, so there is nothing for them to take out — their
+	// engine's place is not theirs to delete, and deleting it would achieve
+	// nothing anyway, because the next sweep puts it straight back.
+	if _, _, err := store.WithdrawTournamentEntry(ctx, "cup", "owner"); !errors.Is(
+		err, ErrTournamentEntryNotFound,
+	) {
+		t.Fatalf("expected the owner to have no entry of their own, got %v", err)
+	}
+
+	// The engine's own account does hold one, and removing it leaves the other
+	// party's alone. Nothing an owner can press reaches this; it is here for the
+	// host's door and the bot drain, which both name an account from outside.
+	after, removed, err := store.WithdrawTournamentEntry(ctx, "cup", fishy.UserID)
 	if err != nil {
 		t.Fatalf("withdraw: %v", err)
 	}
@@ -103,7 +131,7 @@ func TestEntryLookupAndWithdrawalAnswerToEitherEndOfThePair(t *testing.T) {
 	if len(after.Players) != 1 || after.Players[0].IGN != "Stray" {
 		t.Fatalf("expected only Stray left, got %#v", after.Players)
 	}
-	if _, _, err := store.WithdrawTournamentEntry(ctx, "cup", "owner"); !errors.Is(
+	if _, _, err := store.WithdrawTournamentEntry(ctx, "cup", fishy.UserID); !errors.Is(
 		err, ErrTournamentEntryNotFound,
 	) {
 		t.Fatalf("expected a second withdrawal to find nothing, got %v", err)

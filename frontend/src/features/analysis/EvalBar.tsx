@@ -1,10 +1,10 @@
 import { StyleSheet, Text, View } from 'react-native';
 
-import { board, evalBar, players, radius } from '@/theme';
+import { board, evalBar, players, radius, themedSheet } from '@/theme';
 
 /** A score as a player reads it: `+1.20`, `−0.35`, or `M4` for a forced win. */
 export const formatScore = (score: number | null | undefined) => {
-  if (score === undefined || score === null) return '—';
+  if (score === undefined || score === null) return '–';
   if (Math.abs(score) >= 29_000) {
     return `${score >= 0 ? '' : '\u2212'}M${Math.max(1, 30_000 - Math.abs(score))}`;
   }
@@ -83,7 +83,7 @@ export default function EvalBar({ height, redScore }: EvalBarProps) {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   evalBar: {
     position: 'relative',
     width: EVAL_BAR_WIDTH,
@@ -135,4 +135,4 @@ const styles = StyleSheet.create({
     fontVariant: ['tabular-nums'],
   },
   evalValueOnRed: { color: evalBar.badgeOnRedText },
-});
+}));

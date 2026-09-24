@@ -353,13 +353,26 @@ FROM tournaments WHERE tournament_id = ?
 		discord = handle
 	}
 
-	// One entry per party, which is the rule that makes "yourself, or one of
-	// your bots" mean something. Checked inside the transaction that inserts,
-	// so two tabs cannot each see an empty slot for the same owner. Lifted for
-	// the host's sweep — see HostSignupForTournament.
+	// One entry per account. Checked inside the transaction that inserts, so two
+	// tabs cannot each see an empty slot for the same person. Lifted for the
+	// sweep — see HostSignupForTournament.
+	//
+	// # It used to be one entry per party
+	//
+	// Meaning an owner and all their engines shared a place, which was the rule
+	// that made "yourself, or exactly one of your bots" mean something. There is
+	// no such choice any more: an engine is entered by its switch and the sweep,
+	// several at a time from the same author, and the sweep goes through the door
+	// with this check lifted. So all the party version could still do was refuse
+	// a *person* a place because an engine of theirs had been swept in without
+	// their asking — an author locked out of an event by their own bot, told they
+	// were "already entered, as Fishy".
+	//
+	// A person's place is their own, then, and an engine's is its own. The cap
+	// below is what an event uses to stay the size it meant to be.
 	if onePlacePerParty {
-		if held, found, err := tournamentEntryOfParty(
-			ctx, transaction, tournamentID, party,
+		if held, found, err := tournamentEntryOfAccount(
+			ctx, transaction, tournamentID, userID,
 		); err != nil {
 			return Tournament{}, err
 		} else if found {
@@ -473,6 +486,40 @@ LIMIT 1
 	return player, true, nil
 }
 
+// tournamentEntryOfAccount is the entry one account holds, and only that one.
+//
+// The narrow twin of tournamentEntryOfParty, for the question "what did *you*
+// enter" as against "is your side already in". An owner and their engines are
+// one party and up to several accounts, so the two differ exactly when an engine
+// has been swept into an event its owner is also in — which is where the
+// party-wide answer is not a safe thing to delete. See WithdrawTournamentEntry.
+func tournamentEntryOfAccount(
+	ctx context.Context,
+	queryer tournamentQueryer,
+	tournamentID string,
+	userID string,
+) (TournamentPlayer, bool, error) {
+	var player TournamentPlayer
+	var agreed int
+	err := queryer.QueryRowContext(ctx, `
+SELECT player_id, user_id, ign, discord, agreed_to_unfiltered_chat,
+       signup_order, seed, joined_at_unix_ms
+FROM tournament_players
+WHERE tournament_id = ? AND user_id = ?
+`, tournamentID, userID).Scan(
+		&player.PlayerID, &player.UserID, &player.IGN, &player.Discord, &agreed,
+		&player.SignupOrder, &player.Seed, &player.JoinedAtUnixMs,
+	)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return TournamentPlayer{}, false, nil
+	case err != nil:
+		return TournamentPlayer{}, false, fmt.Errorf("read tournament entry: %w", err)
+	}
+	player.AgreedToUnfilteredChat = agreed == 1
+	return player, true, nil
+}
+
 // TournamentEntryFor is the entry an account is answerable for in an event:
 // their own, or the one their bot is playing.
 //
@@ -500,12 +547,25 @@ func (store *Store) TournamentEntryFor(
 	return entry, nil
 }
 
-// WithdrawTournamentEntry takes a party's entry back out of an event.
+// WithdrawTournamentEntry takes the caller's own entry back out of an event.
 //
-// The entrant's own door, where WithdrawFromTournament is the host's and the
-// bot drain's: it removes whatever this account is answerable for rather than
-// an account named from outside, so an owner can change their mind about which
-// engine they are entering without going through the host.
+// The entrant's own door, where WithdrawFromTournament is the host's and the bot
+// drain's: it removes the account that asked rather than an account named from
+// outside.
+//
+// # Their own, rather than their party's
+//
+// It used to remove whatever the *party* held — the owner's entry or their
+// engine's, whichever had entered first — because an owner picking one of their
+// engines per event needed a way to pick again. Nobody picks any more: an engine
+// is entered by its switch and the sweep (see enrolOnlineBots), so the only
+// thing a party-wide withdrawal could still do is quietly take out an engine
+// that the next sweep would put straight back. Worse, it decided *which* entry
+// by signup order, so an owner whose engine had been swept in ahead of them
+// could press Withdraw on their own entry and remove the engine instead.
+//
+// So this is the account that asked, and nothing else. An engine leaves events
+// the way it enters them, by its owner turning the switch off.
 //
 // Registration only, for the reason WithdrawFromTournament gives at length: a
 // name that leaves before the pairings exist costs nothing, and one that leaves
@@ -545,11 +605,9 @@ FROM tournaments WHERE tournament_id = ?
 		return Tournament{}, TournamentPlayer{}, ErrTournamentAlreadyStarted
 	}
 
-	party, err := tournamentPartyID(ctx, transaction, strings.TrimSpace(userID))
-	if err != nil {
-		return Tournament{}, TournamentPlayer{}, err
-	}
-	entry, found, err := tournamentEntryOfParty(ctx, transaction, tournamentID, party)
+	entry, found, err := tournamentEntryOfAccount(
+		ctx, transaction, tournamentID, strings.TrimSpace(userID),
+	)
 	if err != nil {
 		return Tournament{}, TournamentPlayer{}, err
 	}

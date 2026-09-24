@@ -352,6 +352,21 @@ export const currentTournaments = (
 export const championOf = (tournament: Tournament): string | null =>
   tournament.status === 'completed' ? tournament.standings?.[0]?.ign ?? null : null;
 
+/**
+ * The account behind an entrant, addressed the way a player page wants it.
+ *
+ * A standings row carries the `ign` somebody entered under and the `playerId`
+ * of that signup, and no account at all — the roster is the only place the two
+ * are joined. So anything that wants to link a name in the table has to come
+ * through here, and gets the empty string when the roster does not say, which
+ * is what `PlayerLink` reads as "this name goes nowhere".
+ */
+export const entrantHandle = (
+  tournament: Tournament | null | undefined,
+  playerId: number,
+): string =>
+  tournament?.players?.find((player) => player.playerId === playerId)?.userId ?? '';
+
 /** How many home-screen tournaments were left off by the cap. */
 export const hiddenHomeTournamentCount = (
   tournaments: Tournament[] | null | undefined,

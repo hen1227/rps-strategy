@@ -2,6 +2,7 @@ package persistence
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -19,7 +20,7 @@ func TestSQLitePersistsAccountsAndRetainsChosenUsername(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if account.Elo != DefaultElo || account.Username != "Ada" {
+	if account.Elo != RatingFloor || account.Username != "Ada" {
 		t.Fatalf("unexpected new account: %#v", account)
 	}
 	if _, err := store.EnsureAccount(context.Background(), "player-1", "Guest"); err != nil {
@@ -38,7 +39,7 @@ func TestSQLitePersistsAccountsAndRetainsChosenUsername(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if persisted.Username != "Ada" || persisted.Elo != DefaultElo {
+	if persisted.Username != "Ada" || persisted.Elo != RatingFloor {
 		t.Fatalf("account did not survive reopening: %#v", persisted)
 	}
 }
@@ -67,8 +68,29 @@ func TestCompletedRankedGameUpdatesEloHistoryAndHeadToHeadExactlyOnce(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !update.Recorded || update.RedEloAfter != 1216 || update.BlueEloAfter != 1184 {
-		t.Fatalf("unexpected Elo update: %#v", update)
+	if !update.Recorded {
+		t.Fatalf("the game was not recorded: %#v", update)
+	}
+	// Both start at the floor, having proved nothing. The winner rises; the
+	// loser does not pay for it, which is the property that separates this from
+	// the transfer it replaced. There is no reservoir of points on a scale
+	// everybody starts at the bottom of, so a rating cannot be taken from
+	// somebody and given to somebody else — the game said one thing about the
+	// winner and a different thing about the loser, and each is applied to its
+	// own side.
+	if update.RedEloBefore != RatingFloor || update.BlueEloBefore != RatingFloor {
+		t.Fatalf("two new accounts did not start at the floor: %#v", update)
+	}
+	if update.RedEloAfter <= update.RedEloBefore {
+		t.Fatalf("the winner did not gain: %#v", update)
+	}
+	if gained, lost := update.RedEloAfter-update.RedEloBefore,
+		update.BlueEloBefore-update.BlueEloAfter; gained == lost {
+		t.Fatalf("the winner took exactly what the loser lost, which is a transfer: %#v",
+			update)
+	}
+	if update.BlueEloAfter < RatingFloor {
+		t.Fatalf("a rating went below the floor: %#v", update)
 	}
 
 	duplicate, err := store.RecordCompletedGame(
@@ -89,17 +111,17 @@ func TestCompletedRankedGameUpdatesEloHistoryAndHeadToHeadExactlyOnce(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if redAccount.ModeElo(game.ModeInfiltration) != 1216 || redAccount.Wins != 1 ||
-		redAccount.GamesPlayed != 1 {
+	if redAccount.ModeElo(game.ModeInfiltration) != update.RedEloAfter ||
+		redAccount.Wins != 1 || redAccount.GamesPlayed != 1 {
 		t.Fatalf("unexpected Red account: %#v", redAccount)
 	}
-	if blueAccount.ModeElo(game.ModeInfiltration) != 1184 || blueAccount.Losses != 1 ||
-		blueAccount.GamesPlayed != 1 {
+	if blueAccount.ModeElo(game.ModeInfiltration) != update.BlueEloAfter ||
+		blueAccount.Losses != 1 || blueAccount.GamesPlayed != 1 {
 		t.Fatalf("unexpected Blue account: %#v", blueAccount)
 	}
 	// The shared rating is only the seed a mode starts from, so a rated result
 	// must leave it untouched.
-	if redAccount.Elo != DefaultElo || blueAccount.Elo != DefaultElo {
+	if redAccount.Elo != RatingFloor || blueAccount.Elo != RatingFloor {
 		t.Fatalf("ranked play moved the shared seed rating: %d, %d",
 			redAccount.Elo, blueAccount.Elo)
 	}
@@ -153,7 +175,7 @@ func TestDrawIsRecordedWithoutChangingEqualRatings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if update.RedEloAfter != DefaultElo || update.BlueEloAfter != DefaultElo {
+	if update.RedEloAfter != RatingFloor || update.BlueEloAfter != RatingFloor {
 		t.Fatalf("equal players should not change Elo on a draw: %#v", update)
 	}
 	record, err := store.HeadToHead(context.Background(), red.UserID, blue.UserID)
@@ -165,7 +187,17 @@ func TestDrawIsRecordedWithoutChangingEqualRatings(t *testing.T) {
 	}
 }
 
-func TestModeRatingsRateIndependentlyFromTheSharedSeed(t *testing.T) {
+// Modes are rated separately, and a mode you have never played starts from the
+// strength the rest of your play established — held at arm's length, because a
+// strength is not a rating until it has been demonstrated here.
+//
+// This used to seed the new mode from a shared Elo column and copy the number
+// straight across. On this scale that would put a figure in front of somebody
+// that no strength of theirs backs, and their first win in the mode would appear
+// to move them from 130 to 18. What carries over now is the strength; what is
+// published is that strength shrunk by the uncertainty of a mode with no games
+// in it, which reads near the floor and climbs as they play.
+func TestModeRatingsCarryStrengthAcrossModesButNotCertainty(t *testing.T) {
 	store, err := Open(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -174,26 +206,18 @@ func TestModeRatingsRateIndependentlyFromTheSharedSeed(t *testing.T) {
 
 	red := game.PlayerProfile{UserID: "seed-red", Username: "Red"}
 	blue := game.PlayerProfile{UserID: "seed-blue", Username: "Blue"}
-	for _, seed := range []struct {
-		userID string
-		elo    int
-	}{{userID: red.UserID, elo: 1300}, {userID: blue.UserID, elo: 1100}} {
-		if _, err := store.EnsureAccount(context.Background(), seed.userID, "Player"); err != nil {
-			t.Fatal(err)
-		}
-		// Stand in for an account that carried a single rating before modes
-		// rated separately.
-		if _, err := store.db.ExecContext(
-			context.Background(),
-			"UPDATE accounts SET elo = ? WHERE user_id = ?",
-			seed.elo, seed.userID,
-		); err != nil {
+	for _, userID := range []string{red.UserID, blue.UserID} {
+		if _, err := store.EnsureAccount(context.Background(), userID, "Player"); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	record := func(gameID string, modeID game.ModeID, resigning game.PlayerColor) RatingUpdate {
-		newGame, err := game.NewGame(gameID, modeID, red, blue)
+	counter := 0
+	record := func(modeID game.ModeID, resigning game.PlayerColor) RatingUpdate {
+		counter++
+		newGame, err := game.NewGame(
+			fmt.Sprintf("seed-%d", counter), modeID, red, blue,
+		)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -210,41 +234,44 @@ func TestModeRatingsRateIndependentlyFromTheSharedSeed(t *testing.T) {
 		return update
 	}
 
-	infiltration := record("seed-infiltration", game.ModeInfiltration, game.Blue)
-	if infiltration.ModeID != game.ModeInfiltration ||
-		infiltration.RedEloBefore != 1300 || infiltration.BlueEloBefore != 1100 {
-		t.Fatalf("the first game in a mode must start from the shared seed: %#v", infiltration)
+	// Red builds a real record in Infiltration.
+	var infiltration RatingUpdate
+	for range 6 {
+		infiltration = record(game.ModeInfiltration, game.Blue)
 	}
-	if infiltration.RedEloAfter != 1308 || infiltration.BlueEloAfter != 1092 {
-		t.Fatalf("unexpected Infiltration rating update: %#v", infiltration)
-	}
-
-	// Total War has not been played yet, so it still sits on the shared seed
-	// rather than inheriting the Infiltration result.
-	totalWar := record("seed-total-war", game.ModeTotalWar, game.Red)
-	if totalWar.RedEloBefore != 1300 || totalWar.BlueEloBefore != 1100 {
-		t.Fatalf("Total War inherited the Infiltration rating: %#v", totalWar)
-	}
-	if totalWar.RedEloAfter != 1276 || totalWar.BlueEloAfter != 1124 {
-		t.Fatalf("unexpected Total War rating update: %#v", totalWar)
+	if infiltration.RedEloAfter <= RatingFloor {
+		t.Fatalf("six wins did not lift the winner off the floor: %#v", infiltration)
 	}
 
+	// Total War has never been played, so it publishes far below what
+	// Infiltration does — but not from nothing, because the strength came with
+	// them.
 	redAccount, err := store.Account(context.Background(), red.UserID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if redAccount.ModeElo(game.ModeInfiltration) != 1308 ||
-		redAccount.ModeElo(game.ModeTotalWar) != 1276 {
-		t.Fatalf("modes did not keep separate ratings: %#v", redAccount.ModeRatings)
+	established := redAccount.ModeElo(game.ModeInfiltration)
+	totalWar := record(game.ModeTotalWar, game.Red)
+	if totalWar.RedEloBefore >= established {
+		t.Fatalf("an unplayed mode published as much as an established one: %d against %d",
+			totalWar.RedEloBefore, established)
 	}
-	if redAccount.ModeElo(game.ModeID("V7")) != 1300 {
-		t.Fatal("an unplayed mode must report the shared seed rating")
+
+	// And they rate independently: losing in Total War does not touch
+	// Infiltration.
+	after, err := store.Account(context.Background(), red.UserID)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if redAccount.GamesPlayed != 2 || redAccount.Wins != 1 || redAccount.Losses != 1 {
-		t.Fatalf("lifetime totals must span every mode: %#v", redAccount)
+	if after.ModeElo(game.ModeInfiltration) != established {
+		t.Fatalf("a Total War game moved the Infiltration rating: %d then %d",
+			established, after.ModeElo(game.ModeInfiltration))
 	}
-	if redAccount.ModeRatings[game.ModeInfiltration].GamesPlayed != 1 ||
-		redAccount.ModeRatings[game.ModeTotalWar].GamesPlayed != 1 {
-		t.Fatalf("unexpected per-mode records: %#v", redAccount.ModeRatings)
+	if after.GamesPlayed != 7 || after.Wins != 6 || after.Losses != 1 {
+		t.Fatalf("lifetime totals must span every mode: %#v", after)
+	}
+	if after.ModeRatings[game.ModeInfiltration].GamesPlayed != 6 ||
+		after.ModeRatings[game.ModeTotalWar].GamesPlayed != 1 {
+		t.Fatalf("unexpected per-mode records: %#v", after.ModeRatings)
 	}
 }

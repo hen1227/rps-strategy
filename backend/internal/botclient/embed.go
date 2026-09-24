@@ -23,6 +23,12 @@ var script string
 //go:embed example_engine.py
 var exampleEngine string
 
+//go:embed yardstick_random.py
+var yardstickEngine string
+
+//go:embed yardstick_greedy.py
+var greedyEngine string
+
 // The documents the website serves, so it can show exactly what the repository
 // documents. go:embed cannot reach outside this directory, so these are copies
 // of docs/bots.md, docs/rpsi.md and docs/notation.md — and `docs_test.go` fails
@@ -83,6 +89,27 @@ func Script() (string, string) {
 // ExampleEngine is a complete working bot, short enough to read in one go.
 func ExampleEngine() (string, string) {
 	return exampleEngine, digest(exampleEngine)
+}
+
+// YardstickEngine is the anchor: the engine rating 1 is defined as.
+//
+// Published rather than kept in the deployment, and the digest beside it is the
+// reason. Every rating on this server is a distance from this file, so anybody
+// who wants to check what "no better than chance" actually means — or run their
+// own copy to test against before entering the pool — can read it and confirm
+// the server is running the same one.
+func YardstickEngine() (string, string) {
+	return yardstickEngine, digest(yardstickEngine)
+}
+
+// GreedyEngine is the rung above the anchor: capture when you can.
+//
+// Published for the same reason and with the same digest beside it. It is the
+// rung most authors will actually be measured against on their first day — a
+// first submission sits somewhere near it — so being able to read what it does
+// and run a copy is the difference between a rating and a number.
+func GreedyEngine() (string, string) {
+	return greedyEngine, digest(greedyEngine)
 }
 
 // Guide is the bot-author README, Protocol the full RPSI reference, and

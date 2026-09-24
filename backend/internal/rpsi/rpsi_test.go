@@ -135,4 +135,38 @@ func TestParseHandshakeReadsIdentityAndIgnoresTheUnknown(t *testing.T) {
 	if !ParseHandshake([]string{"id name Minimal", "rpsiok"}).Supports(game.ModeTotalWar) {
 		t.Error("an engine declaring no modes should be allowed to play")
 	}
+
+	// The fixture above declares no build, which is every engine written before
+	// the field existed. It has to parse exactly as it always did.
+	if handshake.Version != "" {
+		t.Errorf("an engine that sends no build has none: %q", handshake.Version)
+	}
+}
+
+// `id version` is a new sub-key of a line that already existed, which is safe
+// only because the parser ignores what it does not know. This pins both halves:
+// the new key is read, and an engine sending it to an older server was never
+// refused for it.
+func TestParseHandshakeReadsTheEngineBuild(t *testing.T) {
+	handshake := ParseHandshake([]string{
+		"id name RPSFish",
+		"id author Henry Abrahamsen",
+		"id version 0.4.1-rc2",
+		"rpsiok",
+	})
+	if handshake.Version != "0.4.1-rc2" {
+		t.Fatalf("declared build: %#v", handshake)
+	}
+	// The build is separate from the name, so an engine that sends both keeps a
+	// name with no version buried in it.
+	if handshake.Name != "RPSFish" {
+		t.Fatalf("the name is not the version: %#v", handshake)
+	}
+
+	// Free text, like the name beside it: a build stamp can be a tag, a commit
+	// or a date, and this is not the place to have an opinion about which.
+	spaced := ParseHandshake([]string{"id version 2026-09-14 build 77", "rpsiok"})
+	if spaced.Version != "2026-09-14 build 77" {
+		t.Fatalf("a build stamp is free text: %q", spaced.Version)
+	}
 }

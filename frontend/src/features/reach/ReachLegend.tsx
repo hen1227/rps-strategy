@@ -1,7 +1,7 @@
 import { StyleSheet, Text, View } from 'react-native';
 
 import type { ReachSettings } from './settings';
-import { REACH_BANDS, board, colors, players, radius, reach } from '@/theme';
+import { board, colors, players, radius, reach, REACH_BANDS, themedSheet } from '@/theme';
 import type { SideColor } from '@/types/game';
 
 // What the colours on the board mean, in the space of two rows.
@@ -75,8 +75,7 @@ export default function ReachLegend({ settings, focusColor }: ReachLegendProps) 
       <Text style={styles.notation}>
         Squares read <Text style={styles.notationStrong}>R3</Text>,{' '}
         <Text style={styles.notationStrong}>P4</Text>,{' '}
-        <Text style={styles.notationStrong}>S5</Text> — the kind, then the moves it
-        needs. One line per kind that can get there.
+        <Text style={styles.notationStrong}>S5</Text> : piece type and moves needed, one line per type.
       </Text>
       <View style={styles.keys}>
         <Text style={styles.keysLabel}>MOVES AWAY</Text>
@@ -92,7 +91,7 @@ export default function ReachLegend({ settings, focusColor }: ReachLegendProps) 
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   root: { gap: 5 },
   contestRow: { gap: 3 },
   ramp: { flexDirection: 'row', gap: 2 },
@@ -115,4 +114,4 @@ const styles = StyleSheet.create({
   keyItem: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   keySwatch: { width: 11, height: 11, borderRadius: radius.small - 3 },
   keyLabel: { color: colors.textMuted, fontSize: 8, fontWeight: '700' },
-});
+}));

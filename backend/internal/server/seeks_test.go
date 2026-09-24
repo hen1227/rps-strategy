@@ -312,15 +312,21 @@ func TestExpiredSeeksDoNotPair(t *testing.T) {
 func TestSearchRangeWidensUntilItIsFullyOpen(t *testing.T) {
 	joinedAt := time.Date(2026, time.August, 17, 12, 0, 0, 0, time.UTC)
 	seek := &Seek{JoinedAt: joinedAt}
-	if got := seek.SearchRange(joinedAt); got != matchmakingInitialEloRange {
-		t.Fatalf("expected initial range %d, got %d", matchmakingInitialEloRange, got)
+	if got := seek.SearchRange(joinedAt); got != matchmakingInitialRatingRange {
+		t.Fatalf("expected initial range %d, got %d", matchmakingInitialRatingRange, got)
 	}
+	// A quarter of the way to fully open at the halfway point, because the
+	// widening is quadratic. Computed from the two ends rather than written down,
+	// so that restating either for a new scale cannot leave this asserting a
+	// number from the old one.
 	midpoint := joinedAt.Add(matchmakingFullyOpenAfter / 2)
-	if got := seek.SearchRange(midpoint); got != 2575 {
-		t.Fatalf("expected quadratic midpoint range 2575, got %d", got)
+	quarter := matchmakingInitialRatingRange +
+		(matchmakingMaximumRatingRange-matchmakingInitialRatingRange)/4
+	if got := seek.SearchRange(midpoint); got != quarter {
+		t.Fatalf("expected quadratic midpoint range %d, got %d", quarter, got)
 	}
 	fullyOpen := joinedAt.Add(matchmakingFullyOpenAfter)
-	if got := seek.SearchRange(fullyOpen); got != matchmakingMaximumEloRange ||
+	if got := seek.SearchRange(fullyOpen); got != matchmakingMaximumRatingRange ||
 		!seek.searchIsFullyOpen(fullyOpen) {
 		t.Fatalf("expected a fully open search, got range=%d", got)
 	}

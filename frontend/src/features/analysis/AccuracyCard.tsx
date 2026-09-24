@@ -1,7 +1,7 @@
 import { StyleSheet, Text, View } from 'react-native';
 
 import type { PlayerAccuracy } from '@/engine/gameReview';
-import { colors, players, radius } from '@/theme';
+import { colors, players, radius, themedSheet } from '@/theme';
 import { SIDE_COLORS, type PlayerColor, type SideColor } from '@/types/game';
 
 /**
@@ -47,7 +47,7 @@ export default function AccuracyCard({
               </View>
               <Text style={[styles.value, !report && styles.pending]}>
                 {report?.accuracy === null || report?.accuracy === undefined
-                  ? '—'
+                  ? '–'
                   : `${report.accuracy.toFixed(1)}%`}
               </Text>
               {report ? (
@@ -66,7 +66,7 @@ export default function AccuracyCard({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   card: {
     padding: 13,
     borderRadius: radius.large,
@@ -85,4 +85,4 @@ const styles = StyleSheet.create({
   value: { color: colors.textStrong, fontSize: 22, fontWeight: '900', marginTop: 3 },
   pending: { color: colors.textFaint },
   detail: { color: colors.textFaint, fontSize: 8, marginTop: 2 },
-});
+}));

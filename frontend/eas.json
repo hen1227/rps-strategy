@@ -1,0 +1,27 @@
+{
+  "cli": {
+    "version": ">= 20.5.1",
+    "appVersionSource": "remote"
+  },
+  "build": {
+    "simulator": {
+      "distribution": "internal",
+      "node": "24.16.0",
+      "ios": {
+        "simulator": true
+      }
+    },
+    "preview": {
+      "distribution": "internal",
+      "node": "24.16.0"
+    },
+    "production": {
+      "distribution": "store",
+      "autoIncrement": true,
+      "node": "24.16.0"
+    }
+  },
+  "submit": {
+    "production": {}
+  }
+}

@@ -515,6 +515,7 @@ func buildMetadata(tags map[string]string) Metadata {
 		RedEloAfter:   parseInt(tags["RedEloAfter"]),
 		BlueEloBefore: parseInt(tags["BlueElo"]),
 		BlueEloAfter:  parseInt(tags["BlueEloAfter"]),
+		RatingScale:   tags["RatingSystem"],
 		FinishedAt:    timeFromUnixMs(parseInt64(tags["EndTimeUnixMs"])),
 	}
 }

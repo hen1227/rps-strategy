@@ -1,0 +1,83 @@
+# What EAS uploads when it builds the app.
+#
+# EAS archives from the repository root, not from frontend/, so the paths here
+# are repo-relative. When this file exists it replaces .gitignore for the
+# archive, which means every exclusion the upload needs has to be restated
+# here — including the ones that keep secrets out.
+#
+# The one thing this file exists to *add* is
+# frontend/modules/rpsfish/ios/RPSFish.xcframework, which .gitignore excludes
+# because it is a build artifact of the engine's own repository. The EAS
+# builder cannot produce it — the engine is Rust, in a separate repository —
+# so the framework has to travel with the upload. It is included here by
+# simply having no rule; `npm run build:rpsfish:ios` refreshes it, and a stale
+# framework is a stale engine with no sign that anything is wrong.
+#
+# Two things about EAS's matcher, both found by inspecting the archive rather
+# than from the docs. A directory needs both its bare name and a `dir/**`
+# glob: a plain `dir/` with a trailing slash matches nothing and the whole
+# tree ships. And a negated directory glob wins over everything after it, so
+# the `/*` + `!/frontend/**` allow-list shape cannot work here — it re-includes
+# frontend's build output with no later rule able to take it back out. (The
+# docs' `!` example is a single file placed last, which is a narrower thing.)
+# Verify any change to this file by reading the archive it produces:
+#   eas build:inspect --platform ios --stage archive --output /tmp/archive
+
+# Not part of an app build.
+backend
+backend/**
+deploy
+deploy/**
+docs
+docs/**
+tools
+tools/**
+.github
+.github/**
+*.md
+.DS_Store
+
+# Secrets, restated from the .gitignore this file replaces. deploy/ above
+# already covers the bot tokens and deploy.env; these cover a stray anywhere.
+*.p8
+*.p12
+*.key
+*.jks
+*.pem
+*.mobileprovision
+frontend/.env.development
+frontend/.env*.local
+
+# .env.production is deliberately not excluded: it is tracked, and the
+# production bundle needs the EXPO_PUBLIC_ values in it.
+
+# Installed on the builder from package-lock.json.
+frontend/node_modules
+frontend/node_modules/**
+
+# Generated on the builder by `expo prebuild`. The local copies are stale and
+# carry absolute paths from wherever this checkout used to live, so uploading
+# them would quietly build the wrong thing instead of failing.
+frontend/ios
+frontend/ios/**
+frontend/android
+frontend/android/**
+
+# Local build output and caches.
+frontend/.expo
+frontend/.expo/**
+frontend/dist
+frontend/dist/**
+frontend/web-build
+frontend/web-build/**
+frontend/expo-env.d.ts
+frontend/.idea
+frontend/.idea/**
+frontend/.kotlin
+frontend/.kotlin/**
+frontend/*.tsbuildinfo
+frontend/.metro-health-check*
+
+# Web-only engine artifacts. A native build loads the XCFramework instead.
+frontend/public/rpsfish/*.wasm
+frontend/public/rpsfish/rpsfish-worker.js

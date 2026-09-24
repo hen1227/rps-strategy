@@ -13,6 +13,7 @@ import {
   SectionHeading,
 } from '@/ui/primitives';
 import BotIcon from './BotIcon';
+import TitleTag from '@/ui/TitleTag';
 import {
   botClientScriptUrl,
   botIconUrl,
@@ -22,14 +23,16 @@ import {
   resumeBot,
   retireBot,
   rotateBotToken,
+  setBotSwitch,
   shutdownBot,
-  updateBot,
+  type BotSwitch,
   type OwnedBot,
 } from '@/store/api/bots';
 import type { BotDrain } from '@/types/protocol';
 import { ApiError } from '@/store/api/http';
 import { useGameStore } from '@/store/gameStore';
-import { colors, radius } from '@/theme';
+import { colors, radius, themedSheet } from '@/theme';
+import PlayerLink from '@/ui/PlayerLink';
 
 /** The message an API failure should show, whatever kind of failure it was. */
 
@@ -66,8 +69,8 @@ const drainDetail = (drain: BotDrain): string => {
   const asked = drain.source ? ` (asked by ${drain.source})` : '';
   if (drain.waitingOn.length === 0) {
     return drain.exitWhenDone
-      ? `Nothing left to finish — stopping${asked}`
-      : `Nothing left to finish — idle and safe to stop${asked}`;
+      ? `Games finished. Stopping${asked}`
+      : `Games finished. Safe to stop${asked}`;
   }
   return `Waiting for: ${drain.waitingOn.join(', ')}${asked}`;
 };
@@ -138,17 +141,12 @@ export default function BotManagerPanel() {
       return created;
     });
 
-  const toggle = (bot: OwnedBot, field: 'allowPublicPlay' | 'enterTournaments') =>
+  const toggle = (bot: OwnedBot, field: BotSwitch) =>
     run(async () => {
       if (!token) return;
-      await updateBot(token, bot.botId, {
-        description: bot.description ?? '',
-        allowPublicPlay: field === 'allowPublicPlay' ? !bot.allowPublicPlay : bot.allowPublicPlay,
-        enterTournaments:
-          field === 'enterTournaments' ? !bot.enterTournaments : bot.enterTournaments,
-      });
+      await setBotSwitch(token, bot, field, !bot[field]);
       await refresh(token);
-    }, 'Updated. Note that rpsbot.conf re-applies its own settings when the bot restarts.');
+    }, "Saved. Restarting the bot restores settings from rpsbot.conf.");
 
   const rotate = (bot: OwnedBot) =>
     run(async () => {
@@ -174,8 +172,8 @@ export default function BotManagerPanel() {
       await refresh(token);
       return reply;
     }, exit
-      ? 'No new games. It will stop once it has finished what it owes.'
-      : 'No new games. It will sit idle once it has finished what it owes.');
+      ? "Finishing scheduled games, then stopping."
+      : "Finishing scheduled games, then pausing.");
 
   const putBackInPlay = (bot: OwnedBot) =>
     run(async () => {
@@ -192,17 +190,24 @@ export default function BotManagerPanel() {
     <Panel>
       {/* No link to the guide: the guide is on this page, under this panel. */}
       <SectionHeading eyebrow="BOTS" title="Your bots" />
+      {/* What the three switches mean, once, rather than a tooltip on each.
+          Ranked ladder is the one worth spelling out: it is the only source of
+          a rating and the only one that spends your machine's time on a
+          schedule, so an owner should not have to guess at either. */}
+      <Text style={styles.switchHelp}>
+        Challengeable allows casual games. Tournaments enters scheduled events. Ranked ladder enters hourly rated pairs; PLAY NOW adds a pair on demand.
+      </Text>
       {error ? <Banner message={error} onDismiss={() => setError(null)} tone="error" /> : null}
       {notice ? <Banner message={notice} onDismiss={() => setNotice(null)} /> : null}
 
       {freshToken ? (
         <View style={styles.tokenBox}>
-          <Text style={styles.tokenLabel}>YOUR BOT TOKEN — SHOWN ONCE</Text>
+          <Text style={styles.tokenLabel}>YOUR BOT TOKEN (SHOWN ONCE)</Text>
           <Text selectable style={styles.tokenValue}>
             {freshToken}
           </Text>
           <Text style={styles.tokenHelp}>
-            {'Download the client, then run it and paste this when it asks:\n\n'}
+            {"Run the client and paste this token when prompted:"}
             {'  curl -O '}
             {botClientScriptUrl}
             {'\n  pip install websockets'}
@@ -240,7 +245,19 @@ export default function BotManagerPanel() {
               />
               <View style={styles.rowCopy}>
                 <Text style={styles.rowName}>
-                  {bot.name || 'Unclaimed slot'}{' '}
+                  {/* The engine's own tag, if it has earned one. Here rather
+                      than only on the public pages because this is the screen
+                      its author is looking at when the arena finishes. */}
+                  {bot.title ? (
+                    <>
+                      <TitleTag title={bot.title} />{' '}
+                    </>
+                  ) : null}
+                  {/* An owner's own engine has a public page like anybody
+                      else's, and this is the one screen that never linked to
+                      it. A slot whose client has not connected yet has no name
+                      and no page, and renders as the words it already was. */}
+                  <PlayerLink handle={bot.name ?? ''} name={bot.name || 'Unclaimed slot'} />{' '}
                   <Badge
                     label={statusOf(bot).label}
                     tone={statusOf(bot).tone}
@@ -249,6 +266,7 @@ export default function BotManagerPanel() {
                 {bot.engineName ? (
                   <Text style={styles.rowMeta}>
                     {bot.engineName}
+                    {bot.engineVersion ? ` ${bot.engineVersion}` : ''}
                     {bot.engineModes?.length ? ` · ${bot.engineModes.join(' · ')}` : ''}
                   </Text>
                 ) : null}
@@ -268,6 +286,13 @@ export default function BotManagerPanel() {
                 checked={bot.enterTournaments}
                 label="Tournaments"
                 onToggle={() => toggle(bot, 'enterTournaments')}
+              />
+              {/* The one switch that costs something on a schedule, so it says
+                  what it costs rather than only what it is for. */}
+              <Checkbox
+                checked={bot.enterLadder}
+                label="Ranked ladder"
+                onToggle={() => toggle(bot, 'enterLadder')}
               />
               {/* Only for a bot somebody is running: there is nothing to drain
                   on a slot with no connection behind it, and the server would
@@ -315,16 +340,22 @@ export default function BotManagerPanel() {
         ) : null}
       </View>
       <Text style={styles.help}>
-        These are overridden by the bot's configuration file!
+        Restarting the bot restores settings from rpsbot.conf.
       </Text>
       <Text style={styles.help}>
-        FINISH AND STOP waits until the bot has finished all games it has already accepted, then stops it. PAUSE stops accepting any new games.
+        Both options finish scheduled games first. FINISH AND STOP exits; PAUSE stays connected.
       </Text>
     </Panel>
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
+  switchHelp: {
+    color: colors.textFaint,
+    fontSize: 11,
+    lineHeight: 16,
+    marginBottom: 10,
+  },
   help: { color: colors.textFaint, fontSize: 11, lineHeight: 16, marginTop: 8 },
   actions: {
     flexDirection: 'row',
@@ -370,4 +401,4 @@ const styles = StyleSheet.create({
   rowName: { color: colors.text, fontSize: 12, fontWeight: '800' },
   rowMeta: { color: colors.textFaint, fontSize: 10, marginTop: 2 },
   rowDrain: { color: colors.textFaint, fontSize: 10, fontStyle: 'italic', marginTop: 3 },
-});
+}));

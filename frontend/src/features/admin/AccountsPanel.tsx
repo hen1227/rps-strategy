@@ -211,7 +211,7 @@ export default function AccountsPanel({ admin }: AccountsPanelProps) {
         <EmptyState
           detail={
             matched === 0 && (filter.query ?? '') === ''
-              ? 'Nothing matches those filters. Try widening them — Clear puts them back.'
+              ? "No matches. Try fewer filters or press Clear."
               : 'Nothing matched that search.'
           }
           title="No accounts"

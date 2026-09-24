@@ -146,7 +146,7 @@ INSERT INTO accounts (
     created_at_unix_ms, updated_at_unix_ms
 ) VALUES (?, ?, ?, '', ?, ?, ?, ?)
 ON CONFLICT(user_id) DO NOTHING
-`, userID, AccountKindHuman, username, sealedHash, DefaultElo, now, now); err != nil {
+`, userID, AccountKindHuman, username, sealedHash, RatingFloor, now, now); err != nil {
 		return Account{}, fmt.Errorf("claim account: create account: %w", err)
 	}
 
@@ -263,6 +263,70 @@ WHERE user_id = ?
 		return Account{}, fmt.Errorf("link identity: commit: %w", err)
 	}
 	return store.Account(ctx, userID)
+}
+
+// LinkDiscordIdentityWithPassword links an identity to the account a username
+// and password name.
+//
+// This is the same operation as LinkDiscordIdentity, authenticated differently,
+// and it exists because of the one path the session-authenticated version
+// cannot serve: somebody whose account predates Discord, signed out, pressing
+// the Discord button. They have no session to prove which account is theirs and
+// no way to get one except the password route they are being moved off — so
+// without this the front door has no exit for them, and the naming step they
+// land on can only offer them a *second* account.
+//
+// The password is the proof, which is exactly the proof the password sign-in
+// they would otherwise use asks for. Nothing weaker is accepted and nothing is
+// created: this either lands on an account that already exists or fails.
+//
+// An account already linked to Discord has no password left — LinkDiscordIdentity
+// clears it — so AuthenticateAccount refuses it, and this route can only ever
+// reach the legacy accounts it is for.
+func (store *Store) LinkDiscordIdentityWithPassword(
+	ctx context.Context,
+	username string,
+	password string,
+	discordUserID string,
+	discordUsername string,
+) (Account, error) {
+	if strings.TrimSpace(discordUserID) == "" {
+		return Account{}, ErrInvalidDiscordIdentity
+	}
+	account, err := store.AuthenticateAccount(ctx, username, password)
+	if err != nil {
+		return Account{}, err
+	}
+	return store.LinkDiscordIdentity(ctx, account.UserID, discordUserID, discordUsername)
+}
+
+// UsernameCanLinkWithPassword reports whether a name belongs to an account that
+// a password would link a Discord identity to.
+//
+// Only for telling one kind of collision from another *after* a claim has
+// already failed, so that somebody who typed the name of their own older
+// account is told what to do about it rather than merely told no. It is not a
+// pre-flight check and must not be used as one — see SuggestAvailableUsername
+// for why the claim itself stays the thing that decides.
+//
+// The conditions are the ones LinkDiscordIdentityWithPassword will enforce
+// anyway, asked here only so the refusal can be the useful one. Offering a
+// password box for a name held by an account that has no password — one already
+// signing in with Discord — would be a dead end dressed up as a way forward.
+func (store *Store) UsernameCanLinkWithPassword(
+	ctx context.Context,
+	username string,
+) (bool, error) {
+	var found int
+	err := store.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM accounts
+WHERE username_lower = ? AND kind = ? AND disabled = 0 AND `+awaitingDiscordLinkSQL(""),
+		UsernameKey(username), AccountKindHuman,
+	).Scan(&found)
+	if err != nil {
+		return false, fmt.Errorf("check username for a password link: %w", err)
+	}
+	return found > 0, nil
 }
 
 // SuggestAvailableUsername is SuggestUsername plus the database question.

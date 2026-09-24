@@ -58,7 +58,13 @@ echo "Using RPSFish engine at $ENGINE_DIR"
 
 case "$RPSFISH_WHAT" in
   web)
-    "$ENGINE_DIR/scripts/build_web.sh"
+    # The engine stages a copy of its own as well, into a path it derives from
+    # where *it* sits — which was this app's public folder before the monorepo
+    # and is a directory outside both repositories now. The copy below is still
+    # the authoritative one, so that this script does not depend on where the
+    # engine chooses to put things; pointing the engine at the same destination
+    # only stops it leaving a stray tree behind on every build.
+    RPSFISH_WEB_DIR="$APP_DIR/public/rpsfish" "$ENGINE_DIR/scripts/build_web.sh"
     WASM="$ENGINE_DIR/target/wasm32-unknown-unknown/release/rpsfish.wasm"
     [ -f "$WASM" ] || { echo "Engine build produced no $WASM" >&2; exit 1; }
     mkdir -p "$APP_DIR/public/rpsfish"

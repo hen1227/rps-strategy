@@ -153,3 +153,27 @@ func TestPublishingANameResolvesOnlyThatLinesSuggestions(t *testing.T) {
 		t.Fatalf("the name survived removal: %#v (err %v)", names, err)
 	}
 }
+
+// Anybody may name an opening line, and the name then appears in the explorer,
+// in the book, and above the board of everybody who plays into that line. That
+// is a published label from a stranger, so it is filtered like one.
+func TestOpeningNamesAreFiltered(t *testing.T) {
+	for _, name := range []string{"The Fuck Attack", "n1gger gambit", "shitline"} {
+		if _, err := normalizeOpeningName(name); err == nil {
+			t.Errorf("%q was accepted as an opening name", name)
+		}
+	}
+	// And the names people actually want, which is the half that matters: a
+	// filter that refuses these is one nobody uses the feature past.
+	for _, name := range []string{
+		"Bassett Defence",
+		"Classical Variation",
+		"The Assassin",
+		"Scunthorpe Gambit",
+		"Dickson Attack",
+	} {
+		if _, err := normalizeOpeningName(name); err != nil {
+			t.Errorf("%q was refused: %v", name, err)
+		}
+	}
+}

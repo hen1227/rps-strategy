@@ -3,7 +3,7 @@ import { StyleSheet, Text, View } from 'react-native';
 
 import { Banner, PrimaryButton } from '@/ui/primitives';
 import { useGameStore } from '@/store/gameStore';
-import { colors } from '@/theme';
+import { colors, themedSheet } from '@/theme';
 
 // The one component that starts a Discord sign-in.
 //
@@ -31,8 +31,7 @@ export default function DiscordSignInButton({
   if (!available) {
     return (
       <Text style={styles.unavailable}>
-        This version of the app cannot sign in with Discord. Updating from the App Store will
-        fix it.
+        Update the app from the App Store to sign in with Discord.
       </Text>
     );
   }
@@ -65,9 +64,9 @@ export default function DiscordSignInButton({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   // Carries the fill through a row parent, which stretches neither this nor the
   // button inside it on its own.
   wrapper: { flexGrow: 1, flexBasis: '100%' },
   unavailable: { color: colors.textMuted, fontSize: 12, lineHeight: 18, marginTop: 8 },
-});
+}));

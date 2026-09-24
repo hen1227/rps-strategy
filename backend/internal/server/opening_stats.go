@@ -473,16 +473,7 @@ func (server *Server) isStandardStartingPosition(
 // which is the only marker that survives into the archive -- the PGN records
 // usernames, and a username can be anything.
 func openingSegmentOf(archived persistence.ArchivedGameOpening) string {
-	red := strings.HasPrefix(archived.RedPlayerID, persistence.BotAccountPrefix)
-	blue := strings.HasPrefix(archived.BluePlayerID, persistence.BotAccountPrefix)
-	switch {
-	case red && blue:
-		return persistence.OpeningSegmentBot
-	case red || blue:
-		return persistence.OpeningSegmentMixed
-	default:
-		return persistence.OpeningSegmentHuman
-	}
+	return persistence.SegmentForSeats(archived.RedPlayerID, archived.BluePlayerID)
 }
 
 // runOpeningStats keeps the statistics fresh, on its own timer.

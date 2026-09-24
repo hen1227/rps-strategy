@@ -25,19 +25,61 @@ export interface BoardShape {
 }
 
 /**
+ * Which side of the 2026-09-03 board flip a position is being judged on.
+ *
+ * `current` is today's rules and the answer for everything except an archived
+ * record. `preChange` is the board as it was written before that day, when the
+ * ranks ran the other way and the colours were the other way round: Red opened
+ * from the top and raced for i1, Blue from the bottom for a9.
+ *
+ * It exists because a record is replayed, not re-derived. An archived game
+ * carries the board it was played from, and the moves in it are legal either
+ * way — movement is eight-connected and captures depend only on the two pieces
+ * — so the *only* thing that reads differently under today's rules is which
+ * square ends the game. A pre-change Intransitive record replayed against
+ * today's corners finishes on the wrong square or, worse, on the right square
+ * several moves early, and the reader sees an error rather than a game.
+ *
+ * The backend's opening-statistics compiler answers the same question by
+ * flipping the record onto today's board (see `game/rank_flip.go`). Review
+ * cannot do that: flipping renames the colours, and a review has the players'
+ * names on the Red and Blue seats and the result token to agree with. So the
+ * record stays as written and the *goals* move instead, which is the same
+ * relabelling read from the other end.
+ */
+export type RulesEra = 'current' | 'preChange';
+
+/** Red and Blue exchanged; the other half of the rank flip. */
+const swapSide = (side: SideColor | null): SideColor | null =>
+  side === 'Red' ? 'Blue' : side === 'Blue' ? 'Red' : null;
+
+/**
  * The side that wins by standing on this tile, or null when standing there
  * wins nothing.
  *
  * At most one side per tile: no mode gives both the same goal, and the two
  * that have goals put them at opposite ends of a board at least three tiles
  * across.
+ *
+ * A `preChange` board is answered by running today's rule at the mirrored rank
+ * and swapping the side, rather than by a second table of coordinates. That is
+ * exactly the rank flip — reverse the ranks, swap the colours — and deriving it
+ * is what keeps the two eras from drifting apart: a mode whose goal moves has
+ * one place to move it. It also lands on the right answer for the modes that
+ * did not change. Infiltration's goal ranks are each other's images, so the
+ * flip returns them unaltered and V3 and V5 read identically in both eras,
+ * which is why the board flip only ever showed up in V6.
  */
 export const goalOwnerAt = (
   modeId: ModeID | undefined,
   x: number,
   y: number,
   shape: BoardShape,
+  era: RulesEra = 'current',
 ): SideColor | null => {
+  if (era === 'preChange') {
+    return swapSide(goalOwnerAt(modeId, x, shape.rows - 1 - y, shape));
+  }
   if (modeId === MODE_INFILTRATION) {
     if (y === 0) return 'Red';
     if (y === shape.rows - 1) return 'Blue';

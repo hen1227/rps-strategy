@@ -87,6 +87,28 @@ const (
 	OpeningSegmentMeaf = "meaf"
 )
 
+// SegmentForSeats names the segment a game on this site belongs to, from the
+// two account ids that played it. Only a bot account carries BotAccountPrefix,
+// so the two seats decide it between them and nothing else has to be loaded.
+//
+// It lives here rather than beside the statistics compiler because the compiler
+// is no longer the only caller: the published data set labels every game the
+// same way, and the two answering differently would mean the site and the file
+// disagree about what "bot games" are. Meaf is not reachable from here — those
+// games have no seats on this site — so this returns one of the other three.
+func SegmentForSeats(redPlayerID, bluePlayerID string) string {
+	red := strings.HasPrefix(redPlayerID, BotAccountPrefix)
+	blue := strings.HasPrefix(bluePlayerID, BotAccountPrefix)
+	switch {
+	case red && blue:
+		return OpeningSegmentBot
+	case red || blue:
+		return OpeningSegmentMixed
+	default:
+		return OpeningSegmentHuman
+	}
+}
+
 // OpeningSegments is every segment, in the order the page offers them. The
 // order is this site's own three first, most specific first, then the imports.
 var OpeningSegments = []string{

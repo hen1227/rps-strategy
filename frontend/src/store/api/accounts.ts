@@ -54,6 +54,25 @@ export const setAccountTitle = (userId: string, sessionToken: string, title: Tit
     what: 'Saving the title',
   });
 
+/**
+ * Store the look this player chose, so it follows them to their other devices.
+ *
+ * Its own route for the same reason the title has one: this saves on every tap,
+ * and coupling it to the profile form would mean a rejected username also cost
+ * the player the theme they picked beside it.
+ */
+export const setAccountAppearance = (
+  userId: string,
+  sessionToken: string,
+  appearance: string,
+) =>
+  request<Account>(`/api/accounts/${encodeURIComponent(userId)}/appearance`, {
+    method: 'PUT',
+    token: sessionToken,
+    body: { appearance },
+    what: 'Saving your appearance',
+  });
+
 /** Every title there is, in display order. Public: an unearned one is worth chasing. */
 export const getTitleCatalogue = () =>
   request<Title[]>('/api/titles', { what: 'Loading titles' });

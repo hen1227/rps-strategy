@@ -152,6 +152,11 @@ func (server *Server) deleteAccount(writer http.ResponseWriter, request *http.Re
 		return
 	}
 	server.disconnectAccount(userID, "this account has been removed")
+	// See the same call in deleteOwnAccount: an anonymized account keeps its
+	// row, but a never-played one is deleted outright and takes its block rows
+	// with it. The cache has to be told either way, since it is what every
+	// enforcement path actually reads.
+	server.forgetBlocksOf(userID)
 	writeJSON(writer, http.StatusOK, map[string]any{
 		"anonymized":       true,
 		"recordsRewritten": rewritten,

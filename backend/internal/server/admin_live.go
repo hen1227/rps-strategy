@@ -85,6 +85,7 @@ type AdminBot struct {
 	ReservedFor     string `json:"reservedFor,omitempty"`
 	AllowPublicPlay bool   `json:"allowPublicPlay"`
 	EnterTournament bool   `json:"enterTournaments"`
+	EnterLadder     bool   `json:"enterLadder"`
 	Elo             int    `json:"elo"`
 	// Restricted lists any sanctions on the engine's own account, because a bot
 	// can be barred from ranked play or from events just as a person can.
@@ -331,7 +332,7 @@ func stopOutcome(outcome string) (game.PlayerColor, bool, bool) {
 // listAdminBots is every connected engine, with the socket detail the public
 // roster does not carry.
 func (server *Server) listAdminBots(writer http.ResponseWriter, request *http.Request) {
-	benched := botsAreBenched(time.Now())
+	benched := server.botsAreBenched(time.Now())
 
 	server.mu.RLock()
 	byBot := make(map[string][]*Client, len(server.bots))
@@ -375,6 +376,7 @@ func (server *Server) listAdminBots(writer http.ResponseWriter, request *http.Re
 				entry.ClientVersion = clientVersion
 				entry.AllowPublicPlay = record.AllowPublicPlay
 				entry.EnterTournament = record.EnterTournaments
+				entry.EnterLadder = record.EnterLadder
 				entry.Elo = client.account.Elo
 				entry.IconSHA256 = record.IconSHA256
 				entry.Draining = botHasOwnDrain(client)

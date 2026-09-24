@@ -1,6 +1,6 @@
 import { StyleSheet } from 'react-native';
 
-import { colors, radius, space, type } from '@/theme';
+import { colors, radius, space, themedSheet, type } from '@/theme';
 
 // The look every admin panel shares.
 //
@@ -13,7 +13,7 @@ import { colors, radius, space, type } from '@/theme';
 // layout keeps it in its own file, so that this stays the set of things that
 // genuinely have to match rather than a dumping ground.
 
-export const adminStyles = StyleSheet.create({
+export const adminStyles = themedSheet(() => ({
   // The gold frame that says "this panel is the host's". Deliberately the same
   // colour as the tournament screen's host block, so the two read as one set of
   // tools that happen to live in two places.
@@ -74,7 +74,7 @@ export const adminStyles = StyleSheet.create({
   chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: space.snug },
 
   help: { ...type.body, color: colors.textFaint, marginTop: space.medium },
-});
+}));
 
 // The destructive button, and the states it moves through.
 //
@@ -82,7 +82,7 @@ export const adminStyles = StyleSheet.create({
 // panel's, and because `ConfirmButton` is the only thing that should be drawing
 // them: an armed-looking button that is not actually armed is worse than no
 // confirmation at all.
-export const confirmStyles = StyleSheet.create({
+export const confirmStyles = themedSheet(() => ({
   // Matched to GhostButton, so a quiet destructive action beside one reads as a
   // button rather than as a disabled one.
   button: {
@@ -110,4 +110,4 @@ export const confirmStyles = StyleSheet.create({
   text: { ...type.label, color: colors.textSubtle },
   textDanger: { color: colors.dangerSoft },
   textArmed: { color: colors.dangerText },
-});
+}));

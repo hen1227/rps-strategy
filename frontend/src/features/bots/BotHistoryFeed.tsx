@@ -5,14 +5,14 @@ import { StyleSheet, Text, View } from 'react-native';
 import BotSeriesCard from './BotSeriesCard';
 import { relativeTime } from './relativeTime';
 import { failureMessage } from '@/errors';
-import { recordResultLabel } from '@/features/game/resultLabels';
+import ResultLine from '@/features/game/ResultLine';
 import { useWideScreen } from '@/hooks/useBoardLayout';
 import { useOpenGame } from '@/hooks/useOpenGame';
 import { gameReviewURL, links } from '@/navigation/links';
 import { botMatches, listBotSeries, type BotMatch, type BotSeries } from '@/store/api/bots';
 import { listTournaments } from '@/store/api/tournaments';
 import { useGameStore } from '@/store/gameStore';
-import { colors, space, type } from '@/theme';
+import { colors, space, themedSheet, type } from '@/theme';
 import CopyLinkButton from '@/ui/CopyLinkButton';
 import ListRow from '@/ui/ListRow';
 import {
@@ -96,7 +96,7 @@ export default function BotHistoryFeed({
   botUserIds,
   children,
   collapsedRows = 6,
-  emptyDetail = 'Pit two engines against each other and their games show up here.',
+  emptyDetail = "Games from your bot series appear here.",
   eyebrow = 'MATCH HISTORY',
   modeId = null,
   refreshKey = 0,
@@ -308,7 +308,7 @@ function GameEntry({ match, when, wide }: GameEntryProps) {
       divided={false}
       meta={`${match.modeName} · ${match.moveNumber} moves · ${when}`}
       style={wide ? undefined : styles.rowStacked}
-      title={recordResultLabel(match)}
+      title={<ResultLine record={match} />}
       trailing={wide ? actions : undefined}
     />
   );
@@ -367,7 +367,7 @@ function TournamentEntry({ games, onOpen, tournament, when }: TournamentEntryPro
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   help: { ...type.body, color: colors.textFaint, marginTop: space.small },
   feed: { gap: space.small, marginTop: space.medium },
 
@@ -396,4 +396,4 @@ const styles = StyleSheet.create({
   tournamentMeta: { ...type.meta, color: colors.goldMuted },
   tournamentLeader: { ...type.body, color: colors.textSoft },
   tournamentActions: { flexDirection: 'row', marginTop: space.hair },
-});
+}));

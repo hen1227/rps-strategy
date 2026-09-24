@@ -233,3 +233,29 @@ func TestSuggestAvailableUsernameKeepsTheSuffixWhenTrimming(t *testing.T) {
 		t.Fatalf("suggested an invalid name %q: %v", suggestion, err)
 	}
 }
+
+// A name is filtered harder than a message is, because it is not something
+// somebody said once in a room that empties — it is a label carried into every
+// lobby list, every leaderboard, and the game record of everybody they play.
+func TestUsernamesAreFiltered(t *testing.T) {
+	for _, name := range []string{"n1gger", "F.a.g.g.o.t", "fuckyou", "SHITLORD"} {
+		if _, err := ValidateUsername(name); err == nil {
+			t.Errorf("%q was accepted as a username", name)
+		}
+	}
+	// And the other half, which matters as much: the filter must not swallow
+	// ordinary names on its way past.
+	for _, name := range []string{"Scunthorpe", "Bassett", "classic.player", "Dickson"} {
+		if _, err := ValidateUsername(name); err != nil {
+			t.Errorf("%q was refused: %v", name, err)
+		}
+	}
+}
+
+// A Discord display name holding something unusable must produce a suggestion
+// rather than an empty field the player cannot get past.
+func TestSuggestedUsernamesAreFiltered(t *testing.T) {
+	if suggestion := SuggestUsername("faggot"); suggestion != FallbackUsername {
+		t.Errorf("expected the placeholder, got %q", suggestion)
+	}
+}

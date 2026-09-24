@@ -2,6 +2,9 @@ import { setAudioModeAsync, useAudioPlayer } from 'expo-audio';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Platform } from 'react-native';
 
+import type { GameSound } from '@/appearance/gameSound';
+import { soundPackById } from '@/appearance/soundPacks';
+import { useAppearanceStore } from '@/appearance/store';
 import { useGameStore } from '@/store/gameStore';
 import type { ActiveGame } from '@/store/types';
 import type { Piece, PlayerColor } from '@/types/game';
@@ -12,33 +15,12 @@ import type { Piece, PlayerColor } from '@/types/game';
 // names its taker exactly. The lookup below is still keyed by the victim,
 // which is what the grid comparison can actually see.
 //
-// Both move sounds are the same clip for now. Keeping them apart here rather
-// than collapsing to one costs nothing and leaves giving the opponent their own
-// voice a one-line change, instead of rebuilding the branch that tells them
-// apart.
-const SOUND_SOURCES = {
-  end: require('../../assets/sounds/end.wav'),
-  illegal: require('../../assets/sounds/illegal.wav'),
-  moveOpponent: require('../../assets/sounds/move.wav'),
-  moveSelf: require('../../assets/sounds/move.wav'),
-  notify: require('../../assets/sounds/notify.wav'),
-  paperTakesRock: require('../../assets/sounds/paper_takes_rock.wav'),
-  rockTakesScissors: require('../../assets/sounds/rock_takes_scissors.wav'),
-  scissorsTakesPaper: require('../../assets/sounds/scissors_takes_paper.wav'),
-  start: require('../../assets/sounds/start.wav'),
-};
-
-/** Which sound a transition calls for. */
-export type GameSound =
-  | 'end'
-  | 'illegal'
-  | 'moveOpponent'
-  | 'moveSelf'
-  | 'notify'
-  | 'paperTakesRock'
-  | 'rockTakesScissors'
-  | 'scissorsTakesPaper'
-  | 'start';
+// The clips themselves live in `@/appearance/soundPacks`, one set per pack, and
+// which pack is playing is read from the appearance store below. Both move
+// sounds are the same clip in the pack that ships; keeping them apart as
+// separate names costs nothing and leaves giving the opponent their own voice a
+// one-line change, instead of rebuilding the branch that tells them apart.
+export type { GameSound } from '@/appearance/gameSound';
 
 const CAPTURE_SOUND_BY_PIECE: Partial<Record<Piece, GameSound>> = {
   Paper: 'scissorsTakesPaper',
@@ -167,8 +149,16 @@ const GESTURE_EVENTS = ['click', 'touchend', 'keydown'] as const;
  * afterwards. Starting each of them muted during that first gesture and
  * rewinding spends the permission without making a sound, and leaves every clip
  * free to play when the game asks for it.
+ *
+ * Changing the sound pack builds nine new elements, which spends the permission
+ * all over again — so a pack change primes *immediately* rather than waiting for
+ * the next gesture. It can: choosing a pack is itself a tap, so the browser is
+ * still inside a gesture when this runs. Waiting would cost the player the first
+ * sound after every switch, which is the one they changed the pack to hear.
  */
-const usePrimedForBrowser = (players: Record<GameSound, AudioPlayer>) => {
+const usePrimedForBrowser = (players: Record<GameSound, AudioPlayer>, packId: string) => {
+  const primedPack = useRef<string | null>(null);
+
   useEffect(() => {
     if (!IS_WEB || typeof window === 'undefined') return undefined;
 
@@ -195,13 +185,22 @@ const usePrimedForBrowser = (players: Record<GameSound, AudioPlayer>) => {
       }
     };
 
+    // A pack the player just chose is already inside a gesture, so spend the
+    // grant now. Only the very first pack of a visit has to wait to be asked.
+    const swapped = primedPack.current !== null && primedPack.current !== packId;
+    primedPack.current = packId;
+    if (swapped) {
+      prime();
+      return undefined;
+    }
+
     // Listening as the event travels down, so that a component stopping it on
     // the way cannot cost the page its one chance to prime.
     for (const type of GESTURE_EVENTS) window.addEventListener(type, prime, true);
     return () => {
       for (const type of GESTURE_EVENTS) window.removeEventListener(type, prime, true);
     };
-  }, [players]);
+  }, [packId, players]);
 };
 
 /**
@@ -259,15 +258,22 @@ const useGameSounds = () => {
   const rejectedMoveCount = useGameStore((state) => state.rejectedMoveCount);
   const previousGameState = useRef<ActiveGame | null>(null);
 
-  const endPlayer = useAudioPlayer(SOUND_SOURCES.end);
-  const illegalPlayer = useAudioPlayer(SOUND_SOURCES.illegal);
-  const moveOpponentPlayer = useAudioPlayer(SOUND_SOURCES.moveOpponent);
-  const moveSelfPlayer = useAudioPlayer(SOUND_SOURCES.moveSelf);
-  const notifyPlayer = useAudioPlayer(SOUND_SOURCES.notify);
-  const paperTakesRockPlayer = useAudioPlayer(SOUND_SOURCES.paperTakesRock);
-  const rockTakesScissorsPlayer = useAudioPlayer(SOUND_SOURCES.rockTakesScissors);
-  const scissorsTakesPaperPlayer = useAudioPlayer(SOUND_SOURCES.scissorsTakesPaper);
-  const startPlayer = useAudioPlayer(SOUND_SOURCES.start);
+  // The pack is what the nine players below are built from, so changing it
+  // rebuilds all nine: `useAudioPlayer` memoises on the source and releases the
+  // player it replaces. That is also why `Silent` needs no branch anywhere —
+  // `null` is a legal source, and a player with nothing to play makes no sound.
+  const packId = useAppearanceStore((state) => state.appearance.sound);
+  const sources = soundPackById(packId).sources;
+
+  const endPlayer = useAudioPlayer(sources.end);
+  const illegalPlayer = useAudioPlayer(sources.illegal);
+  const moveOpponentPlayer = useAudioPlayer(sources.moveOpponent);
+  const moveSelfPlayer = useAudioPlayer(sources.moveSelf);
+  const notifyPlayer = useAudioPlayer(sources.notify);
+  const paperTakesRockPlayer = useAudioPlayer(sources.paperTakesRock);
+  const rockTakesScissorsPlayer = useAudioPlayer(sources.rockTakesScissors);
+  const scissorsTakesPaperPlayer = useAudioPlayer(sources.scissorsTakesPaper);
+  const startPlayer = useAudioPlayer(sources.start);
 
   const players = useMemo<Record<GameSound, AudioPlayer>>(
     () => ({
@@ -295,7 +301,7 @@ const useGameSounds = () => {
   );
 
   useMixedWithBackgroundAudio();
-  usePrimedForBrowser(players);
+  usePrimedForBrowser(players, packId);
 
   useEffect(() => {
     const sound = getGameSoundForTransition(

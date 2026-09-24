@@ -3,7 +3,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { adminStyles } from './adminStyles';
 import type { AdminRestriction } from '@/store/api/admin';
-import { colors, radius, space, type } from '@/theme';
+import { colors, radius, space, themedSheet, type } from '@/theme';
 import type { RestrictionKind } from '@/types/protocol';
 import { Badge, GhostButton, LabeledInput, OptionChips } from '@/ui/primitives';
 
@@ -186,7 +186,7 @@ export default function ModerationControls({
           </Text>
           <Text style={styles.formDetail}>{KIND_DETAIL[composing]}</Text>
           <LabeledInput
-            hint="Shown to them when they run into it, so write it for them to read."
+            hint="Shown to the restricted player."
             label="REASON"
             maxLength={200}
             onChangeText={setReason}
@@ -216,7 +216,7 @@ export default function ModerationControls({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   history: { ...type.meta, color: colors.textFaint, paddingBottom: space.snug },
 
   offer: {
@@ -252,4 +252,4 @@ const styles = StyleSheet.create({
     gap: space.small,
     marginTop: space.tight,
   },
-});
+}));

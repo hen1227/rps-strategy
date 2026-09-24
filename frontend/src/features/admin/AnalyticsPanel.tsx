@@ -6,7 +6,7 @@ import { failureMessage } from '@/errors';
 import { relativeTime } from '@/features/bots/relativeTime';
 import type { AdminToken } from '@/hooks/useAdminToken';
 import { readAnalytics, type Analytics, type DailyActivity } from '@/store/api/admin';
-import { colors, radius, space, type } from '@/theme';
+import { colors, radius, space, themedSheet, type } from '@/theme';
 import { Badge, Banner, GhostButton, Panel, SectionHeading } from '@/ui/primitives';
 
 // The overview: is anybody here, are they playing, and is anything broken.
@@ -227,7 +227,7 @@ export default function AnalyticsPanel({ admin }: AnalyticsPanelProps) {
             detail="median, last 30 days"
             label="LENGTH"
             value={
-              stored ? `${Math.round((stored.games.medianSeconds / 60) * 10) / 10}m` : '—'
+              stored ? `${Math.round((stored.games.medianSeconds / 60) * 10) / 10}m` : '–'
             }
           />
         </View>
@@ -311,16 +311,14 @@ export default function AnalyticsPanel({ admin }: AnalyticsPanelProps) {
           />
         </View>
         <Text style={adminStyles.help}>
-          Sanctions in force, not on record: one that has expired is not counted, which is
-          what keeps this number able to go down. Lapsed ones are still listed against the
-          account that had them, under Players.
+          Active restrictions only. Expired restrictions remain on each player’s account.
         </Text>
       </Panel>
     </>
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   figureRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -358,4 +356,4 @@ const styles = StyleSheet.create({
   chartAxisLabel: { ...type.meta, color: colors.textFaint, fontSize: 9 },
 
   modeBlock: { marginTop: space.medium },
-});
+}));

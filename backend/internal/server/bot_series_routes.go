@@ -208,12 +208,19 @@ func writeSeriesError(writer http.ResponseWriter, err error) {
 		writeAPIError(writer, http.StatusBadRequest, err.Error())
 	case errors.Is(err, errSeriesBotPrivate), errors.Is(err, errSeriesNotYours):
 		writeAPIError(writer, http.StatusForbidden, err.Error())
+	case errors.Is(err, errLadderMatchNotEntered):
+		// 409 rather than 403: the switch is the owner's own and one press away
+		// on the page they are already looking at, so this is a state to fix
+		// rather than a permission they do not have.
+		writeAPIError(writer, http.StatusConflict, err.Error())
 	case errors.Is(err, errSeriesBotOffline),
 		errors.Is(err, errSeriesBotBusy),
 		errors.Is(err, errSeriesBotDraining),
 		errors.Is(err, errSeriesBotReserved),
 		errors.Is(err, errSeriesAlreadyYours),
-		errors.Is(err, errSeriesServerBusy):
+		errors.Is(err, errSeriesServerBusy),
+		errors.Is(err, errLadderMatchNoOpponent),
+		errors.As(err, &ladderMatchBusy{}):
 		writeAPIError(writer, http.StatusConflict, err.Error())
 	case errors.Is(err, errSeriesServerUpdating):
 		// 503 rather than the 409 its neighbours get: this one is about the

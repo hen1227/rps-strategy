@@ -76,3 +76,76 @@ export const clearServerNotice = (adminToken: string) =>
     token: adminToken,
     what: 'Clearing the announcement',
   });
+
+/* ----------------------------------------------------- the engine bench -- */
+
+/**
+ * One window in which no engine takes a game, as the host's screen draws it.
+ *
+ * Instants rather than a date and a time, because the server has no idea what
+ * timezone anybody is in and must not guess: it stores two exact moments, and
+ * every client formats them in its own zone. `untilLabel` is the one part that
+ * does know about zones — it is the words a player is shown ("4 PM Eastern"),
+ * written by whoever scheduled the window in the timezone the event was
+ * announced in.
+ */
+export interface BenchWindow {
+  id: string;
+  reason: string;
+  untilLabel: string;
+  fromUnixMs: number;
+  untilUnixMs: number;
+  createdAtUnixMs: number;
+  /** The account that scheduled it, and absent for the shared host token. */
+  createdBy?: string;
+  /** Whether this window covers the moment the list was read. */
+  active: boolean;
+  /** Whether it is over. Not simply `!active` — a coming window is neither. */
+  past: boolean;
+}
+
+/** Every scheduled bench, past ones included, earliest first. */
+export const listBenchWindows = (adminToken: string) =>
+  request<BenchWindow[]>('/api/admin/bot-bench', {
+    token: adminToken,
+    what: 'Reading the bench schedule',
+  });
+
+export interface ScheduleBenchOptions {
+  /** Shown to players: "the engines are offline until X for …". */
+  reason: string;
+  /** When they are back, in the timezone the event was announced in. */
+  untilLabel: string;
+  fromUnixMs: number;
+  untilUnixMs: number;
+}
+
+/**
+ * Stand every engine down for a window.
+ *
+ * Takes effect the moment it is accepted — a window that has already started is
+ * how a host benches the ladder right now — and the lobby is told without
+ * anybody reloading. The server refuses a window that has already finished, and
+ * one that ends before it starts.
+ */
+export const scheduleBenchWindow = (adminToken: string, options: ScheduleBenchOptions) =>
+  request<BenchWindow>('/api/admin/bot-bench', {
+    method: 'POST',
+    token: adminToken,
+    body: options,
+    what: 'Scheduling the bench',
+  });
+
+/**
+ * Call off a scheduled bench, or end one that is running.
+ *
+ * Cancelling is permanent, including for the windows the server ships with: a
+ * deploy will not put it back. That is the point — a bench that reappeared
+ * after a restart would be off on an afternoon nobody expected.
+ */
+export const cancelBenchWindow = (adminToken: string, windowId: string) =>
+  request<{ cancelled: boolean }>(`/api/admin/bot-bench/${encodeURIComponent(windowId)}`, {
+    method: 'DELETE',
+    token: adminToken,
+    what: 'Cancelling the bench',
+  });

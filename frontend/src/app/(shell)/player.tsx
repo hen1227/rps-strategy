@@ -2,6 +2,7 @@ import ProfileScreen from '@/features/profile/ProfileScreen';
 import { playerHandle } from '@/navigation/links';
 import PageTitle from '@/navigation/PageTitle';
 import { useSettledSearchParams } from '@/navigation/useSettledSearchParams';
+import { useAppearanceGeneration } from '@/appearance/store';
 
 // One player's page, addressed as `/player?user=yuki` — or `?bot=RPSFish`,
 // which is the same address by another name. `playerHandle` owns that, beside
@@ -13,6 +14,14 @@ import { useSettledSearchParams } from '@/navigation/useSettledSearchParams';
 // exist. `useSettledSearchParams` is what handles the consequence — the first
 // client render of a pre-rendered page has no query string yet.
 export default function Page() {
+  // Re-render this page when the look changes.
+  //
+  // A route file is the seam because every one of them is behind its own
+  // `StaticContainer` — expo-router renders each route through a `React.memo`
+  // whose comparator skips `children`, so a re-render above never reaches in.
+  // Subscribing here does, and because the page's element is created inline
+  // below rather than handed in as a prop, the whole subtree follows.
+  useAppearanceGeneration();
   const { params, settled } = useSettledSearchParams<{
     user?: string;
     bot?: string;

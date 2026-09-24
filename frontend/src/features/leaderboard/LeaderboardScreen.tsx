@@ -4,11 +4,12 @@ import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import LadderPodium, { PODIUM_SIZE } from './LadderPodium';
 import LadderRows from './LadderRows';
 import { failureMessage } from '@/errors';
+import { useLadderPool } from '@/features/live/useLadderRound';
 import BotHistoryFeed from '@/features/bots/BotHistoryFeed';
 import { useWideScreen } from '@/hooks/useBoardLayout';
 import { leaderboard, type LeaderboardKind } from '@/store/api/leaderboard';
 import { useGameStore } from '@/store/gameStore';
-import { colors, contentWidth, space, type } from '@/theme';
+import { colors, contentWidth, space, themedSheet, type } from '@/theme';
 import ScreenShell from '@/ui/ScreenShell';
 import TabBar from '@/ui/TabBar';
 import { Banner, EmptyState, GhostButton, Panel, SectionHeading } from '@/ui/primitives';
@@ -28,16 +29,27 @@ import type { LeaderboardEntry } from '@/types/protocol';
 // be linked to; see `links.leaderboard`.
 //
 // **Bots and people are not a tab.** They stack, both boards visible at once.
-// The two ratings are not measuring the same competition — a bot's rating moves
-// in ranked bot-versus-bot series, bot-versus-human is unranked in both
-// directions, and they are not even the same arithmetic: a person's Elo is a
-// per-game transfer, a bot's is a fit over every pair of bots' head-to-head
-// record, because an engine's author picks its opponents and a transfer system
-// pays out for beating a fresh account. Ranking them together would read as a
-// claim nobody made, but behind a tab that separation reads as a question —
-// pick a population — when it is really two answers. Bots go first: the engines
-// play each other constantly, and the games behind their ranking are listed
-// underneath.
+//
+// The two numbers are on one scale *when the reference engines are standing* — a
+// server-run engine that plays at random, which both a person and a bot can be
+// placed against. With none designated the bot board measures from its own
+// weakest engine instead, so the two floors mean different things and the boards
+// are not comparable; the explainer under the bot board says which case is in
+// force rather than leaving a reader to assume the good one.
+//
+// What is different either way is the competition behind them: a bot's rating
+// comes from hourly rounds the server arranges against other bots, a person's
+// from playing people, and the two populations only meet on the yardsticks.
+// Ranking them in one list would blur that; behind a tab it would read as a
+// question — pick a population — when it is really two answers. Bots go first:
+// the engines play each other constantly, and the games behind their ranking are
+// listed underneath.
+//
+// The arithmetic is still different too, and for the same reason it always was.
+// A person gets a per-game Bayesian update because they want the number to move
+// when the game ends; an engine gets a fit over every pair's head-to-head record
+// because an engine's author picks what it plays. Both publish on the same
+// scale, which is the part that changed.
 
 /** Rows fetched per board. The server's own ceiling is 200. */
 const BOARD_LIMIT = 50;
@@ -54,12 +66,12 @@ const SECTIONS: { kind: LeaderboardKind; title: string; help: string }[] = [
   {
     kind: 'bot',
     title: 'Best bots',
-    help: 'Engines, ranked by their games against each other. Every row is a page.',
+    help: "Each owner’s best engine. Select one to view its record.",
   },
   {
     kind: 'human',
     title: 'Best players',
-    help: 'People, ranked by ranked games in this mode.',
+    help: "Player rankings for this mode.",
   },
 ];
 
@@ -91,6 +103,11 @@ export default function LeaderboardScreen({
   const linked = ladderModes.find((entry) => entry.id === mode)?.id;
   const activeMode = linked ?? ladderModes[0]?.id;
 
+  // Whether the bot board is measured from chance or from its own weakest
+  // engine. Absent while the schedule is loading, and absent is treated as the
+  // anchored case: adding the caveat for a beat and then removing it would be
+  // worse than a page that never mentions it.
+  const relativeBotScale = useLadderPool()?.anchorBotId === '';
   const [boards, setBoards] = useState<Record<LeaderboardKind, LeaderboardEntry[]>>({
     bot: [],
     human: [],
@@ -153,14 +170,6 @@ export default function LeaderboardScreen({
 
       <Panel>
         <SectionHeading eyebrow="THE LADDER" title="Who is winning" />
-        <Text style={styles.help}>
-          Every rating in this game belongs to one mode. Pick the one you play.
-        </Text>
-        {/*
-          One tab per playable mode. `fill` because there are three of them and
-          a wrapping row of three is a segmented control; a server that publishes
-          a dozen modes would wrap, which is why the bar handles that itself.
-        */}
         {activeMode ? (
           <View style={styles.tabs}>
             <TabBar
@@ -258,8 +267,8 @@ export default function LeaderboardScreen({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   help: { ...type.body, color: colors.textMuted, marginTop: space.small },
   tabs: { marginTop: space.medium },
   loading: { paddingVertical: space.xlarge, alignItems: 'center' },
-});
+}));

@@ -1,7 +1,7 @@
 import { StyleSheet, Text, View } from 'react-native';
 
 import { useGameStore } from '@/store/gameStore';
-import { colors, space, type } from '@/theme';
+import { colors, space, themedSheet, type } from '@/theme';
 import { Badge, Panel, PrimaryButton, SectionHeading } from '@/ui/primitives';
 import type { ModeDefinition } from '@/types/game';
 
@@ -32,7 +32,7 @@ export default function LocalPlayPanel({ disabled, modes }: LocalPlayPanelProps)
     <Panel>
       <SectionHeading
         eyebrow="ONE DEVICE"
-        title="Play offline IRL"
+        title="Pass and play"
         trailing={<Badge label="OFFLINE" />}
       />
       <Text style={styles.help}>
@@ -55,8 +55,8 @@ export default function LocalPlayPanel({ disabled, modes }: LocalPlayPanelProps)
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   help: { ...type.body, color: colors.textMuted, marginTop: space.small },
   buttonRow: { flexDirection: 'row', flexWrap: 'wrap', gap: space.small, marginTop: space.medium },
   buttonCell: { flexBasis: 180, flexGrow: 1 },
-});
+}));

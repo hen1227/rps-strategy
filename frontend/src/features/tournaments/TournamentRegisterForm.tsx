@@ -1,21 +1,21 @@
 import { failureMessage } from '@/errors';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 
 import DiscordSignInButton from '@/features/account/DiscordSignInButton';
 import { isReservedIn, useIdentityPolicy } from '@/hooks/useIdentityPolicy';
 import { useMyBots } from '@/hooks/useMyBots';
 import { links } from '@/navigation/links';
 import { isSignedIn } from '@/store/accountSession';
-import type { OwnedBot } from '@/store/api/bots';
-import { registerBotForTournament, signupForTournament } from '@/store/api/tournaments';
+import { setBotSwitch, type OwnedBot } from '@/store/api/bots';
+import { signupForTournament } from '@/store/api/tournaments';
 import { useGameStore } from '@/store/gameStore';
-import { colors, radius, space, type } from '@/theme';
+import { colors, radius, space, themedSheet, type } from '@/theme';
 import type { Tournament } from '@/types/protocol';
 import { Badge, Banner, Checkbox, LabeledInput, PrimaryButton } from '@/ui/primitives';
 
-// The registration panel, shared by the home screen and the tournament board.
+// The entry panel, shared by the home screen and the tournament board.
 // It owns its own request state so either surface can drop it in unchanged.
 //
 // **It asks for nothing that the account already answers.** The bracket name and
@@ -24,17 +24,22 @@ import { Badge, Banner, Checkbox, LabeledInput, PrimaryButton } from '@/ui/primi
 // field a host contacts people on was whatever somebody had typed that day. Both
 // now come from the account and are shown rather than edited.
 //
-// # Who is entering
+// # People register. Engines have a switch.
 //
-// The one question this form does ask. An account may enter itself or exactly
-// one of its engines, never both and never two engines — the server enforces
-// that in tournamentPartyID, and the picker here is the shape of the same rule.
+// Which is the one real choice on this panel, and it is not a choice made here:
+// an engine is entered by the server sweeping up everything that is online with
+// `enterTournaments` on, so the only thing an owner decides is that switch. It
+// is drawn here, on the event, because that is where somebody stands when the
+// question occurs to them — and it is the same switch as the one on the bots
+// page, not a copy of it scoped to this event.
 //
-// It replaced a host button that swept every online bot into the field, which
-// is why the picker offers ineligible engines rather than hiding them: an
-// author whose bot cannot enter needs to be told which of the four reasons it
-// is, because each one has a different fix and none of them is visible from a
-// list that simply omits it.
+// It used to be a picker: your name or one of your bots, one place per account,
+// and a REGISTER button under it. That was answering a question the server had
+// already answered differently. The weekend arena — which is the only event most
+// engines ever enter — swept in every online engine whatever the picker said, so
+// an author who had carefully registered one of their three watched all three
+// play, and an author who had registered none watched theirs play anyway. The
+// switch is what was deciding all along, so the switch is what is shown.
 //
 // # The doors
 //
@@ -48,8 +53,26 @@ import { Badge, Banner, Checkbox, LabeledInput, PrimaryButton } from '@/ui/primi
 // The third is asked of the account, not of the entrant, and that is the whole
 // of how it applies to engines: a program has no Discord account and never
 // will, so what is checked is the owner — the person a host has to reach when
-// the engine stops turning up. Switching the picker to a bot does not get past
-// it, so it is the one door drawn without the picker above it.
+// the engine stops turning up. An engine whose author is unverified is passed
+// over by the sweep with its switch on and everything else in order, which is
+// why this door is drawn for an engines-only event too.
+
+/**
+ * Whether this panel has anything to draw for an account.
+ *
+ * Exported because the screens put a heading above it, and a heading over
+ * nothing is worse than no section at all. The panel has content whenever there
+ * are engine switches to show, and otherwise whenever the account is not itself
+ * in the field yet — which covers the doors as well as the form, since somebody
+ * who cannot enter still needs to be told why.
+ */
+export const hasEntryPanel = (
+  tournament: Tournament,
+  accountId: string,
+  bots: OwnedBot[],
+): boolean =>
+  (tournament.field !== 'humans' && bots.some((bot) => !bot.retired)) ||
+  !tournament.players?.some((player) => player.userId === accountId);
 
 export interface TournamentRegisterFormProps {
   /** Tightened spacing, for the home screen's card. */
@@ -59,29 +82,24 @@ export interface TournamentRegisterFormProps {
   tournament: Tournament;
 }
 
-/** `'self'`, or the id of one of the caller's bots. */
-type Entrant = string;
-
-const SELF: Entrant = 'self';
-
 /**
- * Why an engine cannot be entered, or empty when it can.
+ * What this event will do with an engine, beyond what its switch says.
  *
- * The same four questions the server asks in registerBotForTournament, asked
- * here so the answer arrives before the press rather than after it. The server
- * is still the authority — this is a copy for the sake of the sentence under
- * the name, and a stale copy costs a refusal instead of a wrong entry.
+ * Three states the switch cannot fix, so they are worth saying next to it: an
+ * owner who turns the switch on for a slot that has never connected would
+ * otherwise be waiting for an event that is never going to call it.
+ *
+ * The server asks the same questions in enrolOnlineBots. This is a copy for the
+ * sake of the sentence under the name, and a stale copy costs a wrong sentence
+ * rather than a wrong entry — nothing here is what enters anybody.
  */
-const refusalFor = (bot: OwnedBot, tournament: Tournament): string => {
+const blockerFor = (bot: OwnedBot, tournament: Tournament): string => {
   if (!bot.claimed || !bot.userId || !bot.name) {
     return 'Has never connected, so it has no name to enter under.';
   }
   if (bot.disabled) return 'Disabled by an administrator.';
-  if (!bot.enterTournaments) {
-    return 'Set not to enter tournaments — change that on your bots page.';
-  }
   if (bot.engineModes?.length && !bot.engineModes.includes(tournament.modeId)) {
-    return `Does not play ${tournament.modeName}.`;
+    return `Does not play ${tournament.modeName}, so this event will pass it over.`;
   }
   return '';
 };
@@ -100,7 +118,6 @@ export default function TournamentRegisterForm({
   const applyTournamentUpdate = useGameStore((state) => state.applyTournamentUpdate);
   const mine = useMyBots();
 
-  const [chosen, setChosen] = useState<Entrant | null>(null);
   const [agreed, setAgreed] = useState(false);
   const [reservationToken, setReservationToken] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -111,20 +128,17 @@ export default function TournamentRegisterForm({
   const discord = account?.discord?.trim() ?? '';
   const discordVerified = Boolean(account?.discordVerified);
 
-  // The host's field rule, which decides what the picker may offer at all. An
-  // engines-only event is the whole reason any of this exists.
+  // The host's field rule, which decides what is drawn at all. An engines-only
+  // event is the whole reason the switches are here.
   const admitsPeople = tournament.field !== 'bots';
   const admitsEngines = tournament.field !== 'humans';
   const bots = admitsEngines ? mine.bots.filter((bot) => !bot.retired) : [];
-  const firstEligible = bots.find((bot) => !refusalFor(bot, tournament));
-
-  // Derived rather than held in an effect, so the default follows the list in
-  // as it loads instead of flashing the wrong row.
-  const entrant: Entrant | null =
-    chosen ?? (admitsPeople ? SELF : (firstEligible?.botId ?? null));
-  const enteringSelf = entrant === SELF;
-  const chosenBot = bots.find((bot) => bot.botId === entrant) ?? null;
-  const chosenRefusal = chosenBot ? refusalFor(chosenBot, tournament) : '';
+  // Already in, under your own name. The screens draw the entry itself — seed,
+  // handle, the way out — so all this panel owes an entrant is the switches for
+  // engines that are not in yet.
+  const entered = Boolean(
+    accountId && tournament.players?.some((player) => player.userId === accountId),
+  );
 
   // The token is still asked for, and it is the one thing here that is typed.
   // It is not a name or a handle: it is the proof that somebody entering under
@@ -132,33 +146,21 @@ export default function TournamentRegisterForm({
   // account only holds a reserved name by having produced this once already —
   // but the server enforces it on the signup regardless of where the name came
   // from, so a form that could not supply it would lock the owner out of their
-  // own events. Engines are past it: a bot's name was checked when it claimed
-  // its account, not here.
-  const needsToken =
-    enteringSelf && (isReservedIn(policy, ign) || isReservedIn(policy, discord));
-  const canSubmit =
-    agreed &&
-    Boolean(entrant) &&
-    !chosenRefusal &&
-    (!needsToken || Boolean(reservationToken.trim()));
+  // own events.
+  const needsToken = isReservedIn(policy, ign) || isReservedIn(policy, discord);
+  const canSubmit = agreed && (!needsToken || Boolean(reservationToken.trim()));
 
   const submit = async () => {
     setSubmitting(true);
     setError(null);
     try {
-      const registered = enteringSelf
-        ? await signupForTournament(tournament.tournamentId, {
-            userId: accountId,
-            ign,
-            discord,
-            agreedToUnfilteredChat: agreed,
-            reservationToken: reservationToken.trim(),
-          })
-        : await registerBotForTournament(
-            sessionToken ?? '',
-            tournament.tournamentId,
-            entrant ?? '',
-          );
+      const registered = await signupForTournament(tournament.tournamentId, {
+        userId: accountId,
+        ign,
+        discord,
+        agreedToUnfilteredChat: agreed,
+        reservationToken: reservationToken.trim(),
+      });
       applyTournamentUpdate(registered);
       setReservationToken('');
       onRegistered?.(registered);
@@ -169,7 +171,7 @@ export default function TournamentRegisterForm({
     }
   };
 
-  /** The same door, before there is a choice to show above it. */
+  /** The same door, before there is anything to show above it. */
   const bareGate = (detail: string, label: string, href = links.account()) => (
     <View style={styles.form}>
       <Text style={styles.help}>{detail}</Text>
@@ -179,43 +181,24 @@ export default function TournamentRegisterForm({
     </View>
   );
 
-  const picker =
+  const engines =
     admitsEngines && bots.length > 0 ? (
-      <EntrantPicker
+      <EngineSwitches
         bots={bots}
-        entrant={entrant}
-        ign={ign}
-        onChange={setChosen}
-        showSelf={admitsPeople}
+        // Only when there is a second group below to tell it apart from. On an
+        // engines-only event the screen's own heading already says "your
+        // engines", and a second one under it labels nothing.
+        labelled={admitsPeople}
+        onChanged={mine.reload}
         tournament={tournament}
       />
     ) : null;
-
-  /**
-   * A door: what is missing, and the button that goes and fixes it.
-   *
-   * The picker stays above it whenever there is one. Doors 3 and 4 are about
-   * the person, and an owner who is only there to enter an engine must be able
-   * to walk past them — a Discord handle they have not got is not a reason to
-   * strand them on a page with one button that is not the one they wanted.
-   */
-  const gate = (detail: string, label: string, href = links.account()) => (
-    <View style={styles.form}>
-      {picker}
-      <Text style={styles.help}>{detail}</Text>
-      <View style={styles.submit}>
-        <PrimaryButton label={label} onPress={() => router.push(href)} />
-      </View>
-    </View>
-  );
 
   // 1. There is no name to enter under, and nothing to enter, until there is an
   //    account.
   if (!signedIn || !ign) {
     return bareGate(
-      'You need an account to enter. Your account page is where you pick the name you ' +
-        'appear under in the bracket and the Discord handle the host reaches you on — both ' +
-        'are required, and both come from there rather than from this form.',
+      'Set up your account to enter. Your username and Discord handle are required.',
       'GO TO YOUR ACCOUNT',
     );
   }
@@ -226,8 +209,7 @@ export default function TournamentRegisterForm({
     return bareGate(
       mine.loading
         ? 'Checking which of your engines can enter…'
-        : 'This event is for engines, and your account has none. Register a bot, run the ' +
-            'client once so it claims its name, and it can enter.',
+        : 'Register and connect a bot to enter this engine event.',
       'YOUR BOTS',
       links.myBots(),
     );
@@ -236,17 +218,15 @@ export default function TournamentRegisterForm({
   // 3. Every entrant is verified, engines included — and for an engine the
   //    question is asked of *you*, because a program has no Discord account and
   //    the host chasing one that has not turned up needs to reach a person. So
-  //    no picker here: switching to a bot does not get past this, and offering
-  //    the choice would imply it might. The button is the whole fix, and it
-  //    fills the handle in as a side effect.
+  //    no switches here either: turning one on does not get past this, and
+  //    offering it would imply it might.
   if (!discordVerified) {
     return (
       <View style={styles.form}>
         <Text style={styles.help}>
-          Tournaments are open to verified accounts only. Link yours and you can register
-          straight away — your username, rating and games all stay exactly as they are.
+          Link Discord to enter tournaments. Your username, rating, and games stay with you.
           {bots.length > 0
-            ? ' This covers your bots too: an engine enters on its owner’s verification.'
+            ? ' Your bots also need your account to be verified.'
             : ''}
         </Text>
         <View style={styles.submit}>
@@ -256,43 +236,43 @@ export default function TournamentRegisterForm({
     );
   }
 
+  // An engines-only event is the switches and nothing else. There is no form
+  // under them, because there is nothing for a person to submit: drawing a
+  // REGISTER button that entered nobody is what this panel is here to stop.
+  //
+  // An entrant who is already in gets the same treatment on any event, for the
+  // same reason — the form under the switches would be a second place to do a
+  // thing they have done.
+  if (!admitsPeople || entered) {
+    return <View style={styles.form}>{engines}</View>;
+  }
+
   return (
     <View style={styles.form}>
-      {picker ?? (
-        !compact && (
+      {engines ??
+        (!compact && (
           <Text style={styles.help}>
-            You enter under the name on your account, and the host reaches you on its
-            Discord handle. Change either of them on your account page.
+            Your account supplies your entry name and Discord contact.
           </Text>
-        )
-      )}
+        ))}
 
-
-      {enteringSelf ? (
-        <View style={compact ? styles.compactFields : undefined}>
-          <View style={compact ? styles.compactField : undefined}>
-            <Text style={styles.fieldLabel}>IN-GAME NAME</Text>
-            <View style={styles.value}>
-              <Text style={styles.valueText}>{ign}</Text>
-            </View>
-          </View>
-          <View style={compact ? styles.compactField : undefined}>
-            <Text style={styles.fieldLabel}>DISCORD</Text>
-            <View style={styles.value}>
-              <Text style={styles.valueText}>{discord}</Text>
-              {discordVerified ? <Badge label="VERIFIED" tone="accent" /> : null}
-            </View>
+      {/* Only when there is an engine list above to tell it apart from. */}
+      {engines ? <Text style={styles.fieldLabel}>YOU</Text> : null}
+      <View style={compact ? styles.compactFields : undefined}>
+        <View style={compact ? styles.compactField : undefined}>
+          <Text style={styles.fieldLabel}>IN-GAME NAME</Text>
+          <View style={styles.value}>
+            <Text style={styles.valueText}>{ign}</Text>
           </View>
         </View>
-      ) : (
-        // The one thing about entering an engine that is not obvious from the
-        // row above: the host chases *you* when it does not turn up, so the
-        // handle on your account is the one written beside its name.
-        <Text style={styles.help}>
-          {`${chosenBot?.name ?? 'Your bot'} enters under its own name, and the host ` +
-            `reaches you on ${discord} about its matches.`}
-        </Text>
-      )}
+        <View style={compact ? styles.compactField : undefined}>
+          <Text style={styles.fieldLabel}>DISCORD</Text>
+          <View style={styles.value}>
+            <Text style={styles.valueText}>{discord}</Text>
+            {discordVerified ? <Badge label="VERIFIED" tone="accent" /> : null}
+          </View>
+        </View>
+      </View>
 
       {needsToken && (
         <LabeledInput
@@ -328,92 +308,100 @@ export default function TournamentRegisterForm({
   );
 }
 
-interface EntrantPickerProps {
+interface EngineSwitchesProps {
   bots: OwnedBot[];
-  entrant: Entrant | null;
-  ign: string;
-  onChange: (entrant: Entrant) => void;
-  showSelf: boolean;
+  /** Draw the group label, for a panel that has more than this group in it. */
+  labelled: boolean;
+  /** Re-read the list, because the switch that was just written lives on it. */
+  onChanged: () => void;
   tournament: Tournament;
 }
 
 /**
- * Who is taking this account's one place.
+ * Every engine this account owns, and whether it enters events.
  *
- * A list rather than a chip row, because each option carries a second line: an
- * engine's rating and whether it is up, or the reason it cannot enter. Chips
- * would fit the names and drop exactly the part that answers the question.
+ * A list rather than one switch, because the question is per engine and an
+ * owner with three of them is the case this exists for. Each row carries the
+ * second line the old picker carried — whether it is up, or the thing about it
+ * that the switch cannot fix — since an author whose engine is not in the field
+ * needs to be told which of the reasons it is, and none of them is visible from
+ * a bracket that simply does not list it.
+ *
+ * The write is optimistic in appearance only: the checkbox follows the list, and
+ * the list is re-read when the server answers. A switch that did not save
+ * therefore snaps back rather than lying.
  */
-function EntrantPicker({
-  bots,
-  entrant,
-  ign,
-  onChange,
-  showSelf,
-  tournament,
-}: EntrantPickerProps) {
-  const row = (
-    key: Entrant,
-    title: string,
-    detail: string,
-    badge: string | null,
-    refusal: string,
-  ) => {
-    const selected = entrant === key;
-    return (
-      <Pressable
-        accessibilityRole="radio"
-        accessibilityState={{ selected, disabled: Boolean(refusal) }}
-        disabled={Boolean(refusal)}
-        key={key}
-        onPress={() => onChange(key)}
-        style={({ pressed }) => [
-          styles.option,
-          selected && styles.optionSelected,
-          Boolean(refusal) && styles.optionDisabled,
-          pressed && styles.optionPressed,
-        ]}
-      >
-        <View style={[styles.dot, selected && styles.dotSelected]} />
-        <View style={styles.optionCopy}>
-          <View style={styles.optionTop}>
-            <Text style={styles.optionTitle}>{title}</Text>
-            {badge ? <Badge label={badge} tone={refusal ? 'neutral' : 'accent'} /> : null}
-          </View>
-          <Text style={[styles.optionDetail, Boolean(refusal) && styles.optionRefusal]}>
-            {refusal || detail}
-          </Text>
-        </View>
-      </Pressable>
-    );
+function EngineSwitches({ bots, labelled, onChanged, tournament }: EngineSwitchesProps) {
+  const sessionToken = useGameStore((state) => state.sessionToken);
+  const [saving, setSaving] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const toggle = async (bot: OwnedBot) => {
+    if (!sessionToken) return;
+    setSaving(bot.botId);
+    setError(null);
+    try {
+      await setBotSwitch(sessionToken, bot, 'enterTournaments', !bot.enterTournaments);
+      onChanged();
+    } catch (requestError) {
+      setError(failureMessage(requestError, 'That switch could not be saved.'));
+    } finally {
+      setSaving(null);
+    }
   };
 
   return (
-    <View style={styles.picker}>
-      <Text style={styles.fieldLabel}>WHO IS ENTERING</Text>
-      <Text style={styles.pickerHelp}>
-        {showSelf
-          ? 'One place per account: yourself, or one of your bots.'
-          : 'One place per account, and this event is engines only.'}
+    <View style={styles.engines}>
+      {labelled ? <Text style={styles.fieldLabel}>YOUR ENGINES</Text> : null}
+      <Text style={styles.enginesHelp}>
+        Each online engine with Tournaments enabled enters when {tournament.name} starts. You can enter more than one.
       </Text>
-      {showSelf
-        ? row(SELF, ign, 'You play your own matches on the board.', 'YOU', '')
-        : null}
-      {bots.map((bot) =>
-        row(
-          bot.botId,
-          bot.name || 'Unclaimed slot',
-          `${bot.online ? 'online' : 'offline'} · turns up for its own matches, ` +
-            'so you do not have to',
-          'BOT',
-          refusalFor(bot, tournament),
-        ),
+      {bots.map((bot) => {
+        const blocker = blockerFor(bot, tournament);
+        return (
+          <View
+            key={bot.botId}
+            style={[
+              styles.engine,
+              bot.enterTournaments && !blocker && styles.engineIn,
+              saving === bot.botId && styles.engineSaving,
+            ]}
+          >
+            <View style={styles.engineCopy}>
+              <View style={styles.engineTop}>
+                <Text style={styles.engineName}>{bot.name || 'Unclaimed slot'}</Text>
+                <Badge
+                  label={bot.online ? 'ONLINE' : 'OFFLINE'}
+                  tone={bot.online ? 'accent' : 'neutral'}
+                />
+              </View>
+              <Text style={[styles.engineDetail, Boolean(blocker) && styles.engineBlocked]}>
+                {blocker ||
+                  (bot.enterTournaments
+                    ? bot.online
+                      ? 'Enters when the event starts.'
+                      : 'Enters if it is online when the event starts.'
+                    : 'Not entering events.')}
+              </Text>
+            </View>
+            <Checkbox
+              checked={bot.enterTournaments}
+              label="Tournaments"
+              onToggle={() => toggle(bot)}
+            />
+          </View>
+        );
+      })}
+      {Boolean(error) && (
+        <View style={styles.error}>
+          <Banner message={error} onDismiss={() => setError(null)} tone="error" />
+        </View>
       )}
     </View>
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   form: { marginTop: space.tight },
   help: { color: colors.textMuted, ...type.body, marginTop: space.small },
   compactFields: { flexDirection: 'row', flexWrap: 'wrap', gap: space.small + 2 },
@@ -432,11 +420,12 @@ const styles = StyleSheet.create({
     marginTop: space.snug,
   },
   valueText: { color: colors.text, fontSize: 14, fontWeight: '700' },
-  picker: { marginBottom: space.tight },
-  pickerHelp: { color: colors.textFaint, ...type.meta, marginTop: space.tight },
-  option: {
+  engines: { marginBottom: space.tight },
+  enginesHelp: { color: colors.textFaint, ...type.meta, marginTop: space.tight },
+  engine: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
+    alignItems: 'center',
+    flexWrap: 'wrap',
     gap: space.small + 2,
     marginTop: space.small,
     padding: space.medium - 2,
@@ -445,26 +434,18 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderRadius: radius.medium,
   },
-  optionSelected: {
+  engineIn: {
     backgroundColor: colors.accentSurfaceQuiet,
     borderColor: colors.accentBorder,
   },
-  optionDisabled: { opacity: 0.55 },
-  optionPressed: { opacity: 0.8 },
-  dot: {
-    width: 14,
-    height: 14,
-    marginTop: 2,
-    borderRadius: 7,
-    borderWidth: 2,
-    borderColor: colors.borderStrong,
-  },
-  dotSelected: { borderColor: colors.accent, backgroundColor: colors.accent },
-  optionCopy: { flex: 1, minWidth: 0 },
-  optionTop: { flexDirection: 'row', alignItems: 'center', gap: space.small },
-  optionTitle: { color: colors.text, ...type.rowTitle, flexShrink: 1 },
-  optionDetail: { color: colors.textFaint, ...type.meta, marginTop: space.hair },
-  optionRefusal: { color: colors.textDim },
+  engineSaving: { opacity: 0.6 },
+  // minWidth so a long engine name wraps inside the row instead of pushing the
+  // switch off the end of it.
+  engineCopy: { flex: 1, minWidth: 0, flexBasis: 150 },
+  engineTop: { flexDirection: 'row', alignItems: 'center', gap: space.small },
+  engineName: { color: colors.text, ...type.rowTitle, flexShrink: 1 },
+  engineDetail: { color: colors.textFaint, ...type.meta, marginTop: space.hair },
+  engineBlocked: { color: colors.textDim },
   submit: { marginTop: 14 },
   error: { marginTop: space.small + 2 },
-});
+}));

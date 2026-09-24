@@ -4,19 +4,25 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
 	"rps-strategy/backend/internal/game"
 	"rps-strategy/backend/internal/persistence"
+	"rps-strategy/backend/internal/rpsi"
 )
 
-// Owners entering their own engines, which is the only way an engine gets into
-// an event since the host's enrolment sweep was removed.
+// How an engine gets into an event, which is not by registering for one.
 //
-// The rule under test throughout is one entry per *party*: an account and every
-// bot it owns share a single place in the field. Every case below is that rule
-// approached from a different side.
+// An engine has a standing switch — `enterTournaments` — and a sweep that reads
+// it. There is no per-event door for one at all: the tests below are the two
+// halves of that, the doors that are shut and the sweep that is open.
+//
+// The rule the old per-event door carried, one place per party, is gone with it.
+// It was there to stop an author with three engines taking three of six places
+// by choosing three times; nobody chooses now, and the sweep enters whatever is
+// online because that is what a bots-only field is.
 
 // ownedEngine mints, claims and describes a bot for an owner, in the state a
 // bot is in after it has connected once.
@@ -50,24 +56,63 @@ func ownedEngine(
 	return reread
 }
 
-// registerBot is the owner-facing call: POST a botId with a session token.
-func registerBot(
+// connectEngine puts a registry bot on the roster, the way its client does.
+//
+// The sweep only ever looks at connected engines, so a test about the sweep has
+// to have some. The record and the handshake are the two things it reads: the
+// switch lives on the first and the modes on the second.
+func connectEngine(
+	t *testing.T,
+	server *Server,
+	bot persistence.Bot,
+	modes []game.ModeID,
+) *Client {
+	t.Helper()
+	client := &Client{
+		send:    make(chan []byte, 64),
+		done:    make(chan struct{}),
+		profile: game.PlayerProfile{UserID: bot.UserID, Username: bot.Name},
+		server:  server,
+		bot: &botClient{
+			botID:     bot.BotID,
+			record:    bot,
+			handshake: rpsi.Handshake{Modes: modes},
+			ready:     true,
+		},
+	}
+	server.hub.Register(client)
+	t.Cleanup(func() { server.hub.Unregister(client) })
+	server.registerBot(client)
+	return client
+}
+
+// signupRequest posts a signup body, which is the only door left on this route.
+func signupRequest(
 	t *testing.T,
 	handler http.Handler,
 	tournamentID string,
-	botID string,
+	body map[string]any,
 	sessionToken string,
 ) *httptest.ResponseRecorder {
 	t.Helper()
 	return tournamentRequest(
 		t, handler, http.MethodPost,
 		"/api/tournaments/"+tournamentID+"/signups",
-		map[string]any{"botId": botID},
-		sessionToken,
+		body, sessionToken,
 	)
 }
 
-func TestOwnerRegistersOneBotAndOnlyOne(t *testing.T) {
+// Neither door an engine used to be entered through is open.
+//
+// The first is the one an owner pressed — a botId on the signup route. The
+// second is the one that made the first worth checking ownership on: an engine
+// plays under an account of its own, and that account id is on every game it
+// has played, so anybody could read one off a game record and enter it.
+//
+// Both now answer with the same sentence, and it is the sentence that says where
+// the switch is. A refusal that only said "no" would leave an author who has
+// just been told their engine is not in the field with nowhere to go.
+func TestAnEngineIsNotEnteredOneEventAtATime(t *testing.T) {
 	data, err := persistence.Open(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -76,146 +121,26 @@ func TestOwnerRegistersOneBotAndOnlyOne(t *testing.T) {
 	handler := NewWithStore(data, nil).Routes()
 
 	session := registeredSession(t, data, "author", "Author")
-	first := ownedEngine(t, data, "author", "Fishy", []game.ModeID{game.ModeTotalWar})
-	second := ownedEngine(t, data, "author", "Chippy", []game.ModeID{game.ModeTotalWar})
-	cup := openTournament(t, data, "cup", "Engine Cup", game.ModeTotalWar, "Total War")
-
-	// No session at all is the same answer as an expired one: entering an
-	// engine means proving you own it, and there is nobody here to own it.
-	anonymous := registerBot(t, handler, cup.TournamentID, first.BotID, "")
-	if anonymous.Code != http.StatusUnauthorized {
-		t.Fatalf("expected 401 without a session, got %d: %s", anonymous.Code, anonymous.Body)
-	}
-
-	entered := registerBot(t, handler, cup.TournamentID, first.BotID, session)
-	if entered.Code != http.StatusCreated {
-		t.Fatalf("expected the owner's bot to enter, got %d: %s", entered.Code, entered.Body)
-	}
-	var tournament persistence.Tournament
-	if err := json.NewDecoder(entered.Body).Decode(&tournament); err != nil {
-		t.Fatal(err)
-	}
-	if len(tournament.Players) != 1 {
-		t.Fatalf("expected one entrant, got %d", len(tournament.Players))
-	}
-	// Under the engine's own name and account — the bracket says Fishy, not
-	// Author — and reachable at the owner's handle, because the host chasing a
-	// missing engine has to reach a person.
-	player := tournament.Players[0]
-	if player.IGN != "Fishy" || player.UserID != first.UserID {
-		t.Fatalf("expected the bot's own name and account, got %#v", player)
-	}
-	if player.Discord != "Author" {
-		t.Fatalf("expected the owner's Discord handle, got %q", player.Discord)
-	}
-
-	// The second engine is the whole point of the rule. One account, one place.
-	crowded := registerBot(t, handler, cup.TournamentID, second.BotID, session)
-	if crowded.Code != http.StatusConflict {
-		t.Fatalf("expected a second bot to be refused, got %d: %s", crowded.Code, crowded.Body)
-	}
-	// And the refusal names what is already in, because "you are already in" is
-	// no help to somebody who has forgotten which engine they entered.
-	if body := crowded.Body.String(); !jsonErrorContains(body, "Fishy") {
-		t.Fatalf("expected the refusal to name the entered bot, got %s", body)
-	}
-
-	// The owner cannot enter themselves either: their place is taken by their
-	// own engine.
-	self := tournamentRequest(
-		t, handler, http.MethodPost,
-		"/api/tournaments/"+cup.TournamentID+"/signups",
-		map[string]any{
-			"userId": "author", "ign": "Author", "discord": "author.discord",
-			"agreedToUnfilteredChat": true,
-		},
-		"",
-	)
-	if self.Code != http.StatusConflict {
-		t.Fatalf("expected the owner to be refused their own second place, got %d: %s",
-			self.Code, self.Body)
-	}
-}
-
-func TestRegisteringSomebodyElsesBotIsRefused(t *testing.T) {
-	data, err := persistence.Open(":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer data.Close()
-	handler := NewWithStore(data, nil).Routes()
-
-	registeredSession(t, data, "author", "Author")
-	stranger := registeredSession(t, data, "stranger", "Stranger")
 	bot := ownedEngine(t, data, "author", "Fishy", []game.ModeID{game.ModeTotalWar})
 	cup := openTournament(t, data, "cup", "Engine Cup", game.ModeTotalWar, "Total War")
 
-	refused := registerBot(t, handler, cup.TournamentID, bot.BotID, stranger)
-	if refused.Code != http.StatusForbidden {
-		t.Fatalf("expected 403 for another owner's bot, got %d: %s", refused.Code, refused.Body)
+	byBotID := signupRequest(t, handler, cup.TournamentID, map[string]any{
+		"botId": bot.BotID,
+	}, session)
+	if byBotID.Code != http.StatusConflict {
+		t.Fatalf("expected a botId signup to be refused, got %d: %s", byBotID.Code, byBotID.Body)
+	}
+	if body := byBotID.Body.String(); !jsonErrorContains(body, "Tournaments") {
+		t.Fatalf("expected the refusal to name the switch, got %s", body)
 	}
 
-	// The other half of the same door. The engine plays under an account of its
-	// own, and that account id is on every game it has played, so the plain
-	// signup route must not take it either — otherwise the ownership check
-	// above is decoration.
-	viaAccount := tournamentRequest(
-		t, handler, http.MethodPost,
-		"/api/tournaments/"+cup.TournamentID+"/signups",
-		map[string]any{
-			"userId": bot.UserID, "ign": "Fishy", "discord": "bot.fishy",
-			"agreedToUnfilteredChat": true,
-		},
-		"",
-	)
-	if viaAccount.Code != http.StatusForbidden {
+	byAccount := signupRequest(t, handler, cup.TournamentID, map[string]any{
+		"userId": bot.UserID, "ign": "Fishy", "discord": "bot.fishy",
+		"agreedToUnfilteredChat": true,
+	}, "")
+	if byAccount.Code != http.StatusForbidden {
 		t.Fatalf("expected 403 entering a bot account directly, got %d: %s",
-			viaAccount.Code, viaAccount.Body)
-	}
-	if entered, err := data.Tournament(t.Context(), cup.TournamentID); err != nil {
-		t.Fatal(err)
-	} else if len(entered.Players) != 0 {
-		t.Fatalf("expected an empty field, got %#v", entered.Players)
-	}
-}
-
-func TestBotRegistrationChecksTheRegistryBeforeTheField(t *testing.T) {
-	data, err := persistence.Open(":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer data.Close()
-	handler := NewWithStore(data, nil).Routes()
-
-	session := registeredSession(t, data, "author", "Author")
-	cup := openTournament(t, data, "cup", "Engine Cup", game.ModeTotalWar, "Total War")
-
-	// An engine that has never connected has no account and no name, so there
-	// is nothing to write in the bracket.
-	unclaimed, _, err := data.MintBotToken(t.Context(), "author")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if reply := registerBot(t, handler, cup.TournamentID, unclaimed.BotID, session); reply.Code !=
-		http.StatusConflict {
-		t.Fatalf("expected an unclaimed slot to be refused, got %d: %s", reply.Code, reply.Body)
-	}
-
-	// An engine that does not play the event's game would forfeit every match.
-	wrongMode := ownedEngine(t, data, "author", "Narrow", []game.ModeID{game.ModeInfiltration})
-	if reply := registerBot(t, handler, cup.TournamentID, wrongMode.BotID, session); reply.Code !=
-		http.StatusConflict {
-		t.Fatalf("expected a mode refusal, got %d: %s", reply.Code, reply.Body)
-	}
-
-	// The owner's own switch, which is the one remaining thing that reads it.
-	off := ownedEngine(t, data, "author", "Resting", []game.ModeID{game.ModeTotalWar})
-	if _, err := data.UpdateBotSettings(t.Context(), off.BotID, true, false, ""); err != nil {
-		t.Fatal(err)
-	}
-	if reply := registerBot(t, handler, cup.TournamentID, off.BotID, session); reply.Code !=
-		http.StatusConflict {
-		t.Fatalf("expected an opted-out bot to be refused, got %d: %s", reply.Code, reply.Body)
+			byAccount.Code, byAccount.Body)
 	}
 
 	if entered, err := data.Tournament(t.Context(), cup.TournamentID); err != nil {
@@ -225,41 +150,186 @@ func TestBotRegistrationChecksTheRegistryBeforeTheField(t *testing.T) {
 	}
 }
 
-func TestOwnerWithdrawsAndSwapsEngines(t *testing.T) {
+// The sweep is the whole mechanism, and the switch is the whole of the choice.
+//
+// Each engine here is a different answer to "why is my bot not in the field",
+// and the sweep has to give each of them separately: they have different fixes,
+// and neither is a thing the author can see from the bracket.
+func TestTheSweepEntersEveryOnlineEngineWithTheSwitchOn(t *testing.T) {
 	data, err := persistence.Open(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer data.Close()
-	handler := NewWithStore(data, nil).Routes()
+	server := NewWithStore(data, nil)
 
-	session := registeredSession(t, data, "author", "Author")
+	registeredSession(t, data, "author", "Author")
+	registeredSession(t, data, "rival", "Rival")
+
+	// Two from one author, which the old per-event door would have made them
+	// choose between. The sweep takes both: nobody is choosing, so there is no
+	// choice to hold anybody to.
 	first := ownedEngine(t, data, "author", "Fishy", []game.ModeID{game.ModeTotalWar})
 	second := ownedEngine(t, data, "author", "Chippy", []game.ModeID{game.ModeTotalWar})
+	connectEngine(t, server, first, []game.ModeID{game.ModeTotalWar})
+	connectEngine(t, server, second, []game.ModeID{game.ModeTotalWar})
+
+	// The switch off. The one thing an author says about this, and the sweep is
+	// the only thing that reads it.
+	resting := ownedEngine(t, data, "rival", "Resting", []game.ModeID{game.ModeTotalWar})
+	if _, err := data.UpdateBotSettings(t.Context(), resting.BotID, true, false, false, ""); err != nil {
+		t.Fatal(err)
+	}
+	resting.EnterTournaments = false
+	connectEngine(t, server, resting, []game.ModeID{game.ModeTotalWar})
+
+	// An engine that does not play the event's game would forfeit every match.
+	narrow := ownedEngine(t, data, "rival", "Narrow", []game.ModeID{game.ModeInfiltration})
+	connectEngine(t, server, narrow, []game.ModeID{game.ModeInfiltration})
+
+	cup := openTournament(t, data, "cup", "Engine Cup", game.ModeTotalWar, "Total War")
+	enrolled, skipped := server.enrolOnlineBots(t.Context(), cup)
+
+	slices.Sort(enrolled)
+	if got := strings.Join(enrolled, ","); got != "Chippy,Fishy" {
+		t.Fatalf("expected both of the author's engines and nothing else, got %q", got)
+	}
+	for name, want := range map[string]string{
+		"Resting": "not entering tournaments",
+		"Narrow":  "does not play",
+	} {
+		if !strings.Contains(skipped[name], want) {
+			t.Fatalf("expected %s to be skipped for %q, got %q", name, want, skipped[name])
+		}
+	}
+
+	entered, err := data.Tournament(t.Context(), cup.TournamentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entered.Players) != 2 {
+		t.Fatalf("expected two engines in the field, got %#v", entered.Players)
+	}
+	// Under their own names and accounts — the bracket says Fishy, not Author —
+	// and reachable at the owner's handle, because a host chasing a missing
+	// engine has to reach a person.
+	for _, player := range entered.Players {
+		if player.Discord != "Author" {
+			t.Fatalf("expected the owner's Discord handle on %s, got %q", player.IGN, player.Discord)
+		}
+	}
+
+	// And it is safe to run twice. The scheduler's minute tick and a host's
+	// button can both land on the same event, and the second one must not
+	// double-enter anybody or report the first one's work as its own.
+	again, _ := server.enrolOnlineBots(t.Context(), cup)
+	if len(again) != 0 {
+		t.Fatalf("a second sweep should have nothing to add, got %#v", again)
+	}
+	if reread, err := data.Tournament(t.Context(), cup.TournamentID); err != nil {
+		t.Fatal(err)
+	} else if len(reread.Players) != 2 {
+		t.Fatalf("a second sweep changed the field: %#v", reread.Players)
+	}
+}
+
+// An engine with the switch off stays out, and turning it on is the whole fix.
+//
+// The point of the pair: the same engine, the same event, the same sweep, and
+// the only thing that changed is the switch its owner can reach from the app.
+func TestTurningTheSwitchOnIsWhatEntersAnEngine(t *testing.T) {
+	data, err := persistence.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer data.Close()
+	server := NewWithStore(data, nil)
+	handler := server.Routes()
+
+	session := registeredSession(t, data, "author", "Author")
+	bot := ownedEngine(t, data, "author", "Fishy", []game.ModeID{game.ModeTotalWar})
+	if _, err := data.UpdateBotSettings(t.Context(), bot.BotID, true, false, false, ""); err != nil {
+		t.Fatal(err)
+	}
+	bot.EnterTournaments = false
+	connectEngine(t, server, bot, []game.ModeID{game.ModeTotalWar})
+	cup := openTournament(t, data, "cup", "Engine Cup", game.ModeTotalWar, "Total War")
+
+	if enrolled, _ := server.enrolOnlineBots(t.Context(), cup); len(enrolled) != 0 {
+		t.Fatalf("an engine with the switch off should stay out, got %#v", enrolled)
+	}
+
+	// The owner's own door, which is the bot record rather than the event. The
+	// connected session is updated with it, so the sweep does not have to wait
+	// for a restart to see the change.
+	flipped := tournamentRequest(
+		t, handler, http.MethodPatch, "/api/bots/"+bot.BotID,
+		map[string]any{
+			"description": "", "allowPublicPlay": true,
+			"enterTournaments": true, "enterLadder": false,
+		},
+		session,
+	)
+	if flipped.Code != http.StatusOK {
+		t.Fatalf("expected the switch to be saved, got %d: %s", flipped.Code, flipped.Body)
+	}
+
+	enrolled, skipped := server.enrolOnlineBots(t.Context(), cup)
+	if len(enrolled) != 1 || enrolled[0] != "Fishy" {
+		t.Fatalf("expected Fishy to be swept in, got %#v (skipped %#v)", enrolled, skipped)
+	}
+}
+
+// Withdrawing removes you, and never the engine standing beside you.
+//
+// The two used to be one door: it removed whatever the party held, earliest
+// first, so an owner whose engine had been swept in ahead of them pressed
+// Withdraw on their own name and took the engine out instead. And an engine
+// taken out that way came straight back on the next sweep, which is the deeper
+// reason the door is shut rather than merely aimed better.
+func TestWithdrawingTakesYourOwnEntryAndNotYourEngines(t *testing.T) {
+	data, err := persistence.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer data.Close()
+	server := NewWithStore(data, nil)
+	handler := server.Routes()
+
+	session := registeredSession(t, data, "author", "Author")
+	bot := ownedEngine(t, data, "author", "Fishy", []game.ModeID{game.ModeTotalWar})
+	connectEngine(t, server, bot, []game.ModeID{game.ModeTotalWar})
 	cup := openTournament(t, data, "cup", "Engine Cup", game.ModeTotalWar, "Total War")
 	path := "/api/tournaments/" + cup.TournamentID + "/signups"
 
-	if reply := registerBot(t, handler, cup.TournamentID, first.BotID, session); reply.Code !=
-		http.StatusCreated {
-		t.Fatalf("expected the first bot to enter, got %d: %s", reply.Code, reply.Body)
+	// The engine first, so it holds the lower signup order. That ordering is
+	// what the old party-wide withdrawal picked by.
+	server.enrolOnlineBots(t.Context(), cup)
+	if entered, err := data.Tournament(t.Context(), cup.TournamentID); err != nil {
+		t.Fatal(err)
+	} else if len(entered.Players) != 1 {
+		t.Fatalf("expected the sweep to enter the engine, got %#v", entered.Players)
 	}
-	// The owner's own door, so it is signed in and takes no player id: it
-	// removes whatever this account is answerable for.
+
+	if reply := signupRequest(t, handler, cup.TournamentID, map[string]any{
+		"userId": "author", "ign": "Author", "discord": "Author",
+		"agreedToUnfilteredChat": true,
+	}, session); reply.Code != http.StatusCreated {
+		t.Fatalf("expected the owner to enter beside their engine, got %d: %s",
+			reply.Code, reply.Body)
+	}
+
 	if reply := tournamentRequest(
 		t, handler, http.MethodDelete, path, nil, session,
 	); reply.Code != http.StatusOK {
 		t.Fatalf("expected the withdrawal to be accepted, got %d: %s", reply.Code, reply.Body)
 	}
-	if reply := registerBot(t, handler, cup.TournamentID, second.BotID, session); reply.Code !=
-		http.StatusCreated {
-		t.Fatalf("expected the swap to be accepted, got %d: %s", reply.Code, reply.Body)
-	}
-	entered, err := data.Tournament(t.Context(), cup.TournamentID)
+	left, err := data.Tournament(t.Context(), cup.TournamentID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entered.Players) != 1 || entered.Players[0].IGN != "Chippy" {
-		t.Fatalf("expected only Chippy in the field, got %#v", entered.Players)
+	if len(left.Players) != 1 || left.Players[0].IGN != "Fishy" {
+		t.Fatalf("expected only the engine left in the field, got %#v", left.Players)
 	}
 
 	// A stranger withdrawing has nothing of their own to remove, and must not
@@ -271,15 +341,37 @@ func TestOwnerWithdrawsAndSwapsEngines(t *testing.T) {
 		t.Fatalf("expected 404 withdrawing an entry you do not hold, got %d: %s",
 			reply.Code, reply.Body)
 	}
+	// And the owner has nothing left either: their engine's entry is not theirs
+	// to take out, which is the whole of the rule.
+	if reply := tournamentRequest(
+		t, handler, http.MethodDelete, path, nil, session,
+	); reply.Code != http.StatusNotFound {
+		t.Fatalf("expected the owner to have nothing left to withdraw, got %d: %s",
+			reply.Code, reply.Body)
+	}
+}
 
-	// Once the pairings exist, every other entrant's schedule is built around
-	// that name being in the field.
-	registeredSession(t, data, "rival-author", "RivalAuthor")
-	other := ownedEngine(t, data, "rival-author", "Rival", []game.ModeID{game.ModeTotalWar})
-	if _, err := data.SignupForTournament(
-		t.Context(), cup.TournamentID, other.UserID, other.Name, "bot.rival", true,
-	); err != nil {
+// Once the pairings exist, every other entrant's schedule is built around that
+// name being in the field.
+func TestWithdrawingClosesWhenTheEventStarts(t *testing.T) {
+	data, err := persistence.Open(":memory:")
+	if err != nil {
 		t.Fatal(err)
+	}
+	defer data.Close()
+	handler := NewWithStore(data, nil).Routes()
+
+	session := registeredSession(t, data, "author", "Author")
+	verifiedEntrants(t, data, "rival")
+	cup := openTournament(t, data, "cup", "Engine Cup", game.ModeTotalWar, "Total War")
+	path := "/api/tournaments/" + cup.TournamentID + "/signups"
+
+	for _, who := range []struct{ id, name string }{{"author", "Author"}, {"rival", "rival"}} {
+		if _, err := data.SignupForTournament(
+			t.Context(), cup.TournamentID, who.id, who.name, who.name, true,
+		); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if _, err := data.StartTournament(t.Context(), cup.TournamentID); err != nil {
 		t.Fatal(err)
@@ -298,10 +390,12 @@ func TestBotsOnlyFieldStillAdmitsEnginesAndBarsPeople(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer data.Close()
-	handler := NewWithStore(data, nil).Routes()
+	server := NewWithStore(data, nil)
+	handler := server.Routes()
 
-	session := registeredSession(t, data, "author", "Author")
+	registeredSession(t, data, "author", "Author")
 	bot := ownedEngine(t, data, "author", "Fishy", []game.ModeID{game.ModeTotalWar})
+	connectEngine(t, server, bot, []game.ModeID{game.ModeTotalWar})
 
 	config := persistence.DefaultTournamentConfig(game.ModeTotalWar, "Total War")
 	config.Name = "Engines Only"
@@ -309,22 +403,18 @@ func TestBotsOnlyFieldStillAdmitsEnginesAndBarsPeople(t *testing.T) {
 	if _, err := data.CreateTournament(t.Context(), "engines", config); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := data.PublishTournament(t.Context(), "engines"); err != nil {
+	engines, err := data.PublishTournament(t.Context(), "engines")
+	if err != nil {
 		t.Fatal(err)
 	}
 
-	if reply := registerBot(t, handler, "engines", bot.BotID, session); reply.Code !=
-		http.StatusCreated {
-		t.Fatalf("expected the engine to enter, got %d: %s", reply.Code, reply.Body)
+	if enrolled, skipped := server.enrolOnlineBots(t.Context(), engines); len(enrolled) != 1 {
+		t.Fatalf("expected the engine to be swept in, got %#v (skipped %#v)", enrolled, skipped)
 	}
-	person := tournamentRequest(
-		t, handler, http.MethodPost, "/api/tournaments/engines/signups",
-		map[string]any{
-			"userId": "watcher", "ign": "Watcher", "discord": "watcher.discord",
-			"agreedToUnfilteredChat": true,
-		},
-		"",
-	)
+	person := signupRequest(t, handler, "engines", map[string]any{
+		"userId": "watcher", "ign": "Watcher", "discord": "watcher.discord",
+		"agreedToUnfilteredChat": true,
+	}, "")
 	if person.Code != http.StatusForbidden {
 		t.Fatalf("expected a person to be barred, got %d: %s", person.Code, person.Body)
 	}

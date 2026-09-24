@@ -9,7 +9,7 @@
 // The goal tiles themselves come from `@/engine/goals`, shared with the rules
 // that end the game on them.
 
-import { goalOwnerAt, type BoardShape } from '@/engine/goals';
+import { goalOwnerAt, type BoardShape, type RulesEra } from '@/engine/goals';
 import type { ModeID, PlayerColor, Tile } from '@/types/game';
 
 const MODE_TOTAL_WAR = 'V5';
@@ -23,13 +23,20 @@ export interface TileTint {
 /**
  * `shape` is the board's own size, not a constant: Blue's goal is measured from
  * the far edge of whatever board this is, and a mode may be any rectangle.
+ *
+ * `era` is which rules decide where the goals are, and it is here rather than
+ * assumed because a review of a pre-change record is drawn on this board. A
+ * board that tinted today's corners under a game being replayed on yesterday's
+ * would point at the wrong square all the way through and then end the game on
+ * a tile it never marked.
  */
 export const tintForTile = (
   modeId: ModeID | undefined,
   tile: Tile,
   shape: BoardShape,
+  era: RulesEra = 'current',
 ): TileTint | null => {
-  const goal = goalOwnerAt(modeId, tile.x, tile.y, shape);
+  const goal = goalOwnerAt(modeId, tile.x, tile.y, shape, era);
   if (goal) return { color: goal, kind: 'goal' };
 
   if (

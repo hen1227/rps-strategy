@@ -1,0 +1,70 @@
+[Unit]
+Description=Publish the RPS Strategy game archive to Hugging Face
+Documentation=https://huggingface.co/datasets/Henhen1227/rps-strategy-games
+After=network-online.target rps-strategy.service
+Wants=network-online.target
+
+[Service]
+# oneshot, not simple: this runs, finishes, and is done. The two ExecStart lines
+# run in order and stop at the first failure, so `systemctl status` names the
+# phase that broke rather than pointing at a wrapper script.
+Type=oneshot
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/production/henhen1227/api-rps.henhen1227.com/export
+
+# Its own environment file, deliberately not the server's. The game server has
+# no business holding a Hugging Face write token, and this job has no business
+# holding the admin token — since the export reads SQLite directly, it needs no
+# admin credential at all.
+EnvironmentFile=/var/www/production/henhen1227/api-rps.henhen1227.com/export/export.env
+
+# ProtectHome=true makes www-data's home unreachable, and huggingface_hub fails
+# at import if it cannot write its cache. This is not optional.
+Environment=HF_HOME=/var/www/production/henhen1227/api-rps.henhen1227.com/export/state/hf-home
+Environment=HF_HUB_DISABLE_TELEMETRY=1
+
+# Read the archive, then publish it. The first step writes a file rather than a
+# pipe so a failed run leaves the records on disk to look at.
+ExecStart=/var/www/production/henhen1227/api-rps.henhen1227.com/export/rps-exportgames-arm64 \
+    -out /var/www/production/henhen1227/api-rps.henhen1227.com/export/staging/records.jsonl
+ExecStart=/var/www/production/henhen1227/api-rps.henhen1227.com/export/venv/bin/python \
+    /var/www/production/henhen1227/api-rps.henhen1227.com/export/export.py \
+    --jsonl /var/www/production/henhen1227/api-rps.henhen1227.com/export/staging/records.jsonl \
+    --state /var/www/production/henhen1227/api-rps.henhen1227.com/export/state/ledger.sqlite \
+    --out /var/www/production/henhen1227/api-rps.henhen1227.com/export/staging \
+    --upload
+
+UMask=0007
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+
+# Narrower than the server's ReadWritePaths, which covers all of
+# /var/www/production/henhen1227/. This job writes only its own state and
+# staging directories...
+ReadWritePaths=/var/www/production/henhen1227/api-rps.henhen1227.com/export/state
+ReadWritePaths=/var/www/production/henhen1227/api-rps.henhen1227.com/export/staging
+
+# ...and this one, which is the database's directory and is the exception that
+# needs explaining. A read-only SQLite connection to a WAL database still has to
+# attach the -shm shared memory index. While the server is up and holding that
+# index, the attach succeeds even on a read-only directory — but a deploy drain
+# makes the server exit cleanly, which removes the -shm, and the next reader has
+# to recreate it. Without this line, a run that lands in that window dies with
+# "attempt to write a readonly database", which is a baffling thing to read
+# about a connection that opened read-only on purpose.
+#
+# The guarantee that this cannot damage the archive is `mode=ro` in the DSN, not
+# this path: SQLite refuses writes to the database itself either way. Measured,
+# not assumed — see the package comment in cmd/exportgames.
+ReadWritePaths=/var/www/production/henhen1227/api-rps.henhen1227.com
+
+# Generous, because the first run is the backfill of the whole archive and the
+# upload is the slow part. A normal night is seconds.
+TimeoutStartSec=1800
+LimitNOFILE=4096
+
+[Install]
+WantedBy=multi-user.target

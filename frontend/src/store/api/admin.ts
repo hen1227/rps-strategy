@@ -256,6 +256,7 @@ export interface AdminBot {
   reservedFor?: string;
   allowPublicPlay: boolean;
   enterTournaments: boolean;
+  enterLadder: boolean;
   elo: number;
   restricted?: Restriction[];
 }

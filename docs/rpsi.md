@@ -1,36 +1,23 @@
 # RPSI: the engine protocol
 
-RPSI is how a Rock–Paper–Scissors Strategy engine talks to whatever drives it. An engine
-reads commands on standard input and writes answers to standard output, one per line. It
-holds no socket, no account, and no opinion about whether it is playing a ranked game, a
-tournament, or nothing at all.
+RPSI is a line-based protocol for Rock–Paper–Scissors Strategy engines, based on UCI.
+Read commands from stdin and write replies to stdout. The host handles networking,
+accounts, rules, clocks, and game records.
 
-The shape is Universal Chess Interface, deliberately, down to the spelling of `isready` and
-`setoption`. If you have written a UCI engine you already know this protocol, so only the
-differences below are worth reading.
-
-Three rules define the relationship:
-
-1. **The host owns the game** — the rules, both clocks, the move history, the archive, and
-   the decision that a game is over. An engine that disagrees is wrong.
-2. **The engine is close to a pure function.** Given a position and a budget, produce a
-   move. The host re-sends the full position every time, so nothing you remember between
-   commands may be load-bearing.
-3. **Every line is complete on its own.** No continuations, no binary, no framing — a human
-   can drive an engine by typing at it, and frequently should.
-
-One process plays one game at a time, always. A host running several games against the same
-engine runs a separate copy per game, so an engine needs no locking, no per-game state, and
-no awareness that any of this is happening.
+- The host decides whether moves are legal and when the game ends.
+- Each search receives the full position and move history. Do not rely on earlier commands to reconstruct it.
+- Each line is a complete command or reply. Flush output after every reply.
+- One engine process plays one game. Concurrent games use separate processes.
 
 ## A whole conversation
 
-`>` is what the host sends, `<` what the engine answers; neither character is on the wire.
+`>` marks host commands and `<` marks engine replies. Neither prefix is sent.
 
 ```text
 > rpsi
-< id name Example 0.1.0
+< id name Example
 < id author you
+< id version 0.1.0
 < protocol 1
 < rules 2
 < option name Hash type spin default 16 min 1 max 4096
@@ -52,49 +39,45 @@ no awareness that any of this is happening.
 > quit
 ```
 
-Only the `info` lines and the `setoption` are optional. An engine that answers `rpsi`,
-`isready`, `position` and `go`, and ignores what it does not recognise, conforms.
+Options and search progress are optional. A simple bot can choose from `legalmoves`
+without parsing the position itself. Ignore commands you do not recognise.
 
 ## Squares, moves and positions
 
-Files `a`–`i`, ranks `1`–`9` running from Blue's home boundary at `1` to Red's at `9`, so
-`a1` is the corner of Blue's home rank. These are the archive's coordinates, untransformed.
+Files run `a`–`i`; ranks run `1`–`9`, from Blue's home boundary to Red's.
+`a1` is a corner of Blue's home rank.
 
-A move is the square left, a separator, and the square entered: `d3-d4`, or `d3xd4` when
-the destination is occupied. **Accept either separator and read nothing into it** — whether
-a move captures is a fact about the position, not about the move. A leading piece letter
-(`Rd3xd4`) is accepted too, which makes an RPSI move a PGN move minus the piece. A move
-echoed back verbatim from `legalmoves` is always spelled acceptably.
+Moves use a source, separator, and destination: `d3-d4` or `d3xd4`.
+Accept either separator; the board determines whether a move captures.
+A leading piece letter, as in `Rd3xd4`, is also accepted.
+You can return a move from `legalmoves` unchanged.
 
-A position is three space-separated fields — pieces, side to move, territory:
+A position has three space-separated fields: pieces, side to move, and territory.
 
 ```text
 3SSS3/3PPP3/3RRR3/9/9/9/3rrr3/3ppp3/3sss3 b 3bbb3/3bbb3/3bbb3/9/9/9/3rrr3/3rrr3/3rrr3
 ```
 
-Rows run rank 1 to rank 9 separated by `/`, digits count consecutive empty tiles, uppercase
-is Blue and lowercase is Red. The side to move is `r`, `b` or `-`; it is `b` in a fresh
-position because Blue opens.
+Rows run from rank 1 to rank 9, separated by `/`. Digits count empty tiles.
+`R`, `P`, and `S` mean rock, paper, and scissors. Uppercase is Blue; lowercase is Red.
+The side to move is `r`, `b`, or `-`. Blue starts a standard game.
 
-The third field is territory ownership, which only Total War (`V5`) uses — a tile can be
-owned by a player with no piece standing on it, and that is what decides that mode. The host
-always writes the field, so **an engine playing Infiltration or Intransitive can ignore
-it**. It is optional on the way in: a position with only pieces and a side to move is read
-with ownership following the pieces.
+Only Total War (`V5`) uses territory. The host always sends it; other modes may
+ignore it. Input may omit territory, in which case ownership follows the pieces.
 
 ## Host to engine
 
 | Command | Arguments | Meaning |
 | --- | --- | --- |
-| `rpsi` | — | Identify yourself: `id`, `protocol`, `rules`, `option` and `mode` lines, then `rpsiok`. The host sends nothing else until `rpsiok` arrives. |
-| `isready` | — | Answer `readyok` once pending `setoption` work has finished. Legal at any time, including during a search, which must not delay it. |
-| `setoption` | `name <id> [value <v>]` | Set one option you declared. Sent before the first `go`, or between games. |
-| `newgame` | `<modeId>` | A new game, unrelated to the last. Clear the transposition table, killers and history heuristics. |
-| `position` | `fen <pieces> <side> <territory> [moves <m>…]` | The board the game was played from, then every move since, in order. |
-| `legalmoves` | `<m>…` | Every legal move for the side to move. Advisory. |
-| `go` | see below | Start searching. |
-| `stop` | — | Stop as soon as possible and print `bestmove`. |
-| `quit` | — | Exit, abandoning any search. |
+| `rpsi` | None | Send identity, protocol, rules, options, and modes, then `rpsiok`. The host waits for `rpsiok`. |
+| `isready` | None | Reply `readyok` after pending option changes. Answer even during a search. |
+| `setoption` | `name <id> [value <v>]` | Set a declared option, before the first search or between games. |
+| `newgame` | `<modeId>` | Start an unrelated game. Clear search history, killers, and the transposition table. |
+| `position` | `fen <pieces> <side> <territory> [moves <m>…]` | Starting board followed by every move played. |
+| `legalmoves` | `<m>…` | Legal moves for the current position. |
+| `go` | See below | Start searching. |
+| `stop` | None | Stop searching and print `bestmove`. |
+| `quit` | None | Exit immediately, abandoning any search. |
 
 ### The `go` line
 
@@ -102,129 +85,93 @@ with ownership following the pieces.
 go rtime 300000 btime 298400 rinc 3000 binc 3000
 ```
 
-`<parameter> <value>` pairs in milliseconds. `rtime`/`btime` are what Red and Blue have
-left; `rinc`/`binc` are what each gains per move. Both clocks are always sent, because an
-engine managing its own time may want to know what its opponent has — `r` and `b` are
-colours, not you and your opponent, and you are whichever side the preceding `position`
-named to move.
+Times are in milliseconds. `rtime` and `btime` are Red's and Blue's remaining time;
+`rinc` and `binc` are their per-move increments. Both clocks are sent. Your side is
+the side to move in the preceding `position`.
 
-Also optional, in any combination: `movetime <ms>` (search exactly this long, ignoring the
-clock), `depth <n>`, `nodes <n>`, `searchmoves <m>…` (only these moves at the root), and
-`infinite` (search until `stop`).
+Optional search limits can be combined:
 
-There is no `movestogo`: a time control is an allowance plus a per-move increment, so there
-is no move count to reach.
+- `movetime <ms>`: search for this long, ignoring the game clock.
+- `depth <n>` or `nodes <n>`: limit depth or node count.
+- `searchmoves <m>…`: search only these root moves.
+- `infinite`: search until `stop`.
+
+There is no `movestogo`. Time controls use an initial allowance and an increment.
 
 ## Engine to host
 
 | Line | Meaning |
 | --- | --- |
-| `id name <text>` | Free text, shown to players. Include a version. |
-| `id author <text>` | Free text. |
-| `protocol <n>` | The RPSI major version you speak. `1` today. |
-| `rules <n>` | The rule set you implement, currently `2`. |
-| `option name <id> type <spin\|check\|combo\|string\|button> [default …] [min …] [max …] [var …]` | UCI's option grammar, unchanged. |
-| `mode <id> [name]` | One line per mode you can play. |
-| `rpsiok` | End of identification. |
-| `readyok` | Answer to `isready`. |
+| `id name <text>` | Engine name shown to players. |
+| `id author <text>` | Author name. |
+| `id version <text>` | Optional build identifier. |
+| `protocol <n>` | RPSI major version, currently `1`. |
+| `rules <n>` | Implemented rule set, currently `2`. |
+| `option name <id> type <spin\|check\|combo\|string\|button> [default …] [min …] [max …] [var …]` | UCI option syntax. |
+| `mode <id> [name]` | One line per supported mode. |
+| `rpsiok` | Identification complete. |
+| `readyok` | Reply to `isready`. |
 | `info …` | Search progress. |
-| `bestmove <move>` | Your move. Exactly one per `go`. |
-| `shutdown [reason]` | Take me out of play when convenient. See below. |
+| `bestmove <move>` | Exactly one move per `go`. |
+| `shutdown [reason]` | Request no new games; finish existing commitments. |
 
-`protocol` exists so a host can refuse an engine it cannot talk to. A `rules` mismatch is
-logged rather than refused: an engine built against an older rule set may still play
-correctly in modes that did not change.
+An unsupported protocol version may be refused. A rules mismatch is logged,
+since unchanged modes may still work. Mode IDs are `V3` (Infiltration),
+`V5` (Total War), and `V6` (Intransitive). Unknown mode IDs are ignored.
 
-Mode ids are `V3` (Infiltration), `V5` (Total War) and `V6` (Intransitive); the trailing
-name is for a human reading a log. **An id the host does not recognise is ignored, not
-rejected**, so you may declare a mode the host has not shipped yet.
-
-`info` fields appear in this order when present: `depth`, `seldepth`, `multipv`, `score`,
-`confidence`, `nodes`, `nps`, `time`, `pv`. `pv` is last, being the only variable-length
-one, and its moves are single-space separated.
-
-**Any other line an engine prints must begin with `info string`.** That is what lets a host
-forward engine output without deciding what is diagnostic; anything else unrecognised may
-be discarded, logged, or treated as a protocol fault.
+When present, `info` fields use this order: `depth`, `seldepth`, `multipv`,
+`score`, `confidence`, `nodes`, `nps`, `time`, `pv`. Put the space-separated move
+list in `pv` last. Prefix all other diagnostic output with `info string`.
+Unrecognised output may be discarded or treated as a protocol fault.
 
 ### `shutdown`
-
-`shutdown`, optionally followed by free text, asks the host to stop giving this engine new
-games. It is the only line here that is a request rather than an answer, and the only one an
-engine sends unprompted.
 
 ```text
 < shutdown this machine is being reclaimed in ten minutes
 ```
 
-Print it at any time — mid-search, between games, or idle. It does not replace a `bestmove`,
-and every game already on a board is still to be played out. A host must not read it as
-"stop now": the engine is asking to leave the queue, not resigning. One that does not
-implement it ignores the line, so an engine may print it unconditionally. **`quit` is
-unrelated** — that comes from the host and means exit now.
+Send this at any time to request no new games. Continue answering searches and
+finish every committed game. It does not replace `bestmove` or resign a game.
+Hosts that do not support it ignore it. The host's `quit` command still means
+exit immediately.
 
-## Three things that are easy to get wrong
+## Common mistakes
 
-**Score is from the side to move's point of view.** `score cp <n>` is in centi-units,
-positive meaning the side to move is better — not Red, not your own colour. A sign error
-here is completely silent: the engine plays on, the protocol never complains, and a strong
-engine simply looks weak. If a new engine loses for no visible reason, check this first. A
-proven result is `score win <plies>` or `score loss <plies>`, counting plies to the end; it
-is not called `mate` because there is no mate in this game. `confidence <0-100>` is optional
-and reports how stable the result has been across iterations — **it is not a win
-probability**.
+**Scores use the side to move's perspective.** `score cp <n>` uses centi-units;
+positive values favour that side. Proven results use `score win <plies>` or `score loss <plies>`, not
+`mate`. Optional `confidence <0-100>` measures stability across search iterations,
+not win probability.
 
-**There is no `startpos`.** You always get a full FEN. A stored game records the board it
-was **actually** played from, and a game can start from a position somebody chose, so an
-engine that assumed the standard opening would occasionally and silently analyse a different
-game than the one being played.
+**There is no `startpos`.** Use the supplied FEN. Games may start from custom
+positions, and standard openings can change.
 
-**The `moves` list is how you count the plies since the last capture.** Two hundred of
-them — a hundred moves from each side — is a draw in every mode, and the FEN carries no
-counter, so the move list is the only place that number can come from. Past the opening this is the difference between a
-draw and a win in both directions: an engine blind to it plays for a win it will not be
-allowed to finish, and declines a draw it has already been handed. Replay the moves and
-reset your count on any move whose destination held a piece.
+**Count captures from the move history.** All modes draw after 200 plies without
+a capture (100 moves per side). FEN has no counter. Replay the moves and reset
+the counter when the destination held a piece.
 
-**No mode has a repetition draw.** Standing in a position for the third time is play, and
-the engine must not score it as half a point. It was a draw once, and in every mode but
-Intransitive (`V6`); a host talking to an older engine should expect it to disagree about
-exactly those positions. The move list still tells you which positions have occurred, which
-is worth knowing for other reasons — a line you have already been down is one you already
-know the value of.
+**Repetition is not a draw in any current mode.** Older rules allowed it in
+Infiltration and Total War, so older engines may disagree.
 
 ## On `legalmoves`
 
-Immediately before every `go`, the host sends every legal move for the side to move. This
-is not in UCI. Without it the smallest possible bot would need a FEN parser, a neighbour
-table, the capture cycle and each mode's movement rules before making one legal move; with
-it, the smallest possible bot is ten lines and picks at random.
-
-The list is authoritative rather than a second opinion — a `bestmove` outside it is
-rejected. An engine with its own generator gets a free conformance check by diffing the two
-and complaining via `info string`, which is the cheapest warning that the rules have moved.
-Otherwise discard it and generate your own; it costs about a kilobyte per move to ignore.
+The host sends this list before each `go`. A move outside it is rejected.
+Simple bots can pick directly from the list. Engines with their own move
+generator can compare the lists to check their rules and report differences
+with `info string`.
 
 ## Time, and errors
 
-Turning a clock into a search budget is the engine's business. Two obligations: return a
-`bestmove` before your own clock reaches zero, leaving a margin for the round trip, because
-the host will flag you; and always answer a `go`, returning the first legal move rather than
-nothing when there is no time to think.
+Return `bestmove` before your clock reaches zero. Leave time for the round trip.
+If time is short, return a legal move immediately.
 
-RPSI has no error replies, on purpose. An engine that cannot understand a line should ignore
-it, optionally saying so with `info string`, and carry on — an illegal `bestmove`, one that
-never arrives, and a crashed process are all detected host-side and resolved without the
-engine's help. The one thing an engine must never do is **exit on an unrecognised
-command**, because future versions will add them.
+There are no error replies. Ignore unknown commands, optionally log them with
+`info string`, and keep running. The host handles illegal moves, missing replies,
+and crashed engines. Never exit just because a command is unfamiliar.
 
 ## Driving an engine by hand
-
-It is plain text on a pipe, so the fastest way to check an engine is to talk to it:
 
 ```bash
 printf 'rpsi\nisready\nnewgame V5\nquit\n' | ./your-engine
 ```
 
-To put an engine on a live server, see [bots.md](bots.md). Nothing here is specific to that:
-an engine that satisfies this specification needs no changes to play online.
+See [Connect your bot](bots.md) to run the engine on a live server.

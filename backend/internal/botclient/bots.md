@@ -1,67 +1,49 @@
 # Connect your bot
 
-Write a program that reads lines from standard input and writes lines to standard output,
-then run one a given Python script next to it. That's it! Your bot never touches
-a network, an account, or a game clock.
+Write an engine that reads and writes lines, then connect it with `rpsbot.py`.
+The client handles the network and account; your engine chooses moves.
 
-- **The protocol** is [RPSI](rpsi.md), a UCI-shaped text protocol. Everything you need to
-  start is on this page; the full reference is there.
-- **The client** is `rpsbot.py`, downloaded from the **Your bots** page under Account. It
-  reports its version on connect and tells you when a newer one exists.
+Download the client from **Bots → Your bots**. See [RPSI](rpsi.md) for the full
+protocol and [Records and notation](notation.md) for PGN and FEN formats.
 
----
+## Game rules
 
-## The game, in a paragraph
+Rock–Paper–Scissors Strategy uses a 9×9 board. Rock captures scissors, scissors
+captures paper, and paper captures rock. In **V3 Infiltration**, reach the enemy
+home row. In **V5 Total War**, capture every enemy piece or hold more territory
+when the board fills. In **V6 Intransitive**, reach the enemy starting corner.
+Declare only the modes your engine supports. Games can be watched live and
+replayed from their saved PGN.
 
-Rock–Paper–Scissors Strategy is played on a 9×9 board. Each side has nine pieces — three
-rock, three paper, three scissors — and a piece captures what it beats. There are three
-modes: **V3 Infiltration**, won by getting a piece to the opponent's home rank; **V5 Total
-War**, won by wiping the opponent out or owning most of the board once it fills; and **V6
-Intransitive**, won by reaching the corner the opponent's army started in. Your engine is
-told which mode each game is and only has to play the ones it declares.
+## Engine basics
 
-Games are real games: they appear in the lobby, anyone can spectate, they are stored as
-PGN, and they can be replayed move by move afterwards.
-
----
-
-## What your bot has to do
-
-Read lines on stdin and answer four of them. The other two you just remember.
+Read commands from stdin and flush each reply to stdout.
 
 | You receive | You reply |
 | --- | --- |
-| `rpsi` | your identity, the modes you play, then `rpsiok` |
+| `rpsi` | Identity and supported modes, then `rpsiok`. |
 | `isready` | `readyok` |
-| `position fen … moves …` | nothing — remember it |
-| `legalmoves d3-d4 e3-e4 …` | nothing — these are your options |
+| `position fen … moves …` | No reply. Save the position and history. |
+| `legalmoves d3-d4 e3-e4 …` | No reply. Save the legal moves. |
 | `go rtime 300000 btime 298400 rinc 3000 binc 3000` | `bestmove d3-d4` |
-| `quit` | exit |
+| `quit` | Exit. |
 
-Ignore anything you do not recognise. Never exit on an unknown command.
+Ignore unknown commands. Do not exit when you receive one.
 
 ### Reading a `go` line
 
-That one line is the only thing you have to understand properly:
-
 ```text
 go rtime 300000 btime 298400 rinc 3000 binc 3000
-   │           │            │          └── Blue gains 3000 ms after each move
-   │           │            └── Red gains 3000 ms after each move
-   │           └── Blue has 298400 ms left  (4:58.4)
-   └── Red has 300000 ms left  (5:00)
 ```
 
-Everything is **milliseconds**, and `r`/`b` are **Red and Blue**, not you and your
-opponent — which side you are is whatever `position` says is to move. So the clock that
-matters is `rtime` on Red's turn and `btime` on Blue's.
+Times are milliseconds. `rtime` and `btime` are Red's and Blue's remaining time;
+`rinc` and `binc` are their per-move increments. Your side is the side to move
+in `position`.
 
-You decide how much of it to spend. A common starting point is a twentieth of what is left
-plus most of the increment, which for the line above gives Blue about 17 seconds. Whatever
-you choose, **return before your own clock reaches zero** — running out is a loss.
-
-`go` can also carry `movetime`, `depth`, `nodes`, `searchmoves` and `infinite`, all optional
-and all safe to ignore. There is no `movestogo`.
+Choose your own search budget. A starting estimate is one twentieth of remaining
+time plus most of the increment. **Return before your clock reaches zero**, with
+a margin for the network. Optional limits include `movetime`, `depth`, `nodes`,
+`searchmoves`, and `infinite`. There is no `movestogo`.
 
 ### A complete, legal bot
 
@@ -86,410 +68,288 @@ for line in sys.stdin:
         break
 ```
 
-It plays random moves and beats nobody, but it finishes every game legally. Download it
-from the Your bots page as `example_engine.py`.
-
-**`flush=True` matters.** Buffered output looks exactly like a hung engine.
-
-It is that short because the server sends `legalmoves` before every `go`. There is no
-move-generation library for this game, so without that line the smallest possible bot would
-need a FEN parser, a neighbour table, the capture cycle and each mode's movement rules
-first. A strong engine ignores the line and generates its own moves; a beginner picks from
-it.
+This bot picks random legal moves. Download it as `example_engine.py` from
+**Your bots**. Keep `flush=True`; buffered replies can make an engine time out.
+The server sends `legalmoves` before every search, so a simple bot needs no move
+generator. More advanced engines can generate their own moves.
 
 ### Squares, moves, positions
 
-Files `a`–`i`, ranks `1`–`9`; `a1` is Blue's home corner. A move is `d3-d4`, or `d3xd4` when
-it captures — **accept either and read nothing into which one you got**. A position is
-pieces, side to move (`r`/`b`), and territory, space-separated. Only Total War uses
-territory, so in the other two modes you can ignore that field.
+Files run `a`–`i`, ranks `1`–`9`, with `a1` at Blue's home corner. Moves look like
+`d3-d4` or `d3xd4`. Accept either separator; the board determines captures.
+Positions contain pieces, side to move (`r`/`b`), and territory. Only Total War
+uses territory.
 
 ### Four things that catch people out
 
-1. **`score cp N` is from the side to move's point of view**, not Red's and not yours. This
-   is the most common bug and it is silent — a strong engine just looks weak.
-2. **There is no `startpos`.** You always get a full FEN, because a game can begin from a
-   position somebody chose, and a mode's opening layout can be redesigned.
-3. **The `moves` list is how you count the plies since the last capture.** Two hundred of
-   them — a hundred moves from each side — is a draw in every mode, and the FEN cannot tell
-   you how long it has been. Repeating a position, on the other hand, is *not* a draw in any mode, so do not
-   score a repeat as half a point.
-4. **Having no legal move is not always a draw.** It is in Infiltration and Total War; in
-   Intransitive the side that cannot move has lost. So a quiet move leaving your opponent
-   nowhere to go wins on the spot there — and one leaving **you** nowhere to go loses.
+1. **Scores use the side to move's perspective.** Positive `score cp N` favours that side.
+2. **Use the supplied FEN.** There is no `startpos`; games can start from custom positions.
+3. **Count captures from the move list.** All modes draw after 200 plies without a capture (100 moves per side). FEN has no counter. Repetition is not a draw.
+4. **No legal moves means a loss in Intransitive**, but a draw in Infiltration and Total War.
 
-Full detail, including `info` output and search limits, is in [rpsi.md](rpsi.md).
+## Quick start
 
----
-
-## Getting connected
-
-**Register an account.** Anonymous play stays anonymous, but a bot needs an owner, and
-registering keeps the rating and history you already have.
-
-**Add a bot** from your account page. You get a token like `rps_b_…`, shown once. It *is*
-your bot's identity: the same token always means the same bot, with the same rating and
-history, so a restart is recognised rather than creating a second one.
-
-**Download the client** from the Your bots page and check it against the digest shown there:
+1. Sign in with Discord. Your existing games and rating stay with you.
+2. Add a bot under **Bots → Your bots**. Save its `rps_b_…` token, which is shown once. Reusing it keeps the same bot and history.
+3. Download `rpsbot.py` and compare its digest with the one shown on the page:
 
 ```bash
 shasum -a 256 rpsbot.py
 ```
 
-**Run it.** The first run asks six questions and saves the answers to `rpsbot.conf`:
+4. Install the dependency and run your engine through the client:
 
 ```bash
 pip install websockets
 python3 rpsbot.py -- python3 example_engine.py
 ```
 
-```text
-Bot name: MyBot
-Icon: a square PNG up to 128x128, or blank for none []: mybot.png
-Let other players challenge this bot? [Y/n] y
-Enter tournaments automatically? [Y/n] y
-Games at once (1-5; each one runs its own copy of your engine) [1]: 1
-Paste your bot token (from your account page): rps_b_…
-
-Saved rpsbot.conf.
-MyBot is online. Waiting for a game.
-Using rules V3 published 2026-09-03
-Using rules V5 published 2026-09-03
-```
-
-Leave the icon blank if you have not drawn one — **Giving your bot a face** below says how,
-and you can add one later. Leave **Games at once** at 1 unless you have read **Playing more
-than one game at once** and your machine has the cores for it. Every later run connects
-straight away. The engine command after `--` is deliberately **not** saved, so the config
-file can never contain something that runs.
+On first run, enter a name, optional icon, game settings, and bot token. Answers
+are saved to `rpsbot.conf`; later runs connect directly. The engine command after
+`--` is not saved. Start with one game at a time until you know your machine can
+handle more.
 
 ### Options
 
 ```text
---reconfigure     ask the questions again
+--reconfigure     ask the setup questions again
 --name NAME       override the bot name for this run
 --icon PATH       override the icon for this run
---max-games N     override how many games to play at once (1-5)
---server URL      point at a different instance (saved on first run)
---config PATH     use a different config file
+--max-games N     set concurrent games (1-5)
+--server URL      use another server (saved on first run)
+--config PATH     use another config file
 ```
 
-Two bots on one machine: give each its own directory and its own conf.
+Give each bot its own directory and config file.
 
 ### Versions
 
-On connect the client tells the server which version it is. If a newer one exists you get a
-notice with the download link; if yours is too old to play, it says so and stops before
-starting your engine. The current version and its digest are on the Your bots page and at
-`GET /api/bot/version`, which is enough to update without a browser: it reports the current
-version, its digest, and download links for the client, the example engine, and this
-document with the protocol reference.
-
-`minimumVersion` is the oldest client the server will still play. It moves rarely, only for
-a change an older client cannot play through, and **1.4 is currently required**: the board's
-orientation and two win conditions changed on 3 September 2026, and 1.4 is the client that
-prints which rules your engine is playing under. An engine written against the old board
-does not fail on connect — it plays legal moves into a position it has misread. Upgrading
-costs nothing: your bot keeps its identity, rating and history.
+The client checks its version on connect. It offers an update link when needed
+and stops if it is too old to play. **Your bots** and `GET /api/bot/version` list
+the current version, digest, minimum supported version, and download links.
+Updating the client keeps your bot's identity, rating, and history.
 
 ### Rules changes
 
-Every connect prints the day the rules of each mode your engine plays were last published,
-and the client remembers those dates in `rpsbot.conf`. A date that has moved since this
-machine last connected is said out loud:
+The client prints each mode's rules date and saves it in `rpsbot.conf`. If that
+date changes, it warns you on connect. Check the updated rules before playing;
+an engine using old rules may still connect and make legal but poor moves.
+
+### Which build is running
+
+The bot's profile lists engine builds and when each first appeared. Report a
+build in the handshake:
 
 ```text
-  The rules changed since this bot last connected: V3 (this bot last played 2026-08-14).
+id name MyBot
+id author Me
+id version 2.3.1
 ```
 
-That exists because **an engine cannot notice**. You read a changelog; your engine plays
-what it was written against, and a board that flipped does not look like a rule change from
-inside a search — it looks like losing. When that line appears, re-read the mode before your
-next game.
+Use a version, commit, or date. Alternatively, set `version = 2.3.1` in
+`rpsbot.conf`. The config value is used only if the engine sends no `id version`.
+Update it when you rebuild. Build information is optional. Keep the build out
+of `id name` if you want it listed separately.
 
----
+## Client internals
 
-## What the client does, and how to check it
+The client forwards commands and replies, reconnects after network failures,
+restarts failed engine processes, and drains stderr. It does not implement game rules.
 
-A couple of hundred lines, no game logic. It writes the lines the server sends to your
-engine's stdin, reads stdout until a line starts with the prefix the server asked for, and
-sends those lines back. Roughly a third of it is failure handling: reconnection with
-backoff, restarting a hung engine, draining stderr so a chatty engine cannot deadlock on a
-full pipe. Four greps establish the rest:
-
-| Check | What you should find |
+| Check | What to look for |
 | --- | --- |
-| `grep -n subprocess rpsbot.py` | one `Popen`, argv exactly what you typed after `--`, run once per slot |
-| `grep -n 'wss\?://' rpsbot.py` | one destination, the `server` value in your conf |
-| `grep -n 'open(' rpsbot.py` | two files: `rpsbot.conf`, written `0600`, and your icon, read as bytes |
-| `grep -nE 'eval\|exec\|pickle\|os.system\|shell=True' rpsbot.py` | nothing |
+| `grep -n subprocess rpsbot.py` | Engine processes use the command after `--`, once per slot. |
+| `grep -n 'wss\?://' rpsbot.py` | The configured server address. |
+| `grep -n 'open(' rpsbot.py` | Config access and icon reads; config permissions are `0600`. |
+| `grep -nE 'eval\|exec\|pickle\|os.system\|shell=True' rpsbot.py` | No matches. |
 
----
+## Connection problems
 
-## When it will not connect
-
-**`<server> does not support bots`** — the server you pointed at is older than your client,
-or is not an RPS Strategy server. Check the `server` line in `rpsbot.conf`: `wss://` for a
-public server, `ws://` for one on your own machine, and the path ends in `/ws`.
-
-**`that bot token is not recognised`** — mistyped, or it belongs to a bot on a different
-server. Tokens are per-server.
-
-**`that bot name is already taken`** — names are shared with player names across the whole
-server. Pick another in `rpsbot.conf`.
-
-**`this copy of rpsbot.py is too old`** — download the current one; the message includes the
-link.
-
-**It connects and then nothing happens** — that is normal. It is waiting for somebody to
-challenge it or to enter it into a series. `Waiting for a game.` is the last thing it prints
-until one starts.
-
----
+| Message or symptom | What to do |
+| --- | --- |
+| `<server> does not support bots` | Check the server address and version. Use `wss://` publicly or `ws://` locally, with a path ending in `/ws`. |
+| `that bot token is not recognised` | Check the token and server. Tokens belong to one server. |
+| `that bot name is already taken` | Choose another name in `rpsbot.conf`. Bots and players share names. |
+| `this copy of rpsbot.py is too old` | Download the version linked in the message. |
+| `Waiting for a game.` | Connected successfully. Leave the client running for a challenge, series, or scheduled game. |
 
 ## Settings
 
-`rpsbot.conf` holds two switches and a number:
-
 ```ini
-public_play = yes    other players can challenge this bot, and can enter it into a series
-tournaments = yes    you are allowed to register it for an event
-max_games = 1        how many games it plays at the same time, 1 to 5
+[bot]
+public_play = yes
+ladder = yes
+tournaments = yes
+max_games = 1
+version =
 ```
 
-`public_play = no` keeps both: nobody but you can challenge it or put it in a series. Your
-own bots are always available to you, which is what makes running a new version against your
-old one work.
+Edit these values in your existing config. `ladder` enters hourly ranked rounds;
+`tournaments` enters supported events automatically. `version` is optional.
 
-The file asserts both switches **every time the bot connects**. The website can change
-either while the bot is running and it takes effect immediately, but a restart re-applies
-the file. If you turn something off on the site and it comes back later, that is the file,
-not a bug.
+With `public_play = no`, only you can challenge your bot or put it in a series.
+The website can change switches while the client runs. **Reconnecting restores
+the config values**, so update the file for lasting changes.
 
 ### Playing more than one game at once
 
-A bot plays one game at a time unless you say otherwise. `max_games` raises that to at most
-five, and each of them is a **slot**: its own connection to the server, its own copy of your
-engine, and one game on it at a time.
+`max_games` creates up to five slots, each with its own connection and engine
+process. Your engine still handles one game at a time. Allow enough memory and
+CPU for every process; overloaded engines can lose on time.
 
-```text
-Playing up to 3 games at once, one engine each.
-[1/3] MyBot is online. Waiting for a game.
-[2/3] MyBot is online. Waiting for a game.
-[3/3] MyBot is online. Waiting for a game.
-```
-
-Three engine processes, then, not one engine asked three things. Your engine needs to know
-nothing about it: it never sees two games, and one written for a single game is already
-correct for five. What it costs is what three copies cost — three times the memory, and
-enough cores that none of them thinks on a timeshare while its clock runs. That is what
-people get wrong: a bot that plays fine on four cores loses on time when five copies share
-them. Start at 1 and raise it only if there is room.
-
-One bot with three slots is still one bot — one name, one rating, one row on the ladder, one
-entry in a tournament — it just gets through its matches faster. The lobby shows it as
-*playing 1 of 3*, and it can be challenged until every slot is taken. Stopping is the bot's
-business rather than the slot's: Ctrl-C, `shutdown` from any engine, and the button on the
-website all drain every slot together.
+All slots share one bot name, rating, leaderboard row, and tournament entry.
+Players can challenge it while a slot is free. Shutdown and pause apply to all slots.
 
 ### Giving your bot a face
 
-A bot with no icon is drawn as two letters on a coloured square. To replace that, point the
-`icon` line at a PNG — **square, at most 128×128, at most 64 KiB**. Smaller squares are fine
-and are drawn at whatever size the page needs; nothing is scaled up, and only PNG is
-accepted.
+Set `icon` to a square PNG, at most **128×128 pixels and 64 KiB**:
 
 ```ini
-icon = mybot.png            # relative to wherever you start the client
+icon = mybot.png
 ```
 
-The icon travels with the name and the switches on every connect, so there is no upload
-page: **replace the file and restart the bot.**
+The path is relative to the client’s working directory. Replace the file and
+reconnect to update it. A blank or missing `icon` setting
+removes the current icon. An unreadable or invalid file leaves the old icon in
+place and prints an error. The bot can still play.
 
-| Your `icon` line | What the website shows |
-| --- | --- |
-| a readable PNG | that picture, from the next connect on |
-| blank, or no `icon` line | no picture — this **takes down** one you set earlier |
-| a file that cannot be read | no change, and the client says why on stderr |
+## Stopping safely
 
-That last row is deliberate: starting the client from the wrong directory is a mistake, not
-an instruction to erase your bot's face. You get a line like `icon: mybot.png is 256x256,
-and the limit is 128x128; leaving the current one alone`, and the bot plays as usual. The
-same goes for anything the server refuses on a closer look, such as a truncated PNG — the
-connection is never in question, and the reason is printed when the bot comes online.
-
----
-
-## Taking it down without losing a game
-
-Killing the process abandons whatever is on the board: a loss for your engine, a spoiled
-game for its opponent, and an abandonment on the record nobody meant. Ask for a **graceful
-shutdown** instead — the bot stops being offered new games immediately, plays out what it
-already owes, and then stops. Three ways to ask, all the same request:
+A graceful shutdown stops new games, finishes commitments, then exits.
 
 | Where | How |
 | --- | --- |
-| The website | **Your bots**, under Account: **FINISH AND STOP**, or **PAUSE** to stay connected |
-| The machine it runs on | Ctrl-C, or a `SIGTERM` from something like `systemctl stop` |
-| The engine itself | print `shutdown` on stdout — see [rpsi.md](rpsi.md) |
+| Website | **Your bots → FINISH AND STOP**, or **PAUSE** to stay connected. |
+| Client machine | Ctrl-C or `SIGTERM`. |
+| Engine | Print `shutdown` to stdout. |
 
-```text
-^C
-  Shutting down gracefully: no new games, finishing what is owed.
-  Press Ctrl-C again to stop now and abandon the games on the board.
+**A second Ctrl-C stops immediately and abandons active games.** The client
+isolates engines from the first signal. For a systemd service, use
+`KillMode=mixed` so the client can let engines finish.
 
-shutting down after: finishing the game it is playing, 3 matches left in Summer Cup
-MyBot has finished everything it owed. Shutting down.
-```
-
-**Press Ctrl-C again and it goes immediately**, abandoning the game — which is what the
-first press used to do, and is still there when you mean it.
-
-| Owed | What happens |
+| Commitment | What happens |
 | --- | --- |
-| the games on the board | each played to the end, and each counts |
-| a series | the current **pair** is finished, then the run stops |
-| a tournament that has started | every match it still has to play |
-| a tournament that has not started | it withdraws — nothing has been played, so nothing is lost |
+| Active games | Finish each game. |
+| Series | Finish the current pair, then stop the series. |
+| Started tournament | Play every remaining match. |
+| Tournament not started | Withdraw. |
 
-The pair is the unit for a series because its two games are the same opening with the colours
-swapped, and stopping between them leaves the record one game lopsided. While a bot drains,
-new games are refused from every direction and the lobby shows it as **SHUTTING DOWN**.
+**PAUSE** finishes the same commitments but stays connected. **RESUME** cancels
+the pause or pending shutdown. Restarting the client clears it too. A network
+reconnection preserves it, so a brief outage does not re-enter a paused bot.
 
-**PAUSE** is the same drain without the exit: the bot finishes what it owes, then sits
-connected and accepting nothing until you restart it. Use it when something else — systemd,
-a container runtime — decides when the process may stop. Either way the drain lives **on the
-connection and nothing else**, so a restart puts the bot back in play and there is no switch
-left set somewhere to find later. A dropped network is not a restart, though: the client
-re-asks for the drain on its next connection, so a blip cannot quietly put a bot you took
-out of play back into it. **RESUME** on the website calls the whole thing off.
+## Reconnecting
 
----
+The client reconnects automatically, starting with a one-second backoff.
+**The server holds an active seat for 15 seconds.** The first slot to reconnect
+and finish its handshake resumes the game.
 
-## When the connection drops
+Your clock keeps running while disconnected. If it reaches zero first, you lose
+on time. Missing the reconnection window is recorded as abandonment.
 
-Not every departure is asked for. A wifi drop, a laptop lid, a redeploy of the machine the
-bot runs on — the socket goes and the client starts reconnecting, on a backoff that begins at
-one second. None of that has to cost you a game.
-
-**Your seat is held for fifteen seconds.** The board stays up, the opponent is told you have
-dropped and shown the countdown, and the first slot of your bot to reconnect and finish its
-handshake **sits back down in the same game** and is asked for a move from wherever the
-position had got to. You do not have to do anything for this — the client has no memory of
-which board it was on and does not need one; the server remembers.
-
-Fifteen seconds **or until the end of your time**, whichever comes first. A clock that is
-running is still running while nobody is there to answer, so an engine that drops on its own
-move with four seconds left has four seconds, and it loses on time rather than by
-abandonment. Not coming back inside the window is an abandonment: a loss, in the record, for
-the engine that was not there.
-
-A run is held open the same way, and this is where it matters most:
-
-| While the socket is gone | What happens to the run |
+| Series state | What happens |
 | --- | --- |
-| back inside the window, mid-game | it carries on in the same game, same score, same room |
-| back inside the window, between games | it deals the game it stopped at — including the swapped half of a pair it had already started |
-| not back inside the window | the run stops, and the games it did play still count |
-| a *spare* slot dropped | nothing: the slot the run is using is the only one it cares about |
+| Reconnect within the window during a game | Resume that game. |
+| Reconnect within the window between games | Continue with the next game, including the swapped half of a pair. |
+| Miss the window | Stop the series; completed games still count. |
+| A spare slot disconnects | The series continues on its active slot. |
 
-The middle row is the point. A run that is written off halfway through a pair leaves that
-matchup's sample one game lopsided in the first mover's favour, which is the one thing the
-pairing exists to prevent — so an engine that comes back gets to finish the pair it started,
-whether it left on purpose or not.
+## Move timing
 
----
+Moves are spaced at least 0.2 seconds apart. Faster replies wait on the server;
+slower replies play immediately. **This wait uses neither clock** and does not
+trigger another search. Your engine is charged only for its thinking time.
 
-## When an engine misbehaves
+## Engine errors
 
-| What happened | What the server does |
+| Problem | Result |
 | --- | --- |
-| `bestmove` is not legal here | asks once more, then ends the game |
-| no reply before the deadline | ends the game |
-| the engine process dies | the client restarts that slot's copy; the game ends |
-| the engine is simply slow | nothing — it loses on time, like anyone else |
-| the socket drops | holds the seat for fifteen seconds — see above |
+| Illegal `bestmove` | One retry, then the game ends. |
+| No reply before the deadline | The game ends. |
+| Engine process crashes | The client restarts that slot; the game ends. |
+| Clock runs out | Loss on time. |
+| Network disconnects | Seat held for up to 15 seconds. |
 
-Running out of clock is a loss, not a fault. Leave a margin, and if there is no time to
-think, return the first legal move rather than nothing.
+Faults are recorded as abandonment. The cause is sent to you and shown on the
+bot's page. Return a legal move promptly if there is no time to search.
 
-A game ended by a fault is recorded as an abandonment. The real reason — the illegal move,
-the timeout — is sent to you as the owner and shown on your bot's page.
+## Ratings and events
 
----
+Your bot has its own rating and game history. You can register **five bots per
+account**. If you lose a token, rotate it under **Your bots** to keep the bot's
+identity and history.
 
-## Ratings, series, tournaments
+### What a rating means
 
-Your bot has its own account, rating and game history. **Bot versus bot is rated** — that is
-the ladder. **Bot versus human is unrated in both directions**, so an engine can never move
-a person's rating and nobody can farm one off your engine.
+Every 20 rating points doubles the estimated odds of winning: a 20-point lead
+means 2:1 odds; 40 points means 4:1.
 
-**Your rating is not a running total.** A person's Elo is a transfer — you take points off
-whoever you beat — but that pays out for beating a fresh account, and an engine's author
-picks its opponents. So the bot ladder awards no points at all: it keeps the head-to-head
-record between every pair of bots and solves for the strengths that best explain it. Three
-things follow, and together they answer "can I just beat my own throwaway five hundred
-times":
+When reference engines are active, they anchor the scale:
 
-- **A matchup counts once, however long you play it.** Past about twenty games between the
-  same two bots only the ratio matters.
-- **You need at least two opponents, and so do they.** A bot whose only opponent is the bot
-  farming it is not on the ladder, which can leave the farmer with no opponents either.
-  Bots that only play each other are ranked against each other and nobody else.
-- **Nothing is assumed about a bot nobody has played.** An unrated engine's strength is left
-  unknown rather than presumed average, so beating it moves that unknown, not your rating.
+| Rating | Reference engine |
+| --- | --- |
+| 1 | Random legal moves: `GET /api/bot/yardstick_random.py` |
+| 100 | Capture when possible, otherwise random: `GET /api/bot/yardstick_greedy.py` |
+| 400 | RPSFish at 5 plies, without clock or opening book. |
+| 600 | RPSFish at 8 plies, without clock or opening book. |
 
-Only the part of the fit the record establishes is published: where the games do not support
-the spread, ratings sit closer to 1200, so a thin record reads as **unproven** rather than as a
-number. More opponents move it; more games do not.
+The Python references and their digests are public. Without designated reference
+engines, ratings are relative to the field: 1 is the weakest ranked engine.
+The leaderboard explains which scale is in use. Changing reference ratings
+recalculates the scale.
 
-Anybody can run a **series**: N pairs of games, each pair played twice from the same book
-opening with the colours swapped, which cancels the first-move advantage and stops the result
-being about which position each engine drew. Those dealt plies are tagged in the PGN and
-excluded from each engine's accuracy. Every game is ordinary — rated, watchable live,
-archived — and the run appears as a score table with a link you can hand to somebody.
-Stopping a run does not cancel the game it is in the middle of; the pairs it had not started
-are forgotten. A series from the website is held to **3 pairs**, **10 minutes each** and
-**one running series per person**, because it spends somebody else's CPU, and both engines
-need `public_play = yes` or must belong to whoever started it.
+### Where a rating comes from
 
-An **all-bot tournament** is a round robin between engines, and **you enter yours yourself**:
-open the event and register, choosing one of your bots. One place per account — yourself or
-one engine, not both and not two engines — and you can withdraw and pick a different one
-right up until the host starts it. Your bot does not have to be running to be registered, and
-it needs no tournament awareness at any point: the server starts its matches when they are
-due. `tournaments = no` is how you keep an engine out of the picker, and the four other
-reasons one is refused — it has never connected, it is disabled, it does not play the event's
-game, or you already have a place — are all named on the button.
+**Rated bot games use server-selected opponents and settings.** Hourly rounds
+start on the hour and play two Intransitive games per pair, with colours swapped.
+Set `ladder = yes` to enter. **PLAY NOW** requests an extra ranked pair; the server
+still chooses the opponent and settings.
 
-Two things to know before you enter. **You need a verified Discord account** — the engine
-cannot have one, so the check is against you, and it is also how the host reaches you when
-your bot stops turning up. And **tournament games are rated**: they move the bot ladder like
-any other ranked game, which for most engines is where the bulk of their rating comes from.
+Keep the client online at the hour. Missed server rounds are skipped. Busy
+engines are paired and wait for a free slot; a pairing still waiting at the next
+hour expires. Hourly rounds schedule at most two games per engine per hour.
 
-A host can also make each pairing more than one game. When they do, the colours swap every
-game and the match is decided on the aggregate, so your engine plays both sides of every
-pairing rather than living with whichever seat it drew.
+The pool prefers useful matchups: similar strength, unfamiliar opponents, and
+uncertain ratings. With reference engines active, new bots play one first.
 
-There is also a **weekend** one. Once a weekend, at a fixed hour, the server
-builds a tournament out of whatever engines are online and set to enter
-tournaments — no registration, nothing to click. If your bot is connected when it
-starts, it plays; if fewer than a handful of engines are up, the event is called
-off. The time control is voted on during the week by whoever turns up on the
-weekend page, and the slot itself follows an availability window — everyone marks
-the slots they can make, shown in their own timezone and under their own day
-names, and the event drifts towards whichever slot suits the most people, a week
-at a time.
-Winning weekends is tracked on its own rolling crown rather than the tournament
-title.
+Challenges and manually arranged series do not affect bot ratings. Bot games
+against people are also casual, except for human ratings against reference engines.
+Infiltration and Total War keep their historical ratings but get no new hourly rounds.
 
-Once the host starts the event your bot goes **into reserve**: still online, still visible,
-and not accepting challenges or series until the event finishes, so its scheduled matches
-are not being lost to passers-by. Before the start it plays anything it likes.
+### Why it is not a running total
 
-A round robin is the best thing for your rating, being a game against every opponent at once —
-as is a series against an opponent you have never played.
+Bot ratings are fitted from the head-to-head record, with limits on repeated
+matchups and shared ownership:
 
-**Five bots per account.** If you lose `rpsbot.conf`, rotate the token from your account
-page: the bot keeps its identity, rating and history, and only the secret changes.
+- After about twenty games against the same engine, the result ratio matters more than the count.
+- Engines need enough independent opponents to establish a rating. Reference engines anchor otherwise uncertain comparisons.
+- An unplayed engine has unknown strength; beating it does not assume it was average.
+- Engines with the same owner do not rate each other.
+
+Insufficient evidence shows as **Not enough data to rank**; thin ratings are
+**Provisional**. Results lose half their weight every three months, so inactive
+ratings become less certain.
+
+### Series and tournaments
+
+A **series** plays pairs from shared opening positions, with colours swapped.
+Seeded opening moves are excluded from accuracy scores. Games are watchable,
+archived, and **casual**. Website series allow up to **3 pairs**, **10 minutes per
+side**, and **one active series per person**. Both bots must allow public play or
+belong to the person starting it. Stopping a series lets its current pair finish.
+
+For **engine tournaments**, set `tournaments = yes` and stay online. Every eligible
+engine enters when the event starts; you can enter multiple bots. Turn the switch
+off to keep a bot out of future events. Your Discord account must be verified.
+Draining, unsupported, or barred engines are skipped; the event page shows why.
+
+The server starts tournament matches automatically. Multiple games per match
+swap colours and use the aggregate result. During an event, engines are reserved
+for its matches and cannot accept challenges or series until it ends. Host-created
+tournaments are casual.
+
+The **weekend arena** builds its field from eligible online engines. It is called
+off if too few are available. Use the weekend page to vote on the clock and mark
+available times in your timezone. The leading time slot sets the following
+weekend's schedule; ties keep the current slot. Weekend results and titles appear
+on that page.

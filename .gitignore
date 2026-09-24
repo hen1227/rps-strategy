@@ -13,5 +13,10 @@ deploy/bots/*.conf
 # builds without it; see backend/internal/meafarchive.
 backend/internal/meafarchive/games_export.txt
 
+# The deploy machine's copy of the server's admin token, for the deploy run
+# from a host that cannot read the server's own .env. Optional: deploy-backend.sh
+# reads that file over ssh by default and keeps nothing here.
+deploy/deploy.env
+
 # Apple push key. A .p8 in a repository is a .p8 leaked.
 *.p8

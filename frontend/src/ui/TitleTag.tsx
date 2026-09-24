@@ -1,6 +1,6 @@
 import { StyleSheet, Text } from 'react-native';
 
-import { colors, radius, space, titleTone } from '@/theme';
+import { colors, radius, space, themedSheet, titleTone } from '@/theme';
 import type { TitleID } from '@/types/protocol';
 
 // The tag that sits in front of a name: `GM`, `BSL`, `DEV`.
@@ -19,6 +19,12 @@ import type { TitleID } from '@/types/protocol';
 // It renders nothing at all when there is no title, so a caller can put it in
 // the row unconditionally rather than guarding at every call site. That is what
 // keeps it out of the layout of the great majority of players, who wear none.
+//
+// Letters, and only letters. Two of the engine tags were once the crown glyph
+// itself, drawn oversized so that a single character could carry the weight of
+// three bold capitals — which made them a gold square in front of a name rather
+// than an abbreviation of anything, and left a screen reader to be told
+// separately not to announce "black chess queen" in the middle of it.
 
 export interface TitleTagProps {
   title?: TitleID | null;
@@ -35,8 +41,8 @@ export default function TitleTag({ title, size = 'small' }: TitleTagProps) {
   const tone = titleTone(tag);
   return (
     <Text
-      // Read out as the word rather than the letters, which a screen reader
-      // would otherwise spell as an acronym in the middle of a name.
+      // Named as a title, so that two or three capitals are not read as the
+      // first syllable of the name beside them.
       accessibilityLabel={`Title: ${tag}`}
       style={[
         styles.tag,
@@ -50,7 +56,7 @@ export default function TitleTag({ title, size = 'small' }: TitleTagProps) {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   tag: {
     // Colour is the title's, applied above. What is left here is the shape,
     // which every tag shares whatever it says.
@@ -58,6 +64,9 @@ const styles = StyleSheet.create({
     borderColor: colors.titleBorder,
     borderRadius: radius.small,
     overflow: 'hidden',
+    // Eight points, and the tracking below is what keeps three capitals legible
+    // at it. A list row is where almost every tag is drawn, so this is the size
+    // the whole scheme is judged at.
     fontSize: 8,
     fontWeight: '900',
     letterSpacing: 0.6,
@@ -68,5 +77,10 @@ const styles = StyleSheet.create({
     flexShrink: 0,
   },
   medium: { fontSize: 9, paddingHorizontal: 5, paddingVertical: space.hair },
-  large: { fontSize: 11, paddingHorizontal: 6, paddingVertical: 2, letterSpacing: 1 },
-});
+  large: {
+    fontSize: 11,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    letterSpacing: 1,
+  },
+}));

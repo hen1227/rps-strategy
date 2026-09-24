@@ -8,8 +8,9 @@ import TileMark from './TileMark';
 import { overlayCellAt, type BoardOverlay } from './overlay';
 import type { PieceLook } from './pieceLook';
 import { tintForTile } from './tint';
-import { board, players } from '@/theme';
+import { board, players, themedSheet } from '@/theme';
 import { boardHeight, boardWidth, type Grid, type ModeID, type Move, type SideColor } from '@/types/game';
+import { useAppearanceGeneration } from '@/appearance/store';
 
 // A board nobody can touch.
 //
@@ -85,6 +86,11 @@ export default memo(function MiniBoard({
   pieceSize,
   size,
 }: MiniBoardProps) {
+  // This component wears `memo()`, and none of its props move when the look
+  // does — so without a subscription of its own it would keep the previous
+  // theme's colours while the page around it changed. See `appearance/store`.
+  useAppearanceGeneration();
+
   // Even a diagram needs this: without it a background that will not load leaves
   // the tiles dimmed over nothing, which reads worse than no picture at all.
   const [backgroundFailed, setBackgroundFailed] = useState<string | null>(null);
@@ -225,7 +231,7 @@ export default memo(function MiniBoard({
   );
 });
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   board: {
     overflow: 'hidden',
     pointerEvents: 'none',
@@ -287,4 +293,4 @@ const styles = StyleSheet.create({
     borderColor: board.moveHint,
   },
   arrowLayer: { ...StyleSheet.absoluteFill, zIndex: 4 },
-});
+}));

@@ -11,7 +11,7 @@ import { StyleSheet, Text, View, Pressable } from 'react-native';
 import { formatScore } from '@/features/analysis/EvalBar';
 import MiniBoard from '@/features/board/MiniBoard';
 import type { OpeningStep } from '@/engine/openingLine';
-import { colors, radius } from '@/theme';
+import { colors, radius, themedSheet } from '@/theme';
 import type { ModeID, SideColor } from '@/types/game';
 
 import { ExpectationBar, TurnDot, forcedLabel } from './openingsUi';
@@ -137,7 +137,7 @@ export default function MoveCard({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   moveCard: {
     padding: CARD_PADDING,
     borderWidth: 1,
@@ -190,4 +190,4 @@ const styles = StyleSheet.create({
   moveName: { color: colors.accentSoft, fontSize: 11, fontWeight: '800', marginTop: 5 },
   moveNameWanted: { color: colors.goldSoft },
   moveStatus: { color: colors.textFaint, fontSize: 9, lineHeight: 13, marginTop: 4 },
-});
+}));

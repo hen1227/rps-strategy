@@ -2,7 +2,7 @@ import { StyleSheet, Text, View } from 'react-native';
 
 import { links } from '@/navigation/links';
 import type { ProfileTournament } from '@/store/api/players';
-import { colors, space, type } from '@/theme';
+import { colors, space, themedSheet, type } from '@/theme';
 import { Badge, EmptyState, GhostLink, Panel, SectionHeading } from '@/ui/primitives';
 import type { BadgeTone } from '@/ui/tones';
 
@@ -98,7 +98,7 @@ export default function ProfileTournaments({ tournaments }: ProfileTournamentsPr
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   list: { marginTop: space.small },
   row: {
     flexDirection: 'row',
@@ -112,4 +112,4 @@ const styles = StyleSheet.create({
   copy: { flex: 1, minWidth: 160 },
   name: { ...type.rowTitle, color: colors.text },
   meta: { ...type.meta, color: colors.textFaint, marginTop: 2 },
-});
+}));

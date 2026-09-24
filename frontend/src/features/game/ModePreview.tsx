@@ -3,7 +3,7 @@ import { StyleSheet, Text, View } from 'react-native';
 
 import { gridFromRows } from '@/engine/analysisGame';
 import MiniBoard from '@/features/board/MiniBoard';
-import { colors, radius } from '@/theme';
+import { colors, radius, themedSheet } from '@/theme';
 import { isBoardRows, type ModeDefinition, type StartingPosition } from '@/types/game';
 
 const DEFAULT_ROWS = [
@@ -62,7 +62,7 @@ export default function ModePreview({ mode, position, size = PREVIEW_SIZE }: Mod
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   frame: {
     padding: FRAME_PADDING,
     borderRadius: radius.large,
@@ -91,4 +91,4 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     letterSpacing: 0.8,
   },
-});
+}));

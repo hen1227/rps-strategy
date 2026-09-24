@@ -238,37 +238,16 @@ export const signupForTournament = (tournamentId: string, signup: TournamentSign
   });
 
 /**
- * Enter one of your engines instead of yourself.
- *
- * The same route, and deliberately: an account has one entry in an event, and
- * this is a different answer to the same question rather than a second door.
- * Nothing about the bot is sent but its id — its name, the handle the host
- * reaches it on, and the chat agreement are the server's to read from the
- * registry and from your account, because none of them is a thing this form
- * gets to assert about a program.
- *
- * The session token is required here where it is optional above: entering an
- * engine means proving you own it.
- */
-export const registerBotForTournament = (
-  sessionToken: string,
-  tournamentId: string,
-  botId: string,
-) =>
-  request<Tournament>(`/api/tournaments/${encodeURIComponent(tournamentId)}/signups`, {
-    method: 'POST',
-    token: sessionToken,
-    body: { botId },
-    what: 'Registering your bot',
-  });
-
-/**
- * Take your entry back out, whichever of you is holding it.
+ * Take your own entry back out.
  *
  * Registration only — once the pairings exist, every other entrant's schedule
  * is built around your name being in it, and the host is the only one who can
- * unpick that. Before then this is how an owner who entered the wrong engine
- * fixes it: withdraw, then register the right one.
+ * unpick that.
+ *
+ * Your own, and not your engines'. There is no per-event door for an engine in
+ * either direction: it is entered by having its `enterTournaments` switch on
+ * when an event starts, and it leaves by having it off. A withdrawal would last
+ * only until the next sweep looked.
  */
 export const withdrawFromTournament = (sessionToken: string, tournamentId: string) =>
   request<Tournament>(`/api/tournaments/${encodeURIComponent(tournamentId)}/signups`, {

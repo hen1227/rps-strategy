@@ -9,7 +9,7 @@ import {
 } from './officialTournament';
 import { useNow } from '@/hooks/useNow';
 import { links } from '@/navigation/links';
-import { colors, radius, space, type } from '@/theme';
+import { colors, radius, space, themedSheet, type } from '@/theme';
 
 // The front page's notice about the official tournament.
 //
@@ -41,7 +41,7 @@ export default function OfficialTournamentBanner() {
   return (
     <Link asChild href={links.tournamentInfo()}>
       <Pressable
-        accessibilityLabel={`${officialTournament.name} — tournament information`}
+        accessibilityLabel={`${officialTournament.name} · tournament information`}
         accessibilityRole="link"
         // One resolved style object: `Link asChild` clones this into a real
         // anchor and an array reaches the DOM node as something with numeric
@@ -71,7 +71,7 @@ export default function OfficialTournamentBanner() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   banner: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -97,4 +97,4 @@ const styles = StyleSheet.create({
   title: { ...type.rowTitle, color: colors.textStrong, fontSize: 13 },
   detail: { ...type.body, color: colors.textMuted, marginTop: space.hair },
   chevron: { color: colors.textFaint, fontSize: 18 },
-});
+}));

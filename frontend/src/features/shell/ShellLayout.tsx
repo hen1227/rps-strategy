@@ -11,7 +11,7 @@ import { useBottomInset } from './bottomInset';
 import ServerBanner from './ServerBanner';
 import LiveRail from '@/features/live/LiveRail';
 import { useWideScreen } from '@/hooks/useBoardLayout';
-import { colors } from '@/theme';
+import { colors, themedSheet } from '@/theme';
 import { Banner } from '@/ui/primitives';
 import { useGameStore } from '@/store/gameStore';
 
@@ -133,7 +133,7 @@ export default function ShellLayout() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   screen: { flex: 1, backgroundColor: colors.background },
   columns: { flex: 1, flexDirection: 'row', alignItems: 'stretch' },
   stack: { flex: 1, flexDirection: 'column' },
@@ -144,4 +144,4 @@ const styles = StyleSheet.create({
   // part of the chrome rather than as a band of page behind it.
   barHolder: { backgroundColor: colors.surfaceSunken },
   tabHolder: { backgroundColor: colors.surfaceSunken },
-});
+}));

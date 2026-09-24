@@ -4,7 +4,7 @@ import { StyleSheet, Text, View } from 'react-native';
 import { adminStyles } from './adminStyles';
 import { useGameStore } from '@/store/gameStore';
 import type { TournamentConfig } from '@/store/api/tournaments';
-import { colors, radius, space, type } from '@/theme';
+import { colors, radius, space, themedSheet, type } from '@/theme';
 import type { ModeID } from '@/types/game';
 import type {
   Tournament,
@@ -51,13 +51,13 @@ const FORMATS: { label: string; value: TournamentFormat }[] = [
 /** What each format costs, in the units a host is deciding in: games. */
 const FORMAT_DETAIL: Record<TournamentFormat, string> = {
   round_robin:
-    'Everybody plays everybody once. The fairest, and the one that does not scale — sixteen entrants is 120 games.',
+    "Each entrant plays every other once. Sixteen entrants means 120 games.",
   double_round_robin:
-    'Everybody plays everybody twice, with the seats swapped so nobody gets both openings. Twice the games.',
+    "Each entrant plays every other twice, with colours swapped.",
   single_elimination:
-    'A knockout. Lose and you are out; a field that is not a power of two byes its top seeds in round one. Rounds are paired as they are reached.',
+    "Lose and you are out. Top seeds get first-round byes when needed.",
   swiss:
-    'Fixed number of rounds, paired by score, nobody plays the same opponent twice. Scales to a large field without eliminating anybody.',
+    "A fixed number of rounds, paired by score, with no repeat opponents or eliminations.",
 };
 
 const FIELDS: { label: string; value: TournamentField }[] = [
@@ -68,8 +68,8 @@ const FIELDS: { label: string; value: TournamentField }[] = [
 
 const FIELD_DETAIL: Record<TournamentField, string> = {
   open: 'Anybody may enter, engines included.',
-  humans: 'Engines are refused, and their owners are not offered them in the entrant picker.',
-  bots: 'People are refused. Engines entered in a running event are held in reserve for it — they take no challenges and no series until it finishes, even after their last match.',
+  humans: "Human players only.",
+  bots: "Engines only. Entrants cannot accept challenges or series until the event ends.",
 };
 
 const SEEDINGS: { label: string; value: TournamentSeeding }[] = [
@@ -231,7 +231,7 @@ export default function TournamentBuilder({
           */}
           {format === 'swiss' ? (
             <LabeledInput
-              hint="Leave blank to let the field size decide, which is what a Swiss normally does."
+              hint="Leave blank to choose rounds based on field size."
               keyboardType="number-pad"
               label="ROUNDS"
               onChangeText={setSwissRounds}
@@ -249,7 +249,7 @@ export default function TournamentBuilder({
             what makes a bot event's table mean anything.
           */}
           <LabeledInput
-            hint="Blank or 1 plays a single game. Even numbers give each side the opening seat the same number of times. Ten at most."
+            hint="1–10 games per match. Use an even number to balance colours. Blank means one game."
             keyboardType="number-pad"
             label="GAMES PER MATCH"
             onChangeText={setGamesPerMatch}
@@ -258,8 +258,7 @@ export default function TournamentBuilder({
           />
           {Number(gamesPerMatch) > 1 && Number(gamesPerMatch) % 2 === 1 ? (
             <Text style={styles.detail}>
-              An odd number hands one entrant of every pairing an extra turn at opening.
-              Allowed, but an even number is what makes the match fair.
+              An odd number gives one entrant an extra game moving first.
             </Text>
           ) : null}
 
@@ -280,8 +279,8 @@ export default function TournamentBuilder({
           />
           <Text style={styles.detail}>
             {seeding === 'rating'
-              ? "Strongest first, using each entrant's rating in this event's mode. What a bracket wants, so the two favourites do not meet in round one."
-              : 'The order people entered. Nothing about it is a judgement, which is its own kind of fair.'}
+              ? "Seed by rating in this mode, keeping top entrants apart in early rounds."
+              : "Seed by entry order."}
           </Text>
 
           <OptionChips
@@ -298,7 +297,7 @@ export default function TournamentBuilder({
 
       {locked.cap ? null : (
         <LabeledInput
-          hint="Leave blank for no cap. A cap is how a round robin stays finishable."
+          hint="Leave blank for no limit."
           keyboardType="number-pad"
           label="MAXIMUM PLAYERS"
           onChangeText={setMaxPlayers}
@@ -319,16 +318,14 @@ export default function TournamentBuilder({
       </View>
       {tournament ? null : (
         <Text style={adminStyles.help}>
-          A new event is a draft. It is not on the public board, it takes no signups, and
-          nobody but you can reach its address — so it can sit half-decided for as long as you
-          like. Publishing is what opens it.
+          Drafts are private. Publish to list the event and open registration.
         </Text>
       )}
     </View>
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   form: {
     gap: space.snug,
     marginTop: space.small,
@@ -347,4 +344,4 @@ const styles = StyleSheet.create({
     gap: space.small,
     marginTop: space.small,
   },
-});
+}));

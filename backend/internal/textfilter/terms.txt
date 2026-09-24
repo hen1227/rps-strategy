@@ -1,0 +1,182 @@
+# The words this server will not carry.
+#
+# Read by filter.go, which explains what the two sections mean and why the
+# distinction matters. The short version:
+#
+#   [anywhere]  refused wherever it appears, even inside another word. Only for
+#               terms long and unambiguous enough that no ordinary word
+#               contains them — five letters minimum, enforced at load.
+#   [word]      refused only as a whole word. This is where anything short or
+#               ambiguous goes: "ass" here refuses "ass" and leaves "class",
+#               "assess", and "Bass" alone.
+#   [name]      refused anywhere inside a *username*, and nowhere else. A name
+#               has no spaces in it, so whole-word matching does almost nothing
+#               there: "fuckyou" is one word. This section is the answer, and it
+#               is a hand-picked subset rather than the [word] list reused —
+#               substring-matching that would refuse Dickson, Pakistani,
+#               raccoon, Mustard, and suspicious.
+#
+# Matching folds case, strips spacing and punctuation, and undoes the usual
+# digit substitutions, so a term listed once covers "F.U.C.K", "f u c k", and
+# "fu(k". Stretched spellings are handled too. None of that needs listing here:
+# write the plain word and the matcher does the rest.
+#
+# Adding a term is editing this file. Think about which section it belongs in —
+# a short or ambiguous term in [anywhere] is how a filter starts refusing
+# innocent messages and teaching people that it is broken. "chink" is the
+# example to keep in mind: a real slur, and also the word in "a chink in his
+# armour", which is a sentence somebody will type on a strategy site. It is in
+# [word] for that reason and the trade is deliberate.
+#
+# This list is deliberately narrow. It covers slurs and the strongest
+# profanity, and nothing else. Insults, heat, and rudeness are for the report
+# button and the host, not for a word list that cannot tell an argument from
+# abuse — and neither are proper nouns: "nazi" and "hitler" are absent because
+# refusing them refuses the sentence condemning them just as readily.
+
+[anywhere]
+# Racial and ethnic slurs long enough to match inside anything.
+nigger
+nigga
+wetback
+towelhead
+raghead
+beaner
+zipperhead
+junglebunny
+# Slurs against gay, lesbian, bisexual, and transgender people.
+faggot
+tranny
+shemale
+# Ableist slurs. "retarded" only: "retard" is in [word], because "retardant"
+# and "retardation" are ordinary words and this section matches inside them.
+retarded
+mongoloid
+spastic
+# Sexual and violent terms with no innocent reading.
+rapist
+pedophile
+paedophile
+molester
+childporn
+cumshot
+blowjob
+handjob
+creampie
+bestiality
+# Hate slogans, which is a narrower thing than the history they come from.
+heilhitler
+whitepower
+sieg heil
+
+# Refused anywhere inside a username. See the header: a name is one word, so
+# the [word] section below barely applies to it.
+#
+# Everything here has to be a string that no ordinary name contains, and the
+# absences are the interesting part of this list. All of these look obvious and
+# all of them are wrong:
+#
+#   cunt   Scunthorpe. The original of the whole problem, and it is a place
+#          people are actually from.
+#   kike   "Kike" is a common Spanish nickname for Enrique, and sits inside
+#          Kikelomo.
+#   dyke   Vandyke, Dykes — surnames.
+#   dick   Dickson, Dickinson.
+#   coon   raccoon, tycoon.
+#   paki   Pakistani, which is what somebody calls themselves.
+#   arse   parse, sparse, Marseille.
+#   rape   grape, drape.
+#   anus   Uranus, Manus.
+#   spic   suspicious, auspicious.
+#   tard   Mustard, custard.
+#   gook   Gookin, and a romanization of a Korean surname.
+#
+# Each of those is still refused as a whole word by the [word] section below.
+# What is given up is only the compound — "cuntface" gets through — and that is
+# the right way round: the report button catches what this does not, and there
+# is no undoing having refused somebody their own name.
+[name]
+fuck
+shit
+bitch
+whore
+slut
+twat
+wanker
+asshole
+arsehole
+pussy
+jizz
+dildo
+bastard
+retard
+chink
+wetback
+
+[word]
+# Short or ambiguous slurs, matched only as whole words.
+chink
+spic
+spick
+gook
+kike
+coon
+paki
+dyke
+fag
+fags
+wog
+abo
+jap
+kraut
+tard
+retard
+retards
+# Strong profanity.
+fuck
+fucks
+fucker
+fuckers
+fucking
+fucked
+motherfucker
+motherfucking
+cunt
+cunts
+shit
+shits
+shitty
+bullshit
+bitch
+bitches
+whore
+whores
+slut
+sluts
+cock
+cocks
+dick
+dicks
+pussy
+twat
+wanker
+bastard
+ass
+asses
+asshole
+assholes
+arse
+arsehole
+prick
+piss
+pissed
+tits
+titties
+jizz
+cum
+dildo
+anus
+rape
+rapes
+raping
+raped

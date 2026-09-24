@@ -2,12 +2,13 @@ import { Link } from 'expo-router';
 import type { ReactNode } from 'react';
 import { Pressable, StyleSheet, Text, View, type ViewStyle } from 'react-native';
 
+import ReignNote from './ReignNote';
 import { RecordSummary, ladderRecord } from './ladderRecord';
 import BotIcon from '@/features/bots/BotIcon';
 import { links } from '@/navigation/links';
 import { botIconUrl } from '@/store/api/bots';
 import type { LeaderboardKind } from '@/store/api/leaderboard';
-import { colors, podium, radius, space, type } from '@/theme';
+import { colors, podium, radius, space, themedSheet, type } from '@/theme';
 import Monogram from '@/ui/Monogram';
 import TitleTag from '@/ui/TitleTag';
 import { Badge } from '@/ui/primitives';
@@ -186,6 +187,7 @@ function TallCard({ entry, kind, you }: CardProps) {
       </View>
       <Text style={[styles.elo, isFirst && styles.eloFirst]}>{entry.elo}</Text>
       <Byline entry={entry} kind={kind} />
+      <ReignNote entry={entry} isBot={kind === 'bot'} />
       <RecordSummary result={result} />
     </CardShell>
   );
@@ -216,6 +218,7 @@ function FlatCard({ entry, kind, you }: CardProps) {
           {you ? <Badge label="YOU" tone="accent" /> : null}
         </View>
         <Byline entry={entry} kind={kind} />
+        <ReignNote entry={entry} isBot={kind === 'bot'} />
         <RecordSummary result={result} />
       </View>
       <Text style={styles.flatElo}>{entry.elo}</Text>
@@ -223,7 +226,7 @@ function FlatCard({ entry, kind, you }: CardProps) {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   podium: { gap: space.small, marginTop: space.medium },
   // Bottoms aligned, so the first card standing up out of the row is what makes
   // it a podium — rather than three equal cards with a colour difference.
@@ -262,4 +265,4 @@ const styles = StyleSheet.create({
   eloFirst: { color: colors.textStrong },
 
   byline: { ...type.meta, color: colors.textDim },
-});
+}));

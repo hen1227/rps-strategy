@@ -1,9 +1,7 @@
 import { Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { links, webGoatGuy } from '@/navigation/links';
-import { up } from '@/navigation/upFrom';
-import { colors, contentWidth, radius, space, type } from '@/theme';
-import BackLink from '@/ui/BackLink';
+import { colors, contentWidth, radius, space, themedSheet, type } from '@/theme';
 import ScreenShell from '@/ui/ScreenShell';
 import LinkRow from '@/ui/LinkRow';
 import { Panel, SectionHeading } from '@/ui/primitives';
@@ -34,17 +32,17 @@ interface OutwardLink {
 const videos: OutwardLink[] = [
   {
     eyebrow: 'THE ORIGINAL',
-    title: 'The video this whole game came out of',
+    title: "The original game designs",
     detail:
-      'WebGoatGuy invents several games in one sitting, v3 and v5 among them. Everything on this site starts here.',
+      "WebGoatGuy introduces Infiltration (v3) and Total War (v5).",
     url: webGoatGuy.originalVideoURL,
     mark: '▶',
   },
   {
     eyebrow: 'THE SEQUEL',
-    title: 'Intransitive — the video that introduced v6',
+    title: "Introducing Intransitive (v6)",
     detail:
-      'The later video, where Intransitive is designed and shown off. It is the newest mode here and the one the official tournament is played in.',
+      "WebGoatGuy introduces Intransitive, the official tournament mode.",
     url: webGoatGuy.intransitiveVideoURL,
     mark: '▶',
   },
@@ -55,7 +53,7 @@ const elsewhere: OutwardLink[] = [
     eyebrow: 'THE OFFICIAL SITE',
     title: 'Play the games where they came from',
     detail:
-      'WebGoatGuy’s own implementation at meaf.us/rps2 — the official place to play, and where the tournaments are held.',
+      "The official game and tournament site by WebGoatGuy.",
     url: webGoatGuy.playURL,
     mark: '◆',
   },
@@ -63,7 +61,7 @@ const elsewhere: OutwardLink[] = [
     eyebrow: 'THE COMMUNITY',
     title: 'The Intransitive Discord',
     detail:
-      'Where the games are discussed, the tournaments are organised, and the people who invented all of this actually are.',
+      "Join the community for game discussion and tournaments.",
     url: webGoatGuy.discordURL,
     mark: '◆',
   },
@@ -98,24 +96,22 @@ function OutwardCard({ link }: { link: OutwardLink }) {
   );
 }
 
+// No back button, like every other *section* of the shell.
+//
+// It carried one for as long as it was not a section: the sidebar was there,
+// but nothing in it lit up for this page, because the only ways here were a
+// link in the sidebar's foot and the tab bar's More menu. Both of those are
+// gone — this is a row of the You group on either surface now, and the row
+// lights up — so the button was pointing at the lobby from a page one press
+// from the lobby. Same story as the privacy page.
 export default function CreditsScreen() {
-  // A back button, unlike every *section* of the shell.
-  //
-  // This page used to argue that the sidebar was already the way out, and it is
-  // half true: the sidebar is there, but nothing in it lights up for this page,
-  // because this is not one of the sections it lists. It is reached from a link
-  // in the sidebar's foot and from the tab bar's More menu, and neither of those
-  // says where you came from or how to get back. Same reasoning as the policy
-  // page, which had the same note and the same gap.
   return (
     <ScreenShell width={contentWidth.reading}>
-      <BackLink href={up.credits.href} label={up.credits.label} />
       <View style={styles.hero}>
         <Text style={styles.heroEyebrow}>CREDIT WHERE IT IS DUE</Text>
         <Text style={styles.heroTitle}>WebGoatGuy made this game</Text>
         <Text style={styles.heroSubtitle}>
-          Not this website — the game. Every mode you can play here was invented by WebGoatGuy
-          and published in the videos below.
+          WebGoatGuy created every game mode here. Watch the original videos below.
         </Text>
       </View>
 
@@ -136,8 +132,10 @@ export default function CreditsScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  hero: { paddingTop: space.xlarge, paddingBottom: space.snug },
+const styles = themedSheet(() => ({
+  // No padding on top: the trail that used to sit above this is gone, and
+  // `ScreenShell` already opens every page with the same room.
+  hero: { paddingBottom: space.snug },
   heroEyebrow: { ...type.eyebrow, color: colors.accent, letterSpacing: 2.1 },
   heroTitle: {
     color: colors.textStrong,
@@ -182,4 +180,4 @@ const styles = StyleSheet.create({
   rows: { marginTop: space.small },
 
   pressed: { opacity: 0.7 },
-});
+}));

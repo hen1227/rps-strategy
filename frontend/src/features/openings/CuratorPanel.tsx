@@ -28,7 +28,7 @@ import {
   walkOpeningLine,
   type OpeningStep,
 } from '@/engine/openingLine';
-import { colors, radius, space } from '@/theme';
+import { colors, radius, space, themedSheet } from '@/theme';
 import type { ModeDefinition, ModeID } from '@/types/game';
 import { Badge, GhostButton, Panel, PrimaryButton } from '@/ui/primitives';
 
@@ -116,8 +116,7 @@ export default function CuratorPanel({
         </View>
       ) : !curator.active ? (
         <Text style={ui.hint}>
-          Curator controls are switched off. The toggle at the top of the page brings the naming
-          boxes back.
+          Enable curator controls at the top to edit names.
         </Text>
       ) : (
         <View style={styles.sections}>
@@ -148,8 +147,7 @@ export default function CuratorPanel({
             <Text style={ui.fieldLabel}>WAITING FOR A NAME</Text>
             {naming.queue.length === 0 ? (
               <Text style={ui.hint}>
-                Nothing is waiting. Every name anybody has put forward has been published or turned
-                down.
+                No suggestions waiting for review.
               </Text>
             ) : (
               <>
@@ -349,8 +347,7 @@ function QueueGroup({
         </View>
         {group.parentUnnamed ? (
           <Text style={styles.rowWarning}>
-            {parent.join('  ')} has no name yet — naming that first makes this a variation of
-            something.
+            {parent.join('  ')} has no name yet. Name it before this variation.
           </Text>
         ) : group.ancestor ? (
           <Text style={styles.rowTitle}>Sits under {group.ancestor.name}</Text>
@@ -392,7 +389,7 @@ function CopyableCommand() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   panel: { marginTop: 4, padding: 18, gap: 14 },
   header: {
     flexDirection: 'row',
@@ -444,4 +441,4 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
     marginTop: 6,
   },
-});
+}));

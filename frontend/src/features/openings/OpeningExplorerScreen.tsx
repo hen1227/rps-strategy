@@ -53,6 +53,7 @@ import {
 import { failureMessage } from '@/errors';
 import ReplayControls from '@/features/analysis/ReplayControls';
 import Board, { type AnalysisArrow } from '@/features/board/Board';
+import BoardExportButton from '@/features/board/BoardExportButton';
 import { usePieceDrag } from '@/features/board/pieceDrag';
 import { useBoardLayout } from '@/hooks/useBoardLayout';
 import { useBoardSelection } from '@/hooks/useBoardSelection';
@@ -61,7 +62,7 @@ import { useSettledSearchParams } from '@/navigation/useSettledSearchParams';
 import { ApiError } from '@/store/api/http';
 import { exploreOpeningPosition } from '@/store/api/openings';
 import { useGameStore } from '@/store/gameStore';
-import { colors, contentWidth, radius, space } from '@/theme';
+import { colors, contentWidth, radius, space, themedSheet } from '@/theme';
 import type { ModeDefinition, ModeID } from '@/types/game';
 import ScreenShell from '@/ui/ScreenShell';
 import TabBar from '@/ui/TabBar';
@@ -373,6 +374,22 @@ export default function OpeningExplorerScreen() {
         validMoves={validMoves}
       />
       <ReplayControls
+        // The board this line walked to, beside the buttons that walked it.
+        accessory={
+          <BoardExportButton
+            board={{
+              grid: game.grid,
+              currentTurn: game.currentTurn,
+              mode: game.mode,
+              lastMove: cursor > 0 ? parseBookMove(line[cursor - 1]) : null,
+              detail: {
+                heading: 'OPENING EXPLORER',
+                caption: walked.length > 0 ? walked.join('  ') : 'The starting position',
+              },
+            }}
+            label="EXPORT"
+          />
+        }
         current={cursor}
         label="MOVE"
         onFirst={() => jump(0)}
@@ -406,8 +423,7 @@ export default function OpeningExplorerScreen() {
         <View style={styles.header}>
           <Text style={styles.brand}>OPENING EXPLORER</Text>
           <Text style={styles.headerSubtitle}>
-            Play moves on the board. Every number is about the position in front of you, counted
-            from the games people have actually finished.
+            Play a move to explore results from completed games.
           </Text>
         </View>
 
@@ -448,13 +464,11 @@ export default function OpeningExplorerScreen() {
 
               {segments.length === 0 ? (
                 <Text style={styles.copy}>
-                  No sources are selected. Tick at least one above to count some games — the
-                  numbers here are only ever about the games you have asked for.
+                  Select at least one game source above.
                 </Text>
               ) : missing ? (
                 <Text style={styles.copy}>
-                  These statistics have not been compiled yet. The server recompiles them from the
-                  game archive once a day.
+                  Statistics are not available yet. They update daily.
                 </Text>
               ) : !stats ? (
                 <View style={styles.loadingRow}>
@@ -468,7 +482,7 @@ export default function OpeningExplorerScreen() {
                   <Text style={styles.reachedLabel}>
                     {walked.length === 0
                       ? 'counted in this mode'
-                      : `reached this position — ${
+                      : `reached this position · ${
                           hasEnoughGames(stats.plies > 0 ? stats.games : 0) || stats.share > 0
                             ? formatShare(stats.share)
                             : '0%'
@@ -479,7 +493,7 @@ export default function OpeningExplorerScreen() {
                       looking wrong to somebody who counted the move list. */}
                   {walked.length > 0 && reachedHere > 0 ? (
                     <Text style={styles.note}>
-                      By any move order{folded ? ' or reflection' : ''} — {stats.ply === walked.length
+                      By any move order{folded ? ' or reflection' : ''} – {stats.ply === walked.length
                         ? `${stats.ply} move${stats.ply === 1 ? '' : 's'} is the shortest route anybody took`
                         : `the shortest route anybody took is ${stats.ply} move${
                             stats.ply === 1 ? '' : 's'
@@ -524,8 +538,8 @@ export default function OpeningExplorerScreen() {
                   {missing
                     ? 'Nothing to show until the first compile.'
                     : reachedHere === 0
-                      ? 'No game has reached this position. Step back to a board people have played.'
-                      : 'Every game that reached here stopped here.'}
+                      ? "No games reached this position. Try an earlier move."
+                      : "All games ended at this position."}
                 </Text>
               ) : (
                 <ScrollView
@@ -565,9 +579,9 @@ export default function OpeningExplorerScreen() {
               )}
               {arrows.length > 0 ? (
                 <Text style={styles.note}>
-                  The thickest arrow on the board is the most played move from here.
+                  The thickest arrow shows the most popular move.
                   {hasTwins
-                    ? ' A dashed arrow is the same move reflected — one continuation you can play two ways.'
+                    ? "Dashed arrows show mirrored versions of the same move."
                     : ''}
                 </Text>
               ) : null}
@@ -579,7 +593,7 @@ export default function OpeningExplorerScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   // The page's own top and bottom room, inside the scroller rather than around
   // it — see `contentFlush` in `ScreenShell`. Content still starts and ends
   // clear of the chrome, but it now scrolls the whole way to both edges.
@@ -640,4 +654,4 @@ const styles = StyleSheet.create({
     gap: 4,
     padding: 6,
   },
-});
+}));

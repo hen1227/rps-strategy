@@ -123,6 +123,14 @@ func (server *Server) postSeek(
 			refuseSeek(client, fromQueue, "you cannot challenge yourself")
 			return
 		}
+		// A challenge addressed by name lands in somebody's inbox, which is the
+		// half of a block that is not about chat. An open seek is not checked
+		// here: it is offered to the room, and pairing is deliberately left
+		// alone — see the note at the top of persistence/blocks.go.
+		if server.challengeIsBlocked(client, username) {
+			refuseSeek(client, fromQueue, challengeBlockRefusal)
+			return
+		}
 	}
 	if !server.registry.Has(requested.ModeID) {
 		refuseSeek(client, fromQueue, "invalid game mode")
@@ -408,7 +416,25 @@ func (server *Server) seekAddressedTo(client *Client, challengeID string) *Seek 
 }
 
 func (server *Server) pendingChallengesFor(client *Client, now time.Time) []Challenge {
-	return server.seeks.AddressedTo(client.profile.Username, now)
+	addressed := server.seeks.AddressedTo(client.profile.Username, now)
+	// A challenge from somebody one of you has blocked does not belong in an
+	// inbox. postSeek already refuses to create one, and blocking withdraws
+	// whatever was on the board at the time — but a seek can outlive its
+	// socket, so one posted by somebody who was offline when the block landed
+	// can still be sitting here. Filtered on the way out rather than chased
+	// down, because this is the only place it would be seen.
+	//
+	// The public board is deliberately not filtered the same way: an open row
+	// is offered to the room rather than to you, and matchmaking is the half of
+	// this a block does not touch.
+	kept := addressed[:0]
+	for _, challenge := range addressed {
+		if server.blockedBetween(client.profile.UserID, challenge.Challenger.UserID) {
+			continue
+		}
+		kept = append(kept, challenge)
+	}
+	return kept
 }
 
 // openChallenges is the public board: every unclaimed game anybody is waiting

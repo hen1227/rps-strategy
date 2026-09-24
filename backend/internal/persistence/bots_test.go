@@ -302,3 +302,161 @@ func TestDirectoryListsOnlyClaimedEnabledBots(t *testing.T) {
 		t.Fatalf("owner should see the unclaimed slot too, got %d", len(owned))
 	}
 }
+
+// A bot's description is drawn on its directory row and its profile page, in
+// front of everybody, and it arrives from a config file on a stranger's machine
+// rather than from a form somebody filled in here. So it goes through the same
+// filter a username does.
+func TestBotDescriptionsAreFiltered(t *testing.T) {
+	if _, err := publishableDescription("plays a solid positional game"); err != nil {
+		t.Errorf("an ordinary description was refused: %v", err)
+	}
+	if _, err := publishableDescription("this engine will fucking destroy you"); err == nil {
+		t.Error("a description with strong profanity was published")
+	}
+	// Trimming still happens, and still happens first: a long description is
+	// cut to its ceiling rather than refused.
+	long := strings.Repeat("a", 400)
+	trimmed, err := publishableDescription(long)
+	if err != nil {
+		t.Fatalf("a long description was refused: %v", err)
+	}
+	if len(trimmed) != 280 {
+		t.Errorf("expected the description trimmed to 280, got %d", len(trimmed))
+	}
+}
+
+// A build is recorded once, however many times the engine announces it.
+//
+// The engine says who it is on every connect, and a bot with five slots that
+// reconnects on a blip does that dozens of times a day. Without the conflict
+// clause the history would be a log of reconnections wearing a version number.
+func TestEngineVersionHistoryRecordsBuildsRatherThanConnections(t *testing.T) {
+	store := authTestStore(t)
+	ctx := t.Context()
+
+	registeredOwner(t, store, "ada", "Ada")
+	bot := claimedBot(t, store, "ada", "Chomper")
+
+	record := func(version string) {
+		t.Helper()
+		if err := store.RecordBotEngineIdentity(ctx, bot.BotID, BotEngineIdentity{
+			Name: "Chomper", Author: "Ada", Version: version,
+		}); err != nil {
+			t.Fatalf("record %q: %v", version, err)
+		}
+	}
+
+	record("1.0")
+	record("1.0")
+	record("1.0")
+
+	versions, err := store.BotEngineVersions(ctx, bot.BotID)
+	if err != nil {
+		t.Fatalf("read versions: %v", err)
+	}
+	if len(versions) != 1 {
+		t.Fatalf("one build announced three times is one row: %#v", versions)
+	}
+
+	record("1.1")
+	versions, err = store.BotEngineVersions(ctx, bot.BotID)
+	if err != nil {
+		t.Fatalf("read versions after the upgrade: %v", err)
+	}
+	if len(versions) != 2 || versions[0].Version != "1.1" {
+		t.Fatalf("newest build first: %#v", versions)
+	}
+
+	// The current build is on the bot itself, which is what the directory and
+	// the ladder rows read.
+	reloaded, err := store.Bot(ctx, bot.BotID)
+	if err != nil {
+		t.Fatalf("reload bot: %v", err)
+	}
+	if reloaded.EngineVersion != "1.1" {
+		t.Fatalf("the bot should carry the build it is running: %q", reloaded.EngineVersion)
+	}
+}
+
+// Going back to last week's binary is not shipping a new one. A reverted build
+// keeps the date it first appeared, so the history shows the revert instead of
+// hiding it behind a fresh timestamp.
+func TestARevertedBuildKeepsItsOriginalDate(t *testing.T) {
+	store := authTestStore(t)
+	ctx := t.Context()
+
+	registeredOwner(t, store, "ada", "Ada")
+	bot := claimedBot(t, store, "ada", "Chomper")
+	record := func(version string) {
+		t.Helper()
+		if err := store.RecordBotEngineIdentity(ctx, bot.BotID, BotEngineIdentity{
+			Name: "Chomper", Version: version,
+		}); err != nil {
+			t.Fatalf("record %q: %v", version, err)
+		}
+	}
+
+	record("1.0")
+	first, err := store.BotEngineVersions(ctx, bot.BotID)
+	if err != nil {
+		t.Fatalf("read versions: %v", err)
+	}
+	firstSeen := first[0].FirstSeenAtUnixMs
+
+	record("1.1")
+	record("1.0")
+
+	versions, err := store.BotEngineVersions(ctx, bot.BotID)
+	if err != nil {
+		t.Fatalf("read versions after the revert: %v", err)
+	}
+	if len(versions) != 2 {
+		t.Fatalf("a revert is not a third build: %#v", versions)
+	}
+	var reverted BotEngineVersion
+	for _, version := range versions {
+		if version.Version == "1.0" {
+			reverted = version
+		}
+	}
+	if reverted.FirstSeenAtUnixMs != firstSeen {
+		t.Fatalf("the reverted build kept its own first-seen date: %#v", reverted)
+	}
+	if reverted.LastSeenAtUnixMs < reverted.FirstSeenAtUnixMs {
+		t.Fatalf("last seen moved forward: %#v", reverted)
+	}
+}
+
+// An engine that declares no build has none recorded. Most engines are in this
+// state and nothing about them may behave differently for it.
+func TestAnEngineThatDeclaresNoBuildRecordsNone(t *testing.T) {
+	store := authTestStore(t)
+	ctx := t.Context()
+
+	registeredOwner(t, store, "ada", "Ada")
+	bot := claimedBot(t, store, "ada", "Quiet")
+	if err := store.RecordBotEngineIdentity(ctx, bot.BotID, BotEngineIdentity{
+		Name: "Quiet", Author: "Ada",
+	}); err != nil {
+		t.Fatalf("record identity: %v", err)
+	}
+
+	versions, err := store.BotEngineVersions(ctx, bot.BotID)
+	if err != nil {
+		t.Fatalf("read versions: %v", err)
+	}
+	if len(versions) != 0 {
+		t.Fatalf("no build declared, so no history: %#v", versions)
+	}
+	reloaded, err := store.Bot(ctx, bot.BotID)
+	if err != nil {
+		t.Fatalf("reload bot: %v", err)
+	}
+	if reloaded.EngineVersion != "" {
+		t.Fatalf("expected no build on the bot, got %q", reloaded.EngineVersion)
+	}
+	if reloaded.EngineName != "Quiet" {
+		t.Fatalf("the rest of the identity is unaffected: %#v", reloaded)
+	}
+}

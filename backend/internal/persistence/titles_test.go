@@ -82,11 +82,32 @@ func TestEveryTitleFitsItsSlotAndIsUnique(t *testing.T) {
 
 // Clearing a rung awards it *and* everything below it, which is what makes the
 // ladder a collection rather than one slot: a player who would rather wear the
+// The rungs, by name, so these fixtures say "just above Master" rather than a
+// number that meant that on the scale of the day.
+//
+// The ratings in this file used to be four-figure literals, and every one of
+// them silently became "above every rung" the moment the ladder was restated for
+// the anchored scale. Reading the thresholds back out of ratingLadder is what
+// makes the tests describe the rule rather than a snapshot of it.
+func rungOf(id TitleID) int {
+	for _, rung := range ratingLadder {
+		if rung.id == id {
+			return rung.minimumElo
+		}
+	}
+	panic("titles test: unknown rung " + id)
+}
+
+func gmRung() int { return rungOf(TitleGrandmaster) }
+func imRung() int { return rungOf(TitleInternationalMaster) }
+func fmRung() int { return rungOf(TitleMaster) }
+func cmRung() int { return rungOf(TitleCandidateMaster) }
+
 // modest tag can, and the picker has something to pick from.
 func TestRatingLadderAwardsEveryRungCleared(t *testing.T) {
 	store := authTestStore(t)
 	registeredOwner(t, store, "ada", "Ada")
-	seedModeRating(t, store, "ada", game.ModeTotalWar, 1850, 12)
+	seedModeRating(t, store, "ada", game.ModeTotalWar, imRung()+10, 12)
 
 	awarded := evaluate(t, store, "ada")
 	if len(awarded) != 3 ||
@@ -96,7 +117,7 @@ func TestRatingLadderAwardsEveryRungCleared(t *testing.T) {
 		t.Fatalf("expected IM, FM and CM in that order, got %v", awarded)
 	}
 	if holds(t, store, "ada", TitleGrandmaster) {
-		t.Fatal("1850 is not a Grandmaster rating")
+		t.Fatal("a rating short of the top rung is not a Grandmaster rating")
 	}
 	// Idempotent: the second pass has nothing new to say.
 	if again := evaluate(t, store, "ada"); len(again) != 0 {
@@ -109,7 +130,7 @@ func TestRatingLadderAwardsEveryRungCleared(t *testing.T) {
 func TestRatingLadderIgnoresAnUntestedRating(t *testing.T) {
 	store := authTestStore(t)
 	registeredOwner(t, store, "ada", "Ada")
-	seedModeRating(t, store, "ada", game.ModeTotalWar, 2400, titleLadderMinimumGames-1)
+	seedModeRating(t, store, "ada", game.ModeTotalWar, gmRung()+50, titleLadderMinimumGames-1)
 
 	if awarded := evaluate(t, store, "ada"); len(awarded) != 0 {
 		t.Fatalf("a rating with too few games behind it earns nothing, got %v", awarded)
@@ -121,8 +142,8 @@ func TestRatingLadderIgnoresAnUntestedRating(t *testing.T) {
 func TestRatingLadderReadsTheStrongestMode(t *testing.T) {
 	store := authTestStore(t)
 	registeredOwner(t, store, "ada", "Ada")
-	seedModeRating(t, store, "ada", game.ModeTotalWar, 1250, 30)
-	seedModeRating(t, store, "ada", game.ModeInfiltration, 1650, 11)
+	seedModeRating(t, store, "ada", game.ModeTotalWar, cmRung()-10, 30)
+	seedModeRating(t, store, "ada", game.ModeInfiltration, fmRung()+5, 11)
 
 	if awarded := evaluate(t, store, "ada"); len(awarded) != 2 ||
 		awarded[0] != TitleMaster || awarded[1] != TitleCandidateMaster {
@@ -135,13 +156,13 @@ func TestRatingLadderReadsTheStrongestMode(t *testing.T) {
 func TestATitleSurvivesTheRatingThatEarnedIt(t *testing.T) {
 	store := authTestStore(t)
 	registeredOwner(t, store, "ada", "Ada")
-	seedModeRating(t, store, "ada", game.ModeTotalWar, 1620, 25)
+	seedModeRating(t, store, "ada", game.ModeTotalWar, fmRung()+5, 25)
 	if awarded := evaluate(t, store, "ada"); len(awarded) != 2 {
 		t.Fatalf("expected FM and CM, got %v", awarded)
 	}
 
 	if _, err := store.db.ExecContext(t.Context(), `
-UPDATE account_mode_ratings SET elo = 1100 WHERE user_id = 'ada'
+UPDATE account_mode_ratings SET elo = 1 WHERE user_id = 'ada'
 `); err != nil {
 		t.Fatalf("drop rating: %v", err)
 	}
@@ -199,8 +220,8 @@ func TestBotArchitectFollowsTheTopOfTheBotLadder(t *testing.T) {
 	mine := claimedBot(t, store, "ada", "Mine")
 	theirs := claimedBot(t, store, "grace", "Theirs")
 
-	seedModeRating(t, store, mine.UserID, game.ModeTotalWar, 1400, 20)
-	seedModeRating(t, store, theirs.UserID, game.ModeTotalWar, 1900, 20)
+	seedModeRating(t, store, mine.UserID, game.ModeTotalWar, cmRung(), 20)
+	seedModeRating(t, store, theirs.UserID, game.ModeTotalWar, gmRung()+20, 20)
 
 	if awarded := evaluate(t, store, "ada"); len(awarded) != 0 {
 		t.Fatalf("owning the second-best engine earns nothing, got %v", awarded)
@@ -214,6 +235,62 @@ func TestBotArchitectFollowsTheTopOfTheBotLadder(t *testing.T) {
 	// across every pair's record and is not on a person's scale.
 	if awarded := evaluate(t, store, theirs.UserID); len(awarded) != 0 {
 		t.Fatalf("a bot account earns nothing, got %v", awarded)
+	}
+}
+
+// A level board hands the title to one owner, not to everybody on it.
+//
+// The rule used to be `elo = (SELECT MAX(elo))`, which is a tie against the
+// maximum rather than a rank. Two engines on the same number both satisfied it,
+// and a board where the fit has placed nothing puts the whole fleet on the
+// floor together — so every author on the site wore Bot Architect at once. The
+// board breaks that tie to produce one first row, and the title reads the
+// board.
+func TestBotArchitectGoesToOneOwnerOnALevelBoard(t *testing.T) {
+	store := authTestStore(t)
+	registeredOwner(t, store, "ada", "Ada")
+	registeredOwner(t, store, "grace", "Grace")
+	mine := claimedBot(t, store, "ada", "Mine")
+	theirs := claimedBot(t, store, "grace", "Theirs")
+
+	// Identical in every term the board sorts on but the name.
+	seedModeRating(t, store, mine.UserID, game.ModeTotalWar, gmRung(), 20)
+	seedModeRating(t, store, theirs.UserID, game.ModeTotalWar, gmRung(), 20)
+
+	awarded := 0
+	for _, owner := range []string{"ada", "grace"} {
+		for _, title := range evaluate(t, store, owner) {
+			if title == TitleBotArchitect {
+				awarded++
+			}
+		}
+	}
+	// One. Written as a literal rather than taken from the code, so that this
+	// disagrees with a rule that hands out any other number.
+	if awarded != 1 {
+		t.Fatalf("a level board has one top engine, but %d owners were titled", awarded)
+	}
+}
+
+// An engine the fit could not place does not lead a mode, however high the raw
+// number on its row is. The board sorts unranked rows last; the title has to
+// read the same order, or it would crown a rating that is explicitly not one.
+func TestBotArchitectIgnoresAnUnplacedRating(t *testing.T) {
+	store := authTestStore(t)
+	registeredOwner(t, store, "ada", "Ada")
+	registeredOwner(t, store, "grace", "Grace")
+	mine := claimedBot(t, store, "ada", "Mine")
+	theirs := claimedBot(t, store, "grace", "Theirs")
+
+	seedModeRating(t, store, mine.UserID, game.ModeTotalWar, cmRung(), 20)
+	seedUnplacedRating(t, store, theirs.UserID, game.ModeTotalWar, gmRung()+500, 20)
+
+	if awarded := evaluate(t, store, "ada"); len(awarded) != 1 ||
+		awarded[0] != TitleBotArchitect {
+		t.Fatalf("the measured engine leads the board, got %v", awarded)
+	}
+	if awarded := evaluate(t, store, "grace"); len(awarded) != 0 {
+		t.Fatalf("an unplaced rating leads nothing, got %v", awarded)
 	}
 }
 
@@ -384,7 +461,7 @@ func TestAGrantOutlivesTheRuleThatWouldAlsoAwardIt(t *testing.T) {
 	if err := store.GrantTitle(ctx, "ada", TitleCandidateMaster); err != nil {
 		t.Fatalf("grant: %v", err)
 	}
-	seedModeRating(t, store, "ada", game.ModeTotalWar, 1450, 20)
+	seedModeRating(t, store, "ada", game.ModeTotalWar, cmRung()+10, 20)
 	if awarded := evaluate(t, store, "ada"); len(awarded) != 0 {
 		t.Fatalf("a held title is not awarded twice, got %v", awarded)
 	}
@@ -446,7 +523,7 @@ func TestAnonymizingAnAccountTakesItsTitlesWithIt(t *testing.T) {
 	registeredOwner(t, store, "grace", "Grace")
 	ctx := t.Context()
 
-	seedModeRating(t, store, "ada", game.ModeTotalWar, 1700, 30)
+	seedModeRating(t, store, "ada", game.ModeTotalWar, imRung()-10, 30)
 	if awarded := evaluate(t, store, "ada"); len(awarded) != 2 {
 		t.Fatalf("expected FM and CM, got %v", awarded)
 	}
@@ -520,7 +597,7 @@ INSERT INTO game_history (
 func TestTheLadderTopsOutAtGrandmaster(t *testing.T) {
 	store := authTestStore(t)
 	registeredOwner(t, store, "ada", "Ada")
-	seedModeRating(t, store, "ada", game.ModeTotalWar, 2500, 40)
+	seedModeRating(t, store, "ada", game.ModeTotalWar, gmRung()+70, 40)
 
 	awarded := evaluate(t, store, "ada")
 	if len(awarded) != 4 || awarded[0] != TitleGrandmaster {
@@ -568,6 +645,47 @@ UPDATE accounts SET title = 'SGM' WHERE user_id = 'ada'
 	}
 	if worn := account(t, store, "ada").Title; worn != TitleGrandmaster {
 		t.Fatalf("GM is in the catalogue and must stay on, got %q", worn)
+	}
+}
+
+// A title that has been *renamed* is the other case, and it is not the one
+// above: the award is the same award, so the rows are carried onto the new
+// spelling instead of being left for the retirement to strand.
+//
+// The engine crown is the only id that has ever moved. It used to be the glyph
+// itself, and the sweep would have re-awarded an earned one within the quarter
+// hour — but not a granted one, which is permanent and would have vanished.
+func TestARenamedTitleIsCarriedOntoItsNewSpelling(t *testing.T) {
+	store := authTestStore(t)
+	registeredOwner(t, store, "ada", "Ada")
+	ctx := t.Context()
+	if _, err := store.db.ExecContext(ctx, `
+INSERT INTO account_titles (user_id, title_id, source, awarded_at_unix_ms)
+VALUES ('ada', '♛', 'granted', 1);
+UPDATE accounts SET title = '♛' WHERE user_id = 'ada';
+`); err != nil {
+		t.Fatalf("hold the old crown: %v", err)
+	}
+
+	// What start-up does, and the reason the rename runs before the retirement:
+	// run the other way round, the name would be left bare until the next sweep.
+	if err := store.ensureTitleSchema(ctx); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	if !holds(t, store, "ada", TitleReigningChampion) {
+		t.Error("the granted row should have moved onto the new id")
+	}
+	if worn := account(t, store, "ada").Title; worn != TitleReigningChampion {
+		t.Errorf("and the name should be wearing the new id, got %q", worn)
+	}
+
+	// Every start-up runs it, so the second run has to be the no-op the first
+	// one left behind.
+	if err := store.ensureTitleSchema(ctx); err != nil {
+		t.Fatalf("migrate a second time: %v", err)
+	}
+	if !holds(t, store, "ada", TitleReigningChampion) {
+		t.Error("a second run must not undo the first")
 	}
 }
 

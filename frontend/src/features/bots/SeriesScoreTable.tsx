@@ -3,7 +3,8 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import BotIcon from './BotIcon';
 import { seriesGameIsOpen, seriesView, type SeriesGameView } from './seriesSummary';
 import { botIconUrl, type BotSeries } from '@/store/api/bots';
-import { colors, radius, space, type } from '@/theme';
+import { colors, radius, space, themedSheet, type } from '@/theme';
+import PlayerLink from '@/ui/PlayerLink';
 
 // A run's games, as the score table a match between two engines actually is.
 //
@@ -168,9 +169,16 @@ function Name({ botId, compact, digest, name, size }: NameProps) {
   return (
     <View style={[styles.nameRow, compact && dense.nameRow]}>
       <BotIcon name={name} size={size} uri={botIconUrl(botId, digest)} />
-      <Text numberOfLines={1} style={[styles.name, compact && dense.name]}>
-        {name}
-      </Text>
+      {/*
+        Each side of the run leads to that engine's page. "Who is this thing
+        that just went 5-1" is the question a score table provokes and the one
+        it cannot answer, and the name is where anybody would look for it.
+      */}
+      <PlayerLink
+        name={name}
+        numberOfLines={1}
+        style={[styles.name, compact && dense.name]}
+      />
     </View>
   );
 }
@@ -260,7 +268,7 @@ function Cell({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   wrap: { gap: space.snug },
   table: { flexDirection: 'row', alignItems: 'flex-start' },
 
@@ -303,12 +311,12 @@ const styles = StyleSheet.create({
 
   empty: { ...type.meta, color: colors.textFaint, alignSelf: 'center' },
   abandoned: { ...type.meta, color: colors.liveSoft },
-});
+}));
 
 // Only what the compact table measures differently. Kept as overrides rather
 // than a second sheet so there is still one description of what the table is,
 // and the two versions cannot drift into looking like two tables.
-const dense = StyleSheet.create({
+const dense = themedSheet(() => ({
   names: { paddingRight: space.snug },
   nameRow: { height: ROW_HEIGHT_COMPACT },
   name: { fontSize: 11 },
@@ -324,4 +332,4 @@ const dense = StyleSheet.create({
   totals: { paddingLeft: space.snug, minWidth: 22 },
   totalCell: { height: ROW_HEIGHT_COMPACT },
   total: { fontSize: 12 },
-});
+}));

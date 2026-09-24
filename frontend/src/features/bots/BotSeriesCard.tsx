@@ -6,7 +6,7 @@ import SeriesScoreTable from './SeriesScoreTable';
 import { seriesMetaLine, seriesStatusTone, seriesView } from './seriesSummary';
 import { seriesURL } from '@/navigation/links';
 import type { BotSeries } from '@/store/api/bots';
-import { colors, radius, space, type } from '@/theme';
+import { colors, radius, space, themedSheet, type } from '@/theme';
 import CopyLinkButton from '@/ui/CopyLinkButton';
 import { Badge } from '@/ui/primitives';
 
@@ -94,7 +94,7 @@ export default function BotSeriesCard({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   card: {
     gap: space.small,
     padding: space.medium,
@@ -114,4 +114,4 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: space.snug,
   },
-});
+}));

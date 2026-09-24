@@ -2,7 +2,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import BotIcon from './BotIcon';
 import { BOT_PROFILES } from '@/engine/bots/profiles';
-import { colors, radius, space, type } from '@/theme';
+import { colors, radius, space, themedSheet, type } from '@/theme';
 
 // The difficulty ladder, as tiles.
 //
@@ -66,7 +66,7 @@ export default function BotLevelPicker({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   label: { ...type.eyebrow, color: colors.textFaint, letterSpacing: 1.2, marginTop: space.large },
   levels: {
     flexDirection: 'row',
@@ -104,4 +104,4 @@ const styles = StyleSheet.create({
   rating: { fontSize: 9, fontWeight: '800', color: colors.textFaint, marginTop: space.hair },
   ratingSelected: { color: colors.accentSoft },
   pressed: { opacity: 0.7 },
-});
+}));

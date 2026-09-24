@@ -11,24 +11,14 @@ import Svg, {
 } from 'react-native-svg';
 
 import MoveQualityBadge from './MoveQualityBadge';
-import type {
-  ExpectedScorePoint,
-  GradableMove,
-  GradeKey,
-  GradedMove,
-  ReviewMove,
-} from '@/engine/gameReview';
-import { colors, evaluationChart, moveQuality, players } from '@/theme';
+import { chartMarks, markBudget } from './chartMarks';
+import type { ExpectedScorePoint, GradableMove, ReviewMove } from '@/engine/gameReview';
+import { colors, evaluationChart, moveQuality, players, themedSheet } from '@/theme';
 
 const FALLBACK_WIDTH = 360;
 const PLOT_INSET = { top: 17, right: 10, bottom: 17, left: 10 };
 const BADGE_SIZE = 21;
 const BADGE_GAP = 7;
-
-// Reserve badges for moves that changed the story of the game. Great moves
-// join the existing errors; routine Best/Excellent/Good moves stay in the
-// move list so the chart remains a chart rather than a row of stickers.
-const MARKED_GRADES = new Set<GradeKey>(['great', 'mistake', 'blunder']);
 
 const clamp = (value: number, minimum: number, maximum: number) =>
   Math.max(minimum, Math.min(maximum, value));
@@ -92,39 +82,49 @@ export default function EvalChart<TMove extends GradableMove>({
     return { area, line, x, y };
   }, [height, plotWidth, points, total]);
 
-  const marks = useMemo(
-    () =>
-      geometry
-        ? moves
-            .filter(
-              (move): move is GradedMove<TMove> =>
-                !move.pending && MARKED_GRADES.has(move.grade.key),
-            )
-            .map((move) => ({
-              key: move.index,
-              grade: move.grade,
-              cx: geometry.x(move.index + 1),
-              cy: geometry.y(
-                points.find((point) => point.index === move.index + 1)?.redPercent ?? 50,
-              ),
-            }))
-            .map((mark) => {
-              const placeBelow = mark.cy < height / 2;
-              const badgeTop = clamp(
-                placeBelow ? mark.cy + BADGE_GAP : mark.cy - BADGE_SIZE - BADGE_GAP,
-                2,
-                height - BADGE_SIZE - 2,
-              );
-              return {
-                ...mark,
-                badgeLeft: clamp(mark.cx - BADGE_SIZE / 2, 2, plotWidth - BADGE_SIZE - 2),
-                badgeTop,
-                connectorY: placeBelow ? badgeTop : badgeTop + BADGE_SIZE,
-              };
-            })
-        : [],
-    [geometry, height, moves, plotWidth, points],
-  );
+  // Which mistakes get a badge is a policy, and it lives in `chartMarks.ts`
+  // with its own test. Everything here is where to draw the ones it chose.
+  const marks = useMemo(() => {
+    if (!geometry) return [];
+    const chosen = chartMarks({
+      candidates: moves.map((move) => ({
+        index: move.index,
+        gradeKey: move.pending ? null : move.grade.key,
+        grade: move.pending ? null : move.grade,
+        lossPercent: move.pending ? 0 : move.lossPercent,
+        isBook: move.isBook,
+      })),
+      x: (index) => geometry.x(index + 1),
+      budget: markBudget(plotWidth),
+      // Two badges closer than their own width overlap, and an overlapped
+      // badge hides one verdict while misreading the one on top of it.
+      minimumGap: BADGE_SIZE + BADGE_GAP,
+    });
+    return chosen.flatMap((mark) => {
+      if (!mark.grade) return [];
+      const cx = geometry.x(mark.index + 1);
+      const cy = geometry.y(
+        points.find((point) => point.index === mark.index + 1)?.redPercent ?? 50,
+      );
+      const placeBelow = cy < height / 2;
+      const badgeTop = clamp(
+        placeBelow ? cy + BADGE_GAP : cy - BADGE_SIZE - BADGE_GAP,
+        2,
+        height - BADGE_SIZE - 2,
+      );
+      return [
+        {
+          key: mark.index,
+          grade: mark.grade,
+          cx,
+          cy,
+          badgeLeft: clamp(cx - BADGE_SIZE / 2, 2, plotWidth - BADGE_SIZE - 2),
+          badgeTop,
+          connectorY: placeBelow ? badgeTop : badgeTop + BADGE_SIZE,
+        },
+      ];
+    });
+  }, [geometry, height, moves, plotWidth, points]);
 
   const selectedPoint = useMemo(() => {
     if (!geometry) return null;
@@ -145,7 +145,12 @@ export default function EvalChart<TMove extends GradableMove>({
       <View
         // The whole plot is one press target: a chart you cannot scrub is a
         // picture, and the point of it is to get to the move it is showing.
-        accessibilityLabel="Evaluation over the game. Press to jump to a move."
+        accessibilityLabel={
+          marks.length > 0
+            ? `Evaluation over the game, with the ${marks.length} costliest mistakes ` +
+              "marked. Every move's grade is in the move list. Press to jump to a move."
+            : 'Evaluation over the game. Press to jump to a move.'
+        }
         accessibilityRole="adjustable"
         onLayout={(event) => {
           const measured = Math.round(event.nativeEvent.layout.width);
@@ -275,7 +280,7 @@ export default function EvalChart<TMove extends GradableMove>({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themedSheet(() => ({
   card: {
     overflow: 'hidden',
     borderRadius: 11,
@@ -320,4 +325,4 @@ const styles = StyleSheet.create({
     }),
   },
   qualityMark: { position: 'absolute', width: BADGE_SIZE, height: BADGE_SIZE },
-});
+}));
