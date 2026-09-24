@@ -788,3 +788,19 @@ The binary and SQLite database remain under
 [`backend/README.md`](backend/README.md#orange-pi-production-deployment) for the
 ARM64 build command, systemd unit installation, Nginx site configuration, and
 verification commands.
+
+## Licence
+
+RPS Strategy is free software under the
+[GNU Affero General Public License, version 3 or later](LICENSE). The bot kit
+(`backend/internal/botclient/*.py`) and the documents a bot author works from
+(`docs/bots.md`, `docs/rpsi.md` and `docs/notation.md`) are MIT, so a bot built
+from them is its author's to license however they like. [REUSE.toml](REUSE.toml)
+says which licence covers which file, and [NOTICE.md](NOTICE.md) covers the game
+designs (WebGoatGuy's), the engine, and the artwork. The **Open-source licences**
+page, under Credits, lists every third-party package each build ships (the
+website and the iOS app each list their own); `npm run licences` in `frontend/`
+regenerates it.
+
+Contributing needs a one-time [Contributor License Agreement](CLA.md).
+[CONTRIBUTING.md](CONTRIBUTING.md) explains why, and how to sign.

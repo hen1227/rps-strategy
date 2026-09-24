@@ -4,8 +4,17 @@ Target end state:
 
 | Repo | Contents | License | CLA |
 |---|---|---|---|
-| `rps-strategy` | `backend/`, `frontend/`, `docs/`, `deploy/`, root docs | GPL-3.0-or-later | yes |
-| `rpsfish` | the Rust engine, unchanged | LGPL-3.0-or-later | yes |
+| `rps-strategy` | `backend/`, `frontend/`, `docs/`, `deploy/`, root docs | AGPL-3.0-or-later | yes |
+| `rpsfish` | the Rust engine, unchanged | LGPL-3.0-or-later | no |
+
+> **Updated 2026-09-24.** `rps-strategy` is **AGPL-3.0-or-later**, not the
+> GPL-3.0-or-later this plan was written for. The backend is a network service,
+> and plain GPL lets anyone run a modified, closed copy of it; AGPL §13 closes
+> that. Everything below about the CLA holds unchanged, because the AGPL
+> contains every GPL term the App Store conflicts with. If anything, the CLA
+> matters more: without it, one merged contribution would bind the production
+> server itself under §13. `rpsfish` has **no CLA** (decided 2026-09-05; see
+> §2.1). Read "GPL-3.0" below as the licence the plan started from.
 
 ---
 
@@ -158,7 +167,10 @@ and one unreachable person can pin you.
 
 The same argument applies to `librpsfish.a`. It is **statically linked** into
 the iOS app, which is LGPLv3 §4(d)(0) territory — a third party doing that would
-owe relinkable object files. You don't, for the same reason, and the CLA on
+owe relinkable object files. *(Reversed 2026-09-05: `rpsfish` takes no CLA. The
+App Store build meets LGPL §4(d) itself, by offering the relinkable objects once
+the engine contains anyone else's code. The paragraph below is the original
+reasoning.)* You don't, for the same reason, and the CLA on
 `rpsfish` is what keeps that true. (The web build is already clean: the `.wasm`
 is a separate file fetched at runtime, which is the §4(d)(1) shared-library
 path.)
@@ -169,7 +181,11 @@ path.)
 - a patent grant;
 - a warranty that the contributor has the right to contribute.
 
-Apache's ICLA is the standard starting point. Automate it with
+Apache's ICLA is the standard starting point. *(Done 2026-09-24: `CLA.md`
+adapts it. CLA Assistant turned out to be a dead end: the Lite action was
+archived in March 2026 and the hosted service has had no commit since 2023. So
+the check is `.github/workflows/cla.yml`, a small workflow in this repository
+that keeps its signatures on a `cla-signatures` branch.)* Automate it with
 [CLA Assistant](https://github.com/cla-assistant/cla-assistant) as a required
 status check.
 
@@ -183,8 +199,8 @@ build, it does not.
 |---|---|---|
 | `frontend/assets/sounds/*.mp3` | 🚨 **RELEASE BLOCKER — confirmed scraped from Chess.com.** Proprietary; no licence permits redistribution, under GPL-3.0 or otherwise. | **Must be replaced before publication.** See §2.4. Nine files: `capture`, `move-self`, `move-check`, `move-opponent`, `promote`, `notify`, `rock_captures`, `paper_captures`, `scissor_captures`. |
 | `backend/internal/meafarchive/games_export.txt` | ⚠️ Games are public, but they are Meaf's to publish. Not to be tracked on GitHub pending an arrangement with Meaf. | Keep untracked. **But `//go:embed` makes this a build break** — see §2.5 for the fix. |
-| `frontend/LICENSE` | Expo's MIT boilerplate, carrying *650 Industries'* copyright line. | Delete. Real `LICENSE` at the monorepo root; Expo's notice moves to `NOTICE.md`. |
-| `frontend/assets/pieces/`, `assets/bots/` | Provenance unconfirmed. | Confirm they're yours; state it in `NOTICE.md`. Given the sounds, worth an explicit check. |
+| `frontend/LICENSE` | ✅ Deleted 2026-09-24. No Expo template code was left, so there was no notice to carry. Was: Expo's MIT boilerplate, carrying *650 Industries'* copyright line. | Delete. Real `LICENSE` at the monorepo root; Expo's notice moves to `NOTICE.md`. |
+| `frontend/assets/pieces/`, `assets/bots/` | ✅ Henry confirmed 2026-09-24: all artwork is his, some of it AI-generated and then edited. `NOTICE.md` says so. | Confirm they're yours; state it in `NOTICE.md`. Given the sounds, worth an explicit check. |
 
 ### 2.4 Replacing the sound set — ✅ done in the working tree
 
@@ -397,7 +413,9 @@ Order matters, and two of these are hard gates:
 2. 🚨 **Land the CLA** — document, CLA Assistant, required status check — while
    the repo is still private. Every day it is public without one is a day a PR
    can arrive that you cannot ship on the App Store.
-3. `LICENSE` (GPL-3.0), `NOTICE.md`, community files merged.
+3. `LICENSE` (AGPL-3.0), `NOTICE.md`, community files merged. *(LICENSE, NOTICE,
+   CONTRIBUTING, CLA and REUSE.toml are in the working tree as of 2026-09-24;
+   SECURITY.md and CODE_OF_CONDUCT.md are not.)*
 4. meaf.us export untracked and the `meaf` build tag in place (§2.5), with
    `go build ./...` verified clean on a *fresh clone* — not just on this machine,
    where the file happens to exist.
@@ -407,7 +425,7 @@ Order matters, and two of these are hard gates:
 7. Rotate the bot tokens in `altbot.conf` / `rpsbot.conf`. Never committed, but
    rotating before a release is free insurance.
 8. Flip `rps-strategy` public. Watch it for a day.
-9. Flip `rpsfish` public.
+9. Flip `rpsfish` public. *(Already public: it went first.)*
 
 ---
 
@@ -452,8 +470,13 @@ Order matters, and two of these are hard gates:
 - [x] Replace the nine Chess.com sound files — self-authored WAVs, in the working tree
 - [x] 🚨 Strip the Chess.com mp3s from git history during the §4 merge —
       verified: no `.mp3` blob is reachable from any ref
-- [ ] 🚨 CLA drafted, CLA Assistant enforced as a required check
-- [ ] LICENSE / NOTICE / CONTRIBUTING / SECURITY added; `frontend/LICENSE` deleted
+- [x] 🚨 CLA drafted (`CLA.md`), and the check that enforces it written
+      (`.github/workflows/cla.yml`, tested in `.github/cla/`)
+- [ ] 🚨 Make **CLA** a required check on `main` (a GitHub ruleset; needs
+      Henry), and protect the `cla-signatures` branch from deletion
+- [x] LICENSE (AGPL-3.0) / NOTICE / CONTRIBUTING / REUSE.toml added;
+      `frontend/LICENSE` deleted; the bot kit and protocol docs marked MIT
+- [ ] SECURITY.md and CODE_OF_CONDUCT.md
 - [x] `meaf` build tag in place; both build modes verified — untagged builds
       and tests clean with no export present, `-tags meaf` green with it
 - [ ] Secret scan on merged history; rotate bot tokens

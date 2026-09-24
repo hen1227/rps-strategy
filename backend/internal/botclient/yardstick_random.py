@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Henhen1227, LLC
+# SPDX-License-Identifier: MIT
+#
+# MIT, unlike the AGPL-3.0 the rest of RPS Strategy is under, so you can copy
+# or change this file for your own bot and license the result however you
+# like. The licence text is at https://opensource.org/license/mit.
 """The anchor. Every rating in this game is a distance from this engine.
 
 It plays a uniformly random legal move and looks at nothing else. That is the

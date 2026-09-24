@@ -1,0 +1,44 @@
+# Which licence covers which file, in the format https://reuse.software reads.
+#
+# Everything is AGPL-3.0-or-later unless a table further down says otherwise.
+# Where several tables match a file, the last one wins, and every table
+# overrides whatever the file says about itself. So this is the one place a
+# file's licence is decided. Anything that is not AGPL gets a table here, not
+# just a header. `pipx run reuse lint` checks that every file is covered and
+# that LICENSES/ holds exactly the licences used.
+version = 1
+
+[[annotations]]
+path = "**"
+precedence = "override"
+SPDX-FileCopyrightText = "2026 Henhen1227, LLC"
+SPDX-License-Identifier = "AGPL-3.0-or-later"
+
+# The bot kit: the client people download, the engines published beside it, and
+# the documents a bot author works from. MIT, so a bot built from any of it is
+# its author's to license however they like. The licence note at the end of
+# docs/bots.md says so to the people reading it on the site. The Markdown can't
+# carry an SPDX header of its own, because the site would render it as text.
+[[annotations]]
+path = [
+  "backend/internal/botclient/*.py",
+  "backend/internal/botclient/bots.md",
+  "backend/internal/botclient/notation.md",
+  "backend/internal/botclient/rpsi.md",
+  "docs/bots.md",
+  "docs/notation.md",
+  "docs/rpsi.md",
+]
+precedence = "override"
+SPDX-FileCopyrightText = "2026 Henhen1227, LLC"
+SPDX-License-Identifier = "MIT"
+
+# The native module that wraps RPSFish, licensed like the engine it wraps. The
+# GPL sits beside the LGPL in that directory, following the FSF's layout,
+# because the LGPL is a set of extra permissions on top of the GPL, and one
+# without the other is not the whole licence.
+[[annotations]]
+path = "frontend/modules/rpsfish/**"
+precedence = "override"
+SPDX-FileCopyrightText = "2026 Henhen1227, LLC"
+SPDX-License-Identifier = "LGPL-3.0-or-later"

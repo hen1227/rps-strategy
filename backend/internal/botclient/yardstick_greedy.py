@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Henhen1227, LLC
+# SPDX-License-Identifier: MIT
+#
+# MIT, unlike the AGPL-3.0 the rest of RPS Strategy is under, so you can copy
+# or change this file for your own bot and license the result however you
+# like. The licence text is at https://opensource.org/license/mit.
 """The first rung above chance: take a piece when one is there to take.
 
 This is the second fixed point of the published scale. The anchor beside it --

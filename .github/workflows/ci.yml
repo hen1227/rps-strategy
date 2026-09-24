@@ -40,3 +40,15 @@ jobs:
       # only wants to fix the website, needs Node and nothing else.
       - run: npm test
         working-directory: frontend
+
+  # The CLA check itself runs from cla.yml on pull requests. This job runs the
+  # tests of the script that decides it, which needs nothing but Node. Named so
+  # it can't be mistaken for the required CLA check when picking checks.
+  cla-script-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node --test .github/cla/cla.test.cjs

@@ -1,6 +1,9 @@
+import { Link } from 'expo-router';
+import type { Href } from 'expo-router';
 import { Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { links, webGoatGuy } from '@/navigation/links';
+import { SOURCE_URL, links, webGoatGuy } from '@/navigation/links';
+import { useStackProps } from '@/navigation/stack';
 import { colors, contentWidth, radius, space, themedSheet, type } from '@/theme';
 import ScreenShell from '@/ui/ScreenShell';
 import LinkRow from '@/ui/LinkRow';
@@ -67,6 +70,20 @@ const elsewhere: OutwardLink[] = [
   },
 ];
 
+// Last, under everything that is WebGoatGuy's: the code this build is made of,
+// and the licences of the packages it is built on. The AGPL expects a network
+// service to offer its source to the people using it, and most of those
+// licences ask for their notice to travel with the app, so both need a place a
+// player can find, and a credits page is where people look for them.
+const source: OutwardLink = {
+  eyebrow: 'THE SOURCE',
+  title: 'RPS Strategy is open source',
+  detail:
+    'The code behind this site and the app, under the AGPL-3.0. The bot kit and its protocol documents are MIT, so a bot built from them is yours to license.',
+  url: SOURCE_URL,
+  mark: '◆',
+};
+
 /** A card that opens something outside the app. */
 function OutwardCard({ link }: { link: OutwardLink }) {
   return (
@@ -93,6 +110,29 @@ function OutwardCard({ link }: { link: OutwardLink }) {
       </View>
       <Text style={styles.cardChevron}>↗</Text>
     </Pressable>
+  );
+}
+
+/** A card that opens a page of this site, drawn like the ones that leave it. */
+function InwardCard({ eyebrow, title, detail, href }: { eyebrow: string; title: string; detail: string; href: Href }) {
+  const stack = useStackProps(href);
+  return (
+    <Link asChild href={href} {...stack}>
+      {/*
+        One style object rather than OutwardCard's pressed-state array. On the
+        web, Link asChild hands its child's style to a real anchor, and an array
+        there takes the whole page down during hydration.
+      */}
+      <Pressable accessibilityLabel={title} accessibilityRole="link" style={styles.card}>
+        <Text style={styles.cardMark}>◆</Text>
+        <View style={styles.cardCopy}>
+          <Text style={styles.cardEyebrow}>{eyebrow}</Text>
+          <Text style={styles.cardTitle}>{title}</Text>
+          <Text style={styles.cardDetail}>{detail}</Text>
+        </View>
+        <Text style={styles.cardChevron}>›</Text>
+      </Pressable>
+    </Link>
   );
 }
 
@@ -127,6 +167,17 @@ export default function CreditsScreen() {
         {elsewhere.map((link) => (
           <OutwardCard key={link.url} link={link} />
         ))}
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionLabel}>THIS APP</Text>
+        <OutwardCard link={source} />
+        <InwardCard
+          detail="The open-source packages this site and the app are built on, and the licence of each."
+          eyebrow="THE LICENCES"
+          href={links.licences()}
+          title="Open-source licences"
+        />
       </View>
     </ScreenShell>
   );

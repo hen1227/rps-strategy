@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Henhen1227, LLC
+# SPDX-License-Identifier: MIT
+#
+# MIT, unlike the AGPL-3.0 the rest of RPS Strategy is under, so you can copy
+# or change this file for your own bot and license the result however you
+# like. The licence text is at https://opensource.org/license/mit.
 """Connect a Rock-Paper-Scissors Strategy engine to the live server.
 
     pip install websockets
@@ -36,7 +42,7 @@ import time
 
 from websockets.sync.client import connect
 
-CLIENT_VERSION = "1.7"
+CLIENT_VERSION = "1.7.1"
 DEFAULT_SERVER = "wss://api-rps.henhen1227.com/ws"
 CONFIG_PATH = "rpsbot.conf"
 

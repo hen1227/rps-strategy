@@ -175,3 +175,7 @@ printf 'rpsi\nisready\nnewgame V5\nquit\n' | ./your-engine
 ```
 
 See [Connect your bot](bots.md) to run the engine on a live server.
+
+This reference is released under the MIT License, like `rpsbot.py` and the
+example engines. See the licence note at the end of
+[Connect your bot](bots.md).

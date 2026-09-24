@@ -231,6 +231,16 @@ export const links = {
    * a credit.
    */
   credits: (): Href => '/credits',
+
+  /**
+   * The licence of every third-party package the site and the app ship.
+   *
+   * Under the credits page rather than a section of its own. It answers the
+   * same question for the software this is built on that Credits answers for
+   * the games.
+   */
+  licences: (): Href => '/licences',
+
   /**
    * The feedback board: bugs, suggestions, and the host's answers.
    *
@@ -407,6 +417,13 @@ export const webGoatGuy = {
   /** The Intransitive Discord. */
   discordURL: 'https://discord.gg/QBXJte4YVm',
 } as const;
+
+/**
+ * This project's own source. It is published under the AGPL, which expects a
+ * network service to offer its source to the people using it, so the credits
+ * page and the licences page both link here.
+ */
+export const SOURCE_URL = 'https://github.com/hen1227/rps-strategy';
 
 /**
  * The original video, kept under its old name because several places link to

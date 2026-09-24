@@ -353,3 +353,13 @@ off if too few are available. Use the weekend page to vote on the clock and mark
 available times in your timezone. The leading time slot sets the following
 weekend's schedule; ties keep the current slot. Weekend results and titles appear
 on that page.
+
+## Licence
+
+This handout, the RPSI and notation references, `rpsbot.py`,
+`example_engine.py` and both yardstick engines are released under the MIT
+License, unlike the rest of RPS Strategy, which is AGPL-3.0. Copy or change any
+of them for your own bot and license the result however you like; if you pass
+the files themselves on, keep their copyright notice with them. An engine you
+write yourself only talks to `rpsbot.py` over standard input and output, so it
+is yours outright either way.

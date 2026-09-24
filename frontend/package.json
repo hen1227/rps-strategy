@@ -1,6 +1,7 @@
 {
   "name": "frontend",
   "version": "1.0.0",
+  "license": "AGPL-3.0-or-later",
   "main": "expo-router/entry",
   "dependencies": {
     "@expo/metro-runtime": "~57.0.11",
@@ -41,6 +42,7 @@
     "arena": "node --import ./scripts/register.mjs scripts/botArena.mts",
     "calibrate:review": "node --import ./scripts/register.mjs scripts/reviewCalibration.mts",
     "measure:stability": "node --import ./scripts/register.mjs scripts/reviewStability.mts",
+    "licences": "node --import ./scripts/register.mjs scripts/licences.mts",
     "pretest": "npm run build:worker",
     "test": "tsc --noEmit && node --import ./scripts/register.mjs --test \"src/**/*.test.mts\"",
     "test:watch": "node --import ./scripts/register.mjs --test --watch \"src/**/*.test.mts\"",

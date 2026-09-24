@@ -112,3 +112,6 @@ GET /api/accounts/{userId}/games/pgn   one player's games, newest first
 ```
 
 Both accept `?format=json` to return the stored row instead of PGN.
+
+This reference is released under the MIT License, so anything that reads or
+writes these records can quote it freely.

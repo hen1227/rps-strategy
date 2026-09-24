@@ -74,6 +74,8 @@ export const up = {
   /** The list of players is the one page whose subject is everybody. */
   player: { label: 'Leaderboard', href: links.leaderboard() } as UpTarget,
   tournamentInfo: { label: 'Tournaments', href: links.tournaments() } as UpTarget,
+  /** Reached only from the credits page, which is where the question it answers is asked. */
+  licences: { label: 'Credits', href: links.credits() } as UpTarget,
 } as const satisfies Record<string, UpTarget>;
 
 /**

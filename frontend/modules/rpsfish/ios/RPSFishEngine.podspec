@@ -1,4 +1,4 @@
-# Copyright (C) 2026 Henry Abrahamsen
+# Copyright (C) 2026 Henhen1227, LLC
 # SPDX-License-Identifier: LGPL-3.0-or-later
 
 require 'json'

@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Henhen1227, LLC
+# SPDX-License-Identifier: MIT
+#
+# MIT, unlike the AGPL-3.0 the rest of RPS Strategy is under, so you can copy
+# or change this file for your own bot and license the result however you
+# like. The licence text is at https://opensource.org/license/mit.
 """A complete, legal RPS Strategy bot. It picks at random and never looks
 at the board -- the server sends the legal moves, so it does not need to."""
 import random, sys
