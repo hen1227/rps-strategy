@@ -90,7 +90,9 @@ func run() error {
 	serveErrors := make(chan error, 1)
 	go func() {
 		log.Printf("RPS strategy server listening on %s", httpServer.Addr)
-		serveErrors <- httpServer.Serve(listener.Listener)
+		// The listener itself, not the net.Listener inside it, so that Shutdown
+		// closes it through cleanup. See configuredListener.Close.
+		serveErrors <- httpServer.Serve(listener)
 	}()
 
 	// Three ways this process ends, and by the time any of them fires they all

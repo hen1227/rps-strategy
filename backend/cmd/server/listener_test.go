@@ -141,6 +141,32 @@ func TestCleanupDoesNotRemoveReplacementSocket(t *testing.T) {
 	}
 }
 
+// TestCleanupDoesNotRemoveReplacementSocket only fails where the filesystem
+// hands a freed inode number straight back, which ext4 does and APFS and tmpfs
+// do not. This is the same rule without that dependence. The file left at the
+// path is the listener's own, but once the listener is closed it looks exactly
+// like a replacement that was given the same inode number, so cleanup has to
+// leave it alone too.
+func TestCleanupLeavesSocketOnceListenerIsClosed(t *testing.T) {
+	socketPath := filepath.Join(shortSocketDirectory(t), "server.sock")
+	listener, err := openUnixListener(socketPath)
+	if err != nil {
+		t.Fatalf("open Unix listener: %v", err)
+	}
+	// Closed behind cleanup's back. openUnixListener has turned off the
+	// close's own unlink, so the file stays at the path.
+	if err := listener.Listener.Close(); err != nil {
+		t.Fatalf("close listener: %v", err)
+	}
+
+	if err := listener.cleanup(); err != nil {
+		t.Fatalf("clean up closed listener: %v", err)
+	}
+	if _, err := os.Lstat(socketPath); err != nil {
+		t.Fatalf("socket was removed after its listener closed: %v", err)
+	}
+}
+
 func TestOpenListenerFromEnvironmentFallsBackToTCP(t *testing.T) {
 	t.Setenv(unixSocketEnv, "")
 	t.Setenv("PORT", "0")

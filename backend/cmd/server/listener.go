@@ -79,6 +79,10 @@ func openUnixListener(socketPath string) (*configuredListener, error) {
 		_ = listener.Close()
 		return nil, fmt.Errorf("inspect Unix socket %s: %w", socketPath, err)
 	}
+	// From here on cleanup removes the file, once it has checked that the file
+	// is still this listener's. The close's own unlink would remove whatever is
+	// at the path.
+	listener.SetUnlinkOnClose(false)
 
 	return &configuredListener{
 		Listener:    listener,
@@ -117,35 +121,64 @@ func removeStaleUnixSocket(socketPath string) error {
 	return nil
 }
 
+// Close runs cleanup, because it is what http.Server calls when it shuts down.
+// It returns nil: main reports cleanup's errors itself, and a socket file left
+// behind is no reason for Shutdown to fail and skip archiving the games on the
+// board.
+func (listener *configuredListener) Close() error {
+	_ = listener.cleanup()
+	return nil
+}
+
 func (listener *configuredListener) cleanup() error {
 	listener.cleanupOnce.Do(func() {
+		listener.cleanupErr = listener.removeOwnSocket()
 		if err := listener.Listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
-			listener.cleanupErr = fmt.Errorf("close listener: %w", err)
+			listener.cleanupErr = errors.Join(
+				listener.cleanupErr,
+				fmt.Errorf("close listener: %w", err),
+			)
 		}
-		if listener.socketPath == "" || listener.socketInfo == nil {
-			return
-		}
+	})
+	return listener.cleanupErr
+}
 
+// removeOwnSocket removes the socket file if it is still the one this listener
+// bound, and it has to run before the listener closes. An open socket holds its
+// file's inode, so while the listener is open, a file at the path with the same
+// device and inode number is ours. After the close the number can be reused,
+// and ext4 routinely gives it to the next file created in the same directory: a
+// new server's socket, bound at the same path, would pass the same comparison.
+func (listener *configuredListener) removeOwnSocket() error {
+	unixListener, ok := listener.Listener.(*net.UnixListener)
+	if !ok || listener.socketInfo == nil {
+		return nil
+	}
+	rawConn, err := unixListener.SyscallConn()
+	if err != nil {
+		return fmt.Errorf("inspect Unix socket during cleanup: %w", err)
+	}
+
+	// Control holds the descriptor open until the function returns. On a
+	// listener that is already closed it fails without calling it, and the path
+	// is left alone: if the file there is our own, the next start probes it and
+	// removes it as stale.
+	var removeErr error
+	_ = rawConn.Control(func(uintptr) {
 		currentInfo, err := os.Lstat(listener.socketPath)
 		if errors.Is(err, os.ErrNotExist) {
 			return
 		}
 		if err != nil {
-			listener.cleanupErr = errors.Join(
-				listener.cleanupErr,
-				fmt.Errorf("inspect Unix socket during cleanup: %w", err),
-			)
+			removeErr = fmt.Errorf("inspect Unix socket during cleanup: %w", err)
 			return
 		}
 		if !os.SameFile(listener.socketInfo, currentInfo) {
 			return
 		}
 		if err := os.Remove(listener.socketPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-			listener.cleanupErr = errors.Join(
-				listener.cleanupErr,
-				fmt.Errorf("remove Unix socket during cleanup: %w", err),
-			)
+			removeErr = fmt.Errorf("remove Unix socket during cleanup: %w", err)
 		}
 	})
-	return listener.cleanupErr
+	return removeErr
 }
