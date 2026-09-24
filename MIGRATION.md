@@ -472,13 +472,20 @@ Order matters, and two of these are hard gates:
       verified: no `.mp3` blob is reachable from any ref
 - [x] 🚨 CLA drafted (`CLA.md`), and the check that enforces it written
       (`.github/workflows/cla.yml`, tested in `.github/cla/`)
-- [ ] 🚨 Make **CLA** a required check on `main` (a GitHub ruleset; needs
-      Henry), and protect the `cla-signatures` branch from deletion
+- [x] 🚨 Make **CLA** a required check on `main`, and protect the
+      `cla-signatures` branch from deletion. Done 2026-09-24 with rulesets
+      23958109 and 23958110; the repository admin bypasses the first
 - [x] LICENSE (AGPL-3.0) / NOTICE / CONTRIBUTING / REUSE.toml added;
       `frontend/LICENSE` deleted; the bot kit and protocol docs marked MIT
-- [ ] SECURITY.md and CODE_OF_CONDUCT.md
+- [x] SECURITY.md (reports to support@henhen1227.com)
+- [ ] CODE_OF_CONDUCT.md (optional)
 - [x] `meaf` build tag in place; both build modes verified — untagged builds
       and tests clean with no export present, `-tags meaf` green with it
-- [ ] Secret scan on merged history; rotate bot tokens
-- [ ] Public: `rps-strategy` first, `rpsfish` second
-- [ ] Archive the two old repos with a pointer to the new one
+- [x] Secret scan on merged history. 2026-09-24: every ref, `dist` included,
+      and the working tree. No keys or tokens, and nothing sensitive tracked
+- [ ] Rotate the bot tokens (optional: they were never committed)
+- [x] CI green on Linux. The backend's one failing test was a real bug in the
+      listener's socket cleanup, fixed in `18ca1f8`
+- [ ] Public: `rps-strategy`. (`rpsfish` went first and is already public.)
+- [ ] Archive the two old repos with a pointer to the new one. Keep them
+      private: the frontend one still has the Chess.com mp3s in its history
