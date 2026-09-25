@@ -1,5 +1,5 @@
 // The licences page's data: every third-party package that ships in the website
-// or the iOS app, with its licence text. Writes src/features/credits/licences.json.
+// or the iOS app, with its licence text. Writes src/features/credits/licenceData.json.
 //
 // usage:
 //   npm run licences
@@ -31,7 +31,7 @@ import type { LicenceEntry, LicencesData, Platform } from '../src/features/credi
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const repository = path.resolve(root, '..');
-const output = path.join(root, 'src/features/credits/licences.json');
+const output = path.join(root, 'src/features/credits/licenceData.json');
 
 const run = (command: string, args: string[]) =>
   execFileSync(command, args, {
@@ -259,6 +259,21 @@ function main() {
       textIndex(fs.readFileSync(path.join(root, 'modules/rpsfish/COPYING'), 'utf8').trim()),
     ],
     note: 'The analysis engine. It is by the same author as the rest of RPS Strategy, but it is a separate program with its own repository and licence.',
+  });
+
+  // GitHub's mark, on the sidebar's link to this repository. It is one path
+  // copied out of Octicons into src/ui/GitHubMark.tsx rather than a package,
+  // so neither measurement above can see it, and the MIT still asks for its
+  // notice to go with it. The text is Octicons' own LICENSE, which is this.
+  packages.push({
+    name: 'Octicons',
+    version: null,
+    licence: 'MIT',
+    platforms: ['ios', 'web'],
+    url: 'https://github.com/primer/octicons',
+    from: null,
+    texts: [textIndex(`MIT License\n\nCopyright (c) 2026 GitHub Inc.\n\n${mitPermission}`)],
+    note: "Only GitHub's mark, on the button that links to this project's source. The mark itself is GitHub's trademark.",
   });
 
   packages.sort((a, b) => a.name.localeCompare(b.name, 'en', { sensitivity: 'base' }));

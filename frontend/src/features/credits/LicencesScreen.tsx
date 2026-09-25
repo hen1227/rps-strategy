@@ -38,7 +38,9 @@ export default function LicencesScreen() {
   useEffect(() => {
     let live = true;
     setFailed(false);
-    import('./licences.json')
+    // Named apart from licences.ts on purpose: the dev server asks for this
+    // chunk by its path without the extension, so a shared basename loads the .ts.
+    import('./licenceData.json')
       .then((module) => {
         if (live) setData(module.default as unknown as LicencesData);
       })

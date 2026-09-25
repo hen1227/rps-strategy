@@ -1,7 +1,10 @@
 # What's New
 
-## 1.0.0 — unreleased
+## v0.9.0 — Initial release of the project
+- The entire state of the project up to this point.
 
-- On a phone, the strip behind the status bar now matches the game screen's header instead of the page behind it.
-- Pieces no longer flicker when you tap or drag them.
-- The Credits page now links to the app's source code and lists the open-source software it is built on, with each licence.
+## v0.9.1
+
+- On the website, the sidebar links to the iOS beta on TestFlight and to the source code on GitHub.
+- On a phone, the move list fills the width of the screen and no longer runs off the edge while you look back through a game.
+- Player bars no longer show Discord names, and on a phone the pieces a player has taken sit under their name.

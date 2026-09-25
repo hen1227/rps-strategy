@@ -16,7 +16,7 @@ import type { LicencesData } from './licences.ts';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FRONTEND = resolve(HERE, '../../..');
 const readJSON = (path: string) => JSON.parse(readFileSync(resolve(FRONTEND, path), 'utf8'));
-const data = readJSON('src/features/credits/licences.json') as LicencesData;
+const data = readJSON('src/features/credits/licenceData.json') as LicencesData;
 const REGENERATE = 'Run `npm run licences` to regenerate the licences page.';
 
 test('every package on the licences page is the version installed', () => {

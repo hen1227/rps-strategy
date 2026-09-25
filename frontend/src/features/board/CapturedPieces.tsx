@@ -35,6 +35,8 @@ const STARTING_SYMBOLS: Record<string, { color: SideColor; piece: PlayablePiece 
 };
 
 const PIECE_SIZE = 22;
+/** How tall a one-line tray is, for a caller that keeps room for one. */
+export const TRAY_HEIGHT = PIECE_SIZE;
 
 const emptyTally = (): PieceTally => ({ Rock: 0, Paper: 0, Scissors: 0 });
 

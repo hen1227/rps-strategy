@@ -42,3 +42,13 @@ path = "frontend/modules/rpsfish/**"
 precedence = "override"
 SPDX-FileCopyrightText = "2026 Henhen1227, LLC"
 SPDX-License-Identifier = "LGPL-3.0-or-later"
+
+# GitHub's mark, on the sidebar's link to this repository. The component is
+# ours; the path it draws is copied from GitHub's Octicons, which are MIT. The
+# mark is also GitHub's trademark, which no licence here grants anything in.
+# The note in the file says what GitHub's logo guidelines allow.
+[[annotations]]
+path = "frontend/src/ui/GitHubMark.tsx"
+precedence = "override"
+SPDX-FileCopyrightText = ["2026 Henhen1227, LLC", "2026 GitHub Inc."]
+SPDX-License-Identifier = "AGPL-3.0-or-later AND MIT"

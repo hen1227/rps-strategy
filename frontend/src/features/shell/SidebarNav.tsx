@@ -1,12 +1,13 @@
 import { Link, usePathname } from 'expo-router';
-import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Image, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { sectionForPath, sectionsInGroup, visibleGroups } from './sections';
 import { useNavContext } from './useNavContext';
 import TournamentPromoLink from './TournamentPromoLink';
-import {links, webGoatGuy} from '@/navigation/links';
+import {IOS_APP_URL, SOURCE_URL, iosAppIsBeta, links, webGoatGuy} from '@/navigation/links';
 import { useGameStore } from '@/store/gameStore';
 import { colors, radius, space, themedSheet, type } from '@/theme';
+import GitHubMark from '@/ui/GitHubMark';
 
 // The desktop navigation.
 //
@@ -33,6 +34,10 @@ const BrandMark = () => (
      <Text style={styles.brandName}>RPS Strategy</Text>
   </View>
 );
+
+// What the app button says. It follows `IOS_APP_URL`, so moving from the beta
+// to the App Store is a change to that address and nothing here.
+const IOS_APP_LABEL = iosAppIsBeta ? 'iOS beta on TestFlight' : 'Get the iOS app';
 
 export default function SidebarNav() {
   const pathname = usePathname();
@@ -131,19 +136,48 @@ export default function SidebarNav() {
         {/*
           Where this game came from is now a row in the list above, under You,
           because a phone had no other way to reach it once the More menu went.
-          What stays down here is the one link that is not a page of this site
-          and so cannot be a section: somebody else's Discord.
+          What stays down here are the links that are not pages of this site
+          and so cannot be sections. First the iOS app, on the web only: inside
+          the app it would be an invitation to install what is already open.
+          Then somebody else's Discord, and beside it this site's own source.
+          That one is GitHub's mark with no label, because a second label would
+          not fit beside the first in this column.
         */}
-          <Link asChild href={webGoatGuy.discordURL} replace>
-              <Pressable
-                  accessibilityLabel="Where this game came from"
-                  accessibilityRole="link"
-                  // One resolved style object: see the note above.
-                  style={styles.discord}
-              >
-                  <Text style={styles.videoText}>Official Intransitive Discord</Text>
-              </Pressable>
+        {Platform.OS === 'web' ? (
+          <Link asChild href={IOS_APP_URL} replace>
+            <Pressable
+              accessibilityLabel={IOS_APP_LABEL}
+              accessibilityRole="link"
+              // One resolved style object: see the note above.
+              style={styles.app}
+            >
+              {/* The home-screen icon `+html.tsx` serves, plate and all: the app as a phone shows it. */}
+              <Image source={{ uri: '/apple-touch-icon.png' }} style={styles.appIcon} />
+              <Text style={styles.videoText}>{IOS_APP_LABEL}</Text>
+            </Pressable>
           </Link>
+        ) : null}
+        <View style={styles.outward}>
+          <Link asChild href={webGoatGuy.discordURL} replace>
+            <Pressable
+              accessibilityLabel="Official Intransitive Discord"
+              accessibilityRole="link"
+              // One resolved style object: see the note above.
+              style={styles.discord}
+            >
+              <Text style={styles.videoText}>Official Intransitive Discord</Text>
+            </Pressable>
+          </Link>
+          <Link asChild href={SOURCE_URL} replace>
+            <Pressable
+              accessibilityLabel="Source code on GitHub"
+              accessibilityRole="link"
+              style={styles.source}
+            >
+              <GitHubMark color={colors.textStrong} size={16} />
+            </Pressable>
+          </Link>
+        </View>
       </View>
     </View>
   );
@@ -222,7 +256,23 @@ const styles = themedSheet(() => ({
   identityName: { ...type.rowTitle, color: colors.textStrong },
   identityMeta: { ...type.meta, color: colors.textFaint, marginTop: space.hair },
   videoText: { ...type.label, color: colors.textSubtle, letterSpacing: 0.4 },
-    discord: {
+  // Neutral, like the GitHub button beside Discord: the site's own two links
+  // wear the surface, and only Discord wears its blue.
+  app: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.small,
+    minHeight: 34,
+    paddingHorizontal: space.small,
+    borderRadius: radius.medium,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+  },
+  appIcon: { width: 20, height: 20, borderRadius: 5 },
+  outward: { flexDirection: 'row', gap: space.snug },
+  discord: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     gap: space.snug,
@@ -232,6 +282,18 @@ const styles = themedSheet(() => ({
     borderWidth: 1,
     borderColor: colors.discordBorder,
     backgroundColor: colors.discordSurface,
+  },
+  // Square, and the Discord button's height. Neutral rather than tinted,
+  // because GitHub's mark may only be white, black or grey: see GitHubMark.
+  source: {
+    width: 34,
+    minHeight: 34,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: radius.medium,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
   },
   discordMark: { color: colors.accentSoft, fontSize: 10 },
   discordText: { ...type.label, color: colors.textSubtle, letterSpacing: 0.4 },

@@ -54,7 +54,6 @@ import { colors, radius, shadows, themedSheet, type } from '@/theme';
 import BackLink from '@/ui/BackLink';
 import KeyboardLift from '@/ui/KeyboardLift';
 import { arrows } from '@/ui/arrows';
-import { GhostLink } from '@/ui/primitives';
 import {
   FIRST_TO_MOVE,
   opposingColor,
@@ -931,34 +930,6 @@ function FinishedGameCard({
                 >
                     <Text style={styles.finishedModesButtonText}>Return to lobby</Text>
                 </Pressable>
-            </View>
-            {/*
-              The way to say something went wrong, at the moment it did.
-
-              Here rather than only in the navigation, because this is where
-              people actually meet a bug: a clock that kept running, a move that
-              would not take, a result that reads wrong. By the time somebody has
-              found the Feedback page under You, the detail that would have made
-              the report reproducible is gone.
-
-              Quiet, and last. It is a tertiary action on a card whose job is to
-              say who won, and a third loud button here would compete with
-              playing again.
-
-              The game travels with it only when the server has a record of it:
-              an on-device bot game and a two-at-one-device game exist nowhere
-              but this browser, so attaching their id would put a link on the
-              board that leads to a game nobody else can open.
-            */}
-            <View style={styles.reportBugRow}>
-                <GhostLink
-                    compact
-                    href={links.feedback({
-                        compose: 'bug',
-                        gameId: gameState.bot || gameState.local ? undefined : gameState.gameId,
-                    })}
-                    label="SOMETHING WRONG? REPORT IT"
-                />
             </View>
         </View>
     );
@@ -2758,7 +2729,11 @@ const styles = themedSheet(() => ({
     // What the score sheet is given to scroll in. Beside a board it takes the
     // column's spare room; on a phone it is a fixed slice of a page.
     historySlot: {flexGrow: 1, flexShrink: 1, flexBasis: 0, minHeight: 148},
-    historySlotPhone: {maxHeight: 320},
+    // The width is what holds the card to the page's edges. The phone column
+    // centres its children, so without one the card sized itself to its
+    // contents: narrower than the page at the live edge, and wider than the
+    // screen once `LOOKING BACK` and the LIVE button lengthened them.
+    historySlotPhone: {width: '100%', maxHeight: 320},
     // The chat's slot in the panel, which is now a wrapper's rather than the
     // card's own: the same `flex: 1` and the same floor the card carried when it
     // was a direct child, so the column divides its room exactly as it did.
@@ -2910,9 +2885,6 @@ const styles = themedSheet(() => ({
     reviewGameButtonArrow: {color: colors.textStrong, fontSize: 18, fontWeight: '900'},
     noReviewDetail: {color: colors.textFaint, fontSize: 9, lineHeight: 13, marginTop: 11},
     finishedActions: {width: '100%', flexDirection: 'row', gap: 8, marginTop: 8},
-    // Centred and set apart from the two buttons above it, so it reads as an
-    // aside rather than as a third choice of where to go next.
-    reportBugRow: {width: '100%', alignItems: 'center', marginTop: 10},
     rematchButton: {
         flex: 1,
         alignItems: 'center',

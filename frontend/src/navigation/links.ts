@@ -426,6 +426,17 @@ export const webGoatGuy = {
 export const SOURCE_URL = 'https://github.com/hen1227/rps-strategy';
 
 /**
+ * Where to get the iOS app. For now that is its TestFlight beta. Once the app
+ * is on the App Store, put its App Store address here instead, and that is the
+ * whole change: `iosAppIsBeta` reads which of the two this is from the address,
+ * and the sidebar's button relabels itself to match.
+ */
+export const IOS_APP_URL = 'https://testflight.apple.com/join/Scqf8qzP';
+
+/** Whether `IOS_APP_URL` is still the TestFlight beta rather than the App Store. */
+export const iosAppIsBeta = IOS_APP_URL.startsWith('https://testflight.apple.com/');
+
+/**
  * The original video, kept under its old name because several places link to
  * it directly.
  */

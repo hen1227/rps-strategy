@@ -6,7 +6,7 @@
     "each project's own sources, as CocoaPods fetched them when React Native was last",
     "built from source here (fast_float from its upstream LICENSE-MIT). scripts/licences.mts",
     "merges them into the licences page. Revisit this list when React Native's major version",
-    "moves: the test beside src/features/credits/licences.json fails until you do."
+    "moves: the test beside src/features/credits/licenceData.json fails until you do."
   ],
   "reactNative": "0.86.2",
   "packages": [

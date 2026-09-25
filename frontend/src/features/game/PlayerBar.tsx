@@ -1,7 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
-import { Animated as NativeAnimated, Easing, StyleSheet, Text, View } from 'react-native';
+import {
+  Animated as NativeAnimated,
+  Easing,
+  StyleSheet,
+  Text,
+  View,
+  type LayoutChangeEvent,
+} from 'react-native';
 
-import CapturedPieces, { type CaptureTray } from '@/features/board/CapturedPieces';
+import CapturedPieces, { TRAY_HEIGHT, type CaptureTray } from '@/features/board/CapturedPieces';
+import { useWideLayout } from '@/hooks/useBoardLayout';
 import type { TimeExtension } from '@/store/clockSelectors';
 import PlayerLink from '@/ui/PlayerLink';
 import TitleTag from '@/ui/TitleTag';
@@ -21,6 +29,20 @@ const LOW_TIME_MS = 20_000;
 // waiting on it: the chip has left the clock before the next second ticks.
 const BONUS_MS = 900;
 
+// Narrower than this, the captured pieces leave the name's line for the one
+// under it. Beside the name they are paid for out of the name's room, and on a
+// phone a title, a name and YOU already fill that line before a single piece
+// has been taken. Under the name they share a line with one word, and the bar
+// stays as tall as it was.
+const COMPACT_BELOW = 520;
+
+// How narrow the word beside a compact tray may get before it is dropped
+// rather than cut. About the width of `Thinking`, so the common word is shown
+// whole or not at all, and a long bot line keeps its level until the tray needs
+// that room too. Dropped, it costs nothing a stub like "T…" would have kept:
+// the bar's highlight and the avatar's letter say the same thing.
+const ACTIVITY_FLOOR = 40;
+
 const formatClock = (milliseconds: number) => {
   const safeMilliseconds = Math.max(0, milliseconds);
   if (safeMilliseconds < LOW_TIME_MS) {
@@ -38,8 +60,14 @@ const formatClock = (milliseconds: number) => {
 const remainingForColor = (clock: ClockState | null | undefined, color: SideColor) =>
   color === 'Red' ? clock?.redRemainingMs ?? 0 : clock?.blueRemainingMs ?? 0;
 
-/** The parts of a player the bar actually shows. A bot has no account id. */
-type BarProfile = Pick<Partial<PlayerProfile>, 'username' | 'discord' | 'title'>;
+/**
+ * The parts of a player the bar actually shows. A bot has no account id.
+ *
+ * Not the Discord handle, which the bar used to print under the name. It
+ * crowded the line on a phone, and a board in front of both players and every
+ * spectator is more exposure than a handle needs. Their page still has it.
+ */
+type BarProfile = Pick<Partial<PlayerProfile>, 'username' | 'title'>;
 
 const profileName = (profile: BarProfile | null | undefined, fallback: string) => {
   const name = profile?.username?.trim();
@@ -257,11 +285,56 @@ export default function PlayerBar({
     gameStatus === 'InProgress' &&
     (clock ? clock.activeColor === color : turnColor === color);
   const label = fallbackLabel ?? (isYou ? 'You' : 'Opponent');
-  const discord = profile?.discord?.trim();
   const activity = metaOverride ?? (isActive ? 'Thinking' : color);
 
+  // Measured on the bar rather than read off the window, because the bar is
+  // as wide as the board it sits against, and a wide window with a short board
+  // has bars as cramped as a phone's. Until the bar has been measured, the
+  // screen's own layout is the guess, so neither a phone nor a desktop
+  // rearranges its bars once they have been drawn. Safe against oscillating:
+  // the bar fills its parent either way, so the layout cannot change the width
+  // it reads.
+  const wideLayout = useWideLayout();
+  const [barWidth, setBarWidth] = useState<number | null>(null);
+  const measureBar = (event: LayoutChangeEvent) => {
+    const measured = Math.round(event.nativeEvent.layout.width);
+    setBarWidth((current) => (current === measured ? current : measured));
+  };
+  const compact = barWidth === null ? !wideLayout : barWidth < COMPACT_BELOW;
+  // Compact, the word is given whatever the tray leaves, so its own width is
+  // that leftover. Hidden rather than removed, so it goes on being measured
+  // and comes back by itself if the room does.
+  const [activityWidth, setActivityWidth] = useState<number | null>(null);
+  const measureActivity = (event: LayoutChangeEvent) => {
+    const measured = Math.round(event.nativeEvent.layout.width);
+    setActivityWidth((current) => (current === measured ? current : measured));
+  };
+  const activityCrowded = compact && activityWidth !== null && activityWidth < ACTIVITY_FLOOR;
+
+  const activityLine = (
+    <Text
+      numberOfLines={compact ? 1 : undefined}
+      onLayout={compact ? measureActivity : undefined}
+      style={[
+        styles.playerMeta,
+        compact && styles.playerMetaCompact,
+        activityCrowded && styles.playerMetaCrowded,
+        isActive && styles.playerMetaActive,
+      ]}
+    >
+      {activity}
+    </Text>
+  );
+  const tray = (
+    <CapturedPieces
+      advantage={captured?.advantage ?? 0}
+      color={opposingColor(color)}
+      tally={captured?.tally}
+    />
+  );
+
   return (
-    <View style={[styles.playerBar, isActive && styles.playerBarActive]}>
+    <View onLayout={measureBar} style={[styles.playerBar, isActive && styles.playerBarActive]}>
       <View style={[styles.avatar, color === 'Red' ? styles.redAvatar : styles.blueAvatar]}>
         <Text style={styles.avatarText}>{color.slice(0, 1)}</Text>
       </View>
@@ -288,15 +361,18 @@ export default function PlayerBar({
           {isYou && <Text style={styles.youLabel}>YOU</Text>}
           {Boolean(badge) && <Text style={styles.botLabel}>{badge}</Text>}
         </View>
-        <Text style={[styles.playerMeta, isActive && styles.playerMetaActive]}>
-          {discord ? `Discord: ${discord} · ${activity}` : activity}
-        </Text>
+        {compact ? (
+          // The pieces keep the width they need and the word beside them takes
+          // the rest, so a long bot line gives way before the tray does.
+          <View style={styles.metaRow}>
+            {activityLine}
+            <View style={styles.metaTray}>{tray}</View>
+          </View>
+        ) : (
+          activityLine
+        )}
       </View>
-      <CapturedPieces
-        advantage={captured?.advantage ?? 0}
-        color={opposingColor(color)}
-        tally={captured?.tally}
-      />
+      {compact ? null : tray}
       {Boolean(clock) && (
         <LiveClock clock={clock} color={color} extension={extension} gameStatus={gameStatus} />
       )}
@@ -351,6 +427,20 @@ const styles = themedSheet(() => ({
   },
   playerMeta: { color: colors.textFaint, fontSize: 9, fontWeight: '700', marginTop: 2 },
   playerMetaActive: { color: colors.accentSoft },
+  // As tall as a tray whether or not anything has been taken yet, so the first
+  // capture does not nudge the name up to make room for it.
+  metaRow: {
+    minHeight: TRAY_HEIGHT,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 2,
+  },
+  playerMetaCompact: { flex: 1, minWidth: 0, marginTop: 0 },
+  playerMetaCrowded: { opacity: 0 },
+  // Its own width, up to the whole line: past that the tray wraps inside
+  // itself rather than running under the clock.
+  metaTray: { flexShrink: 0, maxWidth: '100%' },
   // The pill's own box, held still so the pop below cannot shove the row
   // around and the chip has an edge to rise from.
   clockSlot: { position: 'relative' },
