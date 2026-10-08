@@ -34,6 +34,15 @@ export interface LadderRoundPreview {
    * connect; this stays as the server's own count to check that against.
    */
   entered: number;
+  /**
+   * The weekly arena this round will not run for. Absent for a round that runs.
+   *
+   * Nothing ranked starts from half an hour before the arena until it is over,
+   * and nobody knows when that will be until it happens — so every round from
+   * the start of the pause on carries this, and only the first of them is worth
+   * drawing. See backend/internal/server/ladder_pause.go.
+   */
+  pausedFor?: string;
 }
 
 /** What the pool is doing, and the scale it publishes on. */

@@ -1,4 +1,4 @@
-import DiscordCallbackScreen from '@/features/account/DiscordCallbackScreen';
+import SignInCallbackScreen from '@/features/account/SignInCallbackScreen';
 import PageTitle from '@/navigation/PageTitle';
 import { useAppearanceGeneration } from '@/appearance/store';
 
@@ -14,7 +14,7 @@ export default function Page() {
   return (
     <>
       <PageTitle title="Signing in" />
-      <DiscordCallbackScreen />
+      <SignInCallbackScreen />
     </>
   );
 }

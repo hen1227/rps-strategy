@@ -244,8 +244,13 @@ export const ownedEntries = (
  * engine nobody has ever run cannot usefully be told anything about rounds, so
  * that is answered first; then the switch, which is the only part the owner
  * controls from here; then the server's own reason; then the good case.
+ *
+ * `pausedFor` is the weekly arena when the next round is off for it. An engine
+ * can be ready and still have no round coming — between the last round before
+ * the arena and the start of the pause, when a press still works — and "ready
+ * for the next round" would then promise one.
  */
-export const ownedStatus = (entry: OwnedEntry): string => {
+export const ownedStatus = (entry: OwnedEntry, pausedFor: string | null = null): string => {
   if (!entry.bot.claimed) {
     // And it says nothing about the switch on purpose. The client sends its own
     // `ladder` setting when it claims a slot, so whatever this page set before
@@ -260,7 +265,11 @@ export const ownedStatus = (entry: OwnedEntry): string => {
   if (entry.field?.waiting) {
     return "Entered. Joins when its current game ends.";
   }
-  if (entry.field?.ready) return 'Entered and ready for the next round.';
+  if (entry.field?.ready) {
+    return pausedFor
+      ? `Entered. No rounds until ${pausedFor} ends.`
+      : 'Entered and ready for the next round.';
+  }
   if (entry.field?.reason) return `Entered, but ${entry.field.reason}.`;
   // Entered with no row in the field at all. That is a disabled bot, or a
   // database the field was read from before this switch reached it; either way
@@ -279,6 +288,8 @@ export interface ScheduleRow {
   clock: string;
   /** The round being counted down to, which is the one the field is about. */
   next: boolean;
+  /** The weekly arena this round will not run for, or null when it runs. */
+  pausedFor: string | null;
 }
 
 /**
@@ -294,6 +305,10 @@ export interface ScheduleRow {
  * schedule is the round still owed, so for a few minutes after each hour it is
  * a moment in the past, and a row saying a round is at a time that has been is
  * indistinguishable from the schedule having slipped.
+ *
+ * The list stops at the first round the weekly arena has. The server marks every
+ * round from there on, since nobody knows when the arena will end, and a column
+ * of them would read as a forecast that it runs all night.
  */
 export const scheduleRows = (
   schedule: LadderRoundPreview[],
@@ -301,7 +316,9 @@ export const scheduleRows = (
   now: number,
 ): ScheduleRow[] => {
   const upcoming = schedule.filter((round) => round.atUnixMs > now);
-  return upcoming.map((round, index) => ({
+  const firstPaused = upcoming.findIndex((round) => round.pausedFor);
+  const shown = firstPaused === -1 ? upcoming : upcoming.slice(0, firstPaused + 1);
+  return shown.map((round, index) => ({
     key: String(round.atUnixMs),
     atUnixMs: round.atUnixMs,
     at: new Date(round.atUnixMs).toLocaleTimeString(undefined, {
@@ -314,6 +331,7 @@ export const scheduleRows = (
       incrementMs: round.incrementMs,
     }),
     next: index === 0,
+    pausedFor: round.pausedFor ?? null,
   }));
 };
 

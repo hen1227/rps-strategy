@@ -464,7 +464,9 @@ func (server *Server) isStandardStartingPosition(
 		turn = game.OtherColor(turn)
 	}
 	expected := notation.EncodeStartingPosition(mode.Definition().StartingPosition)
-	return strings.EqualFold(notation.EncodePosition(grid, turn), expected)
+	// Exact, not case-folded: a FEN's case is its colours, and folding it
+	// would take an opening with the armies swapped for this one.
+	return notation.EncodePosition(grid, turn) == expected
 }
 
 // openingSegmentOf decides which of this site's three segments a game is in.

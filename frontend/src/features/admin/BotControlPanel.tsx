@@ -159,12 +159,12 @@ export default function BotControlPanel({ admin }: BotControlPanelProps) {
                 {bot.reservedFor ? (
                   <Badge label="RESERVE" tone="warm" />
                 ) : null}
-                {bot.draining ? <Badge label="DRAINING" tone="live" /> : null}
+                {bot.draining ? <Badge label="DRAINING" tone="danger" /> : null}
                 {bot.benched ? <Badge label="BENCHED" tone="neutral" /> : null}
                 {bot.allowPublicPlay ? null : <Badge label="PRIVATE" tone="neutral" />}
                 {bot.enterTournaments ? null : <Badge label="NO EVENTS" tone="neutral" />}
                 {bot.restricted?.length ? (
-                  <Badge label="RESTRICTED" tone="live" />
+                  <Badge label="RESTRICTED" tone="danger" />
                 ) : null}
                 <GhostLink compact href={links.player(bot.name)} label="PAGE" />
                 {/*

@@ -102,7 +102,7 @@ func seriesTestBots(t *testing.T) (*Server, persistence.Bot, persistence.Bot) {
 	if _, err := data.EnsureAccountWithProfileKey(ctx, "owner", "Owner", key); err != nil {
 		t.Fatalf("owner account: %v", err)
 	}
-	if _, err := data.ClaimAccountWithDiscord(ctx, "owner", "Owner", "discord-owner", "owner"); err != nil {
+	if _, err := data.ClaimAccountWithIdentity(ctx, "owner", "Owner", persistence.DiscordIdentity("discord-owner", "owner")); err != nil {
 		t.Fatalf("register owner: %v", err)
 	}
 
@@ -143,8 +143,8 @@ func addSeriesBot(t *testing.T, server *Server, name string) persistence.Bot {
 func addRivalSeriesBot(t *testing.T, server *Server, name string) persistence.Bot {
 	t.Helper()
 	owner := "owner-" + strings.ToLower(name)
-	if _, err := server.data.ClaimAccountWithDiscord(
-		t.Context(), owner, "Owner_"+name, "discord-"+owner, owner,
+	if _, err := server.data.ClaimAccountWithIdentity(
+		t.Context(), owner, "Owner_"+name, persistence.DiscordIdentity("discord-"+owner, owner),
 	); err != nil {
 		t.Fatalf("register owner for %s: %v", name, err)
 	}
@@ -254,8 +254,9 @@ func TestASeriesBetweenOneOwnersBotsIsCasual(t *testing.T) {
 // opponent — so the way to gain rating was to pick a weak one, or register one,
 // or find a friend to register one — and chose the mode, the clock and the
 // length of the run besides. A rating now comes from a round the server
-// arranged and from nowhere else. Everything an author can start still plays,
-// still records, and still shows in the archive; none of it moves a number.
+// arranged, or from a host who asked for one (bot_series_ranked_test.go), and
+// from nowhere else. Everything an author can start still plays, still
+// records, and still shows in the archive; none of it moves a number.
 func TestAHandStartedSeriesIsCasualHoweverManyOwnersAreInvolved(t *testing.T) {
 	server, _, _ := seriesTestBots(t)
 	first := addRivalSeriesBot(t, server, "Rival")
@@ -278,8 +279,9 @@ func TestAHandStartedSeriesIsCasualHoweverManyOwnersAreInvolved(t *testing.T) {
 // And the other half: a round the pool arranged is the one thing that counts.
 //
 // Seated through the same StartBotSeries with one field different, which is
-// deliberate — there is exactly one place a ranked engine game can come from,
-// and it is a flag no route can set.
+// deliberate — this flag is one of only two places a ranked engine game can
+// come from, and no route can set it. The other is a host's Ranked, tested in
+// bot_series_ranked_test.go.
 func TestAPoolRoundIsRanked(t *testing.T) {
 	server, _, _ := seriesTestBots(t)
 	first := addRivalSeriesBot(t, server, "Rival")
@@ -911,7 +913,7 @@ func TestOneSlowSearchDoesNotAbandonTheRestOfTheSeries(t *testing.T) {
 	if _, err := data.EnsureAccountWithProfileKey(ctx, "owner", "Owner", key); err != nil {
 		t.Fatalf("owner account: %v", err)
 	}
-	if _, err := data.ClaimAccountWithDiscord(ctx, "owner", "Owner", "discord-owner", "owner"); err != nil {
+	if _, err := data.ClaimAccountWithIdentity(ctx, "owner", "Owner", persistence.DiscordIdentity("discord-owner", "owner")); err != nil {
 		t.Fatalf("register owner: %v", err)
 	}
 

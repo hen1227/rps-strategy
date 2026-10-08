@@ -196,7 +196,7 @@ const styles = themedSheet(() => ({
     paddingHorizontal: space.medium,
     borderRadius: radius.medium,
     borderWidth: 1,
-    borderColor: colors.accentBorder,
+    borderColor: colors.borderLight,
     backgroundColor: colors.noticeSurface,
   },
   warning: { borderColor: colors.dangerBorder, backgroundColor: colors.dangerSurfaceQuiet },

@@ -100,7 +100,21 @@ export interface LiveGameSeries {
    * game, so it is the only way to read the tally against the two names.
    */
   firstIsRed: boolean;
+  /** Who picked the two engines. Absent from a server older than it. */
+  pairing?: BotSeriesPairing;
+  /** The run does not count on the bot ladder. Absent from an older server. */
+  casual?: boolean;
 }
+
+/**
+ * Who picked a bot series' two engines — the other half, with `casual`, of the
+ * first thing anybody reading one asks.
+ *
+ * `round` is the hourly round's own pairing. `random` is an owner asking for a
+ * ranked match against an engine the server drew. `chosen` is two engines a
+ * person named: a ranked match, a host's run, or any casual series.
+ */
+export type BotSeriesPairing = 'round' | 'random' | 'chosen';
 
 /** The compact current board published with a live lobby row. */
 export interface LiveGamePosition {
@@ -400,6 +414,19 @@ export interface BotPresence {
 }
 
 /**
+ * What every ranked bot match is played at. Served, so the Bots page cannot
+ * describe a match the server would not seat.
+ */
+export interface RankedMatchTerms {
+  /** One of these is drawn when the match is seated, among those both play. */
+  modes: ModeID[];
+  /** And one of these. */
+  clocks: TimeControl[];
+  /** Always one: two games, colours swapped. */
+  pairs: number;
+}
+
+/**
  * A scheduled stretch of time in which every engine is off the board.
  *
  * Not a shutdown and not a fault: the bots stay connected and idle, take no new
@@ -664,6 +691,10 @@ export interface TournamentPlayer {
 }
 
 export interface TournamentStanding {
+  /**
+   * Shared by everybody level on points (in a knockout, on the round they went
+   * out in), so two rows can both be first. See `isTiedStanding`.
+   */
   rank: number;
   playerId: number;
   ign: string;
@@ -1076,6 +1107,8 @@ export interface ConnectionReadyMessage {
   challenges?: Challenge[];
   /** The public board of challenges nobody has claimed yet. */
   openChallenges?: Challenge[];
+  /** What a ranked bot match is played at. See `RankedMatchTerms`. */
+  rankedTerms?: RankedMatchTerms;
   /** People per mode who are waiting *and* at the keyboard right now. */
   modeReadyCounts?: ModeCounts;
   /**

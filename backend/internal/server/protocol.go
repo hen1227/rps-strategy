@@ -188,6 +188,11 @@ type LiveGameSeries struct {
 	// is the only way to read the tally against the two names on the row. The
 	// seats swap every game, so it cannot be inferred from the colours alone.
 	FirstIsRed bool `json:"firstIsRed"`
+	// Pairing is who picked the two engines and Casual is whether the run
+	// counts, so a live board can say both. The same answers the stored run
+	// gives; see persistence.BotSeries.
+	Pairing persistence.BotSeriesPairing `json:"pairing"`
+	Casual  bool                         `json:"casual"`
 }
 
 // LiveGamePosition is the compact board picture sent to the lobby. A complete
@@ -385,4 +390,8 @@ type ServerMessage struct {
 	// telling them a human is waiting, when that human is asleep, turns a
 	// helpful prompt into a wasted click.
 	ModeReadyCounts map[game.ModeID]int `json:"modeReadyCounts,omitempty"`
+	// RankedTerms is what every ranked bot match is played at, carried on
+	// connection_ready so the Bots page can say so before anybody presses for
+	// one. See rankedMatchTerms.
+	RankedTerms *RankedMatchTerms `json:"rankedTerms,omitempty"`
 }

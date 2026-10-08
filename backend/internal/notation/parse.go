@@ -404,19 +404,26 @@ func buildRecord(tags map[string]string, events []game.Event, result string) (ga
 	if err != nil {
 		return game.Record{}, err
 	}
-	startingPosition, err := StartingPositionFrom(tags["FEN"])
+	startingFEN, err := startingFENOf(tags)
 	if err != nil {
 		return game.Record{}, err
 	}
-	startingGrid, startingTurn, err := DecodePosition(tags["FEN"])
+	startingPosition, err := StartingPositionFrom(startingFEN)
 	if err != nil {
 		return game.Record{}, err
 	}
-	// Older hand-written records sometimes omit the side-to-move field. They
-	// historically replayed with Red first, so keep that compatibility while
-	// preserving an explicit Blue turn when the FEN supplies one.
+	startingGrid, startingTurn, err := DecodePosition(startingFEN)
+	if err != nil {
+		return game.Record{}, err
+	}
+	// A FEN with no side to move, or with "-", names nobody to open. The board
+	// is then opened by the side that opens a standard game, which is also who
+	// openingSideFromFEN numbered the movetext from; the two must agree.
 	if startingTurn == game.Neutral {
 		startingTurn = game.FirstToMove
+	}
+	if strings.TrimSpace(tags["FinalFEN"]) == "" {
+		return game.Record{}, fmt.Errorf("%w: no FinalFEN tag", ErrInvalidPGN)
 	}
 	grid, turn, err := DecodePosition(tags["FinalFEN"])
 	if err != nil {
@@ -486,6 +493,26 @@ func buildRecord(tags map[string]string, events []game.Event, result string) (ga
 		Events:          events,
 		Final:           final,
 	}, nil
+}
+
+// startingFENOf is the board a record began from.
+//
+// A record with no FEN began from its mode's own opening, the way a chess PGN
+// with no SetUp began from the standard position. Every record this project
+// writes carries a FEN, so only a hand-written file takes this path -- and the
+// review screen replays such a file from the same board.
+func startingFENOf(tags map[string]string) (string, error) {
+	if fen := strings.TrimSpace(tags["FEN"]); fen != "" {
+		return fen, nil
+	}
+	mode, err := game.DefaultModeRegistry.New(game.ModeID(tags["ModeId"]))
+	if err != nil {
+		return "", fmt.Errorf(
+			"%w: no FEN tag, and mode %q has no standard opening to begin from",
+			ErrInvalidPGN, tags["ModeId"],
+		)
+	}
+	return EncodeStartingPosition(mode.Definition().StartingPosition), nil
 }
 
 func moveNumberFrom(tags map[string]string, events []game.Event) int {

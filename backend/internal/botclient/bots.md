@@ -300,21 +300,46 @@ recalculates the scale.
 
 ### Where a rating comes from
 
-**Rated bot games use server-selected opponents and settings.** Hourly rounds
-start on the hour and play two Intransitive games per pair, with colours swapped.
-Set `ladder = yes` to enter. **PLAY NOW** requests an extra ranked pair; the server
-still chooses the opponent and settings.
+**Only ranked games change a rating.** A ranked match is two Intransitive games
+with colours swapped, at a clock the server picks. Both bots must be entered in
+the ranked ladder (`ladder = yes`), and two bots with the same owner never play
+each other ranked.
+
+A ranked match starts one of three ways:
+
+- **Hourly round:** the server pairs entered bots every hour.
+- **Random opponent:** on **Bots**, pick one bot, choose **RANKED** and press
+  **START RANKED**. **PLAY NOW** on **Hourly Rounds** does the same.
+- **Chosen matchup:** pick any two bots, choose **RANKED** and press **START
+  RANKED**. It starts right away.
+
+Anyone signed in can start one, with any bots. Choose **CASUAL** to set your own
+length and clock instead; casual games never change a rating.
+
+**A ranked match plays both of its games.** Only an administrator can stop one,
+and pausing or shutting down your bot still finishes the pair first.
 
 Keep the client online at the hour. Missed server rounds are skipped. Busy
 engines are paired and wait for a free slot; a pairing still waiting at the next
 hour expires. Hourly rounds schedule at most two games per engine per hour.
 
+**Ranked games pause for the Weekend Bot Arena.** From 30 minutes before the
+arena starts until it ends, no hourly round runs and no ranked match can start,
+for every bot, including bots that are not playing in the arena. Rounds resume
+on the first hour after the arena finishes.
+
 The pool prefers useful matchups: similar strength, unfamiliar opponents, and
 uncertain ratings. With reference engines active, new bots play one first.
 
-Challenges and manually arranged series do not affect bot ratings. Bot games
+Other challenges and hand-arranged series do not affect bot ratings. Bot games
 against people are also casual, except for human ratings against reference engines.
 Infiltration and Total War keep their historical ratings but get no new hourly rounds.
+
+**Administrators can make exceptions.** An administrator can start a ranked
+series between two engines with different owners, and can move a finished engine
+game or series between ranked and casual. Ratings are refitted from the whole
+record straight away, so a change is exact and can be undone. Ranked series pause
+for the Weekend Bot Arena like every other ranked game.
 
 ### Why it is not a running total
 
@@ -334,9 +359,10 @@ ratings become less certain.
 
 A **series** plays pairs from shared opening positions, with colours swapped.
 Seeded opening moves are excluded from accuracy scores. Games are watchable,
-archived, and **casual**. Website series allow up to **3 pairs**, **10 minutes per
-side**, and **one active series per person**. Both bots must allow public play or
-belong to the person starting it. Stopping a series lets its current pair finish.
+archived, and **casual** unless an administrator starts the series as ranked.
+Website series allow up to **3 pairs**, **10 minutes per side**, and **one active
+series per person**. Both bots must allow public play or belong to the person
+starting it. Stopping a series lets its current pair finish.
 
 For **engine tournaments**, set `tournaments = yes` and stay online. Every eligible
 engine enters when the event starts; you can enter multiple bots. Turn the switch

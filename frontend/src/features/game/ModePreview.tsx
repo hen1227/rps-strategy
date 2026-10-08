@@ -18,15 +18,14 @@ const DEFAULT_ROWS = [
   'r.p.s.p.r',
 ];
 
-// The default preview board, and the piece size that reads well inside it.
-// A smaller board scales the pieces with it rather than keeping them large,
+// The default preview board, and the piece size that reads well on it: eleven
+// points of piece for every hundred of board, the ratio the thumbnail was tuned
+// at. A smaller board scales the pieces with it rather than keeping them large,
 // which would turn nine ranks into one dark smudge.
 const PREVIEW_SIZE = 116;
-const PREVIEW_PIECE_SIZE = 11;
-const FRAME_PADDING = 8;
+const PIECE_PER_BOARD = 11 / 100;
 
-const pieceSizeFor = (size: number) =>
-  Math.max(5, Math.round((size * PREVIEW_PIECE_SIZE) / PREVIEW_SIZE));
+const pieceSizeFor = (size: number) => Math.max(5, Math.round(size * PIECE_PER_BOARD));
 
 export interface ModePreviewProps {
   mode: ModeDefinition | null | undefined;
@@ -36,7 +35,7 @@ export interface ModePreviewProps {
    * the goal ranks, and the pieces are wherever the setup put them.
    */
   position?: StartingPosition | null;
-  /** Frame width in points. The board is square inside it. */
+  /** Width in points. The board is square and fills it. */
   size?: number;
 }
 
@@ -55,21 +54,18 @@ export default function ModePreview({ mode, position, size = PREVIEW_SIZE }: Mod
       <MiniBoard
         grid={grid}
         modeId={mode?.id}
+        muted
         pieceSize={pieceSizeFor(size)}
-        size={size - FRAME_PADDING * 2}
+        size={size}
       />
     </View>
   );
 }
 
 const styles = themedSheet(() => ({
-  frame: {
-    padding: FRAME_PADDING,
-    borderRadius: radius.large,
-    backgroundColor: colors.surfaceWell,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
+  // No well around the board. A dark box inside the card inside the page was
+  // three frames for one picture; the board's own edge is enough.
+  frame: { borderRadius: radius.small },
   previewHeader: {
     height: 12,
     flexDirection: 'row',

@@ -2,16 +2,21 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  liveSeriesLabel,
   seriesContains,
   seriesGameIsOpen,
   seriesMetaLine,
-  seriesStatusTone,
+  seriesOccasion,
+  seriesStatus,
   seriesView,
+  singleGameOccasion,
+  tournamentOccasion,
   watchedOutcome,
   withLiveGame,
   withWatchedResult,
 } from './seriesSummary.ts';
 import type { BotSeries, BotSeriesGame } from '../../store/api/bots.ts';
+import type { ModeDefinition } from '../../types/game.ts';
 
 const game = (over: Partial<BotSeriesGame> & { gameNumber: number }): BotSeriesGame => ({
   pairNumber: Math.ceil(over.gameNumber / 2),
@@ -141,65 +146,69 @@ test('falls back to a name for an engine whose account is gone', () => {
   assert.equal(view.secondName, 'Second bot');
 });
 
-test('describes a running run by what it set out to play', () => {
-  assert.equal(
-    seriesMetaLine(run({ status: 'running', requestedByName: 'ada' })),
-    '3 pairs · 3 opening plies · 1+1 · started by ada',
-  );
-  // A run nobody is attributed to — started with the host token, which is a
-  // secret rather than a person — simply says less.
-  assert.equal(seriesMetaLine(run({ status: 'running', openingPlies: 0 })), '3 pairs · 1+1');
+test('says how a run was played, and who started it', () => {
+  assert.equal(seriesMetaLine(run({ requestedByName: 'ada' })), 'V3 · 1+1 · started by ada');
+  // A run nobody is attributed to — an hourly round, or one started with the
+  // host token, which is a secret rather than a person — simply says less.
+  assert.equal(seriesMetaLine(run()), 'V3 · 1+1');
+});
+
+test('names the mode rather than its id when it knows the mode', () => {
+  const modes = [{ id: 'V3', name: 'Intransitive' }] as unknown as ModeDefinition[];
+  assert.equal(seriesMetaLine(run(), modes), 'Intransitive · 1+1');
 });
 
 // The shortest clock the form offers is six seconds each, which a run reported
 // in whole minutes would round to nothing — and the clock is what says whether
 // a 6-0 was two engines thinking or two engines flagging.
 test('states a bullet clock rather than rounding it away', () => {
-  assert.equal(
-    seriesMetaLine(run({ initialTimeMs: 6_000, incrementMs: 1000, openingPlies: 0 })),
-    '0 games · 6s+1',
-  );
+  assert.equal(seriesMetaLine(run({ initialTimeMs: 6_000, incrementMs: 1000 })), 'V3 · 6s+1');
   // An archived row from before the clock was recorded has nothing to say about
   // it, and says nothing rather than "0s+0".
-  assert.equal(
-    seriesMetaLine(run({ initialTimeMs: 0, incrementMs: 0, openingPlies: 0 })),
-    '0 games',
-  );
+  assert.equal(seriesMetaLine(run({ initialTimeMs: 0, incrementMs: 0 })), 'V3');
 });
 
-test('describes a finished run by what it actually played', () => {
-  // Four pairs were asked for and one game happened. Saying "4 pairs" here is
-  // the same invention as drawing seven empty columns beside it.
-  const stopped = run({
-    status: 'aborted',
-    pairs: 4,
-    games: [game({ gameNumber: 1, result: 'second_win', endReason: 'abandonment' })],
+// --- what a run was --------------------------------------------------------
+//
+// The two answers a card leads with, and the reason the card was redrawn: an
+// hourly round, a PLAY NOW and a hand-started run between the same two engines
+// used to be the same card with "casual" somewhere in a line of settings.
+
+test('a run says whether it counted and who picked the pairing', () => {
+  assert.deepEqual(seriesOccasion(run({ pairing: 'round' })), {
+    ranked: true,
+    pairing: 'round',
+    title: 'Hourly round',
   });
-  assert.equal(seriesMetaLine(stopped), '1 game · 3 opening plies · 1+1');
-  assert.equal(
-    seriesMetaLine(
-      run({
-        games: [
-          game({ gameNumber: 1, result: 'first_win' }),
-          game({ gameNumber: 2, result: 'draw' }),
-        ],
-      }),
-    ),
-    '2 games · 3 opening plies · 1+1',
-  );
+  assert.equal(seriesOccasion(run({ pairing: 'random' })).title, 'Random opponent');
+  assert.equal(seriesOccasion(run({ pairing: 'chosen' })).title, 'Chosen matchup');
+  assert.equal(seriesOccasion(run({ pairing: 'chosen', casual: true })).ranked, false);
 });
 
-// A run between two of one person's engines does not move the ladder, and the
-// scoreline is exactly where somebody would otherwise wonder why a 6–0 changed
-// nothing.
-test('says when a run did not count', () => {
-  assert.equal(
-    seriesMetaLine(run({ casual: true, openingPlies: 0 })),
-    '0 games · casual · 1+1',
-  );
-  // And stays quiet about it on a run that did count, rather than labelling
-  // every line with which of the two it is.
-  assert.equal(seriesMetaLine(run({ openingPlies: 0 })), '0 games · 1+1');
+test('a round a host made casual afterwards is still a round, and says both', () => {
+  const moved = seriesOccasion(run({ pairing: 'round', casual: true }));
+  assert.equal(moved.title, 'Hourly round');
+  assert.equal(moved.ranked, false);
+});
+
+test('a run from a server older than the pairing claims the least it can', () => {
+  // Every run such a server knew about was a round or a hand-started one, and
+  // "chosen" is the one of those that asserts nothing about the hour.
+  assert.equal(seriesOccasion(run({ pairing: undefined })).pairing, 'chosen');
+});
+
+test('events and lone games read in the same words as runs', () => {
+  assert.equal(tournamentOccasion(true, true).title, 'Weekend Arena');
+  assert.equal(tournamentOccasion(false, true).title, 'Tournament');
+  assert.equal(tournamentOccasion(false, false).ranked, false);
+  assert.equal(singleGameOccasion(false).title, 'Single game');
+});
+
+test('a live board names its run in capitals, and an old server says less', () => {
+  assert.equal(liveSeriesLabel({ pairing: 'round', casual: false }), 'RANKED · HOURLY ROUND');
+  assert.equal(liveSeriesLabel({ pairing: 'random', casual: false }), 'RANKED · RANDOM OPPONENT');
+  assert.equal(liveSeriesLabel({ pairing: 'chosen', casual: true }), 'CASUAL SERIES');
+  assert.equal(liveSeriesLabel({}), 'BOT SERIES');
 });
 
 test('knows which games belong to a run', () => {
@@ -261,11 +270,15 @@ test('a game is only openable when there is something behind it', () => {
 });
 
 test('a run badges its own state', () => {
-  assert.equal(seriesStatusTone(run({ status: 'running' })), 'live');
-  assert.equal(seriesStatusTone(run({ status: 'completed' })), 'accent');
-  assert.equal(seriesStatusTone(run({ status: 'aborted' })), 'neutral');
+  // Only a run being played wears the live colour; the rest is metadata.
+  assert.deepEqual(seriesStatus(run({ status: 'running' })), { label: 'LIVE', tone: 'live' });
+  assert.deepEqual(seriesStatus(run({ status: 'completed' })), {
+    label: 'FINISHED',
+    tone: 'neutral',
+  });
+  assert.deepEqual(seriesStatus(run({ status: 'aborted' })), { label: 'STOPPED', tone: 'neutral' });
   // Anything the server invents later reads as neutral rather than as nothing.
-  assert.equal(seriesStatusTone(run({ status: 'paused' })), 'neutral');
+  assert.deepEqual(seriesStatus(run({ status: 'paused' })), { label: 'PAUSED', tone: 'neutral' });
 });
 
 // --- what a watcher can fill in ------------------------------------------

@@ -93,7 +93,7 @@ export default function MyBotsScreen() {
           </Text>
           <View style={styles.actions}>
             <PrimaryButton
-              label="SIGN IN WITH DISCORD"
+              label="SIGN IN"
               onPress={() => router.push(links.account())}
             />
           </View>

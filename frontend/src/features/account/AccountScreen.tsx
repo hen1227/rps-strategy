@@ -13,22 +13,30 @@ import {
   PrimaryButton,
   SectionHeading,
 } from '@/ui/primitives';
-import { RATING_EXPLAINER, RATING_FLOOR } from '@/features/ratings/scale';
+import {
+  RATING_EXPLAINER,
+  RATING_FLOOR,
+  RATING_UNRATED_LABEL,
+  ratingIsRankable,
+  ratingLabel,
+} from '@/features/ratings/scale';
 import AccountSignInPanel from '@/features/account/AccountSignInPanel';
 import DeleteAccountPanel from '@/features/account/DeleteAccountPanel';
 import BlockedPlayersPanel from '@/features/moderation/BlockedPlayersPanel';
-import DiscordLinkPrompt from '@/features/account/DiscordLinkPrompt';
+import LinkSignInPrompt from '@/features/account/LinkSignInPrompt';
+import SignInMethodsPanel from '@/features/account/SignInMethodsPanel';
 import UsernameSetupPanel from '@/features/account/UsernameSetupPanel';
 import TitlesPanel from '@/features/account/TitlesPanel';
 import GameHistoryPanel from '@/features/game/GameHistoryPanel';
 import MatchAlertsPanel from '@/features/queue/MatchAlertsPanel';
 import { getAccount, updateAccount } from '@/store/api/accounts';
+import { getSignInMethods, type SignInMethods } from '@/store/api/bots';
 import { isSignedIn } from '@/store/accountSession';
 import { useGameStore } from '@/store/gameStore';
 import { isReservedIn, useIdentityPolicy } from '@/hooks/useIdentityPolicy';
 import { links } from '@/navigation/links';
 import type { ModeDefinition, ModeID } from '@/types/game';
-import type { Account } from '@/types/protocol';
+import type { Account, RatingState } from '@/types/protocol';
 import TitleTag from '@/ui/TitleTag';
 import { colors, contentWidth, radius, themedSheet } from '@/theme';
 
@@ -43,13 +51,15 @@ const visibleName = (account: Account | null | undefined) =>
   account?.username && account.username.toLowerCase() !== 'guest' ? account.username : '';
 
 // Every mode rates separately. A mode the player has not finished yet reports
-// the account's shared rating, which is what the server will seed it with.
+// the account's shared rating, which is what the server will seed it with —
+// and is unrated, so it prints as a dash, the way the leaderboard prints it.
 /** One mode's rating, as the table shows it. */
 interface ModeRatingRow {
   id: ModeID;
   name: string;
   shortCode: string;
   elo: number;
+  ratingState?: RatingState;
   wins: number;
   draws: number;
   losses: number;
@@ -71,6 +81,10 @@ const modeRatingRows = (
         name: mode.name,
         shortCode: mode.shortCode,
         elo: rating?.elo ?? seedElo,
+        // No row at all is a mode never played, whatever the server's age; a
+        // row without a state is an older server, which ratingIsRankable reads
+        // as a real rating.
+        ratingState: rating ? rating.ratingState : 'unrated',
         wins: rating?.wins ?? 0,
         draws: rating?.draws ?? 0,
         losses: rating?.losses ?? 0,
@@ -130,6 +144,42 @@ export default function AccountScreen() {
   // rather than edited. Only a legacy account that has not linked yet still
   // types one.
   const discordVerified = Boolean(account?.discordVerified);
+
+  // What this account signs in with, which only the server can answer, and
+  // only to its owner. It decides two things: whether to ask a password
+  // account to link Discord or Apple — a store review account is on a password
+  // too, and the prompt has to stay off it, since the link it offers is one the
+  // server refuses — and what the sign-in methods panel lists. Null, and
+  // neither, until the server has said.
+  const [awaitingLink, setAwaitingLink] = useState<boolean | null>(null);
+  const [signInMethods, setSignInMethods] = useState<SignInMethods | null>(null);
+  const accountUserId = account?.userId;
+  useEffect(() => {
+    if (!signedIn || !sessionToken) {
+      setAwaitingLink(null);
+      setSignInMethods(null);
+      return;
+    }
+    let cancelled = false;
+    getSignInMethods(sessionToken)
+      .then((reply) => {
+        if (cancelled) return;
+        setAwaitingLink(reply.awaitingLink);
+        setSignInMethods(reply);
+      })
+      .catch((caught) => {
+        if (cancelled) return;
+        // A server older than the route answers 404, and keeps the rule it was
+        // built with: every unverified account is asked. Any other failure asks
+        // nobody, rather than nag on a blip.
+        setAwaitingLink((caught as { status?: number } | null)?.status === 404);
+        setSignInMethods(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [signedIn, sessionToken, accountUserId]);
+
   const username = edits?.username ?? account?.username ?? '';
   const discord = edits?.discord ?? account?.discord ?? '';
   const setField = (field: 'username' | 'discord', value: string) => {
@@ -191,6 +241,11 @@ export default function AccountScreen() {
     (best, rating) => (best && best.gamesPlayed >= rating.gamesPlayed ? best : rating),
     null,
   );
+  // It is the number a player reads as their rating, so a seed nobody has been
+  // measured against prints as a dash rather than as the floor it equals.
+  const featuredState: RatingState | undefined = featuredRating
+    ? featuredRating.ratingState
+    : 'unrated';
 
   return (
     // No back button: inside the app shell the sidebar or the tab bar is the
@@ -203,12 +258,12 @@ export default function AccountScreen() {
             <Text style={styles.subtitle}>
               {account?.registered
                 ? "Your opponents see these details."
-                : "Sign in with Discord to keep your games and rating."}
+                : "Sign in to keep your games and rating."}
             </Text>
           </View>
 
           <UsernameSetupPanel />
-          {signedIn && account && !discordVerified ? <DiscordLinkPrompt /> : null}
+          {signedIn && account && !discordVerified && awaitingLink ? <LinkSignInPrompt /> : null}
 
           {loading ? (
             <View style={styles.loadingCard}>
@@ -242,8 +297,13 @@ export default function AccountScreen() {
                   <Text style={styles.eloLabel}>
                     {featuredRating?.gamesPlayed ? `${featuredRating.shortCode} RATING` : 'RATING'}
                   </Text>
-                  <Text style={styles.eloValue}>
-                    {featuredRating?.elo ?? account?.elo ?? RATING_FLOOR}
+                  <Text
+                    accessibilityLabel={
+                      ratingIsRankable(featuredState) ? undefined : RATING_UNRATED_LABEL
+                    }
+                    style={styles.eloValue}
+                  >
+                    {ratingLabel(featuredRating?.elo ?? account?.elo ?? RATING_FLOOR, featuredState)}
                   </Text>
                 </View>
               </Panel>
@@ -332,6 +392,12 @@ export default function AccountScreen() {
               )}
 
               {/*
+                Beside the identity it belongs to: the ways this account signs
+                in, and the button for whichever of Discord and Apple it lacks.
+              */}
+              {signedIn ? <SignInMethodsPanel methods={signInMethods} /> : null}
+
+              {/*
                 Under the identity form, because a title is part of the name
                 rather than a statistic: it is chosen next to the field it will
                 sit in front of, not down beside the ratings that earned it.
@@ -365,7 +431,7 @@ export default function AccountScreen() {
                           rating.gamesPlayed === 0 && styles.ratingEloUnplayed,
                         ]}
                       >
-                        {rating.elo}
+                        {ratingLabel(rating.elo, rating.ratingState)}
                       </Text>
                     </View>
                   ))}

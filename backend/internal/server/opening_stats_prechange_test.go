@@ -144,3 +144,18 @@ func replayWholeGame(
 	}
 	return played, total
 }
+
+// A FEN's case is its colours. The opening with the armies swapped -- Red's
+// pieces on Blue's squares and Blue's on Red's -- is not the opening, however
+// alike the two read once case is ignored.
+func TestAStandardOpeningIsReadWithItsColours(t *testing.T) {
+	server := openingTestServer(t)
+	const opening = "3SSS3/3PPP3/3RRR3/9/9/9/3rrr3/3ppp3/3sss3 b 3bbb3/3bbb3/3bbb3/9/9/9/3rrr3/3rrr3/3rrr3"
+	if !server.isStandardStartingPosition("V5", opening, false) {
+		t.Fatal("Total War's own opening was not recognised")
+	}
+	const swapped = "3sss3/3ppp3/3rrr3/9/9/9/3RRR3/3PPP3/3SSS3 b 3bbb3/3bbb3/3bbb3/9/9/9/3rrr3/3rrr3/3rrr3"
+	if server.isStandardStartingPosition("V5", swapped, false) {
+		t.Fatal("the opening with the armies swapped was taken for Total War's own")
+	}
+}

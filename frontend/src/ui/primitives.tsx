@@ -12,6 +12,7 @@ import {
   type ViewStyle,
 } from 'react-native';
 
+import { hoverProps } from './hover';
 import type { BadgeTone, BannerTone, ButtonTone, PanelTone } from './tones';
 import { useStackProps } from '@/navigation/stack';
 import { colors, players, radius, space, themedSheet, type } from '@/theme';
@@ -71,6 +72,7 @@ export function Badge({ label, tone = 'neutral' }: BadgeProps) {
         styles.badge,
         tone === 'accent' && styles.badgeAccent,
         tone === 'live' && styles.badgeLive,
+        tone === 'danger' && styles.badgeDanger,
         tone === 'gold' && styles.badgeGold,
         tone === 'warm' && styles.badgeWarm,
         tone === 'cool' && styles.badgeCool,
@@ -82,6 +84,7 @@ export function Badge({ label, tone = 'neutral' }: BadgeProps) {
           styles.badgeText,
           tone === 'accent' && styles.badgeTextAccent,
           tone === 'live' && styles.badgeTextLive,
+          tone === 'danger' && styles.badgeTextDanger,
           tone === 'gold' && styles.badgeTextGold,
         ]}
       >
@@ -118,6 +121,7 @@ export function PrimaryButton({
 }: ButtonProps) {
   return (
     <Pressable
+      {...(tone === 'discord' ? {} : hoverProps(tone === 'accent' ? 'primary' : 'secondary'))}
       accessibilityLabel={accessibilityLabel ?? label}
       accessibilityRole="button"
       accessibilityState={{ disabled: Boolean(disabled) }}
@@ -136,10 +140,17 @@ export function PrimaryButton({
       ]}
     >
       {loading ? (
-        <ActivityIndicator color={colors.textStrong} size="small" />
+        <ActivityIndicator
+          color={tone === 'accent' ? colors.onAccent : colors.textStrong}
+          size="small"
+        />
       ) : (
         <Text
-          style={[styles.primaryButtonText, tone === 'quiet' && styles.primaryButtonTextQuiet]}
+          style={[
+            styles.primaryButtonText,
+            tone === 'quiet' && styles.primaryButtonTextQuiet,
+            tone === 'discord' && styles.primaryButtonTextDiscord,
+          ]}
         >
           {label}
         </Text>
@@ -157,6 +168,7 @@ export function GhostButton({
 }: Omit<ButtonProps, 'loading' | 'tone'>) {
   return (
     <Pressable
+      {...hoverProps('secondary')}
       accessibilityLabel={accessibilityLabel ?? label}
       accessibilityRole="button"
       accessibilityState={{ disabled: Boolean(disabled) }}
@@ -209,6 +221,7 @@ export function GhostLink({
   return (
     <Link asChild href={href} {...stack}>
       <Pressable
+        {...hoverProps(tone === 'accent' ? 'primary' : 'secondary')}
         accessibilityLabel={accessibilityLabel ?? label}
         accessibilityRole="link"
         // `StyleSheet.flatten`, not an array and not the usual `({ pressed })`
@@ -228,6 +241,41 @@ export function GhostLink({
         </Text>
       </Pressable>
     </Link>
+  );
+}
+
+export interface TextButtonProps {
+  label: string;
+  onPress?: () => void;
+  disabled?: boolean;
+  accessibilityLabel?: string;
+}
+
+/**
+ * The third and quietest action: words that do something.
+ *
+ * For the aside on a card — how to play, see all — that should be findable
+ * without competing with the card's own buttons. No fill and no border, and not
+ * the accent either, which is kept for the one thing on a card worth pressing;
+ * the underline is what says it is pressable.
+ */
+export function TextButton({ label, onPress, disabled, accessibilityLabel }: TextButtonProps) {
+  return (
+    <Pressable
+      {...hoverProps('text')}
+      accessibilityLabel={accessibilityLabel ?? label}
+      accessibilityRole="button"
+      accessibilityState={{ disabled: Boolean(disabled) }}
+      disabled={disabled}
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.textButton,
+        disabled && styles.disabled,
+        pressed && styles.pressed,
+      ]}
+    >
+      <Text style={styles.textButtonText}>{label}</Text>
+    </Pressable>
   );
 }
 
@@ -450,14 +498,19 @@ export function EmptyState({ title, detail }: EmptyStateProps) {
 }
 
 const styles = themedSheet(() => ({
+  // A card sits one step above the page. The fill does that; the border is
+  // only the crisp edge, which is why it is the quieter of the two borders.
   panel: {
-    padding: 15,
+    padding: space.large,
     borderRadius: radius.large,
     borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: colors.surface,
   },
-  panelAccent: { borderColor: colors.accentBorder, backgroundColor: colors.accentSurfaceQuiet },
+  // A panel asking for something. Neutral, like every other state: the button
+  // inside it is what wears the accent, and a green panel around a green
+  // button was two ways of saying the same thing.
+  panelAccent: { borderColor: colors.borderLight },
   panelLive: { borderColor: colors.liveBorder, backgroundColor: colors.liveSurface },
 
   headingRow: {
@@ -467,90 +520,99 @@ const styles = themedSheet(() => ({
     gap: 10,
   },
   headingCopy: { flex: 1 },
-  eyebrow: {
-    color: colors.accentBright,
-    fontSize: 8,
-    fontWeight: '900',
-    letterSpacing: 1.4,
-    marginBottom: 3,
-  },
-  headingTitle: { color: colors.textStrong, fontSize: 18, fontWeight: '900' },
+  eyebrow: { ...type.eyebrow, color: colors.textFaint, marginBottom: 3 },
+  headingTitle: { ...type.sectionTitle, color: colors.textStrong },
 
+  // One shape for every tag, whatever it says. The fill is the muted step —
+  // lighter than a card on a dark theme, darker on a light one, so it stands
+  // off the card towards the text either way — and the letters are the
+  // metadata grey. Tones change the letters and, for `live`, add the one dot
+  // of the live colour.
   badge: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 5,
+    minHeight: 20,
     paddingHorizontal: 7,
-    paddingVertical: 4,
     borderRadius: radius.small,
     backgroundColor: colors.surfaceMuted,
   },
-  badgeAccent: { backgroundColor: colors.accentSurfaceRaised },
-  badgeLive: { backgroundColor: colors.liveSurface },
+  badgeAccent: {},
+  badgeLive: {},
+  badgeDanger: { backgroundColor: colors.dangerSurfaceQuiet },
   badgeGold: { backgroundColor: colors.goldSurface },
-  badgeWarm: { backgroundColor: colors.goldSurface },
-  badgeCool: { backgroundColor: players.Blue.surface },
+  badgeWarm: {},
+  badgeCool: {},
   badgeDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.live },
-  badgeText: { color: colors.textSubtle, fontSize: 8, fontWeight: '900', letterSpacing: 0.7 },
-  badgeTextAccent: { color: colors.accentSoft },
+  badgeText: { ...type.label, color: colors.textMuted },
+  badgeTextAccent: { color: colors.textStrong },
   badgeTextLive: { color: colors.liveSoft },
+  badgeTextDanger: { color: colors.dangerText },
   badgeTextGold: { color: colors.goldSoft },
 
+  // Primary, secondary and tertiary share one radius, one height per size and
+  // one set of letters. Only the primary is filled with the accent.
   primaryButton: {
     minHeight: 42,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 16,
+    paddingHorizontal: space.large,
     borderRadius: radius.medium,
+    borderWidth: 1,
+    borderColor: colors.accent,
     backgroundColor: colors.accent,
   },
-  primaryButtonQuiet: { backgroundColor: colors.surfaceMuted },
-  primaryButtonDiscord: { backgroundColor: colors.discordBrand },
-  primaryButtonDiscordPressed: { backgroundColor: colors.discordBrandPressed },
-  primaryButtonCompact: { minHeight: 36, paddingHorizontal: 12 },
-  primaryButtonText: {
-    color: colors.textStrong,
-    fontSize: 10,
-    fontWeight: '900',
-    letterSpacing: 0.9,
+  // `quiet` is the secondary button, drawn exactly as `GhostButton` is.
+  primaryButtonQuiet: { borderColor: colors.borderStrong, backgroundColor: colors.surfaceRaised },
+  primaryButtonDiscord: { borderColor: colors.discordBrand, backgroundColor: colors.discordBrand },
+  primaryButtonDiscordPressed: {
+    borderColor: colors.discordBrandPressed,
+    backgroundColor: colors.discordBrandPressed,
   },
+  primaryButtonCompact: { minHeight: 34, paddingHorizontal: space.medium },
+  primaryButtonText: { ...type.label, fontSize: 11, color: colors.onAccent },
   primaryButtonTextQuiet: { color: colors.textSoft },
+  primaryButtonTextDiscord: { color: colors.textStrong },
 
-  // A row lays its children out along the main axis, so filling it is `flex`
-  // and not the `alignSelf: 'stretch'` that would fill a column.
-  buttonFullWidth: { flexGrow: 1, flexBasis: '100%' },
+  // A width rather than `flexGrow` and `flexBasis`, which act on the main axis
+  // and so fill a row but, in a column, set the height. Every full-width button
+  // sits in a column, and there a 100% basis made the button as tall as the
+  // panel around it, spilling out underneath. A percentage width is horizontal
+  // whichever way the parent runs.
+  buttonFullWidth: { width: '100%' },
 
   ghostButton: {
     minHeight: 42,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 14,
+    paddingHorizontal: space.large,
     borderRadius: radius.medium,
     borderWidth: 1,
     borderColor: colors.borderStrong,
     backgroundColor: colors.surfaceRaised,
   },
-  ghostButtonCompact: { minHeight: 34, paddingHorizontal: 10 },
-  ghostButtonText: {
-    color: colors.textSubtle,
-    fontSize: 9,
-    fontWeight: '900',
-    letterSpacing: 0.8,
+  ghostButtonCompact: { minHeight: 34, paddingHorizontal: space.medium },
+  ghostButtonText: { ...type.label, fontSize: 11, color: colors.textSoft },
+  // The one link on a card worth finding is that card's primary action, so it
+  // is drawn as one.
+  ghostLinkAccent: { borderColor: colors.accent, backgroundColor: colors.accent },
+  ghostLinkAccentText: { color: colors.onAccent },
+
+  textButton: {
+    minHeight: 24,
+    justifyContent: 'center',
+    paddingVertical: space.hair,
   },
-  ghostLinkAccent: {
-    borderColor: colors.accentBorder,
-    backgroundColor: colors.accentSurfaceQuiet,
+  textButtonText: {
+    ...type.bodyStrong,
+    fontWeight: '700',
+    color: colors.textSoft,
+    textDecorationLine: 'underline',
+    textDecorationColor: colors.borderLight,
   },
-  ghostLinkAccentText: { color: colors.accentSoft },
 
   inputGroup: { marginTop: 12 },
-  inputLabel: {
-    color: colors.textMuted,
-    fontSize: 8,
-    fontWeight: '900',
-    letterSpacing: 1,
-    marginBottom: 6,
-  },
+  inputLabel: { ...type.eyebrow, color: colors.textFaint, marginBottom: 6 },
   input: {
     height: 42,
     paddingHorizontal: 12,
@@ -563,18 +625,20 @@ const styles = themedSheet(() => ({
   },
   inputHint: { color: colors.textFaint, fontSize: 10, marginTop: 5 },
 
+  // Selection is neutral: the brightest border, a raised fill and the
+  // strongest letters. The accent is for pressing, not for having pressed.
   toggleChip: { flexDirection: 'row', alignItems: 'center', gap: 7 },
   toggleChipTick: {
     width: 13,
     height: 13,
     borderRadius: 3,
     borderWidth: 1.5,
-    borderColor: colors.border,
+    borderColor: colors.borderLight,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  toggleChipTickOn: { borderColor: colors.accent, backgroundColor: colors.accent },
-  toggleChipMark: { color: colors.textStrong, fontSize: 9, fontWeight: '900', lineHeight: 11 },
+  toggleChipTickOn: { borderColor: colors.textStrong, backgroundColor: colors.textStrong },
+  toggleChipMark: { color: colors.textInverse, fontSize: 9, fontWeight: '900', lineHeight: 11 },
   checkboxRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, marginTop: 13 },
   checkbox: {
     width: 21,
@@ -586,13 +650,13 @@ const styles = themedSheet(() => ({
     borderColor: colors.borderLight,
     backgroundColor: colors.surfaceSunken,
   },
-  checkboxChecked: { borderColor: colors.accent, backgroundColor: colors.accent },
-  checkboxMark: { color: colors.textStrong, fontSize: 13, fontWeight: '900' },
+  checkboxChecked: { borderColor: colors.textStrong, backgroundColor: colors.textStrong },
+  checkboxMark: { color: colors.textInverse, fontSize: 13, fontWeight: '900' },
   checkboxLabel: { flex: 1, color: colors.textSubtle, fontSize: 11, lineHeight: 17 },
 
   chipGroup: { gap: space.tight },
   chipGroupLabel: { ...type.eyebrow, color: colors.textFaint },
-  chipGroupLabelChanged: { color: colors.accentSoft },
+  chipGroupLabelChanged: { color: colors.textStrong },
   chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: space.tight },
   chip: {
     minHeight: 26,
@@ -603,9 +667,9 @@ const styles = themedSheet(() => ({
     borderColor: colors.border,
     backgroundColor: colors.surfaceSunken,
   },
-  chipSelected: { borderColor: colors.accent, backgroundColor: colors.accentSurface },
+  chipSelected: { borderColor: colors.borderLight, backgroundColor: colors.surfaceMuted },
   chipLabel: { ...type.label, color: colors.textMuted },
-  chipLabelSelected: { color: colors.accentTextStrong },
+  chipLabelSelected: { color: colors.textStrong },
 
   banner: {
     flexDirection: 'row',
@@ -620,7 +684,7 @@ const styles = themedSheet(() => ({
   bannerClose: { color: colors.textSoft, fontSize: 18, paddingHorizontal: 5 },
 
   emptyState: { paddingVertical: 18, alignItems: 'flex-start', gap: 4 },
-  emptyTitle: { color: colors.text, fontSize: 13, fontWeight: '900' },
+  emptyTitle: { color: colors.text, fontSize: 13, fontWeight: '800' },
   emptyDetail: { color: colors.textMuted, fontSize: 11, lineHeight: 17 },
 
   disabled: { opacity: 0.35 },

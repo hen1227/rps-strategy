@@ -19,7 +19,8 @@
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
-      }
+      },
+      "package": "com.henhen1227.rpsstrategy"
     },
     "web": {
       "favicon": "./assets/favicon.png",
@@ -36,7 +37,8 @@
       "expo-sqlite",
       "expo-notifications",
       "expo-web-browser",
-      "expo-asset"
+      "expo-asset",
+      "expo-apple-authentication"
     ],
     "scheme": "rps-strategy",
     "experiments": {

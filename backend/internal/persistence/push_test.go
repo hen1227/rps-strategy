@@ -61,7 +61,7 @@ func TestOneAccountCanHaveSeveralBrowsers(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	reachable, err := store.HasPushSubscription(ctx, "alice")
+	reachable, err := store.HasPushSubscription(ctx, "alice", TransportWebPush)
 	if err != nil || !reachable {
 		t.Fatalf("expected alice to be reachable: %v", err)
 	}
@@ -84,7 +84,7 @@ func TestPruningTheLastSubscriptionMakesSomebodyUnreachable(t *testing.T) {
 	if err := store.DeletePushSubscription(ctx, endpoint); err != nil {
 		t.Fatal(err)
 	}
-	reachable, err := store.HasPushSubscription(ctx, "alice")
+	reachable, err := store.HasPushSubscription(ctx, "alice", TransportWebPush, TransportAPNs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,6 +135,36 @@ func TestABrowserAndAPhoneAreBothReachable(t *testing.T) {
 	}
 	if kinds[TransportWebPush] != 1 || kinds[TransportAPNs] != 1 {
 		t.Fatalf("each address must remember which kind it is: %v", kinds)
+	}
+}
+
+// Reachable means reachable by a kind of address the caller can deliver to. A
+// phone registered while this server held an Apple key is no way in once the
+// key is gone, and counting it would keep a seek for somebody no summons can
+// reach.
+func TestOnlyTheNamedKindsOfAddressCount(t *testing.T) {
+	store := pushTestStore(t)
+	ctx := context.Background()
+	if _, err := store.SavePushSubscription(ctx, testDevice("alice", testDeviceToken)); err != nil {
+		t.Fatal(err)
+	}
+
+	for name, check := range map[string]struct {
+		transports []PushTransport
+		want       bool
+	}{
+		"a phone, asked about phones":   {transports: []PushTransport{TransportAPNs}, want: true},
+		"a phone, asked about browsers": {transports: []PushTransport{TransportWebPush}, want: false},
+		"a phone, asked about either":   {transports: []PushTransport{TransportWebPush, TransportAPNs}, want: true},
+		"naming no kind at all":         {transports: nil, want: false},
+	} {
+		reachable, err := store.HasPushSubscription(ctx, "alice", check.transports...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if reachable != check.want {
+			t.Fatalf("%s: expected reachable=%v, got %v", name, check.want, reachable)
+		}
 	}
 }
 

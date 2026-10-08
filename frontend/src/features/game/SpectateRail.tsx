@@ -10,7 +10,12 @@ import {
 } from 'react-native';
 
 import SeriesScoreTable from '@/features/bots/SeriesScoreTable';
-import { watchedOutcome, withLiveGame, withWatchedResult } from '@/features/bots/seriesSummary';
+import {
+  liveSeriesLabel,
+  watchedOutcome,
+  withLiveGame,
+  withWatchedResult,
+} from '@/features/bots/seriesSummary';
 import { useBotSeries } from '@/hooks/useBotSeries';
 import { useWideScreen } from '@/hooks/useBoardLayout';
 import { useGameStore } from '@/store/gameStore';
@@ -48,6 +53,19 @@ export interface SpectateRailProps {
   winner: PlayerColor;
   endReason?: GameEndReason | string | null;
   disabled: boolean;
+  /**
+   * Drawn inside the header's top bar, between the game's title and its time
+   * control, rather than as a bar of its own underneath them. Only a series
+   * goes there: its bar is one short row, where a tournament's is a strip of
+   * boards that wants the whole width.
+   */
+  inline?: boolean;
+  /**
+   * How much of a series' games the bar has had to scroll out of sight, in
+   * points, whenever that changes. The header reads it to tell whether the bar
+   * still fits beside the title. See `SeriesScoreTable`.
+   */
+  onHiddenWidth?: (width: number) => void;
   /** The board asked for, until it lands. */
   pendingGameId: string | null;
   onWatch: (gameId: string) => void;
@@ -61,6 +79,8 @@ export default function SpectateRail({
   disabled,
   endReason = null,
   gameStatus,
+  inline = false,
+  onHiddenWidth,
   pendingGameId,
   onWatch,
   redName,
@@ -71,7 +91,7 @@ export default function SpectateRail({
 
   if (series) {
     return (
-      <RailFrame>
+      <RailFrame inline={inline}>
         <SeriesRail
           blueName={blueName}
           currentGameId={currentGameId}
@@ -80,6 +100,7 @@ export default function SpectateRail({
           gameStatus={gameStatus}
           isPending={isPending}
           nextGame={nextSeriesGame}
+          onHiddenWidth={onHiddenWidth}
           onWatch={onWatch}
           redName={redName}
           series={series}
@@ -106,7 +127,7 @@ export default function SpectateRail({
 }
 
 /** The bar's own arrival, so it does not simply appear over the board. */
-function RailFrame({ children }: { children: ReactNode }) {
+function RailFrame({ children, inline = false }: { children: ReactNode; inline?: boolean }) {
   const entrance = useRef(new NativeAnimated.Value(0)).current;
 
   useEffect(() => {
@@ -124,6 +145,7 @@ function RailFrame({ children }: { children: ReactNode }) {
     <NativeAnimated.View
       style={[
         styles.rail,
+        inline && styles.railInline,
         {
           opacity: entrance,
           transform: [
@@ -151,6 +173,7 @@ interface SeriesRailProps {
   gameStatus: GameStatus;
   isPending: boolean;
   nextGame: LiveGameSummary | null;
+  onHiddenWidth?: (width: number) => void;
   onWatch: (gameId: string) => void;
   redName: string;
   series: NonNullable<SpectateContext['series']>;
@@ -165,6 +188,7 @@ function SeriesRail({
   gameStatus,
   isPending,
   nextGame,
+  onHiddenWidth,
   onWatch,
   redName,
   series,
@@ -269,6 +293,7 @@ function SeriesRail({
       compact
       currentGameId={currentGameId}
       liveGameIds={liveGameIds}
+      onHiddenWidth={onHiddenWidth}
       onSelect={watchSeriesGame}
       series={full}
     />
@@ -278,9 +303,11 @@ function SeriesRail({
     <View style={styles.seriesFrame}>
     <View style={styles.railRow}>
       <View style={isWide ? styles.railCopy : styles.railCopyStacked}>
-        {isWide && <Text style={styles.eyebrow}>BOT SERIES</Text>}
+        {isWide && <Text style={styles.eyebrow}>{liveSeriesLabel(series)}</Text>}
         <Text style={[styles.railTitle, !isWide && styles.railTitleCompact]} numberOfLines={1}>
-          {!isWide && <Text style={[styles.eyebrow, styles.eyebrowCompact]}>BOT SERIES · </Text>}
+          {!isWide && (
+            <Text style={[styles.eyebrow, styles.eyebrowCompact]}>{liveSeriesLabel(series)} · </Text>
+          )}
           {seriesProgressLabel(series)}
         </Text>
         <SeriesMeter played={played} position={series.gameNumber} total={series.totalGames} />
@@ -415,6 +442,12 @@ const styles = themedSheet(() => ({
     borderColor: colors.borderSoft,
     backgroundColor: colors.surfaceSunken,
   },
+  // One item of the top bar rather than a bar of its own: no margin under it,
+  // and the thing in the row that gives way, so a run too long for the room
+  // scrolls its games rather than pushing the time control off the end. That
+  // scrolling is what `onHiddenWidth` reports, and what sends the bar back
+  // underneath.
+  railInline: { marginBottom: 0, flexShrink: 1, minWidth: 0 },
   railRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   railColumn: { gap: 8 },
   // A fixed width so the meter reads as a meter rather than stretching into a

@@ -56,6 +56,7 @@ function WatchRow({ busy, divided, game, mode, onWatch }: WatchRowProps) {
         <MiniBoard
           grid={grid}
           modeId={game.modeId}
+          muted
           size={68}
         />
       }
@@ -123,7 +124,6 @@ export default function LiveNowPanel() {
         people are here — three ways of saying the same number in one screen.
       */}
       <SectionHeading
-        eyebrow="RIGHT NOW"
         title={boards.length === 1 ? 'A game is on' : `${boards.length} games are on`}
       />
       <View style={styles.body}>

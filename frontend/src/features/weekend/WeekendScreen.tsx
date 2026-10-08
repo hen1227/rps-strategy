@@ -14,9 +14,11 @@ import {
 } from '@/store/api/weekend';
 import { useGameStore } from '@/store/gameStore';
 import {
+  championOf,
   entrantHandle,
   matchesOf,
   playedMatchCount,
+  rankLabel,
   statusOf,
 } from '@/store/tournamentSelectors';
 import { colors, contentWidth, radius, space, themedSheet, type } from '@/theme';
@@ -334,7 +336,7 @@ export default function WeekendScreen() {
             <SectionHeading eyebrow="THE TABLE" title="Standings" />
             {tournament.standings.slice(0, 12).map((standing) => (
               <View key={standing.playerId} style={styles.standing}>
-                <Text style={styles.rank}>{standing.rank}</Text>
+                <Text style={styles.rank}>{rankLabel(tournament, standing)}</Text>
                 <PlayerLink
                   handle={entrantHandle(tournament, standing.playerId)}
                   name={standing.ign}
@@ -482,7 +484,7 @@ export default function WeekendScreen() {
                 </Text>
                 <Text style={styles.nightMeta} numberOfLines={1}>
                   {event.status === 'completed'
-                    ? `${event.standings[0]?.ign ?? 'nobody'} won · ${event.players.length} engines`
+                    ? `${championOf(event) ?? 'nobody'} won · ${event.players.length} engines`
                     : event.status === 'cancelled'
                       ? 'called off'
                       : statusOf(event).label.toLowerCase()}
@@ -789,7 +791,8 @@ const styles = themedSheet(() => ({
     borderBottomWidth: 1,
     borderBottomColor: colors.borderSoft,
   },
-  rank: { color: colors.textFaint, ...type.meta, width: 20 },
+  // Wide enough for a shared place, "T4".
+  rank: { color: colors.textFaint, ...type.meta, width: 28 },
   standingName: { color: colors.text, ...type.rowTitle, flex: 1, minWidth: 0 },
   standingMeta: { color: colors.textFaint, ...type.meta },
   points: { color: colors.accentSoft, ...type.rowTitle, width: 34, textAlign: 'right' },

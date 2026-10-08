@@ -85,7 +85,7 @@ const styles = themedSheet(() => ({
     borderRadius: 2,
     backgroundColor: 'transparent',
   },
-  markerCurrent: { backgroundColor: colors.accent },
+  markerCurrent: { backgroundColor: colors.textStrong },
   label: { ...type.label, alignSelf: 'center', color: colors.textFaint, letterSpacing: 0.4 },
   labelCurrent: { color: colors.textStrong },
 }));

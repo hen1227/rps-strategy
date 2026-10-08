@@ -312,3 +312,48 @@ func TestARunHoldingAnEngineIsCalledOffForItsMatch(t *testing.T) {
 		t.Fatalf("the run holding both engines should have been called off, got %q", run.Status)
 	}
 }
+
+// An engine that goes into reserve while it is in a run leaves the run on a pair
+// boundary, the way a draining engine does.
+//
+// The recall only reaches an engine when its own match needs the slot. This is
+// the engine it does not reach: its opponent is not connected, so its match
+// cannot start, and before this the run would have played all its games beside
+// the event.
+func TestARunStopsOnAPairBoundaryWhenAnEngineGoesIntoReserve(t *testing.T) {
+	server, alpha, beta := seriesTestBots(t)
+	// Slow enough that the event starts while the run is still going.
+	server.seriesDelay = 150 * time.Millisecond
+	if _, err := server.StartBotSeries(
+		t.Context(), hostSeries(alpha, beta, game.ModeTotalWar, 3, 2, 7),
+	); err != nil {
+		t.Fatalf("start series: %v", err)
+	}
+	seriesID := latestSeriesID(t, server)
+	waitForFinishedSeriesGames(t, server, seriesID, 1)
+
+	openTournament(t, server.data, "cup", "Test Cup", game.ModeTotalWar, "Total War")
+	registeredSession(t, server.data, "owner-absent", "AuthorAbsent")
+	absent := ownedEngine(t, server.data, "owner-absent", "Absent", []game.ModeID{game.ModeTotalWar})
+	for _, entrant := range []persistence.Bot{beta, absent} {
+		if _, err := server.data.HostSignupForTournament(
+			t.Context(), "cup", entrant.UserID, entrant.Name,
+			"bot."+strings.ToLower(entrant.Name),
+		); err != nil {
+			t.Fatalf("enter %s: %v", entrant.Name, err)
+		}
+	}
+	if _, err := server.data.StartTournament(t.Context(), "cup"); err != nil {
+		t.Fatalf("start the event: %v", err)
+	}
+	server.refreshBotReservations()
+
+	series := waitForSeriesStatus(t, server, seriesID)
+	played := finishedSeriesGames(series)
+	if series.Status != persistence.BotSeriesAborted || played >= 6 {
+		t.Fatalf("the run played on beside the event: %q after %d game(s)", series.Status, played)
+	}
+	if played == 0 || played%2 != 0 {
+		t.Fatalf("the run stopped on %d game(s), which is not a whole number of pairs", played)
+	}
+}

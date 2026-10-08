@@ -315,16 +315,21 @@ for a bots-only event it is the event. A client matches arriving messages on the
 room, not on the board it is showing.
 
 Names belong to accounts. Everyone plays as "Guest" until they sign in with
-Discord from **Account** in the app shell, which attaches that identity to the
-anonymous one the browser already has — same user ID, same ratings, same games.
+Discord or Apple from **Account** in the app shell, which attaches that identity
+to the anonymous one the browser already has — same user ID, same ratings, same
+games.
 Signing in elsewhere brings all of it along. Username and Discord are copied
 into every new online game's player profiles and shown next to each clock, and
 editing them takes the session token rather than the local key.
 
-Discord is the only way to make an account. Accounts created before that keep
-their password and can still sign in with it, and are prompted to link a Discord
-account; linking deletes the password hash. No new password account can be
-created, and `/api/auth/login` goes when the last one has linked.
+Discord and Apple are the two ways to make an account, and either can be added
+to an account made with the other, from the Account screen, so one account opens
+with both. Identities live in `account_identities`, keyed by provider and
+subject, and the linking is written once for every provider. Accounts created
+before Discord sign-in keep their password and can still sign in with it, and
+are prompted to link Discord or Apple; linking deletes the password hash. No new
+password account can be created, and `/api/auth/login` goes when the last one
+has linked, apart from the store review accounts.
 
 Ranked play needs an account. A signed-out player still gets casual online games
 and bots — the server forces `casual` on their own search rather than refusing
@@ -338,12 +343,30 @@ the browser home carrying a one-shot ticket, redeemed by a second request. That
 is what lets the web app and the iOS app share one Discord application, and what
 keeps `rps-strategy://` out of the portal entirely.
 
+Apple's sign-in ends in the same ticket. On the iPhone the app asks
+`/api/auth/apple/nonce` for a nonce, shows Apple's own sheet with no scopes —
+no name, no email — and hands the identity token and code to
+`/api/auth/apple/native`, which checks the token against Apple's published keys
+and answers the way an exchange does. On the website, `/api/auth/apple/start`
+and `/api/auth/apple/callback` work like Discord's pair. Either way the server
+redeems the code with its own Sign in with Apple key and keeps the refresh
+token, for one purpose: deleting the account queues it for revocation, which a
+worker tells Apple about without the deletion ever waiting. `/api/auth/providers`
+says which of these this server can finish, and the app shows Apple's button
+only where it can. Configuration is in `backend/deploy/rps-strategy.env.example`.
+
 ```text
+GET    /api/auth/providers
 POST   /api/auth/discord/start    Bearer <session-token | local-profile-key>
 GET    /api/auth/discord/callback
-POST   /api/auth/discord/exchange
-POST   /api/auth/discord/complete
-POST   /api/auth/login            legacy; no new password accounts
+POST   /api/auth/apple/nonce      Bearer <session-token | local-profile-key>
+POST   /api/auth/apple/native
+POST   /api/auth/apple/start      Bearer <session-token | local-profile-key>
+GET    /api/auth/apple/callback   also POST
+POST   /api/auth/exchange         also /api/auth/discord/exchange
+POST   /api/auth/complete         also /api/auth/discord/complete
+GET    /api/auth/sign-in-methods  Bearer <session-token>
+POST   /api/auth/login            legacy accounts and store review accounts only
 GET    /api/accounts/{userId}
 PATCH  /api/accounts/{userId} Bearer <session-token>
 
@@ -373,11 +396,13 @@ before any of this existed. Generate a VAPID pair with `go run
 `RPS_APNS_KEY_ID` and `RPS_APNS_TEAM_ID`.
 
 `POST /api/push/test` sends one notification to the account that asked for it
-and answers with how many devices it went to, of either kind. It is the only way
-to tell a working registration from one that stores cleanly and silently
-delivers nothing — which are otherwise indistinguishable right up until somebody
-misses a game — and the button for it sits on the account screen beside the
-switch.
+and answers with three counts, over devices of either kind: `delivered`, which a
+push service accepted; `removed`, which had gone for good and were forgotten;
+and `failed`, which refused it or could not be reached and were kept. It is the
+only way to tell a working registration from one that stores cleanly and
+silently delivers nothing — which are otherwise indistinguishable right up until
+somebody misses a game — and the button for it sits on the account screen
+beside the switch.
 
 **Your-game-has-started is the only notification this server sends on its own.**
 No reminders, no "somebody is waiting", no digests. The thirty-second window,
@@ -397,7 +422,8 @@ GET /api/leaderboard?mode=&kind=human|bot&minGames=&limit=&offset=
 GET /api/bot-matches?botId=&botId=&mode=&limit=&offset=
 GET /api/bot-series?limit=
 POST /api/bot-series                        start one, as anybody
-POST /api/bot-series/{seriesId}/abort       stop the one you started
+POST /api/bot-series/{seriesId}/abort       stop the one you started (casual runs only)
+POST /api/bots/{botId}/ranked-match         a ranked pair now, for any signed-in account; {"opponentBotId":…} names the opponent
 POST /api/bots/{botId}/shutdown             drain a bot you own; {"exit":true} stops it
 DELETE /api/bots/{botId}/shutdown           call the drain off
 ```
@@ -708,8 +734,8 @@ be read.
 Titles are earned two ways and granted a third. The rating ladder — `CM`, `FM`,
 `IM`, `GM` — reads the best rating held in any one mode with at least ten ranked
 games behind it, since modes rate independently and requiring the bar everywhere
-would title nobody who specialises. The achievements are `TC` for finishing a
-tournament on the most points, `BSL` for beating a registered engine somebody
+would title nobody who specialises. The achievements are `TC` for finishing
+first in a tournament, `BSL` for beating a registered engine somebody
 *else* owns, `STK` for eight rated wins in a row, and `BM` and `ARC` for owning
 an engine that has won a tournament or that tops a mode's bot ladder. `D` is the
 one with no bar to clear: Discord has vouched for the account, which makes it
@@ -723,7 +749,7 @@ person's scale, and the achievements its games produce accrue to its owner —
 who is the one who turns up in chat. A bot can still be granted a title.
 
 The rulebook re-runs after a finished game, after the last result of a
-tournament, on connect, and when a Discord sign-in finishes — that last one so
+tournament, on connect, and when a sign-in finishes — that last one so
 `D` is on the account the sign-in reply hands back rather than arriving at the
 next reload. It only ever adds, so a rating that falls back keeps
 the title. Anything new arrives as an `account_updated` message carrying the

@@ -65,11 +65,11 @@ const styles = themedSheet(() => ({
   },
   brand: { flexDirection: 'row', alignItems: 'center', gap: space.small },
   brandIcon: { width: 32, height: 32 },
-  brandName: { ...type.bodyStrong, color: colors.accentBright, fontWeight: '900' },
+  brandName: { ...type.bodyStrong, color: colors.textStrong, fontWeight: '800' },
   spacer: { flex: 1 },
   status: { flexDirection: 'row', alignItems: 'center', flexShrink: 1, gap: space.tight },
   dot: { width: 6, height: 6, borderRadius: 3 },
-  dotOnline: { backgroundColor: colors.accent },
+  dotOnline: { backgroundColor: colors.textSoft },
   dotOffline: { backgroundColor: colors.textFaint },
   statusText: { ...type.eyebrow, color: colors.textFaint, letterSpacing: 0.8 },
 }));

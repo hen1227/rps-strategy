@@ -161,9 +161,9 @@ func followDiscordCallback(t *testing.T, server *Server, state string) (string, 
 	return query.Get("ticket"), query.Get("error")
 }
 
-func redeemDiscordTicket(t *testing.T, server *Server, ticket string) (discordExchangeReply, int) {
+func redeemDiscordTicket(t *testing.T, server *Server, ticket string) (signInReply, int) {
 	t.Helper()
-	body, err := json.Marshal(discordTicketRequest{Ticket: ticket})
+	body, err := json.Marshal(signInTicketRequest{Ticket: ticket})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,23 +171,23 @@ func redeemDiscordTicket(t *testing.T, server *Server, ticket string) (discordEx
 		http.MethodPost, "/api/auth/discord/exchange", strings.NewReader(string(body)))
 	recorder := httptest.NewRecorder()
 	server.Routes().ServeHTTP(recorder, request)
-	var reply discordExchangeReply
+	var reply signInReply
 	_ = json.Unmarshal(recorder.Body.Bytes(), &reply)
 	return reply, recorder.Code
 }
 
 func completeDiscordSignup(
 	t *testing.T, server *Server, ticket, username, reservation string,
-) (discordExchangeReply, int) {
+) (signInReply, int) {
 	t.Helper()
 	return completeDiscordSignupWithPassword(t, server, ticket, username, "", reservation)
 }
 
 func completeDiscordSignupWithPassword(
 	t *testing.T, server *Server, ticket, username, password, reservation string,
-) (discordExchangeReply, int) {
+) (signInReply, int) {
 	t.Helper()
-	body, err := json.Marshal(discordCompleteRequest{
+	body, err := json.Marshal(signInCompleteRequest{
 		Ticket: ticket, Username: username, Password: password,
 		ReservationToken: reservation,
 	})
@@ -198,7 +198,7 @@ func completeDiscordSignupWithPassword(
 		http.MethodPost, "/api/auth/discord/complete", strings.NewReader(string(body)))
 	recorder := httptest.NewRecorder()
 	server.Routes().ServeHTTP(recorder, request)
-	var reply discordExchangeReply
+	var reply signInReply
 	_ = json.Unmarshal(recorder.Body.Bytes(), &reply)
 	return reply, recorder.Code
 }
@@ -233,7 +233,7 @@ func TestDiscordSignInCreatesAnAccountAndSession(t *testing.T) {
 	}
 	// Nothing is written until the name is agreed, so an abandoned signup
 	// leaves no half-built account and no squatted username.
-	if _, err := data.AccountForDiscordIdentity(t.Context(), fake.identity.ID); err == nil {
+	if _, err := data.AccountForIdentity(t.Context(), persistence.ProviderDiscord, fake.identity.ID); err == nil {
 		t.Fatal("an account existed before the username was chosen")
 	}
 
@@ -325,13 +325,15 @@ func TestDiscordSignInIgnoresAProfileKeyThatDoesNotMatch(t *testing.T) {
 	}
 }
 
-// seedLegacyPasswordAccount makes the one thing nothing can make any more: an
-// account whose only credential is a password.
+// seedLegacyPasswordAccount makes the one thing nothing can make any more: a
+// player's account whose only credential is a password.
 //
 // Written through a second connection to the same file rather than through the
 // store, because there is deliberately no exported way to create one. Keeping
 // a production function alive purely so a test could call it would leave the
-// door this change exists to close standing open. The hash is a placeholder —
+// door this change exists to close standing open. (A store review account has a
+// password too, but it is no stand-in: the link paths refuse it, which is the
+// opposite of what these tests need.) The hash is a placeholder —
 // this test never signs in with it, it only needs the account to read as
 // registered-without-an-identity, which is the shape the link path is for.
 // Whether the password actually stops working is settled in the persistence
@@ -525,9 +527,10 @@ func TestDiscordCallbackReportsACancelledConsent(t *testing.T) {
 	}
 }
 
-// linkDiscordDirectly writes the identity columns without going through a
-// sign-in, so a test can set up "somebody else already holds this snowflake"
-// without spending the fake Discord's single identity on it.
+// linkDiscordDirectly writes a Discord link without going through a sign-in,
+// so a test can set up "somebody else already holds this snowflake" without
+// spending the fake Discord's single identity on it. Both places a link is kept
+// — the identity table and the old columns — as every real link is.
 func linkDiscordDirectly(t *testing.T, databasePath, userID, discordUserID, handle string) {
 	t.Helper()
 	database, err := sql.Open("sqlite", databasePath)
@@ -540,6 +543,12 @@ UPDATE accounts SET discord_user_id = ?, discord = ?, discord_linked_at_unix_ms 
 WHERE user_id = ?
 `, discordUserID, handle, userID); err != nil {
 		t.Fatalf("link discord directly: %v", err)
+	}
+	if _, err := database.ExecContext(t.Context(), `
+INSERT INTO account_identities (provider, subject, user_id, linked_at_unix_ms)
+VALUES ('discord', ?, ?, 1)
+`, discordUserID, userID); err != nil {
+		t.Fatalf("link discord identity directly: %v", err)
 	}
 }
 
@@ -603,8 +612,8 @@ func TestSigningInWithADeviceKeyStillFollowsTheIdentity(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := data.ClaimAccountWithDiscord(
-		t.Context(), "mine", "Yuki", fake.identity.ID, "yuki",
+	if _, err := data.ClaimAccountWithIdentity(
+		t.Context(), "mine", "Yuki", persistence.DiscordIdentity(fake.identity.ID, "yuki"),
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -670,7 +679,7 @@ func TestTheNamingStepOffersAPasswordForANameThatIsAlreadyTheirs(t *testing.T) {
 
 	// And the ticket is still live for the password, without another trip
 	// through Discord.
-	if _, ok := server.discordTickets.peek(hashDiscordTicket(ticket)); !ok {
+	if _, ok := server.signInTickets.peek(hashSecret(ticket)); !ok {
 		t.Fatal("the ticket was spent on asking a question")
 	}
 }

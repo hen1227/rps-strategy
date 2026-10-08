@@ -1,14 +1,18 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
+import OccasionTag from './OccasionTag';
 import { relativeTime } from './relativeTime';
 import SeriesScoreTable from './SeriesScoreTable';
 import {
   seriesGameIsOpen,
-  seriesStatusTone,
+  seriesOccasion,
+  seriesStatus,
   seriesView,
   type SeriesGameView,
 } from './seriesSummary';
+import { failureMessage } from '@/errors';
+import { useAdminToken } from '@/hooks/useAdminToken';
 import { useWideScreen } from '@/hooks/useBoardLayout';
 import { useBotSeries } from '@/hooks/useBotSeries';
 import { useOpenGame } from '@/hooks/useOpenGame';
@@ -16,13 +20,21 @@ import { gameReviewURL, links, seriesURL } from '@/navigation/links';
 import { up } from '@/navigation/upFrom';
 import { useSettledSearchParams } from '@/navigation/useSettledSearchParams';
 import { useGameStore } from '@/store/gameStore';
-import type { BotSeries } from '@/store/api/bots';
+import { setAdminBotSeriesRanked, type BotSeries } from '@/store/api/bots';
 import { colors, contentWidth, radius, space, themedSheet, type } from '@/theme';
 import CopyLinkButton from '@/ui/CopyLinkButton';
 import ListRow from '@/ui/ListRow';
 import PageHeading from '@/ui/PageHeading';
 import ScreenShell from '@/ui/ScreenShell';
-import { Badge, EmptyState, GhostButton, GhostLink, Panel, SectionHeading } from '@/ui/primitives';
+import {
+  Badge,
+  Banner,
+  EmptyState,
+  GhostButton,
+  GhostLink,
+  Panel,
+  SectionHeading,
+} from '@/ui/primitives';
 
 // One run, at an address of its own.
 //
@@ -67,8 +79,15 @@ export default function SeriesScreen() {
 
   const liveGames = useGameStore((state) => state.liveGames);
   const liveGameIds = useMemo(() => liveGames.map((live) => live.gameId), [liveGames]);
+  const modes = useGameStore((state) => state.modes);
   // Watched or read back, by the rule every list of games shares.
   const openGame = useOpenGame();
+
+  // A host may move a finished run between ranked and casual from here as well
+  // as from the Bots page, whose feed only reaches the last couple of dozen.
+  const admin = useAdminToken();
+  const [moving, setMoving] = useState(false);
+  const [moveError, setMoveError] = useState<string | null>(null);
 
   if (!settled || (seriesId && status === 'loading' && !series)) {
     return (
@@ -111,25 +130,43 @@ export default function SeriesScreen() {
   }
 
   const view = seriesView(series);
+  const occasion = seriesOccasion(series);
+  const runStatus = seriesStatus(series);
+  const modeName = modes.find((mode) => mode.id === series.modeId)?.name ?? series.modeId;
   const at = series.completedAtUnixMs ?? series.createdAtUnixMs;
   const liveGame = view.games.find(
     (entry) => entry.gameId && liveGameIds.includes(entry.gameId),
   );
 
+  const reclassify = async () => {
+    setMoving(true);
+    setMoveError(null);
+    try {
+      // To the other side of what the page says, games and all.
+      await setAdminBotSeriesRanked(admin.token, series.seriesId, series.casual);
+      setTick((count) => count + 1);
+    } catch (caught) {
+      setMoveError(failureMessage(caught, 'The series could not be changed.'));
+    } finally {
+      setMoving(false);
+    }
+  };
+
   return (
     <SeriesShell>
       <PageHeading
         back={up.series}
-        detail={`${series.modeId} · ${view.played} game${view.played === 1 ? '' : 's'} played · ${relativeTime(at)}`}
+        detail={`${modeName} · ${view.played} game${view.played === 1 ? '' : 's'} played · ${relativeTime(at)}`}
         eyebrow="BOT SERIES"
         title={`${view.firstName} v ${view.secondName}`}
-        trailing={
-          <Badge
-            label={String(series.status).toUpperCase()}
-            tone={seriesStatusTone(series)}
-          />
-        }
+        trailing={<Badge label={runStatus.label} tone={runStatus.tone} />}
       />
+      {/*
+        What the run was, before what it scored: whether it counted, and who
+        picked the pairing. The card in the feed leads with the same tag, so a
+        run reads as one thing wherever it was reached from.
+      */}
+      <OccasionTag occasion={occasion} />
 
       <Panel>
         <SectionHeading
@@ -156,10 +193,30 @@ export default function SeriesScreen() {
         </View>
         {liveGame ? (
           <Text style={styles.live}>
-            Game {liveGame.number} is live. Select its column to watch.
+            Game {liveGame.number} is live. Tap its column to watch.
           </Text>
         ) : null}
-        <Provenance series={series} />
+        <Provenance modeName={modeName} series={series} />
+        {/*
+          Under the facts, because it changes one of them. Not while the run is
+          being played: its next game would be seated the old way, and the
+          server refuses it for that reason.
+        */}
+        {admin.unlocked && !running ? (
+          <View style={styles.host}>
+            {moveError ? (
+              <Banner message={moveError} onDismiss={() => setMoveError(null)} tone="error" />
+            ) : null}
+            <View style={styles.hostAction}>
+              <GhostButton
+                compact
+                disabled={moving}
+                label={series.casual ? 'MAKE RANKED' : 'MAKE CASUAL'}
+                onPress={() => void reclassify()}
+              />
+            </View>
+          </View>
+        ) : null}
       </Panel>
 
       <Panel>
@@ -200,14 +257,14 @@ function SeriesShell({ children }: { children: ReactNode }) {
 }
 
 /**
- * The four numbers that shaped the run, plus who asked for it.
+ * The four numbers that shaped the run, whether it counted, and who asked for it.
  *
  * On the page rather than only in the card because this is what makes a result
  * checkable: the seed and the opening plies are exactly what somebody needs to
  * type into the form on the Bots page to play the same run again, and a score
  * nobody can reproduce is an anecdote.
  */
-function Provenance({ series }: { series: BotSeries }) {
+function Provenance({ modeName, series }: { modeName: string; series: BotSeries }) {
   // Written out rather than rounded to minutes: a run can be played at 0.1+1,
   // and "2 min" for a 90-second clock — or "0 min" for a six-second one — would
   // misreport the one number that decides what a run's result is worth.
@@ -217,7 +274,8 @@ function Provenance({ series }: { series: BotSeries }) {
       ? `${seconds} sec`
       : `${Math.floor(seconds / 60)} min${seconds % 60 ? ` ${seconds % 60}s` : ''}`;
   const facts: { label: string; value: string }[] = [
-    { label: 'MODE', value: series.modeId },
+    // Whether it counted and who paired it are the tag at the top of the page.
+    { label: 'MODE', value: modeName },
     { label: 'CLOCK', value: `${clock} + ${Math.round(series.incrementMs / 1000)}s` },
     { label: 'PAIRS', value: String(series.pairs) },
     { label: 'OPENING PLIES', value: String(series.openingPlies) },
@@ -346,6 +404,9 @@ const styles = themedSheet(() => ({
   },
   factLabel: { ...type.eyebrow, color: colors.textFaint },
   factValue: { ...type.rowTitle, color: colors.text },
+  host: { gap: space.small, marginTop: space.medium },
+  // Sized to its label, for the reason emptyAction gives.
+  hostAction: { alignSelf: 'flex-start' },
 
   games: { marginTop: space.small },
   rowStacked: { alignItems: 'flex-start', paddingTop: space.snug },

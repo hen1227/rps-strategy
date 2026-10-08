@@ -99,7 +99,10 @@ type ProfileTournament struct {
 	// Placement is where they finished, and nil for an event still running or
 	// one that never started. FieldSize beside it is what makes a placement
 	// mean anything: third is a different result out of four than out of forty.
-	Placement *int  `json:"placement,omitempty"`
+	Placement *int `json:"placement,omitempty"`
+	// Tied is a placement somebody else finished level on, which is how two
+	// entrants can both have finished first.
+	Tied      bool  `json:"tied,omitempty"`
 	FieldSize int   `json:"fieldSize"`
 	EnteredAt int64 `json:"enteredAtUnixMs"`
 }
@@ -211,11 +214,11 @@ func (store *Store) PublicProfile(
 	}
 
 	var userID string
-	var discordUserID string
+	var linked bool
 	err := store.db.QueryRowContext(ctx, `
-SELECT user_id, discord_user_id FROM accounts
+SELECT user_id, `+hasIdentitySQL("")+` FROM accounts
 WHERE username_lower = ? OR user_id = ?
-`, UsernameKey(handle), handle).Scan(&userID, &discordUserID)
+`, UsernameKey(handle), handle).Scan(&userID, &linked)
 	if errors.Is(err, sql.ErrNoRows) {
 		return PublicProfile{}, ErrProfileNotFound
 	}
@@ -227,11 +230,13 @@ WHERE username_lower = ? OR user_id = ?
 	if err != nil {
 		return PublicProfile{}, err
 	}
-	// A bot has no Discord of its own — it has an owner who does — so the
-	// linked-identity rule is applied to people only. Without this exception
-	// no engine would have a page, which is the opposite of what is wanted:
-	// a bot's page is where its rating and its record live.
-	if discordUserID == "" && account.Kind != AccountKindBot {
+	// A page is for somebody a provider has vouched for — Discord or Apple —
+	// which leaves out the guests and the last of the password accounts. A bot
+	// has no identity of its own — it has an owner who does — so the rule is
+	// applied to people only. Without this exception no engine would have a
+	// page, which is the opposite of what is wanted: a bot's page is where its
+	// rating and its record live.
+	if !linked && account.Kind != AccountKindBot {
 		return PublicProfile{}, ErrProfileNotFound
 	}
 	// A disabled account keeps no page. Anonymized ones are disabled too — see
@@ -376,6 +381,7 @@ LIMIT 10
 				if playerIsAccount(tournament, standing.PlayerID, userID) {
 					rank := standing.Rank
 					result.Placement = &rank
+					result.Tied = rankIsShared(tournament.Standings, standing)
 					break
 				}
 			}
@@ -383,6 +389,16 @@ LIMIT 10
 		results = append(results, result)
 	}
 	return results, nil
+}
+
+// rankIsShared reports whether anybody else in a table holds this row's rank.
+func rankIsShared(standings []TournamentStanding, row TournamentStanding) bool {
+	for _, other := range standings {
+		if other.PlayerID != row.PlayerID && other.Rank == row.Rank {
+			return true
+		}
+	}
+	return false
 }
 
 // playerIsAccount reports whether a standings row belongs to an account.
@@ -446,7 +462,7 @@ func (store *Store) profileBots(ctx context.Context, userID string) ([]ProfileBo
 //
 // The same population rule as PublicProfile, expressed once in SQL here and
 // once in Go there. They have to agree, and the shape of the agreement is the
-// clause below: a linked Discord, or a bot account, and not disabled.
+// clause below: a linked identity, or a bot account, and not disabled.
 func (store *Store) PublicProfiles(
 	ctx context.Context,
 	query string,
@@ -468,7 +484,7 @@ SELECT a.user_id, a.username, a.discord, a.title, a.kind,
        (SELECT COUNT(*) FROM account_titles t WHERE t.user_id = a.user_id)
 FROM accounts a
 WHERE a.disabled = 0
-  AND (a.discord_user_id <> '' OR a.kind = ?)
+  AND (`+hasIdentitySQL("a")+` OR a.kind = ?)
   AND a.username_lower <> ''
   AND (? = '%%' OR a.username_lower LIKE ?)
 ORDER BY 6 DESC, a.games_played DESC

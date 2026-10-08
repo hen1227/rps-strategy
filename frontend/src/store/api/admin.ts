@@ -18,8 +18,10 @@ const request = apiClient('server');
 export interface AccountTotals {
   total: number;
   registered: number;
-  /** The population with a profile page. */
+  /** Discord has vouched for these, so a host can reach them for a tournament. */
   discordLinked: number;
+  /** These sign in with Apple. Overlaps Discord, and absent from an older server. */
+  appleLinked?: number;
   bots: number;
   disabled: number;
   admins: number;

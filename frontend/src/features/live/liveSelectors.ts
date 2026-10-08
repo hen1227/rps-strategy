@@ -53,7 +53,13 @@ export interface WaitingSeat {
 }
 
 /** What an engine is doing, in the one vocabulary every screen spells it in. */
-export type EngineActivity = 'playing' | 'idle' | 'private' | 'draining' | 'benched';
+export type EngineActivity =
+  | 'playing'
+  | 'idle'
+  | 'private'
+  | 'reserved'
+  | 'draining'
+  | 'benched';
 
 /**
  * One engine on the roster, ready to be drawn.
@@ -159,6 +165,16 @@ export const engineStatus = (bot: BotPresence): EngineStatus => {
   // which is exactly why the server publishes the two apart.
   if (bot.benched) return { activity: 'benched', label: 'OFFLINE FOR THE TOURNAMENT', tone: 'neutral' };
   if (bot.draining) return { activity: 'draining', label: 'SHUTTING DOWN', tone: 'neutral' };
+  // Playing in a tournament, at a board or between its matches. Either way it
+  // takes nothing else until the event is over — the server refuses a challenge
+  // and a series alike — so it is named rather than left to read as PLAYING,
+  // which invites waiting for the board to clear, or as IDLE, which invites a
+  // press that can only be refused. At a board it still sorts with the boards.
+  if (bot.reservedFor) {
+    return engineActiveGames(bot) > 0 || bot.busy
+      ? { activity: 'playing', label: 'IN TOURNAMENT', tone: 'live' }
+      : { activity: 'reserved', label: 'IN TOURNAMENT', tone: 'cool' };
+  }
   // An engine with several slots can be playing and free at the same moment, so
   // the badge counts rather than choosing between the two words. `busy` still
   // decides whether it is playing at all: a bot with every slot held by a
@@ -195,7 +211,20 @@ export const engineActiveGames = (bot: BotPresence): number =>
  * cannot say SHUTTING DOWN next to a live PLAY button.
  */
 export const engineIsAvailable = (bot: BotPresence): boolean =>
-  !bot.busy && !bot.draining && !bot.benched && bot.allowPublicPlay;
+  engineCanJoinSeries(bot) && bot.allowPublicPlay;
+
+/**
+ * Whether this engine can be put in a series right now.
+ *
+ * Wider than `engineIsAvailable` by one case: a private engine is still
+ * offered, because its owner may enter it and the server is the one that knows
+ * who that is. What is refused is every state in which no run can start at all
+ * — a game on the board, a drain, a bench, and a tournament the engine is
+ * playing in. One definition, because the card's button and the panel holding
+ * the picks both ask it, and the two used to be separate copies of it.
+ */
+export const engineCanJoinSeries = (bot: BotPresence): boolean =>
+  !bot.busy && !bot.draining && !bot.benched && !bot.reservedFor;
 
 /**
  * Engines at work first: an idle bot is a button, a playing one is a board.
@@ -208,10 +237,12 @@ const ENGINE_ORDER: Record<EngineActivity, number> = {
   playing: 0,
   idle: 1,
   private: 2,
-  draining: 3,
+  // Between its matches: unavailable until its event ends, and then back.
+  reserved: 3,
+  draining: 4,
   // Below a drain, but it does not matter: a bench is on every engine at once,
   // so this rank never breaks a tie against anything else.
-  benched: 4,
+  benched: 5,
 };
 
 export interface LiveSnapshot {

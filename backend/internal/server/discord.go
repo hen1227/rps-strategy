@@ -28,29 +28,22 @@ import (
 // separate Discord applications, `rps-strategy://` never has to be a registered
 // redirect URI, and a local dev origin is one allowlist entry rather than a
 // portal change.
+//
+// The ticket, and everything done with it, is not Discord's: Apple's sign-in
+// ends in the same ticket, and signin.go is where both are redeemed. What lives
+// here is the part only Discord has — its configuration, the flow out to its
+// consent screen, and the two calls that turn its answer into an identity —
+// plus the small expiring map and the secrets every sign-in route uses.
 
 const (
 	// discordFlowLifetime bounds how long somebody may sit on Discord's consent
 	// screen. Ten minutes is generous for a decision that takes three seconds,
 	// and short enough that abandoned flows are not worth remembering.
 	discordFlowLifetime = 10 * time.Minute
-	// discordTicketLifetime is the window between landing back here and the app
-	// redeeming the ticket, which is one page load. Short on purpose: the
-	// ticket is the one part of this that travels in a URL.
-	discordTicketLifetime = 2 * time.Minute
-	// Bounded so that an unauthenticated caller hammering /start cannot turn
-	// this map into the memory problem.
-	discordMaximumPending = 1024
 
 	discordAuthorizeURL = "https://discord.com/oauth2/authorize"
 	discordTokenURL     = "https://discord.com/api/oauth2/token"
 	discordUserURL      = "https://discord.com/api/users/@me"
-
-	// DiscordTicketPrefix marks the one-shot code that comes back in the return
-	// URL. Prefixed for the same reason session and bot tokens are: several
-	// different secrets arrive on this server, and telling them apart by shape
-	// is how one gets accepted where another was meant.
-	DiscordTicketPrefix = "rps_t_"
 )
 
 // discordAuth holds the configuration and the seam tests reach through.
@@ -89,11 +82,7 @@ func newDiscordAuth() *discordAuth {
 		userURL:      discordUserURL,
 		client:       &http.Client{Timeout: 10 * time.Second},
 	}
-	for _, candidate := range strings.Split(os.Getenv("RPS_DISCORD_RETURN_URLS"), ",") {
-		if trimmed := strings.TrimSpace(candidate); trimmed != "" {
-			auth.returnURLs = append(auth.returnURLs, strings.TrimRight(trimmed, "/"))
-		}
-	}
+	auth.returnURLs = parseReturnURLs(os.Getenv("RPS_DISCORD_RETURN_URLS"))
 
 	configured := 0
 	for _, value := range []string{auth.clientID, auth.clientSecret, auth.redirectURL} {
@@ -129,11 +118,35 @@ func newDiscordAuth() *discordAuth {
 // origin and a `rps-strategy://` scheme have to pass. The separator check is
 // what stops "https://rps.henhen1227.com.evil.test" matching.
 func (auth *discordAuth) permittedReturnURL(candidate string) bool {
+	return returnURLPermitted(auth.returnURLs, candidate)
+}
+
+// defaultReturnURL is where somebody is sent when their flow has expired and
+// there is therefore no validated address to send them to.
+func (auth *discordAuth) defaultReturnURL() string {
+	return firstReturnURL(auth.returnURLs)
+}
+
+// parseReturnURLs reads a comma-separated allowlist of return addresses, for
+// every provider whose sign-in sends a browser back.
+func parseReturnURLs(value string) []string {
+	var returnURLs []string
+	for _, candidate := range strings.Split(value, ",") {
+		if trimmed := strings.TrimSpace(candidate); trimmed != "" {
+			returnURLs = append(returnURLs, strings.TrimRight(trimmed, "/"))
+		}
+	}
+	return returnURLs
+}
+
+// returnURLPermitted is the open-redirect guard itself, shared by Discord and
+// Apple: equality, or a prefix that ends at a separator. See permittedReturnURL.
+func returnURLPermitted(allowlist []string, candidate string) bool {
 	candidate = strings.TrimSpace(candidate)
 	if candidate == "" {
 		return false
 	}
-	for _, allowed := range auth.returnURLs {
+	for _, allowed := range allowlist {
 		if candidate == allowed {
 			return true
 		}
@@ -144,13 +157,11 @@ func (auth *discordAuth) permittedReturnURL(candidate string) bool {
 	return false
 }
 
-// defaultReturnURL is where somebody is sent when their flow has expired and
-// there is therefore no validated address to send them to.
-func (auth *discordAuth) defaultReturnURL() string {
-	if len(auth.returnURLs) == 0 {
+func firstReturnURL(allowlist []string) string {
+	if len(allowlist) == 0 {
 		return "/"
 	}
-	return auth.returnURLs[0]
+	return allowlist[0]
 }
 
 // discordFlow is what is remembered between sending somebody to Discord and
@@ -165,20 +176,6 @@ type discordFlow struct {
 	// by a device key, which is the difference between "attach this identity to
 	// *this* account" and "upgrade this browser's guest if that helps". The
 	// first is a request that can be refused; the second is an optimisation.
-	linkFromSession bool
-}
-
-// discordTicket is the one-shot result of a finished OAuth conversation,
-// redeemed by the app for a session.
-type discordTicket struct {
-	discordUserID   string
-	discordUsername string
-	globalName      string
-	// linkUserID is the account this identity should attach to, when the
-	// caller proved one at /start.
-	linkUserID string
-	// linkFromSession carries the flow's distinction through to redemption. See
-	// discordFlow.
 	linkFromSession bool
 }
 
@@ -213,9 +210,15 @@ func newTTLStore[Value any](lifetime time.Duration, capacity int) *ttlStore[Valu
 	}
 }
 
-// put stores a value and returns the key, which is fresh randomness the caller
-// hands out exactly once.
+// put stores a value under a key, which is fresh randomness the caller hands
+// out exactly once.
 func (store *ttlStore[Value]) put(key string, value Value) {
+	store.putFor(key, value, store.lifetime)
+}
+
+// putFor is put with a lifetime of its own, for the one entry that has earned
+// a longer one. See redeemSignInTicket.
+func (store *ttlStore[Value]) putFor(key string, value Value, lifetime time.Duration) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if len(store.entries) >= store.capacity {
@@ -227,7 +230,7 @@ func (store *ttlStore[Value]) put(key string, value Value) {
 		// ten minutes ago has to press the button again.
 		store.dropOldestLocked()
 	}
-	store.entries[key] = ttlEntry[Value]{value: value, expiryAt: store.now().Add(store.lifetime)}
+	store.entries[key] = ttlEntry[Value]{value: value, expiryAt: store.now().Add(lifetime)}
 }
 
 // take returns a value and removes it. Single use is the point: a state or a
@@ -289,6 +292,14 @@ func (store *ttlStore[Value]) dropOldestLocked() {
 	}
 }
 
+// hashSecret is the key a one-shot secret is stored under — a ticket, or an
+// Apple nonce — so that the map holding them is not itself a list of live
+// secrets.
+func hashSecret(secret string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(secret)))
+	return hex.EncodeToString(sum[:])
+}
+
 // oauthSecret returns URL-safe randomness for a state, a verifier, or a ticket.
 func oauthSecret() (string, error) {
 	raw := make([]byte, 32)
@@ -306,11 +317,6 @@ func oauthSecret() (string, error) {
 func pkceChallenge(verifier string) string {
 	sum := sha256.Sum256([]byte(verifier))
 	return base64.RawURLEncoding.EncodeToString(sum[:])
-}
-
-func hashDiscordTicket(ticket string) string {
-	sum := sha256.Sum256([]byte(strings.TrimSpace(ticket)))
-	return hex.EncodeToString(sum[:])
 }
 
 // returnWithParameters builds the address the browser is sent back to.

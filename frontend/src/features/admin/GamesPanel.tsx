@@ -6,8 +6,12 @@ import LiveGamesPanel from './LiveGamesPanel';
 import { adminStyles } from './adminStyles';
 import { failureMessage } from '@/errors';
 import type { AdminToken } from '@/hooks/useAdminToken';
-import { deleteGame, listAdminGames } from '@/store/api/bots';
-import type { GameRecord } from '@/types/protocol';
+import {
+  deleteGame,
+  listAdminGames,
+  setAdminGameRanked,
+  type AdminGameRecord,
+} from '@/store/api/bots';
 import {
   Banner,
   Checkbox,
@@ -31,7 +35,7 @@ export interface GamesPanelProps {
 
 export default function GamesPanel({ admin }: GamesPanelProps) {
   const [query, setQuery] = useState('');
-  const [games, setGames] = useState<GameRecord[]>([]);
+  const [games, setGames] = useState<AdminGameRecord[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -78,6 +82,27 @@ export default function GamesPanel({ admin }: GamesPanelProps) {
     }
   };
 
+  // No confirmation, unlike delete: the same press puts it back, and the
+  // ladder it moves is refitted from the record rather than adjusted.
+  const toggleRanked = async (game: AdminGameRecord) => {
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      await setAdminGameRanked(admin.token, game.gameId, !game.ranked);
+      setNotice(
+        game.ranked
+          ? 'Game made casual. The bot ladder no longer counts it.'
+          : 'Game made ranked. The bot ladder counts it now.',
+      );
+      await refresh();
+    } catch (caught) {
+      setError(failureMessage(caught));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <>
       <LiveGamesPanel admin={admin} />
@@ -119,12 +144,16 @@ export default function GamesPanel({ admin }: GamesPanelProps) {
                 key={game.gameId}
                 onArm={() => setConfirming(`game:${game.gameId}`)}
                 onDelete={() => removeGame(game.gameId)}
+                onToggleRanked={() => toggleRanked(game)}
               />
             ))}
           </View>
         )}
         <Text style={adminStyles.help}>
           Deletion removes the game from history, archives, and reviews. Keep the box checked to reverse rating and win-count changes for both players. Rating reversal is exact for their latest game and approximate for older games.
+        </Text>
+        <Text style={adminStyles.help}>
+          A game between two engines can also be made ranked or casual. The bot ladder is refitted from every game at once, so the change is exact and can be undone. Games with a person in them cannot be moved, because a person's rating cannot be replayed.
         </Text>
       </Panel>
     </>

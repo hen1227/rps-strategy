@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"rps-strategy/backend/internal/game"
@@ -45,8 +46,8 @@ VALUES (?, ?, ?, ?, ?)
 		t.Fatalf("seed mode rating: %v", err)
 	}
 
-	after, err := store.ClaimAccountWithDiscord(
-		ctx, "player-1", "Scrappy", "80351110224678912", "scrappy",
+	after, err := store.ClaimAccountWithIdentity(
+		ctx, "player-1", "Scrappy", DiscordIdentity("80351110224678912", "scrappy"),
 	)
 	if err != nil {
 		t.Fatalf("claim: %v", err)
@@ -93,8 +94,8 @@ func TestProfileKeyCannotClaimBotOrRegisteredAccount(t *testing.T) {
 	// now: it has no browser behind it at all, so an empty profile key is its
 	// natural state rather than an accident.
 	anonymousAccount(t, store, "discord-victim", "Yuki")
-	if _, err := store.ClaimAccountWithDiscord(
-		ctx, "discord-victim", "Yuki", "80351110224678912", "yuki",
+	if _, err := store.ClaimAccountWithIdentity(
+		ctx, "discord-victim", "Yuki", DiscordIdentity("80351110224678912", "yuki"),
 	); err != nil {
 		t.Fatalf("claim discord account: %v", err)
 	}
@@ -140,12 +141,12 @@ func TestAnonymousAccountsMayStillShareADisplayName(t *testing.T) {
 	}
 
 	// A claimed name, though, is exclusive.
-	if _, err := store.ClaimAccountWithDiscord(
-		ctx, "anon-1", "Twin", "discord-anon-1", "twin",
+	if _, err := store.ClaimAccountWithIdentity(
+		ctx, "anon-1", "Twin", DiscordIdentity("discord-anon-1", "twin"),
 	); err != nil {
 		t.Fatalf("claim first: %v", err)
 	}
-	_, err := store.ClaimAccountWithDiscord(ctx, "anon-2", "TWIN", "discord-anon-2", "twin2")
+	_, err := store.ClaimAccountWithIdentity(ctx, "anon-2", "TWIN", DiscordIdentity("discord-anon-2", "twin2"))
 	if !errors.Is(err, ErrUsernameTaken) {
 		t.Fatalf("a claimed name must be exclusive regardless of case, got %v", err)
 	}
@@ -179,8 +180,8 @@ func TestSessionsResolveExpireAndRevoke(t *testing.T) {
 	ctx := t.Context()
 
 	anonymousAccount(t, store, "player-1", "Ada")
-	if _, err := store.ClaimAccountWithDiscord(
-		ctx, "player-1", "Ada", "80351110224678912", "ada",
+	if _, err := store.ClaimAccountWithIdentity(
+		ctx, "player-1", "Ada", DiscordIdentity("80351110224678912", "ada"),
 	); err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -327,5 +328,49 @@ VALUES ('veteran', 'Veteran', 1550, 12, 1, 2);
 		t.Context(), "veteran", "Veteran", testProfileKey,
 	); err != nil {
 		t.Fatalf("a legacy pre-key account must still be claimable: %v", err)
+	}
+}
+
+// The Account screen asks this whether to show the "Link your Discord" prompt,
+// so each kind of account has to give the answer that prompt needs — above all
+// the store review account, which must not be asked for a link it is refused.
+func TestSignInMethodsAsksOnlyALegacyAccountToLink(t *testing.T) {
+	store := authTestStore(t)
+	ctx := t.Context()
+
+	anonymousAccount(t, store, "guest", "Guest")
+	legacyPasswordAccount(t, store, "legacy", "Ada", "correct horse battery")
+	anonymousAccount(t, store, "linked", "Guest")
+	if _, err := store.ClaimAccountWithIdentity(
+		ctx, "linked", "Yuki", DiscordIdentity("80351110224678912", "yuki"),
+	); err != nil {
+		t.Fatalf("claim with discord: %v", err)
+	}
+	review := resetStoreReview(t, store, "apple", StoreReviewOptions{Username: "ReviewAda"})
+
+	for _, want := range []struct {
+		userID   string
+		methods  []string
+		awaiting bool
+	}{
+		{userID: "guest", methods: []string{}},
+		{userID: "legacy", methods: []string{}, awaiting: true},
+		{userID: "linked", methods: []string{"discord"}},
+		{userID: review.UserID, methods: []string{}},
+	} {
+		got, err := store.SignInMethods(ctx, want.userID)
+		if err != nil {
+			t.Fatalf("%s: %v", want.userID, err)
+		}
+		if got.AwaitingLink != want.awaiting ||
+			strings.Join(got.Methods, ",") != strings.Join(want.methods, ",") ||
+			got.Methods == nil {
+			t.Fatalf("%s: got %#v, want methods %v awaiting %v",
+				want.userID, got, want.methods, want.awaiting)
+		}
+	}
+
+	if _, err := store.SignInMethods(ctx, "nobody"); !errors.Is(err, ErrAccountNotFound) {
+		t.Fatalf("an unknown account: %v", err)
 	}
 }

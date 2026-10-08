@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import type { ReactNode, Ref } from 'react';
 import { ScrollView, StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
 
 import { colors, contentWidth, space, themedSheet } from '@/theme';
@@ -32,6 +32,8 @@ export interface ScreenShellProps {
   /** Extra room at the bottom, for chrome floating over the page. */
   bottomInset?: number;
   contentStyle?: StyleProp<ViewStyle>;
+  /** Let a page move to a detail section after an explicit user action. */
+  scrollRef?: Ref<ScrollView>;
 }
 
 export default function ScreenShell({
@@ -40,6 +42,7 @@ export default function ScreenShell({
   scroll = true,
   bottomInset = 0,
   contentStyle,
+  scrollRef,
 }: ScreenShellProps) {
   const content = (
     <View style={[styles.content, !scroll && styles.contentFlush, { maxWidth: width }, contentStyle]}>
@@ -51,6 +54,7 @@ export default function ScreenShell({
   }
   return (
     <ScrollView
+      ref={scrollRef}
       // Every text field in the app that is not the chat's composer is on a page
       // that scrolls inside here — the username you are challenging, a
       // tournament sign-up, the whole of the admin section — and on a phone a

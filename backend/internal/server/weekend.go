@@ -76,6 +76,9 @@ func (server *Server) runWeekend(now time.Time) {
 		log.Printf("weekend: read config: %v", err)
 		return
 	}
+	// Before any of the ways out below, so a schedule switched off or skipped
+	// stops holding the ranked pool as well. See ladder_pause.go.
+	server.ladderPool.arena.observeSchedule(config, now)
 	if !config.Enabled {
 		return
 	}
@@ -91,6 +94,19 @@ func (server *Server) runWeekend(now time.Time) {
 	today := local.Format("2006-01-02")
 
 	if config.SkipDate == today {
+		return
+	}
+	// An event whose doors are open starts at the hour it published, on
+	// whatever day that is. The rest of this is about when to open the next
+	// one. A host can open one by hand on a day the schedule does not name, to
+	// replay an arena that went wrong for instance, and the weekday check below
+	// used to leave that event in registration for good.
+	if open, err := server.data.OpenWeekend(ctx); err == nil &&
+		open.Status == persistence.TournamentRegistration &&
+		open.StartsAtUnixMs != nil &&
+		!now.Before(time.UnixMilli(*open.StartsAtUnixMs)) {
+		// The ballot was cast against the event's own date, which is in its id.
+		server.beginWeekend(ctx, config, weekendEventDate(open))
 		return
 	}
 	if !config.RunsOn(local) {
@@ -158,6 +174,10 @@ func (server *Server) openWeekendDoors(
 	// up. Swiss is the safe placeholder: it is legal at any size, where a round
 	// robin over forty engines is not.
 	settings.Format = persistence.FormatSwiss
+	// Its length is set now rather than at the start, because a host can start
+	// the event by hand from the tournament board, which never reaches
+	// ConfigureWeekendStart and plays whatever the doors published.
+	settings.SwissRounds = config.SwissRounds
 	// Advisory, and the reason the countdown on the page has something to count
 	// down to.
 	startsAt := startAt.UnixMilli()
@@ -167,10 +187,7 @@ func (server *Server) openWeekendDoors(
 		settings.IncrementMs = control.Increment
 	}
 
-	// The id keeps the "nightly-" prefix for the same reason the stored kind
-	// does: every event in the archive is named that way, and the page finds
-	// today's ballot by trimming it. See persistence.TournamentKind.
-	tournamentID := fmt.Sprintf("nightly-%s", today)
+	tournamentID := weekendTournamentID(today)
 	if _, err := server.data.CreateTournament(ctx, tournamentID, settings); err != nil {
 		log.Printf("weekend: create %s: %v", tournamentID, err)
 		return
@@ -222,13 +239,40 @@ func (server *Server) beginWeekend(
 		log.Printf("weekend: a restart is draining, not starting %s", tournament.Name)
 		return
 	}
+	if _, err := server.startWeekend(ctx, config, tournament, today, false); err != nil {
+		log.Printf("weekend: start %s: %v", tournament.Name, err)
+	}
+}
 
+// weekendFieldShort is an arena with fewer engines than its minimum. Its text is
+// the reason, in the words the banner uses.
+type weekendFieldShort struct{ reason string }
+
+func (short weekendFieldShort) Error() string { return short.reason }
+
+// startWeekend locks the clock in, fills the field, and starts the event.
+//
+// The scheduler calls it at the hour the event published, and a host's START
+// calls it early. START used to go straight to StartTournament, which skipped
+// all of this: no engines swept in, the doors' placeholder Swiss whatever the
+// field, and the default clock whatever the ballot said.
+//
+// A field under the minimum is where the two differ. The scheduler calls the
+// event off, as it always has. A host is told why and the event stays open,
+// because a host pressing START wants it played.
+func (server *Server) startWeekend(
+	ctx context.Context,
+	config persistence.WeekendConfig,
+	tournament persistence.Tournament,
+	eventDate string,
+	byHand bool,
+) (persistence.Tournament, error) {
 	// The poll, resolved once and then never asked again — the clock is a fact
 	// about the event from here on, and the page shows it as one.
 	control, _ := persistence.WeekendControlFor(config.DefaultControl)
 	if config.PollEnabled {
 		tallies, _, err := server.data.WeekendPoll(
-			ctx, persistence.WeekendVoteClock, today, "",
+			ctx, persistence.WeekendVoteClock, eventDate, "",
 		)
 		if err != nil {
 			log.Printf("weekend: read ballot: %v", err)
@@ -263,13 +307,18 @@ func (server *Server) beginWeekend(
 			"only %d engine%s were in the field, and %s needs %d",
 			field, pluralSuffix(field), tournament.Name, config.MinimumField,
 		)
+		if byHand {
+			// Still open, with whatever the sweep entered on the board.
+			server.broadcastTournaments()
+			return tournament, weekendFieldShort{reason: reason}
+		}
 		if _, err := server.data.CancelTournament(ctx, tournament.TournamentID, reason); err != nil {
 			log.Printf("weekend: cancel %s: %v", tournament.Name, err)
 		}
 		server.postWeekendNotice(tournament.Name + " is off this weekend: " + reason + ".")
 		server.refreshBotReservations()
 		server.broadcastTournaments()
-		return
+		return tournament, nil
 	}
 
 	// Everybody plays everybody while the field is small, which is the fairest
@@ -287,8 +336,7 @@ func (server *Server) beginWeekend(
 
 	started, err := server.data.StartTournament(ctx, tournament.TournamentID)
 	if err != nil {
-		log.Printf("weekend: start %s: %v", tournament.Name, err)
-		return
+		return tournament, err
 	}
 	// The field has just closed, which is the moment its engines go into
 	// reserve. See bot_reserve.go.
@@ -302,6 +350,22 @@ func (server *Server) beginWeekend(
 		log.Printf("weekend: %s skipped %d engines", started.Name, len(skipped))
 	}
 	server.broadcastTournaments()
+	return started, nil
+}
+
+// weekendTournamentID is the id of the arena for one local date.
+//
+// It keeps the "nightly-" prefix for the same reason the stored kind does:
+// every event in the archive is named that way, and the page finds the ballot
+// by trimming it. See persistence.TournamentKind. Being the date, it also means
+// one arena per date, so replaying one means deleting it first.
+func weekendTournamentID(localDate string) string {
+	return "nightly-" + localDate
+}
+
+// weekendEventDate is the local date an arena belongs to, read off its id.
+func weekendEventDate(tournament persistence.Tournament) string {
+	return strings.TrimPrefix(tournament.TournamentID, "nightly-")
 }
 
 // weekendFieldSize is how many entrants an event holds, after the sweep.
@@ -403,13 +467,21 @@ func (server *Server) postWeekendNotice(message string) {
 // settleWeekendForfeits gives up on matches whose engine has gone away.
 //
 // An hour of play is long enough that an engine will drop, and a round that
-// cannot finish stops the event. So a match whose players are not both
-// available starts a clock, and when it runs out the unplayed games go to
-// whoever is still there.
+// cannot finish stops the event. So a match kept waiting by a missing engine
+// starts a clock, and when it runs out the unplayed games go to whoever is
+// still there.
 //
-// The clock runs from when the engine went missing rather than from when the
-// match came due, and an engine that has already been waited for once gets no
-// second grace: the round should not keep paying for the same absence.
+// Missing means gone, not busy. A round robin creates every pairing when it
+// starts, so most of its schedule is always waiting on engines that are at
+// another of its boards. Counting those as missing ended Weekend Bot Arena #6
+// ninety seconds into round one: every pairing between two busy engines was
+// drawn, and the rest went to whichever engine had a slot free. See
+// weekendSideOf.
+//
+// The clock runs only while somebody is actually waiting, which is the engine
+// still here being free to play this match now. An engine that has already
+// been waited for once gets no second grace: the round should not keep paying
+// for the same absence.
 func (server *Server) settleWeekendForfeits(now time.Time) {
 	server.mu.RLock()
 	connected := len(server.bots)
@@ -441,14 +513,17 @@ func (server *Server) settleWeekendForfeits(now time.Time) {
 			server.clearWeekendGrace(key)
 			continue
 		}
-		// The same question autoReadyBotMatches asks, and it has to be the same
-		// question: an engine busy in an ordinary game is one a recall can free,
-		// so calling it absent here would forfeit a match that the sweep earlier
-		// in this very tick is about to start. Planning reads state and changes
-		// none, which is what makes it safe to ask as a predicate.
-		firstHere := server.planBotRecall(match.Player1.UserID) != nil
-		secondHere := server.planBotRecall(match.Player2.UserID) != nil
-		if firstHere && secondHere {
+		first := server.weekendSideOf(match.Player1.UserID)
+		second := server.weekendSideOf(match.Player2.UserID)
+		if first.here && second.here {
+			server.clearWeekendGrace(key)
+			continue
+		}
+		// One engine is gone, and the one still here is at another board, so it
+		// could not play this match now either. Nothing has waited for the absent
+		// engine yet. The clock starts when the other is free and this is what it
+		// is waiting for, which in a round robin may be its last pairing.
+		if first.here && !first.free || second.here && !second.free {
 			server.clearWeekendGrace(key)
 			continue
 		}
@@ -475,9 +550,9 @@ func (server *Server) settleWeekendForfeits(now time.Time) {
 		// neither turned up is a draw: there is nobody to award it to.
 		result := persistence.MatchDraw
 		switch {
-		case firstHere && !secondHere:
+		case first.here && !second.here:
 			result = persistence.MatchPlayer1Win
-		case secondHere && !firstHere:
+		case second.here && !first.here:
 			result = persistence.MatchPlayer2Win
 		}
 		if _, err := server.data.SetTournamentMatchResult(
@@ -490,6 +565,44 @@ func (server *Server) settleWeekendForfeits(now time.Time) {
 		server.refreshBotReservations()
 		server.broadcastTournaments()
 	}
+}
+
+// weekendSide is where one engine of a pending match stands, as the no-show
+// clock sees it.
+type weekendSide struct {
+	// free is an engine that could be brought to this board now.
+	free bool
+	// here is free, or playing at another tournament board. An engine playing
+	// one of its other matches has not gone anywhere.
+	here bool
+}
+
+// weekendSideOf answers weekendSide for one engine.
+//
+// free is the question autoReadyBotMatches asks, and it has to be the same
+// question: an engine busy in an ordinary game is one a recall can free, so
+// calling it absent here would forfeit a match that the sweep earlier in this
+// very tick is about to start. Planning reads state and changes none, which is
+// what makes it safe to ask as a predicate.
+//
+// A recall never takes an engine out of a tournament game, which is why here
+// needs its own look at the engine's boards. Without it an engine at another
+// board counts as gone.
+func (server *Server) weekendSideOf(userID string) weekendSide {
+	if server.planBotRecall(userID) != nil {
+		return weekendSide{free: true, here: true}
+	}
+	client := server.botClientFor(userID)
+	if client == nil {
+		return weekendSide{}
+	}
+	for _, slot := range server.botConnections(client.bot.botID) {
+		if participant := server.participantFor(slot); participant != nil &&
+			participant.session.tournament != nil {
+			return weekendSide{here: true}
+		}
+	}
+	return weekendSide{}
 }
 
 func (server *Server) clearWeekendGrace(key tournamentMatchKey) {

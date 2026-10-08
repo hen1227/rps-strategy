@@ -116,6 +116,10 @@ export default function RoundsScreen() {
   // bake a stale minute into the static HTML. So the head of the page arrives a
   // render later rather than wrong.
   const round = now === null ? null : ladderRoundView(view, modes, now);
+  // The weekly arena has the evening. Everything the page says about the next
+  // round — when it is, who is in it — is about a round that is not coming, so
+  // those parts step aside for one sentence saying so.
+  const pausedFor = round?.pausedFor ?? null;
   const groups = ladderFieldGroups(view?.field ?? []);
   const shortField = view
     ? shortFieldNote({ inRound: groups.inRound, minimumField: view.minimumField })
@@ -161,7 +165,17 @@ export default function RoundsScreen() {
         </View>
       ) : null}
 
-      {round ? (
+      {round && pausedFor ? (
+        <Panel>
+          <SectionHeading eyebrow="NEXT ROUND" title={`Paused for ${pausedFor}`} />
+          <Text style={styles.help}>
+            Ranked games stop 30 minutes before the weekly arena and resume on the first hour after it ends.
+          </Text>
+          <View style={styles.actions}>
+            <GhostLink href={links.weekend()} label="THE ARENA ›" />
+          </View>
+        </Panel>
+      ) : round ? (
         <Panel tone={round.phase === 'waiting' ? 'default' : 'accent'}>
           <SectionHeading
             eyebrow="NEXT ROUND"
@@ -193,7 +207,7 @@ export default function RoundsScreen() {
         </Panel>
       ) : null}
 
-      {view ? (
+      {view && !pausedFor ? (
         <Panel>
           <SectionHeading
             eyebrow="NEXT ROUND"
@@ -273,6 +287,7 @@ export default function RoundsScreen() {
       <YourEnginesPanel
         field={view?.field ?? []}
         onChanged={() => void refresh()}
+        pausedFor={pausedFor}
       />
 
       {view ? (
@@ -317,17 +332,30 @@ export default function RoundsScreen() {
             {view?.rotationHours ?? 0} hours.
           </Text>
           <View style={styles.list}>
-            {rotation.map((row, index) => (
-              <ListRow
-                divided={index > 0}
-                key={row.key}
-                meta={row.clock}
-                title={`${row.at} · ${row.mode}`}
-                trailing={
-                  row.next ? <Badge label="NEXT" tone="accent" /> : undefined
-                }
-              />
-            ))}
+            {rotation.map((row, index) =>
+              row.pausedFor ? (
+                // The last row whenever it appears — see `scheduleRows` — and
+                // the one place in the list that says why it stops. The event
+                // goes on the second line: a phone cuts a one-line title at
+                // about thirty characters, and the name is the part to keep.
+                <ListRow
+                  divided={index > 0}
+                  key={row.key}
+                  meta={`Until ${row.pausedFor} ends`}
+                  title={`${row.at} · Paused`}
+                />
+              ) : (
+                <ListRow
+                  divided={index > 0}
+                  key={row.key}
+                  meta={row.clock}
+                  title={`${row.at} · ${row.mode}`}
+                  trailing={
+                    row.next ? <Badge label="NEXT" tone="accent" /> : undefined
+                  }
+                />
+              ),
+            )}
           </View>
         </Panel>
       ) : null}

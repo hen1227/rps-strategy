@@ -377,8 +377,8 @@ func writeRestrictionError(writer http.ResponseWriter, err error) {
 // rankedRefusal explains why a game just became casual.
 //
 // Two reasons can produce the same downgrade, and telling somebody to sign in
-// with Discord when they already have — and are barred — is the message that
-// makes a moderation decision look like a bug.
+// when they already have — and are barred — is the message that makes a
+// moderation decision look like a bug.
 func (server *Server) rankedRefusal(client *Client) string {
 	if restriction := server.restrictionOn(
 		client.profile.UserID, persistence.RestrictRanked,
@@ -386,7 +386,7 @@ func (server *Server) rankedRefusal(client *Client) string {
 		return "this account cannot play ranked" +
 			sanctionSuffix(*restriction) + "; this game is casual"
 	}
-	return "sign in with Discord to play ranked; this game is casual"
+	return "sign in to play ranked; this game is casual"
 }
 
 // rankedAcceptRefusal is the same explanation for the other side of the gate:
@@ -398,7 +398,7 @@ func (server *Server) rankedAcceptRefusal(client *Client) string {
 		return "that game is ranked, and this account cannot play ranked" +
 			sanctionSuffix(*restriction)
 	}
-	return "that game is ranked; sign in with Discord to accept it"
+	return "that game is ranked; sign in to accept it"
 }
 
 // pruneRestrictions clears out lapsed sanctions, in the store and in the cache.

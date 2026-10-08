@@ -16,13 +16,12 @@
 
 import { requireOptionalNativeModule } from 'expo';
 
+import { type Authorize, type DiscordOutcome } from './discordAuth.types';
 import {
   ACCOUNT_CALLBACK_PATH,
-  discordRefusalMessage,
+  signInRefusalMessage,
   ticketFromCallbackURL,
-  type Authorize,
-  type DiscordOutcome,
-} from './discordAuth.types';
+} from './signInReturn';
 
 /**
  * Whether this binary has the browser module linked in.
@@ -50,7 +49,7 @@ export const signInThroughDiscord = async (authorize: Authorize): Promise<Discor
       return { kind: 'cancelled' };
     }
     const { ticket, error } = ticketFromCallbackURL(result.url);
-    if (error) return { kind: 'failed', message: discordRefusalMessage(error) };
+    if (error) return { kind: 'failed', message: signInRefusalMessage(error) };
     if (!ticket) return { kind: 'failed', message: 'Discord did not send anything back.' };
     return { kind: 'ticket', ticket };
   } catch (error) {

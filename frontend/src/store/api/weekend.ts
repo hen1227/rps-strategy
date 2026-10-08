@@ -117,6 +117,12 @@ export interface WeekendConfig {
   pollClosesMinutes: number;
   gamesPerMatch: number;
   roundRobinMax: number;
+  /**
+   * Rounds a field too big for a round robin plays, capped at one fewer than
+   * the field; zero is the shortest Swiss for the field size. Optional because
+   * a server older than the setting does not send it.
+   */
+  swissRounds?: number;
   pollEnabled: boolean;
   defaultControl: string;
   minimumVotes: number;

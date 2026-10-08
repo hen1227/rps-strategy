@@ -53,6 +53,7 @@ import type {
   ChatRoomScope,
   LiveGameSummary,
   ModeCounts,
+  RankedMatchTerms,
   Restriction,
   ServerMessage,
   ServerNotice,
@@ -167,8 +168,11 @@ const anchorWait = (
 // This browser's own identity, as distinct from the store's `accountId`,
 // which is whoever the server says we are right now. The two differ on a
 // browser where somebody has signed in to an account claimed elsewhere.
-const localUserId = getOrCreateUserId();
-const profileKey = getOrCreateProfileKey();
+//
+// Asked for each time rather than read once, because it can change: signing
+// out of an account this device upgraded in place gives the device a new guest.
+// See `replaceDeviceIdentity`.
+const localUserId = () => getOrCreateUserId();
 let shouldReconnect = true;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let reconnectAttempts = 0;
@@ -327,6 +331,14 @@ export interface LobbyState {
    * fact two homes that can disagree.
    */
   lastBotDrain: { botId?: string; botName?: string; drain?: BotDrain } | null;
+  /**
+   * What a ranked bot match is played at, or null before the handshake.
+   *
+   * Sent on connect rather than written into the client, so the Bots page
+   * describes the match the server will actually seat — the rotation's modes
+   * and clocks — and cannot drift from it.
+   */
+  rankedTerms: RankedMatchTerms | null;
   /**
    * The graceful restart this server is under, or null when it is not under one.
    *
@@ -546,8 +558,8 @@ export type LobbySlice = LobbyState & LobbyActions;
 
 const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get) => ({
   socket: null,
-  accountId: localUserId,
-  profileKey,
+  accountId: localUserId(),
+  profileKey: getOrCreateProfileKey(),
   account: null,
   gameSessionId: readGameSessionId(),
   connectionStatus: 'disconnected',
@@ -563,6 +575,7 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
   restrictions: [],
   blockedUserIds: [],
   lastBotDrain: null,
+  rankedTerms: null,
   serverUpdate: null,
   serverNotice: null,
   standingNotice: null,
@@ -628,7 +641,7 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
       set({ error: null });
       send(socket, {
         type: 'authenticate',
-        userId: localUserId,
+        userId: localUserId(),
         profileKey: get().profileKey,
         // A signed-in player is their account here rather than whatever this
         // browser is called. The server prefers the token when it is set.
@@ -766,6 +779,7 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
             botBench: message.botBench ?? null,
             restrictions: message.restrictions ?? [],
             blockedUserIds: message.blockedUserIds ?? [],
+            rankedTerms: message.rankedTerms ?? state.rankedTerms,
             gameSessionId,
             spectatedGameId,
             modes,
@@ -1760,7 +1774,7 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
   },
 
   applyAccountUpdate: (account) => {
-    set({ account, accountId: account?.userId ?? localUserId, error: null });
+    set({ account, accountId: account?.userId ?? localUserId(), error: null });
     shouldReconnect = true;
     const socket = get().socket;
     if (socket) socket.close();

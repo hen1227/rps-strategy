@@ -119,14 +119,13 @@ ON CONFLICT(user_id) DO NOTHING
 		return Account{}, fmt.Errorf("authenticate account: create account: %w", err)
 	}
 
-	var storedHash, storedPasswordHash, storedDiscordUserID, kind string
+	var storedHash, kind string
+	var registered bool
 	var disabled int
 	if err := transaction.QueryRowContext(ctx, `
-SELECT profile_key_hash, password_hash, discord_user_id, kind, disabled
+SELECT profile_key_hash, `+registeredSQL("")+`, kind, disabled
 FROM accounts WHERE user_id = ?
-`, userID).Scan(
-		&storedHash, &storedPasswordHash, &storedDiscordUserID, &kind, &disabled,
-	); err != nil {
+`, userID).Scan(&storedHash, &registered, &kind, &disabled); err != nil {
 		return Account{}, fmt.Errorf("authenticate account: read profile key: %w", err)
 	}
 	if disabled != 0 {
@@ -134,15 +133,15 @@ FROM accounts WHERE user_id = ?
 	}
 	// Only an anonymous, unregistered account may be claimed by whoever turns
 	// up with a key. "Unregistered" has to mean no credential *of any kind*:
-	// a Discord account has no password, so testing the password alone would
-	// hand every Discord account to anyone who read its user ID. Every user ID in this database is public — it appears in
-	// live-game listings, PGN tags, and history rows — so without this guard
-	// anyone could connect as somebody else's bot, or as a registered player
-	// whose row happened to have no key, and play as them. Bot accounts are
-	// additionally sealed with a discarded random key at creation, making this
-	// the second of two locks rather than the only one.
-	claimable := kind == AccountKindHuman &&
-		!accountIsRegistered(storedPasswordHash, storedDiscordUserID)
+	// a Discord or Apple account has no password, so testing the password alone
+	// would hand every one of them to anyone who read its user ID. Every user ID
+	// in this database is public — it appears in live-game listings, PGN tags,
+	// and history rows — so without this guard anyone could connect as somebody
+	// else's bot, or as a registered player whose row happened to have no key,
+	// and play as them. Bot accounts are additionally sealed with a discarded
+	// random key at creation, making this the second of two locks rather than
+	// the only one.
+	claimable := kind == AccountKindHuman && !registered
 	if storedHash == "" {
 		if !claimable {
 			return Account{}, ErrInvalidProfileKey
@@ -199,11 +198,13 @@ func (store *Store) UpdateAccountProfile(
 	if err != nil {
 		return Account{}, err
 	}
-	var passwordHash, discordUserID, storedDiscord string
+	var registered, discordVerified bool
+	var storedDiscord string
 	var disabled int
 	err = store.db.QueryRowContext(ctx, `
-SELECT password_hash, discord_user_id, discord, disabled FROM accounts WHERE user_id = ?
-`, userID).Scan(&passwordHash, &discordUserID, &storedDiscord, &disabled)
+SELECT `+registeredSQL("")+`, `+discordVerifiedSQL("")+`, discord, disabled
+FROM accounts WHERE user_id = ?
+`, userID).Scan(&registered, &discordVerified, &storedDiscord, &disabled)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Account{}, ErrAccountNotFound
 	}
@@ -213,7 +214,7 @@ SELECT password_hash, discord_user_id, discord, disabled FROM accounts WHERE use
 	if disabled != 0 {
 		return Account{}, ErrAccountDisabled
 	}
-	if !accountIsRegistered(passwordHash, discordUserID) {
+	if !registered {
 		return Account{}, ErrNotRegistered
 	}
 
@@ -225,7 +226,7 @@ SELECT password_hash, discord_user_id, discord, disabled FROM accounts WHERE use
 	//
 	// Skipping validateDiscord with it is deliberate. That rule was written for
 	// a handle somebody typed, and Discord is not obliged to satisfy it.
-	if discordUserID != "" {
+	if discordVerified {
 		discord = storedDiscord
 	} else if discord, err = validateDiscord(discord); err != nil {
 		return Account{}, err

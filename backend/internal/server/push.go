@@ -117,6 +117,25 @@ func (sender *pushSender) canSend(transport persistence.PushTransport) bool {
 	return sender.webEnabled
 }
 
+// sendableTransports is every kind of address this server can deliver to now.
+//
+// Reachability is asked in these terms, not as "has any row", for the reason
+// `canSend` exists: a phone registered under an Apple key this deployment no
+// longer has is an address no summons can arrive at, and a seek kept on the
+// strength of it is a seek for somebody who will never be told.
+func (sender *pushSender) sendableTransports() []persistence.PushTransport {
+	transports := make([]persistence.PushTransport, 0, 2)
+	for _, transport := range []persistence.PushTransport{
+		persistence.TransportWebPush,
+		persistence.TransportAPNs,
+	} {
+		if sender.canSend(transport) {
+			transports = append(transports, transport)
+		}
+	}
+	return transports
+}
+
 // pushTransports is which kinds of device this server can actually reach.
 //
 // Sent both on the socket at connect and from the key route, because the client
@@ -151,7 +170,7 @@ func (sender *pushSender) Reachable(ctx context.Context, userID string) bool {
 	if sender.reachableOverride != nil {
 		return *sender.reachableOverride
 	}
-	reachable, err := sender.data.HasPushSubscription(ctx, userID)
+	reachable, err := sender.data.HasPushSubscription(ctx, userID, sender.sendableTransports()...)
 	if err != nil {
 		log.Printf("check push subscriptions for %s: %v", userID, err)
 		return false
@@ -159,44 +178,83 @@ func (sender *pushSender) Reachable(ctx context.Context, userID string) bool {
 	return reachable
 }
 
-// SendTo is Send with the count of devices it reached, for the one caller that
-// needs to report back: a person pressing "send me a test" wants to know
-// whether anything went anywhere, and "no subscriptions" is a different answer
-// from "sent, check your notification settings".
-func (sender *pushSender) SendTo(userID string, payload pushPayload) int {
+// deliveryOutcome is what one attempt to reach one address came to.
+//
+// Three answers rather than a success flag, because the two ways of failing ask
+// for opposite things: an address that is gone has to be forgotten at once, and
+// one that merely failed this time has to be kept. Neither counts as reached.
+// "Sent" is a claim the test button repeats to a person, and a refusal counted
+// as a delivery sends them looking in their own settings for a fault that is
+// this server's.
+type deliveryOutcome int
+
+const (
+	// deliveryAccepted is a push service taking the notification. Whether it
+	// is shown is up to the device from here.
+	deliveryAccepted deliveryOutcome = iota
+	// deliveryGone is an address that will never work again.
+	deliveryGone
+	// deliveryFailed is a refusal or an outage. Nothing arrived, and the address
+	// is kept, because nothing about it is known to be wrong.
+	deliveryFailed
+)
+
+// pushReport is what one send came to, counted by address.
+type pushReport struct {
+	// Delivered is how many addresses a push service accepted it for.
+	Delivered int
+	// Removed is how many turned out to be gone for good, and were forgotten.
+	Removed int
+	// Failed is how many refused it or could not be reached this time, and
+	// were kept.
+	Failed int
+}
+
+// SendTo is Send with a report of where it went, for the one caller that needs
+// to answer: a person pressing "send me a test" wants to know whether anything
+// went anywhere, and "no subscriptions", "refused" and "sent, check your
+// notification settings" are three different answers.
+func (sender *pushSender) SendTo(userID string, payload pushPayload) pushReport {
+	var report pushReport
 	if !sender.enabled() {
-		return 0
+		return report
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), pushTimeout)
 	defer cancel()
 	subscriptions, err := sender.data.PushSubscriptionsFor(ctx, userID)
 	if err != nil {
 		log.Printf("read push subscriptions for %s: %v", userID, err)
-		return 0
+		return report
 	}
 	if len(subscriptions) == 0 {
-		return 0
+		return report
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		log.Printf("encode push payload: %v", err)
-		return 0
+		return report
 	}
-	reached := 0
 	for _, subscription := range subscriptions {
 		if !sender.canSend(subscription.Transport) {
 			continue
 		}
+		var outcome deliveryOutcome
 		if subscription.Transport == persistence.TransportAPNs {
-			if sender.apns.send(ctx, subscription.Endpoint, payload) {
-				sender.forget(ctx, subscription)
-			}
+			outcome = sender.apns.send(ctx, subscription.Endpoint, payload)
 		} else {
-			sender.deliver(ctx, subscription, body)
+			outcome = sender.deliver(ctx, subscription, body)
 		}
-		reached++
+		switch outcome {
+		case deliveryAccepted:
+			report.Delivered++
+		case deliveryGone:
+			report.Removed++
+			sender.forget(ctx, subscription)
+		default:
+			report.Failed++
+		}
 	}
-	return reached
+	return report
 }
 
 // Send delivers one payload to every device an account has registered.
@@ -210,18 +268,22 @@ func (sender *pushSender) Send(userID string, payload pushPayload) {
 }
 
 // forget drops a device the push service has told us is gone, and says so if it
-// was the last one.
+// was the last one this server can reach.
 //
 // Shared by both transports, because the consequence is the transport's only
 // point of contact with the queue: an address nobody prunes is an account that
 // looks reachable for ever and silently is not, and a seek left behind one is
-// exactly the ghost this feature must not have.
+// exactly the ghost this feature must not have. "Last" is counted the way
+// Reachable counts, so a phone this deployment has no key for cannot keep a
+// seek alive after the browser beside it has gone.
 func (sender *pushSender) forget(ctx context.Context, subscription persistence.PushSubscription) {
 	if err := sender.data.DeletePushSubscription(ctx, subscription.Endpoint); err != nil {
 		log.Printf("prune dead push subscription: %v", err)
 		return
 	}
-	reachable, err := sender.data.HasPushSubscription(ctx, subscription.UserID)
+	reachable, err := sender.data.HasPushSubscription(
+		ctx, subscription.UserID, sender.sendableTransports()...,
+	)
 	if err == nil && !reachable && sender.onUnreachable != nil {
 		sender.onUnreachable(subscription.UserID)
 	}
@@ -231,7 +293,7 @@ func (sender *pushSender) deliver(
 	ctx context.Context,
 	subscription persistence.PushSubscription,
 	body []byte,
-) {
+) deliveryOutcome {
 	response, err := webpush.SendNotificationWithContext(ctx, body, &webpush.Subscription{
 		Endpoint: subscription.Endpoint,
 		Keys: webpush.Keys{
@@ -248,7 +310,7 @@ func (sender *pushSender) deliver(
 	})
 	if err != nil {
 		log.Printf("send push notification: %v", err)
-		return
+		return deliveryFailed
 	}
 	defer response.Body.Close()
 
@@ -256,10 +318,11 @@ func (sender *pushSender) deliver(
 	// permission was revoked, the profile was deleted, the subscription
 	// expired.
 	if response.StatusCode == http.StatusNotFound || response.StatusCode == http.StatusGone {
-		sender.forget(ctx, subscription)
-		return
+		return deliveryGone
 	}
 	if response.StatusCode >= 400 {
 		log.Printf("push service rejected a notification: %s", response.Status)
+		return deliveryFailed
 	}
+	return deliveryAccepted
 }

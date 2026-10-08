@@ -1,4 +1,12 @@
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useRef } from 'react';
+import {
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+  type LayoutChangeEvent,
+} from 'react-native';
 
 import BotIcon from './BotIcon';
 import { seriesGameIsOpen, seriesView, type SeriesGameView } from './seriesSummary';
@@ -64,17 +72,44 @@ export interface SeriesScoreTableProps {
    * and it does not belong to a run, so it is passed in.
    */
   liveGameIds?: readonly string[];
+  /**
+   * Told how much of the row of games is scrolled out of sight, in points,
+   * whenever that changes: 0 while every game shows. For a caller that put the
+   * table somewhere tight and has somewhere wider to move it to.
+   */
+  onHiddenWidth?: (width: number) => void;
 }
 
 export default function SeriesScoreTable({
   compact = false,
   currentGameId = null,
   liveGameIds,
+  onHiddenWidth,
   onSelect,
   series,
 }: SeriesScoreTableProps) {
   const view = seriesView(series);
   const iconSize = compact ? 16 : 24;
+  // The games' own width against the width they were given. Both arrive as
+  // layout events, in either order, so each one reports with the other's last
+  // reading. Only measured for a caller that asked.
+  const games = useRef({ content: 0, shown: 0 });
+  const reportHidden = () => {
+    const { content, shown } = games.current;
+    if (onHiddenWidth && shown > 0) onHiddenWidth(Math.max(0, Math.round(content - shown)));
+  };
+  const onGamesSize = onHiddenWidth
+    ? (width: number) => {
+        games.current.content = width;
+        reportHidden();
+      }
+    : undefined;
+  const onGamesLayout = onHiddenWidth
+    ? (event: LayoutChangeEvent) => {
+        games.current.shown = event.nativeEvent.layout.width;
+        reportHidden();
+      }
+    : undefined;
 
   return (
     <View style={styles.wrap}>
@@ -114,6 +149,8 @@ export default function SeriesScoreTable({
           <ScrollView
             contentContainerStyle={styles.columns}
             horizontal
+            onContentSizeChange={onGamesSize}
+            onLayout={onGamesLayout}
             showsHorizontalScrollIndicator={false}
             style={[styles.scroller, compact && dense.scroller]}
           >

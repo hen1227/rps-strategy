@@ -14,12 +14,18 @@ export interface SeriesLinkProps {
   /** Shortened where the surroundings already say the word "series". */
   label?: string;
   compact?: boolean;
+  /**
+   * `default` where the link is one of many — a feed of cards, where a green
+   * button on every one would be a column of primary actions.
+   */
+  tone?: 'accent' | 'default';
 }
 
 export default function SeriesLink({
   seriesId,
   label = 'FULL SERIES RESULTS ›',
   compact = true,
+  tone = 'accent',
 }: SeriesLinkProps) {
   return (
     <GhostLink
@@ -27,7 +33,7 @@ export default function SeriesLink({
       compact={compact}
       href={links.series(seriesId)}
       label={label}
-      tone="accent"
+      tone={tone}
     />
   );
 }

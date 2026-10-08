@@ -13,13 +13,15 @@ import { colors, themedSheet } from '@/theme';
 // A panel and not a route, which matters more than it looks. Nothing has been
 // written to the database yet — no account, no claim on the name — so there is
 // nothing to clean up if somebody closes the tab here, and nobody can be
-// trapped mid-flow. Backing out costs one more trip through Discord and no
-// data.
+// trapped mid-flow. Backing out costs one more trip through Discord or Apple
+// and no data.
 //
 // The suggestion comes from the server, because only the server can check the
 // name is actually free. A suggestion the player cannot accept is worse than
 // none: they press the obvious button, are told it is taken, and have to think
-// of one anyway — having been led to believe the work was done.
+// of one anyway — having been led to believe the work was done. After Apple
+// there is none at all, since Apple is asked for no name, and the field starts
+// empty rather than holding a filler to delete.
 //
 // The second half of this panel is for the people it strands otherwise. An
 // account made before Discord sign-in has a name and a password and no session
@@ -30,12 +32,16 @@ import { colors, themedSheet } from '@/theme';
 // the stray now holds the identity. So the way back to it is offered up front,
 // and typing the name they already have leads to the same place rather than to
 // "that username is taken".
+//
+// Somebody who already plays with Discord and presses Apple first lands here
+// too, about to make a second account. The way out is the other order — sign in
+// with Discord, then add Apple from the Account screen — so the panel says so.
 
 export default function UsernameSetupPanel() {
   const policy = useIdentityPolicy();
-  const pending = useGameStore((state) => state.pendingDiscordSignup);
-  const claimDiscordUsername = useGameStore((state) => state.claimDiscordUsername);
-  const dismissDiscordSignup = useGameStore((state) => state.dismissDiscordSignup);
+  const pending = useGameStore((state) => state.pendingSignup);
+  const claimUsername = useGameStore((state) => state.claimUsername);
+  const dismissSignup = useGameStore((state) => state.dismissSignup);
 
   // Null until they type, so the server's suggestion can still appear if it
   // arrives after this panel has mounted.
@@ -50,6 +56,7 @@ export default function UsernameSetupPanel() {
   const [error, setError] = useState<string | null>(null);
 
   if (!pending) return null;
+  const apple = pending.provider === 'apple';
 
   const username = typed ?? (claiming ? '' : pending.suggestedUsername);
   const trimmed = username.trim();
@@ -72,7 +79,7 @@ export default function UsernameSetupPanel() {
     setBusy(true);
     setError(null);
     try {
-      const account = await claimDiscordUsername(
+      const account = await claimUsername(
         pending.ticket,
         trimmed,
         askingForPassword ? password : '',
@@ -84,7 +91,7 @@ export default function UsernameSetupPanel() {
       if (!account) setPassword('');
     } catch (caught) {
       // The ticket survives a refused name, so they can pick another without
-      // going back through Discord.
+      // going back through the provider.
       setError(failureMessage(caught, 'That name did not work.'));
     } finally {
       setBusy(false);
@@ -98,11 +105,20 @@ export default function UsernameSetupPanel() {
         title={askingForPassword ? 'Sign in to your account' : 'Choose your username'}
       />
       <Text style={styles.help}>
-        {pending.discordHandle ? `Signed in as ${pending.discordHandle} on Discord. ` : ''}
+        {apple
+          ? 'Signed in with Apple. '
+          : pending.discordHandle
+            ? `Signed in as ${pending.discordHandle} on Discord. `
+            : ''}
         {askingForPassword
-          ? "Enter your old username and password to link Discord and keep your account."
+          ? `Enter your old username and password to link ${apple ? 'Apple' : 'Discord'} and keep your account.`
           : 'This is the name other players see. You can change it later.'}
       </Text>
+      {apple && !askingForPassword ? (
+        <Text style={styles.help}>
+          Already play with Discord? Press Not now, sign in with Discord, then add Apple.
+        </Text>
+      ) : null}
 
       {error ? <Banner message={error} onDismiss={() => setError(null)} tone="error" /> : null}
 
@@ -153,13 +169,14 @@ export default function UsernameSetupPanel() {
           loading={busy}
           onPress={submit}
         />
-        <GhostButton label="Not now" onPress={dismissDiscordSignup} />
+        <GhostButton label="Not now" onPress={dismissSignup} />
       </View>
 
       {/*
         Offered before they press anything, not after it has gone wrong. By the
         time a legacy account holder has claimed the suggested name there is no
-        undo: a second account exists and it holds their Discord identity.
+        undo: a second account exists and it holds their Discord or Apple
+        identity.
       */}
       <Pressable
         accessibilityRole="button"

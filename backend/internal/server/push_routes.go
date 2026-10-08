@@ -250,14 +250,22 @@ func (server *Server) sendTestPush(writer http.ResponseWriter, request *http.Req
 		return
 	}
 	// Delivery is synchronous here, unlike every other send. Nothing is waiting
-	// on it — no pairing, no clock — and the count is the entire answer.
-	delivered := server.push.SendTo(account.UserID, pushPayload{
+	// on it — no pairing, no clock — and the report is the entire answer.
+	// `delivered` counts only what a push service accepted. The other two say
+	// why the rest did not go, because "turn alerts off and on again" is the
+	// cure for an address that is gone and no cure at all for a refusal of this
+	// server's own key.
+	report := server.push.SendTo(account.UserID, pushPayload{
 		Kind:  "test",
 		Title: "Notifications are working",
 		Body:  "This is the only kind of alert RPS sends, and only when a game starts.",
 		Tag:   "rps-test",
 	})
-	writeJSON(writer, http.StatusOK, map[string]any{"delivered": delivered})
+	writeJSON(writer, http.StatusOK, map[string]any{
+		"delivered": report.Delivered,
+		"removed":   report.Removed,
+		"failed":    report.Failed,
+	})
 }
 
 // validatePushKeys rejects a subscription that could never be encrypted for.

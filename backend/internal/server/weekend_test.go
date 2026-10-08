@@ -101,6 +101,25 @@ func TestWeekendDoorsOpenOnceAndOnlyOnce(t *testing.T) {
 	}
 }
 
+// The doors publish the arena's length, so an event the host starts by hand
+// from the tournament board plays it as well as one the scheduler starts.
+func TestTheWeekendDoorsPublishTheSwissLength(t *testing.T) {
+	server, config := weekendServer(t, func(config *persistence.WeekendConfig) {
+		config.SwissRounds = 6
+	})
+	ctx := t.Context()
+	today := time.Now().Format("2006-01-02")
+	server.openWeekendDoors(ctx, config, today, time.Now().Add(time.Hour))
+
+	open, err := server.data.OpenWeekend(ctx)
+	if err != nil {
+		t.Fatalf("the doors should have opened: %v", err)
+	}
+	if open.SwissRounds != 6 {
+		t.Fatalf("expected the event to carry six Swiss rounds, got %d", open.SwissRounds)
+	}
+}
+
 // An event with nobody in it is called off out loud rather than left open.
 func TestAWeekendWithoutAFieldIsCalledOff(t *testing.T) {
 	server, config := weekendServer(t, func(config *persistence.WeekendConfig) {
@@ -653,7 +672,7 @@ func TestWeekendConfigRoundTripsWithoutTakingTheRunDate(t *testing.T) {
 			"startDay": int(time.Sunday), "windowOpensDay": int(time.Saturday),
 			"windowOpensHour": 9, "modeId": string(game.ModeIntransitive),
 			"minimumField": 4, "doorsMinutes": 45, "pollClosesMinutes": 20,
-			"gamesPerMatch": 4, "roundRobinMax": 8, "pollEnabled": true,
+			"gamesPerMatch": 4, "roundRobinMax": 8, "swissRounds": 5, "pollEnabled": true,
 			"defaultControl": "1+1", "minimumVotes": 5, "graceSeconds": 120,
 			"skipDate": "", "lastRunDate": "1999-12-31", "updatedAtUnixMs": 0,
 		},
@@ -666,7 +685,8 @@ func TestWeekendConfigRoundTripsWithoutTakingTheRunDate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored.StartLocal != "19:30" || stored.ModeID != game.ModeIntransitive {
+	if stored.StartLocal != "19:30" || stored.ModeID != game.ModeIntransitive ||
+		stored.SwissRounds != 5 {
 		t.Fatalf("the settings did not survive: %#v", stored)
 	}
 	// Sunday evening is thirty-four hours into a window that opens Saturday at

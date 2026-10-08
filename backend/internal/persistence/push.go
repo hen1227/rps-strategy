@@ -208,11 +208,31 @@ ORDER BY created_at_unix_ms
 // HasPushSubscription answers the only question the queue asks: can this person
 // be called back? Counted rather than fetched, because the caller that asks is
 // deciding whether to keep a seek, not preparing to send anything.
-func (store *Store) HasPushSubscription(ctx context.Context, userID string) (bool, error) {
+//
+// Only addresses of the kinds named count, and the caller names the kinds it
+// can actually deliver to. A row outlives the keys that reached it — VAPID can
+// be withdrawn with browsers still subscribed, and an Apple key can go missing
+// with phones still registered — so counting every row would keep a seek on the
+// board for somebody no summons can reach. Naming no kinds counts nothing,
+// which is the safe answer for a caller that forgot to ask properly.
+func (store *Store) HasPushSubscription(
+	ctx context.Context,
+	userID string,
+	transports ...PushTransport,
+) (bool, error) {
+	if len(transports) == 0 {
+		return false, nil
+	}
+	arguments := make([]any, 0, len(transports)+1)
+	arguments = append(arguments, strings.TrimSpace(userID))
+	for _, transport := range transports {
+		arguments = append(arguments, string(transport))
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?, ", len(transports)), ", ")
 	var count int
 	err := store.db.QueryRowContext(ctx, `
-SELECT COUNT(*) FROM push_subscriptions WHERE user_id = ?
-`, strings.TrimSpace(userID)).Scan(&count)
+SELECT COUNT(*) FROM push_subscriptions WHERE user_id = ? AND transport IN (`+placeholders+`)
+`, arguments...).Scan(&count)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return false, fmt.Errorf("count push subscriptions: %w", err)
 	}

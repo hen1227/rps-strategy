@@ -87,20 +87,63 @@ type BotSeries struct {
 	Games         []BotSeriesGame `json:"games,omitempty"`
 	CreatedAtMs   int64           `json:"createdAtUnixMs"`
 	CompletedAtMs *int64          `json:"completedAtUnixMs,omitempty"`
-	// Ladder is a run the ranked pool arranged, which is the only kind that
-	// moves a rating. Stored on the row, because "who arranged this" is a fact
-	// about the run and not something derivable from it afterwards.
+	// Ladder is a run the ranked pool arranged: a round, or an owner's press.
+	// Stored on the row, because "who arranged this" is a fact about the run and
+	// not something derivable from it afterwards.
 	Ladder bool `json:"ladder"`
-	// Casual is a run that does not move the ladder, which is every run except a
-	// pool round — and a pool round between two engines one person registered,
-	// which the fit drops however it was flagged (botHeadToHeadTx).
+	// Ranked is whether the run's games are seated ranked: every pool run, an
+	// owner's ranked match against an engine they named, and a host's run when
+	// they asked for one. Apart from Ladder because the two answer different
+	// questions — a named match is not a round, and is not what the rounds page
+	// reports as one — and because an administrator can move a finished run
+	// either way afterwards (SetBotSeriesRanked), which changes whether it
+	// counts without changing who arranged it.
 	//
-	// Derived on every read rather than stored, which is what makes it right
-	// about the runs played before the pool existed. Those games went down
-	// `ranked = 1` and are not counted now, so the run did not move anything,
-	// and "casual" is the true answer to the only question anybody asks of the
-	// word here.
+	// Not on the wire. Casual is the answer clients read, and a run can be
+	// ranked here and still casual there.
+	Ranked bool `json:"-"`
+	// Casual is a run that does not move the ladder: one that was not seated
+	// ranked, and one between two engines one person registered, which the fit
+	// drops however its games were flagged (botHeadToHeadTx).
+	//
+	// Derived on every read rather than stored, so the owner half is right about
+	// a run whatever its games were flagged when they were played.
 	Casual bool `json:"casual"`
+	// Pairing is who picked the two engines: the hourly round, the server on an
+	// owner's press, or a person. Whether the run counts is Casual's answer; the
+	// two are apart because they are two questions — a round a host moved to
+	// casual afterwards is still a round, and a card should say both. Derived on
+	// every read, like Casual. See BotSeriesPairingOf.
+	Pairing BotSeriesPairing `json:"pairing"`
+}
+
+// BotSeriesPairing is who picked a run's two engines.
+type BotSeriesPairing string
+
+const (
+	// BotSeriesPairingRound is a pairing the hourly round made.
+	BotSeriesPairingRound BotSeriesPairing = "round"
+	// BotSeriesPairingRandom is a ranked match an owner asked for, against an
+	// opponent the server drew.
+	BotSeriesPairingRandom BotSeriesPairing = "random"
+	// BotSeriesPairingChosen is two engines a person named: a ranked match
+	// against a named engine, a host's run, or any casual series.
+	BotSeriesPairingChosen BotSeriesPairing = "chosen"
+)
+
+// BotSeriesPairingOf names who picked a run's engines from two facts its row
+// already records, so every run ever played reads correctly without a
+// migration: whether the pool arranged it, and who asked. The pool's own rounds
+// are the only runs nobody asks for.
+func BotSeriesPairingOf(ladder bool, requestedBy string) BotSeriesPairing {
+	switch {
+	case ladder && requestedBy == "":
+		return BotSeriesPairingRound
+	case ladder:
+		return BotSeriesPairingRandom
+	default:
+		return BotSeriesPairingChosen
+	}
 }
 
 // BotSeriesGame is one game of a run.
@@ -187,6 +230,40 @@ CREATE INDEX IF NOT EXISTS bot_series_games_game_idx
 			return fmt.Errorf("add bot series requester column: %w", err)
 		}
 	}
+	if !columns["ranked"] {
+		if err := store.addBotSeriesRankedColumn(ctx); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// addBotSeriesRankedColumn adds the ranked column and fills it in.
+//
+// Until the column existed a run was seated ranked exactly when the pool
+// arranged it, so `ranked = ladder` is what every existing row already meant,
+// and every card drawn from one reads as it did before. In one transaction,
+// because a column added without its backfill is a column that says every pool
+// round ever played was casual — and the next start would see the column and
+// never fill it in.
+func (store *Store) addBotSeriesRankedColumn(ctx context.Context) error {
+	transaction, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("add bot series ranked column: %w", err)
+	}
+	defer func() { _ = transaction.Rollback() }()
+	for _, statement := range []string{
+		"ALTER TABLE bot_series ADD COLUMN ranked INTEGER NOT NULL DEFAULT 0" +
+			" CHECK (ranked IN (0, 1))",
+		"UPDATE bot_series SET ranked = ladder",
+	} {
+		if _, err := transaction.ExecContext(ctx, statement); err != nil {
+			return fmt.Errorf("add bot series ranked column: %w", err)
+		}
+	}
+	if err := transaction.Commit(); err != nil {
+		return fmt.Errorf("add bot series ranked column: %w", err)
+	}
 	return nil
 }
 
@@ -196,13 +273,14 @@ func (store *Store) CreateBotSeries(ctx context.Context, series BotSeries) (BotS
 	if _, err := store.db.ExecContext(ctx, `
 INSERT INTO bot_series (
     series_id, mode_id, first_bot_id, second_bot_id, pairs, opening_plies, seed,
-    initial_time_ms, increment_ms, requested_by_user_id, ladder, created_at_unix_ms
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    initial_time_ms, increment_ms, requested_by_user_id, ladder, ranked,
+    created_at_unix_ms
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `,
 		series.SeriesID, series.ModeID, series.FirstBotID, series.SecondBotID,
 		series.Pairs, series.OpeningPlies, series.Seed,
 		series.InitialTimeMs, series.IncrementMs, series.RequestedByUserID,
-		boolToInt(series.Ladder), now,
+		boolToInt(series.Ladder), boolToInt(series.Ranked), now,
 	); err != nil {
 		return BotSeries{}, fmt.Errorf("create bot series: %w", err)
 	}
@@ -301,8 +379,8 @@ SELECT s.series_id, s.mode_id, s.first_bot_id, s.second_bot_id,
        s.initial_time_ms, s.increment_ms,
        s.first_wins, s.second_wins, s.draws,
        s.created_at_unix_ms, s.completed_at_unix_ms,
-       s.ladder,
-       CASE WHEN s.ladder = 0 THEN 1
+       s.ladder, s.ranked,
+       CASE WHEN s.ranked = 0 THEN 1
             ELSE COALESCE(fb.owner_user_id IS NOT NULL
                           AND fb.owner_user_id = sb.owner_user_id, 0)
        END
@@ -318,7 +396,7 @@ LEFT JOIN accounts ra ON ra.user_id = s.requested_by_user_id`
 func scanBotSeries(scanner interface{ Scan(...any) error }) (BotSeries, error) {
 	var series BotSeries
 	var completedAt sql.NullInt64
-	var ladder, casual int
+	var ladder, ranked, casual int
 	err := scanner.Scan(
 		&series.SeriesID, &series.ModeID, &series.FirstBotID, &series.SecondBotID,
 		&series.FirstBotName, &series.SecondBotName,
@@ -328,7 +406,7 @@ func scanBotSeries(scanner interface{ Scan(...any) error }) (BotSeries, error) {
 		&series.Status, &series.Pairs, &series.OpeningPlies, &series.Seed,
 		&series.InitialTimeMs, &series.IncrementMs,
 		&series.FirstWins, &series.SecondWins, &series.Draws,
-		&series.CreatedAtMs, &completedAt, &ladder, &casual,
+		&series.CreatedAtMs, &completedAt, &ladder, &ranked, &casual,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return BotSeries{}, ErrBotSeriesNotFound
@@ -340,7 +418,9 @@ func scanBotSeries(scanner interface{ Scan(...any) error }) (BotSeries, error) {
 		series.CompletedAtMs = &completedAt.Int64
 	}
 	series.Ladder = ladder == 1
+	series.Ranked = ranked == 1
 	series.Casual = casual == 1
+	series.Pairing = BotSeriesPairingOf(series.Ladder, series.RequestedByUserID)
 	return series, nil
 }
 

@@ -14,7 +14,7 @@ import {
   type GradableMove,
   type ReviewMove,
 } from '@/engine/gameReview';
-import { encodePGN, encodePosition, formatMove, resultFor } from '@/engine/pgn';
+import { boardSizeTag, encodePGN, encodePosition, formatMove, resultFor } from '@/engine/pgn';
 import { failureMessage } from '@/errors';
 import AccuracyCard from '@/features/analysis/AccuracyCard';
 import AnalysisEffortToggle from '@/features/analysis/AnalysisEffortToggle';
@@ -89,6 +89,8 @@ const botBattlePGN = ({
   winner,
 }: BattlePGNInput) => {
   const result = resultFor('Finished', winner);
+  // `SetUp "1"` promises a FEN, so there is always a board to write one from.
+  const start = startGame ?? createAnalysisGame(mode);
   return encodePGN({
     tags: [
       { name: 'Event', value: 'Bot battle' },
@@ -102,12 +104,9 @@ const botBattlePGN = ({
       { name: 'Result', value: result },
       { name: 'Variant', value: mode.name },
       { name: 'ModeId', value: mode.id },
-      { name: 'BoardSize', value: '9' },
+      { name: 'BoardSize', value: boardSizeTag(start.grid) },
       { name: 'SetUp', value: '1' },
-      {
-        name: 'FEN',
-        value: startGame ? encodePosition(startGame.grid, startGame.currentTurn) : '',
-      },
+      { name: 'FEN', value: encodePosition(start.grid, start.currentTurn) },
       { name: 'RedId', value: `bot:${redProfile.id}` },
       { name: 'BlueId', value: `bot:${blueProfile.id}` },
       { name: 'Ranked', value: 'false' },
@@ -750,7 +749,7 @@ const styles = themedSheet(() => ({
     marginBottom: 12,
   },
   titleCopy: { flex: 1, flexBasis: 140, minWidth: 0 },
-  kicker: { color: colors.accentBright, fontSize: 8, fontWeight: '900', letterSpacing: 1.35 },
+  kicker: { color: colors.textFaint, fontSize: 8, fontWeight: '900', letterSpacing: 1.35 },
   title: { color: colors.textStrong, fontSize: 20, fontWeight: '900', marginTop: 2 },
   modeBadge: {
     flexDirection: 'row',

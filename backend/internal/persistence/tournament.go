@@ -150,6 +150,8 @@ type TournamentPlayer struct {
 }
 
 type TournamentStanding struct {
+	// Rank is shared by everybody level on the format's measure, so two rows can
+	// both be first. See tournamentStandings.
 	Rank     int    `json:"rank"`
 	PlayerID int64  `json:"playerId"`
 	IGN      string `json:"ign"`
@@ -298,10 +300,11 @@ FROM tournaments WHERE tournament_id = ?
 	// entrant with no account on record reads as human, which is what a
 	// hand-entered signup is.
 	kind := AccountKindHuman
-	var verifiedDiscordUserID, verifiedDiscordHandle string
+	var discordVerified bool
+	var verifiedDiscordHandle string
 	if err := transaction.QueryRowContext(ctx,
-		`SELECT kind, discord_user_id, discord FROM accounts WHERE user_id = ?`, userID,
-	).Scan(&kind, &verifiedDiscordUserID, &verifiedDiscordHandle); err != nil &&
+		`SELECT kind, `+discordVerifiedSQL("")+`, discord FROM accounts WHERE user_id = ?`, userID,
+	).Scan(&kind, &discordVerified, &verifiedDiscordHandle); err != nil &&
 		!errors.Is(err, sql.ErrNoRows) {
 		return Tournament{}, fmt.Errorf("sign up for tournament: read account: %w", err)
 	}
@@ -313,7 +316,9 @@ FROM tournaments WHERE tournament_id = ?
 	}
 
 	// The verification door, and it is unconditional: every entrant in every
-	// event is somebody Discord has vouched for.
+	// event is somebody Discord has vouched for. Discord and not merely an
+	// identity: an Apple ID signs somebody in, but a host cannot message it,
+	// and reaching the field is what this door is for.
 	//
 	// It is asked of the **party** rather than of the account playing, which is
 	// what lets it apply to engines at all. A program has no Discord account and
@@ -327,14 +332,15 @@ FROM tournaments WHERE tournament_id = ?
 		return Tournament{}, err
 	}
 	if party != userID {
+		discordVerified = false
 		if err := transaction.QueryRowContext(ctx,
-			`SELECT discord_user_id, discord FROM accounts WHERE user_id = ?`, party,
-		).Scan(&verifiedDiscordUserID, &verifiedDiscordHandle); err != nil &&
+			`SELECT `+discordVerifiedSQL("")+`, discord FROM accounts WHERE user_id = ?`, party,
+		).Scan(&discordVerified, &verifiedDiscordHandle); err != nil &&
 			!errors.Is(err, sql.ErrNoRows) {
 			return Tournament{}, fmt.Errorf("sign up for tournament: read owner: %w", err)
 		}
 	}
-	if strings.TrimSpace(verifiedDiscordUserID) == "" {
+	if !discordVerified {
 		return Tournament{}, ErrTournamentDiscordRequired
 	}
 	// The handle typed into the form is discarded in favour of the one Discord
@@ -1123,10 +1129,32 @@ func tournamentStandings(
 		}
 		return standings[i].SignupOrder < standings[j].SignupOrder
 	})
+	// Entrants level on what the format ranks by share a rank, and the next one
+	// down skips the places they took: 1, 1, 3. The sort above still orders a tie
+	// so the table reads the same every time, but that order is not a result.
+	// Two engines on ten points both finished first, and whoever finishes first
+	// is who tournamentChampions crowns.
 	for index := range standings {
+		if index > 0 && standingsLevel(format, standings[index-1], standings[index]) {
+			standings[index].Rank = standings[index-1].Rank
+			continue
+		}
 		standings[index].Rank = index + 1
 	}
 	return standings
+}
+
+// standingsLevel reports whether two entrants tie on what their format ranks
+// by: points, or for a knockout, the round they went out in.
+func standingsLevel(format TournamentFormat, first, second TournamentStanding) bool {
+	if format.Knockout() {
+		firstOut, secondOut := first.EliminatedInRound, second.EliminatedInRound
+		if firstOut == nil || secondOut == nil {
+			return firstOut == nil && secondOut == nil
+		}
+		return *firstOut == *secondOut
+	}
+	return first.Points == second.Points
 }
 
 // markEliminations records the round each knockout entrant went out in.

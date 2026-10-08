@@ -82,10 +82,12 @@ const styles = themedSheet(() => ({
   // Two points of border rather than one, and the accent rather than a tint:
   // this row is read at a glance from across a settings page, and a one-pixel
   // edge on a card that is itself full of colour does not survive that.
-  chipSelected: { borderColor: colors.accent, backgroundColor: colors.accentSurfaceQuiet },
+  // The strongest ink for the edge: the swatch inside already carries every
+  // colour the preset has, so the choice is marked by the one it does not.
+  chipSelected: { borderColor: colors.textStrong, backgroundColor: colors.surfaceRaised },
   pressed: { opacity: 0.7 },
   art: { alignItems: 'center', justifyContent: 'center', minHeight: 52 },
   name: { ...type.rowTitle, color: colors.textSoft },
-  nameSelected: { color: colors.accentTextStrong },
+  nameSelected: { color: colors.textStrong },
   blurb: { ...type.meta, color: colors.textFaint },
 }));

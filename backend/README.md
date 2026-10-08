@@ -72,7 +72,8 @@ and therefore the only reason a matchmaking seek is allowed to outlive its
 socket. They come in two kinds — Web Push for a browser, APNs for the iOS app —
 and each is configured, and can be missing, on its own. `HasPushSubscription`
 counts both, so "can this person be called back" stays one question with one
-answer whichever devices they happen to own.
+answer whichever devices they happen to own — but only the kinds this server
+holds keys for, because a row outlives the key that reached it.
 
 #### Web Push
 
@@ -116,8 +117,9 @@ appears from a real press, so nothing about this can be automated. The panel
 then offers **Send a test**, which is the third check and the only one that
 exercises the whole chain: `POST /api/push/test` encrypts a payload with the
 VAPID keys, hands it to the browser's own push service, and answers with how
-many browsers it went to. A subscription that stores cleanly and then silently
-delivers nothing looks exactly like one that works until that button says so.
+many browsers accepted it and how many refused it or were gone. A subscription
+that stores cleanly and then silently delivers nothing looks exactly like one
+that works until that button says so.
 
 Two things outside this server can still swallow a notification: iOS delivers
 Web Push only to a site added to the Home Screen, and `/sw.js` must be served
@@ -153,7 +155,14 @@ Everything downstream is shared. `POST /api/push/devices` stores a token where a
 Web Push endpoint goes, `summon` fans one payload out to every address an
 account has, and a `410 Unregistered` prunes a phone and drops the wait it left
 on the board exactly as a `410` from a push service does for a browser. **Send a
-test** on the account screen reports how many devices it reached, of both kinds.
+test** on the account screen reports how many devices accepted it, of both
+kinds, and says so when Apple refused it: a wrong key or environment reads as a
+refusal, not as "sent".
+
+What APNs never reports is a phone whose owner has switched notifications off
+in Settings. It goes on accepting every summons for that token, so the app
+withdraws its own token the next time it comes to the front and finds the
+permission gone. Until then the phone still counts as reachable.
 
 Rotating or revoking the Apple key does not invalidate stored tokens — they are
 addresses, not credentials — so a new key with the same team and bundle id keeps
@@ -438,16 +447,23 @@ GET /api/accounts/{userId}/games?limit=20&offset=0
 GET /api/accounts/{userId}/record/{opponentId}
 ```
 
-Registering claims a name for the anonymous account the browser is already
-using, keeping its user ID, ratings, and history:
+Signing in claims a name for the anonymous account the browser is already
+using, keeping its user ID, ratings, and history. Discord and Apple both end in
+a one-shot ticket, redeemed and named through the same two routes; the root
+README walks through both flows.
 
 ```text
-POST /api/auth/register    Authorization: Bearer <local-profile-key>
-                           {"userId":"…","username":"Player","password":"…"}
-POST /api/auth/login       {"username":"Player","password":"…"}
-POST /api/auth/logout      Authorization: Bearer <session-token>
-GET  /api/auth/me          Authorization: Bearer <session-token>
-POST /api/auth/password    Authorization: Bearer <session-token>
+GET  /api/auth/providers         which sign-ins this server can finish
+POST /api/auth/discord/start     Authorization: Bearer <session-token | local-profile-key>
+POST /api/auth/apple/nonce       Authorization: Bearer <session-token | local-profile-key>
+POST /api/auth/apple/native      {"nonce":"…","identityToken":"…","authorizationCode":"…"}
+POST /api/auth/apple/start       Authorization: Bearer <session-token | local-profile-key>
+POST /api/auth/exchange          {"ticket":"rps_t_…"}                 also /api/auth/discord/exchange
+POST /api/auth/complete          {"ticket":"rps_t_…","username":"…"}  also /api/auth/discord/complete
+POST /api/auth/login             {"username":"Player","password":"…"} legacy and review accounts
+POST /api/auth/logout            Authorization: Bearer <session-token>
+GET  /api/auth/me                Authorization: Bearer <session-token>
+GET  /api/auth/sign-in-methods   Authorization: Bearer <session-token>
 GET  /api/identity/policy
 ```
 
@@ -588,6 +604,31 @@ Retiring a bot (`DELETE /api/bots/{botId}`, which an owner may call for their
 own) is the soft version: the bot leaves play and frees its name while its games
 stay. `DELETE /api/admin/bots/{botId}` is the hard one, for a bot whose record
 is itself the problem.
+
+### Store review accounts
+
+App Review and Google Play's reviewers each get a password account, because
+Discord cannot sign a reviewer in, Apple only does on an iPhone, and no player
+can create a password account.
+One account per store label, made and repaired by one route:
+
+```text
+GET /api/admin/store-review-accounts           every label, and whether it signs in
+PUT /api/admin/store-review-accounts/{label}   {"username":"…","newPassword":false}
+```
+
+The `PUT` makes the account the first time and puts it back every time after:
+the name the store has on file, switched on, no typed Discord handle, every
+device signed out. It keeps a password that still works, and generates a new one
+only when the account had to be made again — a reviewer testing deletion — or
+when `newPassword` asks. The reply carries the password only when it changed,
+checked against the login path first, and that is the only time it is shown.
+Neither Discord nor Apple can be linked to one of these, and it cannot be made
+an administrator; `internal/persistence/store_review.go` has the reasons.
+
+Call it through `deploy/store-review-account.sh`, before every submission. The
+credentials go into the two consoles and never into this repository, which is
+public; `docs/store-listing.md` has the rest.
 
 ### The weekend bot arena
 

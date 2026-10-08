@@ -2,21 +2,25 @@ import { failureMessage } from '@/errors';
 import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
-import DiscordSignInButton from './DiscordSignInButton';
+import SignInButtons from './SignInButtons';
 import { Banner, LabeledInput, Panel, PrimaryButton, SectionHeading } from '@/ui/primitives';
+import { useAppleOffered } from '@/hooks/useSignInProviders';
 import { useGameStore } from '@/store/gameStore';
 import { colors, themedSheet } from '@/theme';
 
 // Getting into an account.
 //
-// Discord is the only way to make one, so it leads and it is the only thing
-// most people will ever see here. Underneath, folded away, is the password form
-// for accounts that predate the change — kept because those players still have
-// to be able to get in, and folded because offering it alongside would suggest
-// it is a choice somebody new could make.
+// Discord and Apple are the ways to make one, so they lead, as equals, and they
+// are the only thing most people will ever see here. Apple appears wherever
+// this build and this server can finish it; Android has no Apple sheet, so it
+// is Discord alone there. Underneath, folded away, is the password form for
+// accounts that predate the change — kept because those players still have to
+// be able to get in, and folded because offering it alongside would suggest it
+// is a choice somebody new could make.
 
 export default function AccountSignInPanel() {
   const signIn = useGameStore((state) => state.signIn);
+  const appleOffered = useAppleOffered();
   const [showPasswordForm, setShowPasswordForm] = useState(false);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -38,16 +42,16 @@ export default function AccountSignInPanel() {
 
   return (
     <Panel tone="accent">
-      <SectionHeading eyebrow="ACCOUNT" title="Sign in with Discord" />
-      <View style={styles.discordAction}>
-        <DiscordSignInButton />
+      <SectionHeading eyebrow="ACCOUNT" title="Sign in" />
+      <View style={styles.signInActions}>
+        <SignInButtons />
       </View>
 
       {showPasswordForm ? (
         <View style={styles.legacy}>
           <SectionHeading eyebrow="OLDER ACCOUNTS" title="Sign in with a password" />
           <Text style={styles.help}>
-            For older accounts. Sign in once, then link Discord.
+            For older accounts. Sign in once, then link {appleOffered ? 'Discord or Apple' : 'Discord'}.
           </Text>
           {error ? <Banner message={error} onDismiss={() => setError(null)} tone="error" /> : null}
           <LabeledInput
@@ -94,7 +98,7 @@ export default function AccountSignInPanel() {
 
 const styles = themedSheet(() => ({
   help: { color: colors.textMuted, fontSize: 11, lineHeight: 17, marginTop: 8 },
-  discordAction: { marginTop: 14 },
+  signInActions: { marginTop: 14 },
   legacyLink: { alignSelf: 'center', marginTop: 16, paddingVertical: 2 },
   legacyLinkPressed: { opacity: 0.7 },
   // Muted and small, but not dimmer than that: it is still the only door left

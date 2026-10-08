@@ -93,9 +93,12 @@ type botSeries struct {
 	// check on an abort — and neither wants a query.
 	requestedBy string
 	privileged  bool
-	// ladder marks a run the ranked pool arranged, which is what makes its games
-	// count. See BotSeriesRequest.Ladder.
+	// ladder marks a run the ranked pool arranged, and ranked a run whose games
+	// count: every ladder run, and a host's when they asked for one. Two flags
+	// because the pool asks the first and the board the second — see
+	// BotSeriesRequest.Ranked.
 	ladder     bool
+	ranked     bool
 	pairs      int
 	plies      int
 	seed       uint64
@@ -165,6 +168,11 @@ func (runner *botSeriesRunner) summaries() map[string]LiveGameSeries {
 			FirstWins:  run.firstWins,
 			SecondWins: run.secondWins,
 			Draws:      run.draws,
+			Pairing:    persistence.BotSeriesPairingOf(run.ladder, run.requestedBy),
+			// A ranked run is never between one owner's engines — StartBotSeries
+			// refuses that, and the pool never pairs it — so `ranked` alone is
+			// whether it counts.
+			Casual: !run.ranked,
 		}
 		run.step.Unlock()
 	}
@@ -223,19 +231,50 @@ type BotSeriesRequest struct {
 	// Privileged lifts the public ceilings and the public-play requirement. True
 	// for an administrator, and for nobody else.
 	Privileged bool
-	// Ladder marks a run the ranked pool arranged, and it is the only thing that
-	// makes an engine game count.
+	// Ladder marks a run the ranked pool arranged, and it makes the run's games
+	// count.
 	//
 	// Set by seatLadderRound and by StartLadderMatch, and by nothing else — not
-	// by a request field anybody can send, not even on an administrator's
-	// series. Those two are one rule rather than two doors: both take the
-	// opponent from the field and the conditions from the rotation, and the only
-	// difference between them is whether the hour struck or somebody pressed a
-	// button. What stays impossible is the thing the complaint was about —
-	// choosing the opponent, the mode, the clock or the length of a run and then
-	// keeping the result. None of those four is reachable from outside, which is
-	// why the flag is set from inside the server or not at all.
+	// by a request field anybody can send. Those two are one rule rather than
+	// two doors: both take the opponent from the field and the conditions from
+	// the rotation, and the only difference between them is whether the hour
+	// struck or somebody pressed a button. What stays impossible for an author
+	// is the thing the complaint was about — choosing the opponent, the mode,
+	// the clock or the length of a run and then keeping the result. None of
+	// those four is reachable from outside, which is why the flag is set from
+	// inside the server or not at all.
 	Ladder bool
+	// Ranked is the one other way an engine game counts: an administrator
+	// asking for it, on a run whose opponent, mode, clock and length they chose.
+	//
+	// That is exactly the combination Ladder keeps from an author, and it is the
+	// host's to have for the reason the ceilings are: the person the ladder
+	// answers to is not an author with an engine to promote. What it is for is
+	// the run the rotation will never arrange — fifty pairs to settle which of
+	// two engines is better, or the benchmark rungs played off against each
+	// other. Only the two administrative doors send it, and StartBotSeries
+	// refuses it without Privileged in case a third ever forgets to check.
+	//
+	// Apart from Ladder rather than folded into it, because a host's run is not
+	// a round: it does not spend an engine's hourly budget (inLadderRun), and
+	// the rounds page does not report it as the hour's results.
+	Ranked bool
+	// Chosen is the third way: a ranked match between two engines somebody
+	// named, whoever owns them. See StartRankedMatch in ladder_match.go.
+	//
+	// The person pressing does choose the opponent here, which is what Ladder
+	// refuses them. What makes that acceptable is that both engines are entered
+	// in the ranked ladder — the switch that already lets the hour seat them
+	// against anyone — and that the rest stays the rotation's: one pair, a drawn
+	// mode and clock, because being rated against somebody is not consent to be
+	// rated only at the clock their engine was tuned for. What bounds picking
+	// the opponents an engine beats is the fit's pair cap, which stops any one
+	// matchup counting for more than about twenty games.
+	//
+	// Not Ladder either, for the reason Ranked is not: the pool did not arrange
+	// it, so it spends no hourly budget and is not the hour's results. Set by
+	// StartRankedMatch and by nothing a client can send.
+	Chosen bool
 }
 
 // StartBotSeries sets up a run and plays its first game.
@@ -248,6 +287,20 @@ func (server *Server) StartBotSeries(
 	// the one who asked for the restart is the one most likely to be here.
 	if server.isUpdating() {
 		return persistence.BotSeries{}, errSeriesServerUpdating
+	}
+	if ask.Ranked && !ask.Privileged {
+		return persistence.BotSeries{}, errSeriesRankedHostOnly
+	}
+	// No ranked run starts while the pool stands down for the weekly arena,
+	// whoever asks: this is the door the round, a held pairing, a press and a
+	// host's ranked run all come through. Asked before the engines are, so a
+	// held pairing is let go the moment the stand-down begins rather than
+	// waiting for its engine to come free only to be refused then. See
+	// ladder_pause.go.
+	if ask.Ladder || ask.Ranked || ask.Chosen {
+		if refusal := server.ladderPausedFor(time.Now()); refusal != nil {
+			return persistence.BotSeries{}, refusal
+		}
 	}
 	if ask.FirstBotID == ask.SecondBotID {
 		return persistence.BotSeries{}, errSeriesSameBot
@@ -278,6 +331,12 @@ func (server *Server) StartBotSeries(
 	if first == nil || second == nil {
 		return persistence.BotSeries{}, errSeriesBotOffline
 	}
+	// Refused rather than quietly seated casual, which is what a pool run
+	// between these two would get. A host who asked for ranked and got a run
+	// that moved nothing would find out from the ladder, hours later.
+	if (ask.Ranked || ask.Chosen) && sameBotOwner(first, second) {
+		return persistence.BotSeries{}, errSeriesRankedSameOwner
+	}
 	if server.freeBotConnection(ask.FirstBotID) == nil ||
 		server.freeBotConnection(ask.SecondBotID) == nil {
 		return persistence.BotSeries{}, errSeriesBotBusy
@@ -290,7 +349,11 @@ func (server *Server) StartBotSeries(
 	if server.botIsReserved(first) || server.botIsReserved(second) {
 		return persistence.BotSeries{}, errSeriesBotReserved
 	}
-	if !ask.Privileged &&
+	// The consent a run spends. A ranked match spends the ranked-ladder switch,
+	// which its caller checked when it seated the pair from the entrants; any
+	// other run spends the public-play one.
+	rankedMatch := ask.Ladder || ask.Chosen
+	if !ask.Privileged && !rankedMatch &&
 		(!openToPublicSeries(first, ask.RequestedBy) ||
 			!openToPublicSeries(second, ask.RequestedBy)) {
 		return persistence.BotSeries{}, errSeriesBotPrivate
@@ -312,8 +375,8 @@ func (server *Server) StartBotSeries(
 		seriesID: seriesID, modeID: ask.ModeID, control: ask.Control,
 		firstBot: ask.FirstBotID, secondBot: ask.SecondBotID,
 		requestedBy: ask.RequestedBy, privileged: ask.Privileged,
-		ladder: ask.Ladder,
-		pairs:  ask.Pairs, plies: ask.OpeningPlies, seed: seed,
+		ladder: ask.Ladder, ranked: ask.Ladder || ask.Ranked || ask.Chosen,
+		pairs: ask.Pairs, plies: ask.OpeningPlies, seed: seed,
 		openings:     make(map[int][]game.Move),
 		openingSeeds: make(map[int]uint64),
 		counted:      make(map[int]bool),
@@ -348,6 +411,7 @@ func (server *Server) StartBotSeries(
 		InitialTimeMs:     ask.Control.InitialTimeMs,
 		IncrementMs:       ask.Control.IncrementMs,
 		Ladder:            ask.Ladder,
+		Ranked:            run.ranked,
 	})
 	if err != nil {
 		server.releaseSeriesBots(run)
@@ -386,7 +450,15 @@ func (server *Server) playNextSeriesGame(run *botSeries) {
 	// nowhere and reaches no ladder — but the two seatings of a pair exist to
 	// cancel the first-move advantage, and stopping between them leaves the
 	// matchup's sample one game lopsided. Finishing costs one more short game.
-	if !swapped && (server.isUpdating() || server.seriesBotIsDraining(run)) {
+	//
+	// An engine that has gone into reserve leaves the same way. Its run began
+	// before its tournament did — StartBotSeries refuses one after — and from
+	// here the event comes first. A recall takes the slot at once when a match
+	// needs it; this is for the rest, an engine sitting out a round or one with
+	// a slot to spare, which would otherwise play the whole run out alongside
+	// its own event. See bot_reserve.go.
+	if !swapped && (server.isUpdating() || server.seriesBotIsDraining(run) ||
+		server.seriesBotIsReserved(run)) {
 		server.finishBotSeries(run, persistence.BotSeriesAborted)
 		return
 	}
@@ -432,7 +504,9 @@ func (server *Server) playNextSeriesGame(run *botSeries) {
 		red, blue = second, first
 	}
 
-	// Ranked only if the ranked pool arranged this run, and casual otherwise.
+	// Ranked only if the run was started as a ranked match — the hourly round,
+	// an owner's PLAY NOW, an owner's match against an engine they named, or a
+	// host's ranked run (see BotSeriesRequest) — and casual otherwise.
 	//
 	// This used to be the other way round: an engine game was rated unless one
 	// person owned both sides. That is the rule the community complained about,
@@ -442,14 +516,15 @@ func (server *Server) playNextSeriesGame(run *botSeries) {
 	// mode, the clock and the number of pairs, so an engine that happened to be
 	// strong at one minute could be rated only ever at one minute.
 	//
-	// So a rating now comes from one shape of game: a pairing the server
-	// arranged, under conditions the server picked, against an opponent the
-	// server chose. See ladder_pool.go for the hourly one and ladder_match.go
-	// for the same thing on a button — an author may ask for it whenever they
-	// like, and still names nobody. Everything else an author can start — trying
-	// a new build against an old one, answering somebody's challenge, running a
-	// hundred games to test a change — still works and still shows up in the
-	// archive, and none of it moves a number.
+	// So a ranked match has one shape unless a host starts it: one pair,
+	// colours swapped, at a mode and clock the server draws, between two
+	// engines their owners entered in the ranked ladder. See ladder_pool.go for
+	// the hourly one and ladder_match.go for the two on a button. The opponent
+	// may be named, and what bounds picking the ones you beat is the fit's pair
+	// cap rather than this file. Everything else an author can start — trying a
+	// new build against an old one, running a hundred games to test a change —
+	// still works and still shows up in the archive, and none of it moves a
+	// number.
 	//
 	// Same-owner is still refused on top, because a pair of engines one hand
 	// controls can be made to lose to each other on purpose. The pool will not
@@ -464,7 +539,7 @@ func (server *Server) playNextSeriesGame(run *botSeries) {
 	setup := game.GameSetup{
 		ModeID:      run.modeID,
 		TimeControl: run.control,
-		Casual:      !run.ladder || sameBotOwner(first, second),
+		Casual:      !run.ranked || sameBotOwner(first, second),
 	}
 	entry := func(client *Client) QueueEntry {
 		return QueueEntry{
@@ -603,6 +678,16 @@ func (server *Server) AbortBotSeries(
 	}
 	if !privileged && (requestedBy == "" || run.requestedBy != requestedBy) {
 		return errSeriesNotYours
+	}
+	// A ranked run is played out, even by the person who asked for it: a round,
+	// a PLAY NOW, a match against a named engine. Its two games are one opening
+	// with the colours swapped, and a requester who could stop it after watching
+	// the first go badly would be choosing which half of the evidence reaches
+	// the ladder. It is two games at most. An administrator can still stop one,
+	// and an owner's own shutdown finishes the pair rather than cutting it — see
+	// playNextSeriesGame.
+	if !privileged && run.ranked {
+		return errSeriesRankedNoStop
 	}
 	server.finishBotSeries(run, persistence.BotSeriesAborted)
 	return nil
@@ -955,6 +1040,28 @@ func (server *Server) seriesBotIsDraining(run *botSeries) bool {
 		botIsDraining(server.readyBot(run.secondBot))
 }
 
+// seriesBotIsReserved reports whether either engine in a run is being held for
+// a tournament it is playing in.
+//
+// Keyed on the record's account id, the one the roster and the challenge path
+// ask with, since that is what a tournament entry records. An engine that is
+// not connected is not asked about: the run stalls for it before this matters.
+func (server *Server) seriesBotIsReserved(run *botSeries) bool {
+	for _, botID := range []string{run.firstBot, run.secondBot} {
+		client := server.readyBot(botID)
+		if client == nil {
+			continue
+		}
+		client.bot.mu.Lock()
+		userID := client.bot.record.UserID
+		client.bot.mu.Unlock()
+		if server.botReservation(userID) != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // readyBot returns a connected, handshaken slot of a bot by id.
 //
 // Any of them: the callers here want the engine's record, handshake and drain,
@@ -1069,5 +1176,25 @@ var (
 	errSeriesNotYours       = errors.New("only the person who started a series can stop it")
 	errSeriesServerUpdating = errors.New(
 		"the server is restarting for an update; try again in a minute",
+	)
+
+	// A host's ranked run, refused. The first is a visitor sending the field;
+	// the second is a pair the ladder never rates, which the form can see
+	// coming and says so beside the switch.
+	errSeriesRankedHostOnly  = errors.New("only an administrator can start a ranked series")
+	errSeriesRankedSameOwner = errors.New(
+		"one person registered both of those bots, so the ladder would not rate their games;" +
+			" start it casual",
+	)
+	// errSeriesStillRunning is a run moved between ranked and casual before it
+	// has finished. Its next game would be seated with the flag it started
+	// with, which is held in memory rather than read back.
+	errSeriesStillRunning = errors.New(
+		"that series is still being played; stop it or let it finish first",
+	)
+	// errSeriesRankedNoStop is somebody other than a host stopping a ranked
+	// run, their own included. See AbortBotSeries.
+	errSeriesRankedNoStop = errors.New(
+		"a ranked match plays both of its games; only an administrator can stop one",
 	)
 )

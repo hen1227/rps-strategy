@@ -217,7 +217,7 @@ const styles = themedSheet(() => ({
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   title: { color: colors.textFaint, fontSize: 7, fontWeight: '900', letterSpacing: 1.1 },
   more: { paddingVertical: 1, paddingHorizontal: 2 },
-  moreText: { color: colors.accentText, fontSize: 8, fontWeight: '900', letterSpacing: 0.7 },
+  moreText: { color: colors.textSoft, fontSize: 8, fontWeight: '900', letterSpacing: 0.7 },
 
   views: { flexDirection: 'row', flexWrap: 'wrap', gap: 3 },
   viewChip: {
@@ -228,9 +228,9 @@ const styles = themedSheet(() => ({
     borderColor: colors.borderSoft,
     backgroundColor: colors.surfaceSunken,
   },
-  viewChipOn: { borderColor: colors.accentBorder, backgroundColor: colors.accentSurfaceRaised },
+  viewChipOn: { borderColor: colors.borderLight, backgroundColor: colors.surfaceMuted },
   viewChipText: { color: colors.textMuted, fontSize: 8, fontWeight: '900', letterSpacing: 0.6 },
-  viewChipTextOn: { color: colors.accentTextStrong },
+  viewChipTextOn: { color: colors.textStrong },
 
   rangeRow: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   rangeLabel: {
@@ -263,9 +263,9 @@ const styles = themedSheet(() => ({
     borderColor: colors.borderSoft,
     backgroundColor: colors.surfaceSunken,
   },
-  pillOn: { borderColor: colors.accentBorder, backgroundColor: colors.accentSurface },
+  pillOn: { borderColor: colors.borderLight, backgroundColor: colors.surfaceRaised },
   pillText: { color: colors.textFaint, fontSize: 7, fontWeight: '900', letterSpacing: 0.6 },
-  pillTextOn: { color: colors.accentSoft },
+  pillTextOn: { color: colors.textStrong },
 
   hint: { color: colors.textFaint, fontSize: 8, lineHeight: 12 },
   pressed: { opacity: 0.7 },

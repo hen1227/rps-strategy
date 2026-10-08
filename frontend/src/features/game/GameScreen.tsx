@@ -1325,6 +1325,45 @@ export default function GameScreen() {
         narrowMargin: PHONE_PADDING * 2,
     });
     const compactSeriesHeader = isWatchingSeries && !isWide;
+    // A wide screen draws the series bar inside the top bar, in the room
+    // between the title and the time control that was otherwise empty. As a
+    // bar of its own underneath, it took a second strip off the top of the
+    // screen, and that strip came out of the board.
+    //
+    // Only while the whole run fits there. The bar is as wide as its games, and
+    // a run can be two games or a hundred: one that would have to scroll games
+    // out of sight, the live one among them, goes back underneath, where it has
+    // the header's whole width. There is no telling how wide a run is until it
+    // is laid out, so it is laid out, the table says how much it had to hide,
+    // and how wide the header would have to be is kept for that run. A wider
+    // window brings the bar back up; the same window never tries again, so the
+    // bar cannot flicker between the two.
+    const [headerRowWidth, setHeaderRowWidth] = useState(0);
+    const [seriesRoom, setSeriesRoom] = useState<{seriesId: string; needs: number} | null>(null);
+    const headerRow = useRef({width: 0, hidden: 0});
+    const watchedSeriesId = isWatchingSeries ? (spectateContext.series?.seriesId ?? null) : null;
+    const seriesCrowded =
+        seriesRoom !== null &&
+        seriesRoom.seriesId === watchedSeriesId &&
+        headerRowWidth < seriesRoom.needs;
+    const seriesInHeader = isWatchingSeries && isWide && !seriesCrowded;
+    // Read from both ends, because the two widths arrive as separate layout
+    // events in no particular order.
+    const keepSeriesRoom = () => {
+        const {hidden, width} = headerRow.current;
+        if (!seriesInHeader || !watchedSeriesId || width === 0 || hidden <= 1) return;
+        setSeriesRoom({seriesId: watchedSeriesId, needs: width + hidden});
+    };
+    const measureHeaderRow = (event: LayoutChangeEvent) => {
+        const measured = Math.round(event.nativeEvent.layout.width);
+        headerRow.current.width = measured;
+        setHeaderRowWidth((current) => (current === measured ? current : measured));
+        keepSeriesRoom();
+    };
+    const measureSeriesHidden = (hidden: number) => {
+        headerRow.current.hidden = hidden;
+        keepSeriesRoom();
+    };
     // A refresh arrives here with nothing in the store: the socket has to come
     // back up and the game has to be asked for again before there is a board to
     // draw. So an empty screen is two different things, and saying the wrong
@@ -1999,6 +2038,115 @@ export default function GameScreen() {
         />
     );
 
+    // The bar over a spectated board, and the three things in the top bar with
+    // it. Built once each, because a series bar on a wide screen is drawn in
+    // the same row as the other three and anything else is drawn under them.
+    // See `seriesInHeader`.
+    const spectateRail = isSpectating ? (
+        <SpectateRail
+            blueName={playerName(gameState.bluePlayer, 'Blue player')}
+            context={spectateContext}
+            currentGameId={gameState.gameId}
+            disabled={!isConnected}
+            endReason={gameState.endReason ?? null}
+            gameStatus={gameState.status}
+            inline={seriesInHeader}
+            onHiddenWidth={measureSeriesHidden}
+            onWatch={watchGame}
+            pendingGameId={spectatedGameId}
+            redName={playerName(gameState.redPlayer, 'Red player')}
+            winner={gameState.winner}
+        />
+    ) : null;
+
+    // The way out, in the corner every other page of this site keeps it in.
+    // There used to be nothing at all up here: leaving was a button on the
+    // right of the status card, which only appeared once the game was over
+    // or if you were watching, so the one screen people spend the most time
+    // on was the one screen with no navigation where they reached for it.
+    //
+    // Disabled rather than missing during your own rated game, because
+    // there is genuinely no leaving one: the app puts a player back on
+    // their live board from wherever they navigate to, so a working button
+    // here would take somebody to the lobby and bounce them straight back.
+    // Resigning or aborting is the honest way out and both are in the panel
+    // beside the board. A bot game and a shared-device game are only in
+    // this tab, so those leave freely.
+    const backLink = (
+        <BackLink
+            disabled={!canLeave}
+            hint={
+                canLeave
+                    ? undefined
+                    : 'Resign or abort to leave a game in progress.'
+            }
+            label={up.play.label}
+            onPress={returnToModes}
+        />
+    );
+    const matchIdentity = (
+        <View
+            style={[
+                styles.matchIdentity,
+                compactSeriesHeader && styles.matchIdentityCompact,
+                seriesInHeader && styles.matchIdentityBesideSeries,
+            ]}
+        >
+            <Text style={[styles.matchKicker, compactSeriesHeader && styles.matchKickerCompact]}>
+                {gameState.mode.shortCode} ·{' '}
+                {gameState.status === 'Finished'
+                    ? 'FINAL'
+                    : bot
+                        ? 'BOT GAME · UNRATED'
+                        : local
+                            ? 'LOCAL GAME · UNRATED'
+                            : isSpectating
+                                ? 'SPECTATING LIVE'
+                                : 'LIVE MATCH'}
+            </Text>
+            <Text style={[styles.modeName, compactSeriesHeader && styles.modeNameCompact]}>
+                {gameState.mode.name}
+            </Text>
+            {/*
+              The terms this game was set up with, when they are not
+              the usual ones. Players who accepted a custom game
+              should not have to remember what they agreed to.
+            */}
+            {customTerms ? (
+                <Text numberOfLines={2} style={styles.customTerms}>
+                    {customTerms}
+                </Text>
+            ) : null}
+            {/*
+              What the opening is called, while it is still
+              being played. A custom board never gets one: the
+              book is measured from the mode's own opening, and
+              a line from anywhere else is not one it knows.
+            */}
+            <OpeningBadge
+                linked={gameState.status === 'Finished'}
+                modeId={gameState.mode.id}
+                opening={opening}
+            />
+        </View>
+    );
+    const timeControl = (
+        <View
+            style={[
+                styles.timeControlBadge,
+                compactSeriesHeader && styles.timeControlBadgeCompact,
+                seriesInHeader && styles.timeControlBadgeBesideSeries,
+            ]}
+        >
+            <Text style={[styles.timeControlLabel, compactSeriesHeader && styles.timeControlLabelCompact]}>
+                {bot || local ? 'OPPONENT' : 'TIME CONTROL'}
+            </Text>
+            <Text style={styles.timeControlValue} numberOfLines={1}>
+                {bot ? bot.name : local ? 'Same device' : timeControlLabel}
+            </Text>
+        </View>
+    );
+
     return (
         <SafeAreaView
             style={styles.safeArea}
@@ -2032,99 +2180,29 @@ export default function GameScreen() {
                     <ServerBanner />
                 </View>
                 <View onLayout={measureHeader} style={styles.header}>
-                    <View style={styles.headerInner}>
-                        <View style={[styles.topBar, compactSeriesHeader && styles.topBarCompact]}>
-                            {/*
-                              The way out, in the corner every other page of this
-                              site keeps it in. There used to be nothing at all up
-                              here: leaving was a button on the right of the status
-                              card, which only appeared once the game was over or if
-                              you were watching, so the one screen people spend the
-                              most time on was the one screen with no navigation
-                              where they reached for it.
-
-                              Disabled rather than missing during your own rated
-                              game, because there is genuinely no leaving one: the
-                              app puts a player back on their live board from
-                              wherever they navigate to, so a working button here
-                              would take somebody to the lobby and bounce them
-                              straight back. Resigning or aborting is the honest way
-                              out and both are in the panel beside the board. A
-                              bot game and a shared-device game are only in this
-                              tab, so those leave freely.
-                            */}
-                            <BackLink
-                                disabled={!canLeave}
-                                hint={
-                                    canLeave
-                                        ? undefined
-                                        : 'Resign or abort to leave a game in progress.'
-                                }
-                                label={up.play.label}
-                                onPress={returnToModes}
-                            />
-                            <View style={[styles.matchIdentity, compactSeriesHeader && styles.matchIdentityCompact]}>
-                                <Text style={[styles.matchKicker, compactSeriesHeader && styles.matchKickerCompact]}>
-                                    {gameState.mode.shortCode} ·{' '}
-                                    {gameState.status === 'Finished'
-                                        ? 'FINAL'
-                                        : bot
-                                            ? 'BOT GAME · UNRATED'
-                                            : local
-                                                ? 'LOCAL GAME · UNRATED'
-                                                : isSpectating
-                                                    ? 'SPECTATING LIVE'
-                                                    : 'LIVE MATCH'}
-                                </Text>
-                                <Text style={[styles.modeName, compactSeriesHeader && styles.modeNameCompact]}>
-                                    {gameState.mode.name}
-                                </Text>
-                                {/*
-                                  The terms this game was set up with, when they are not
-                                  the usual ones. Players who accepted a custom game
-                                  should not have to remember what they agreed to.
-                                */}
-                                {customTerms ? (
-                                    <Text numberOfLines={2} style={styles.customTerms}>
-                                        {customTerms}
-                                    </Text>
-                                ) : null}
-                                {/*
-                                  What the opening is called, while it is still
-                                  being played. A custom board never gets one: the
-                                  book is measured from the mode's own opening, and
-                                  a line from anywhere else is not one it knows.
-                                */}
-                                <OpeningBadge
-                                    linked={gameState.status === 'Finished'}
-                                    modeId={gameState.mode.id}
-                                    opening={opening}
-                                />
+                    {/*
+                      Slots rather than two layouts, so the series bar keeps its
+                      place in the tree when it moves between them: the bar
+                      fetches its run's games when it mounts, and moving it into
+                      a different parent would mount a new one and fetch them
+                      again. Nothing else here holds any state, so the rest is
+                      simply drawn again in its other place.
+                    */}
+                    <View
+                        onLayout={measureHeaderRow}
+                        style={[styles.headerInner, seriesInHeader && styles.headerInnerOneLine]}
+                    >
+                        {!seriesInHeader && (
+                            <View style={[styles.topBar, compactSeriesHeader && styles.topBarCompact]}>
+                                {backLink}
+                                {matchIdentity}
+                                {timeControl}
                             </View>
-                            <View style={[styles.timeControlBadge, compactSeriesHeader && styles.timeControlBadgeCompact]}>
-                                <Text style={[styles.timeControlLabel, compactSeriesHeader && styles.timeControlLabelCompact]}>
-                                    {bot || local ? 'OPPONENT' : 'TIME CONTROL'}
-                                </Text>
-                                <Text style={styles.timeControlValue} numberOfLines={1}>
-                                    {bot ? bot.name : local ? 'Same device' : timeControlLabel}
-                                </Text>
-                            </View>
-                        </View>
-
-                        {isSpectating && (
-                            <SpectateRail
-                                blueName={playerName(gameState.bluePlayer, 'Blue player')}
-                                context={spectateContext}
-                                currentGameId={gameState.gameId}
-                                disabled={!isConnected}
-                                endReason={gameState.endReason ?? null}
-                                gameStatus={gameState.status}
-                                onWatch={watchGame}
-                                pendingGameId={spectatedGameId}
-                                redName={playerName(gameState.redPlayer, 'Red player')}
-                                winner={gameState.winner}
-                            />
                         )}
+                        {seriesInHeader && backLink}
+                        {seriesInHeader && matchIdentity}
+                        {spectateRail}
+                        {seriesInHeader && timeControl}
                     </View>
                 </View>
             </SafeAreaView>
@@ -2428,6 +2506,9 @@ const styles = themedSheet(() => ({
         paddingVertical: 7,
         paddingHorizontal: 14,
     },
+    // The top bar and the series bar as one row: the top bar's own spacing,
+    // with the series bar between the title and the time control.
+    headerInnerOneLine: {flexDirection: 'row', alignItems: 'center', gap: 11},
     topBar: {
         minHeight: 47,
         flexDirection: 'row',
@@ -2440,6 +2521,13 @@ const styles = themedSheet(() => ({
     // time-control badge.
     matchIdentity: {flex: 1, minWidth: 0, paddingRight: 10},
     matchIdentityCompact: {paddingRight: 0},
+    // Beside the series bar, the slack is still the title's, but the title is
+    // no longer the only thing that can give. Without a floor it gave first:
+    // the bar's width counts in full before the title's does, so on a narrow
+    // window the mode name broke mid-word. With one, the bar is what gives,
+    // and a bar that has to give goes back underneath — see `seriesInHeader`.
+    // Wide enough for a mode name on one line.
+    matchIdentityBesideSeries: {minWidth: 150},
     matchKicker: {
         color: colors.accentBright,
         fontSize: 8,
@@ -2461,6 +2549,9 @@ const styles = themedSheet(() => ({
         backgroundColor: colors.surface,
     },
     timeControlBadgeCompact: {minWidth: 72, paddingHorizontal: 8, paddingVertical: 5},
+    // As tall as the series bar beside it, so the two read as a pair of tiles
+    // rather than a large box and a small one.
+    timeControlBadgeBesideSeries: {alignSelf: 'stretch', justifyContent: 'center'},
     timeControlLabel: {
         color: colors.textFaint,
         fontSize: 7,

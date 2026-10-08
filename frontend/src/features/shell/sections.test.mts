@@ -75,11 +75,17 @@ test('a page underneath one draws its own, and so does a page outside the shell'
 });
 
 test('a row that is gated off gives its page the way out back', () => {
-  // The registry is listed once Discord has vouched for the account, and until
-  // then the page is reachable only from a link — so it carries a trail.
+  // The registry is listed once somebody is signed in — with Discord or with
+  // Apple, both of which can own bots — and until then the page is reachable
+  // only from a link, so it carries a trail.
   assert.equal(listedInNav('/account/bots', GUEST), false);
-  assert.equal(listedInNav('/account/bots', at(0, { discordVerified: false })), false);
-  assert.equal(listedInNav('/account/bots', at(0, { discordVerified: true })), true);
+  assert.equal(listedInNav('/account/bots', at(0, { registered: false })), false);
+  assert.equal(listedInNav('/account/bots', at(0, { registered: true })), true);
+  assert.equal(
+    listedInNav('/account/bots', at(0, { registered: true, discordVerified: false })),
+    true,
+    'an account that signs in with Apple owns bots too',
+  );
 });
 
 test('the official event is a row while there is an event', () => {

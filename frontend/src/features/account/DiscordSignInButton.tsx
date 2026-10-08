@@ -65,8 +65,9 @@ export default function DiscordSignInButton({
 }
 
 const styles = themedSheet(() => ({
-  // Carries the fill through a row parent, which stretches neither this nor the
-  // button inside it on its own.
-  wrapper: { flexGrow: 1, flexBasis: '100%' },
+  // The full width of whatever it is dropped into. A width, not a flex basis:
+  // every caller is a column, where a 100% basis is a height, and it made the
+  // button as tall as the panel it sat in. See buttonFullWidth in primitives.
+  wrapper: { width: '100%' },
   unavailable: { color: colors.textMuted, fontSize: 12, lineHeight: 18, marginTop: 8 },
 }));

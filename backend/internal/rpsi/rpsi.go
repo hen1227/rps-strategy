@@ -26,8 +26,9 @@ const ProtocolVersion = 1
 // The FEN is the board the game was actually played from, taken from the
 // record rather than from the mode's present-day opening, because a mode's
 // starting layout can be redesigned and games can begin from a position a
-// player chose. The full move list follows because it is the only way an
-// engine can see a threefold repetition coming — the FEN carries no history.
+// player chose. The full move list follows because the FEN carries no history
+// and no counters: replaying the moves is the only way an engine can know how
+// close the game is to the no-capture draw.
 func PositionCommand(record game.Record) string {
 	startingFEN := notation.EncodeStartingPosition(record.StartingPosition())
 	if record.InitialPosition != nil {

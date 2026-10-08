@@ -161,6 +161,15 @@ export interface ThemeSpec {
   };
   accent: {
     accent: string;
+    /**
+     * Letters on the accent fill: the label of every primary button.
+     *
+     * Authored rather than borrowed from `textInverse`, because the two answer
+     * different questions on a light preset — the inverse of dark ink is pale,
+     * and pale letters sink into a mid-tone green. Every preset's accent is a
+     * fill light enough that dark letters are the ones that clear 4.5:1.
+     */
+    onAccent: string;
     accentBright: string;
     accentSoft: string;
     accentText: string;

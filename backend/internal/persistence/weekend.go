@@ -154,6 +154,10 @@ type WeekendConfig struct {
 	// the event is a Swiss, which is the right tool for a big field rather than
 	// a truncated round robin.
 	RoundRobinMax int `json:"roundRobinMax"`
+	// SwissRounds is how many rounds that Swiss plays, capped at one fewer than
+	// the field. Zero is the shortest Swiss the tournament code derives, about
+	// log2 of the field.
+	SwissRounds int `json:"swissRounds"`
 	// PollEnabled turns the clock ballot on. Off, every weekend plays
 	// DefaultControl.
 	PollEnabled    bool   `json:"pollEnabled"`
@@ -196,10 +200,14 @@ func DefaultWeekendConfig() WeekendConfig {
 		PollClosesMinutes: 60,
 		GamesPerMatch:     2,
 		RoundRobinMax:     10,
-		PollEnabled:       true,
-		DefaultControl:    "3+1",
-		MinimumVotes:      3,
-		GraceSeconds:      90,
+		// Seven rather than the derived length. That gave nine engines four
+		// rounds, so none met more than half the field, and the table ended with
+		// two engines level at the top and four level below them.
+		SwissRounds:    7,
+		PollEnabled:    true,
+		DefaultControl: "3+1",
+		MinimumVotes:   3,
+		GraceSeconds:   90,
 	}
 }
 
@@ -242,6 +250,9 @@ CREATE TABLE IF NOT EXISTS nightly_votes (
 		return err
 	}
 	if err := store.ensureWeekendAvailabilitySchema(ctx); err != nil {
+		return err
+	}
+	if err := store.ensureWeekendRoundsColumn(ctx); err != nil {
 		return err
 	}
 
@@ -320,6 +331,29 @@ func (store *Store) ensureWeekendScheduleColumns(ctx context.Context) error {
 		); err != nil {
 			return fmt.Errorf("add weekend column %s: %w", column.name, err)
 		}
+	}
+	return nil
+}
+
+// ensureWeekendRoundsColumn adds the Swiss length, which the arena used to leave
+// to the tournament code's derived default.
+//
+// The column default is DefaultWeekendConfig's, so the row a server already has
+// takes the longer event on its first boot. A host who wants the short one back
+// sets zero.
+func (store *Store) ensureWeekendRoundsColumn(ctx context.Context) error {
+	columns, err := tableColumns(ctx, store.db, "nightly_config")
+	if err != nil {
+		return fmt.Errorf("inspect weekend config schema: %w", err)
+	}
+	if columns["swiss_rounds"] {
+		return nil
+	}
+	if _, err := store.db.ExecContext(ctx, fmt.Sprintf(
+		"ALTER TABLE nightly_config ADD COLUMN swiss_rounds INTEGER NOT NULL DEFAULT %d",
+		DefaultWeekendConfig().SwissRounds,
+	)); err != nil {
+		return fmt.Errorf("add weekend column swiss_rounds: %w", err)
 	}
 	return nil
 }
@@ -452,14 +486,14 @@ func (store *Store) WeekendConfiguration(ctx context.Context) (WeekendConfig, er
 	err := store.db.QueryRowContext(ctx, `
 SELECT enabled, zone, start_local, start_day, window_opens_day, window_opens_hour,
        mode_id, minimum_field, doors_minutes, poll_closes_minutes, games_per_match,
-       round_robin_max, poll_enabled, default_control, minimum_votes, grace_seconds,
-       skip_date, last_run_date, updated_at_unix_ms
+       round_robin_max, swiss_rounds, poll_enabled, default_control, minimum_votes,
+       grace_seconds, skip_date, last_run_date, updated_at_unix_ms
 FROM nightly_config WHERE id = 1
 `).Scan(
 		&enabled, &config.Zone, &config.StartLocal, &config.StartDay,
 		&config.WindowOpensDay, &config.WindowOpensHour, &modeID,
 		&config.MinimumField, &config.DoorsMinutes, &config.PollClosesMinutes,
-		&config.GamesPerMatch, &config.RoundRobinMax, &pollEnabled,
+		&config.GamesPerMatch, &config.RoundRobinMax, &config.SwissRounds, &pollEnabled,
 		&config.DefaultControl, &config.MinimumVotes, &config.GraceSeconds,
 		&config.SkipDate, &config.LastRunDate, &config.UpdatedAtUnixMs,
 	)
@@ -533,6 +567,9 @@ func (store *Store) SaveWeekendConfiguration(
 	config.PollClosesMinutes = clamp(config.PollClosesMinutes, 0, config.DoorsMinutes)
 	config.GamesPerMatch = normalizeGamesPerMatch(config.GamesPerMatch)
 	config.RoundRobinMax = clamp(config.RoundRobinMax, 2, 64)
+	// The same ceiling the tournament builder has. swissRoundCount caps it again
+	// at one fewer than whatever field turns up.
+	config.SwissRounds = clamp(config.SwissRounds, 0, 32)
 	config.MinimumVotes = clamp(config.MinimumVotes, 0, 1000)
 	config.GraceSeconds = clamp(config.GraceSeconds, 0, 15*60)
 	// A start outside the window is dragged to the nearer end of it rather than
@@ -546,8 +583,8 @@ UPDATE nightly_config SET
     enabled = ?, zone = ?, start_local = ?, start_day = ?, window_opens_day = ?,
     window_opens_hour = ?, days = ?, mode_id = ?, minimum_field = ?,
     doors_minutes = ?, poll_closes_minutes = ?, games_per_match = ?,
-    round_robin_max = ?, poll_enabled = ?, default_control = ?, minimum_votes = ?,
-    grace_seconds = ?, skip_date = ?, updated_at_unix_ms = ?
+    round_robin_max = ?, swiss_rounds = ?, poll_enabled = ?, default_control = ?,
+    minimum_votes = ?, grace_seconds = ?, skip_date = ?, updated_at_unix_ms = ?
 WHERE id = 1
 `,
 		boolToInt(config.Enabled), strings.TrimSpace(config.Zone),
@@ -561,7 +598,8 @@ WHERE id = 1
 		strconv.Itoa(config.StartDay),
 		string(config.ModeID), config.MinimumField, config.DoorsMinutes,
 		config.PollClosesMinutes, config.GamesPerMatch, config.RoundRobinMax,
-		boolToInt(config.PollEnabled), config.DefaultControl, config.MinimumVotes,
+		config.SwissRounds, boolToInt(config.PollEnabled), config.DefaultControl,
+		config.MinimumVotes,
 		config.GraceSeconds, config.SkipDate, time.Now().UnixMilli(),
 	); err != nil {
 		return WeekendConfig{}, fmt.Errorf("save weekend config: %w", err)

@@ -164,6 +164,14 @@ func (server *Server) getAdminSession(writer http.ResponseWriter, _ *http.Reques
 }
 
 func (server *Server) startTournament(writer http.ResponseWriter, request *http.Request) {
+	// An arena taking entries has a start of its own, so START on one is that,
+	// done early. See startWeekendByHand.
+	if open, err := server.data.OpenWeekend(request.Context()); err == nil &&
+		open.TournamentID == strings.TrimSpace(request.PathValue("tournamentID")) &&
+		open.Status == persistence.TournamentRegistration {
+		server.startWeekendByHand(writer, request, open)
+		return
+	}
 	tournament, err := server.data.StartTournament(
 		request.Context(),
 		request.PathValue("tournamentID"),

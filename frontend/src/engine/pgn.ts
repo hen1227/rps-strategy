@@ -739,8 +739,13 @@ export const encodePGN = ({
   return `${header}\n\n${wrapTokens(tokens)}\n`;
 };
 
-/** The `BoardSize` tag: one number for a square board, `WxH` for anything else. */
-const boardSizeTag = (grid: Grid) => {
+/**
+ * The `BoardSize` tag: one number for a square board, `WxH` for anything else.
+ *
+ * Taken from the board rather than written as `9`, so it cannot disagree with
+ * the `FEN` beside it, which is what a reader actually replays.
+ */
+export const boardSizeTag = (grid: Grid) => {
   const columns = grid[0]?.length ?? 0;
   const rows = grid.length;
   return columns === rows ? String(rows) : `${columns}x${rows}`;

@@ -8,6 +8,7 @@ import type {
   TournamentMatch,
   TournamentMatchState,
   TournamentPlayer,
+  TournamentStanding,
   TournamentStatus,
 } from '@/types/protocol';
 
@@ -25,7 +26,7 @@ export const TOURNAMENT_STATUS: Record<TournamentStatus, StatusBadge> = {
   registration: { label: 'REGISTRATION OPEN', tone: 'accent' },
   in_progress: { label: 'IN PROGRESS', tone: 'warm' },
   completed: { label: 'COMPLETE', tone: 'cool' },
-  cancelled: { label: 'CANCELLED', tone: 'live' },
+  cancelled: { label: 'CANCELLED', tone: 'danger' },
 };
 
 /**
@@ -348,9 +349,63 @@ export const currentTournaments = (
     (tournament) => tournament.status !== 'completed' && !isWeekendArena(tournament),
   );
 
-/** Who won, when an event has finished and anybody played in it. */
-export const championOf = (tournament: Tournament): string | null =>
-  tournament.status === 'completed' ? tournament.standings?.[0]?.ign ?? null : null;
+/**
+ * Everybody the table ranks first.
+ *
+ * More than one when the top is shared: the server gives entrants level on
+ * points the same rank, so two engines on ten points are both first rather
+ * than first and second in signup order.
+ */
+export const leadersOf = (
+  tournament: Tournament | null | undefined,
+): TournamentStanding[] =>
+  (tournament?.standings ?? []).filter((row) => row.rank === 1);
+
+/** Whether anybody else in the table holds this row's rank. */
+export const isTiedStanding = (
+  tournament: Tournament | null | undefined,
+  standing: TournamentStanding,
+): boolean =>
+  (tournament?.standings ?? []).some(
+    (row) => row.rank === standing.rank && row.playerId !== standing.playerId,
+  );
+
+/**
+ * Whether the table says anything yet: a match decided, or a bye awarded.
+ *
+ * Before that every entrant is level on nothing and shares first place, which
+ * is true and not worth printing down the whole column.
+ */
+export const tableHasResults = (tournament: Tournament | null | undefined) =>
+  (tournament?.standings ?? []).some(
+    (row) => row.played > 0 || (row.byes ?? 0) > 0,
+  );
+
+/** A rank as a table prints it: "T4" for a shared fourth, a dash before any results. */
+export const rankLabel = (
+  tournament: Tournament | null | undefined,
+  standing: TournamentStanding,
+): string => {
+  if (!tableHasResults(tournament)) return '–';
+  return `${isTiedStanding(tournament, standing) ? 'T' : ''}${standing.rank}`;
+};
+
+/** Names as a sentence lists them: "Ada & Grace", "Ada, Grace & 2 others". */
+export const joinNames = (names: readonly string[], limit = 3): string => {
+  if (names.length <= 1) return names[0] ?? '';
+  if (names.length > limit) {
+    const shown = names.slice(0, limit - 1);
+    return `${shown.join(', ')} & ${names.length - shown.length} others`;
+  }
+  return `${names.slice(0, -1).join(', ')} & ${names[names.length - 1]}`;
+};
+
+/** Who won, when an event has finished: everybody level at the top. */
+export const championOf = (tournament: Tournament): string | null => {
+  if (tournament.status !== 'completed') return null;
+  const winners = leadersOf(tournament);
+  return winners.length > 0 ? joinNames(winners.map((row) => row.ign)) : null;
+};
 
 /**
  * The account behind an entrant, addressed the way a player page wants it.

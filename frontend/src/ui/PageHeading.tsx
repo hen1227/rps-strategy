@@ -59,7 +59,7 @@ const styles = themedSheet(() => ({
   header: { gap: space.small },
   titleRow: { flexDirection: 'row', alignItems: 'flex-end', gap: space.small },
   copy: { flex: 1, minWidth: 0 },
-  eyebrow: { ...type.eyebrow, color: colors.accent, marginBottom: space.hair },
+  eyebrow: { ...type.eyebrow, color: colors.textFaint, marginBottom: space.hair },
   title: { ...type.screenTitle, color: colors.textStrong, letterSpacing: -0.4 },
   detail: { ...type.body, color: colors.textMuted, maxWidth: 620 },
 }));

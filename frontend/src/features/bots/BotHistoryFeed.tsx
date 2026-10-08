@@ -1,20 +1,25 @@
 import { useRouter } from 'expo-router';
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 
 import BotSeriesCard from './BotSeriesCard';
+import OccasionTag from './OccasionTag';
 import { relativeTime } from './relativeTime';
+import { singleGameOccasion, tournamentOccasion } from './seriesSummary';
 import { failureMessage } from '@/errors';
 import ResultLine from '@/features/game/ResultLine';
-import { useWideScreen } from '@/hooks/useBoardLayout';
 import { useOpenGame } from '@/hooks/useOpenGame';
-import { gameReviewURL, links } from '@/navigation/links';
+import { links } from '@/navigation/links';
 import { botMatches, listBotSeries, type BotMatch, type BotSeries } from '@/store/api/bots';
 import { listTournaments } from '@/store/api/tournaments';
 import { useGameStore } from '@/store/gameStore';
-import { colors, space, themedSheet, type } from '@/theme';
-import CopyLinkButton from '@/ui/CopyLinkButton';
-import ListRow from '@/ui/ListRow';
+import {
+  isWeekendArena,
+  joinNames,
+  leadersOf,
+  tableHasResults,
+} from '@/store/tournamentSelectors';
+import { colors, radius, space, themedSheet, type } from '@/theme';
 import {
   Badge,
   Banner,
@@ -47,18 +52,25 @@ import type { Tournament } from '@/types/protocol';
 // difference between the two is a filter, and a second copy would be a second
 // place for "what counts as bot history" to be decided.
 //
-// Every occasion in it carries its own address, because a feed is where somebody
-// looks for the game they want to *send*: a run links to its own page and copies
-// a link to it, and a bot game that belongs to no run copies a link to its
-// review. None of those addresses are built here — they come from `links.ts`,
-// which is the only thing that knows what a page is called.
+// Every occasion in it links to its own page — a run's, an event's, a lone
+// game's review — which is where its address is copied from. One quiet link a
+// card: a feed is a column of these, and a green button on every one is a
+// column of primary actions. None of those addresses are built here — they
+// come from `links.ts`, which is the only thing that knows what a page is called.
 
 /** How long the feed can go without being wrong about a running series. */
 const REFRESH_MS = 20_000;
 
 type FeedEntry =
   | { kind: 'series'; at: number; key: string; series: BotSeries }
-  | { kind: 'tournament'; at: number; key: string; tournament: Tournament; games: number }
+  | {
+      kind: 'tournament';
+      at: number;
+      key: string;
+      tournament: Tournament;
+      /** Any of its games counted. See `tournamentOccasion`. */
+      ranked: boolean;
+    }
   | { kind: 'game'; at: number; key: string; match: BotMatch };
 
 /**
@@ -104,11 +116,6 @@ export default function BotHistoryFeed({
   title = 'What the bots have been playing',
 }: BotHistoryFeedProps) {
   const router = useRouter();
-  // On a phone the two buttons go under the row rather than beside it, the same
-  // way an account's own history stacks them: at 390 points a result line
-  // squeezed past both truncates to "Kestrel beat Ang…", which is the only thing
-  // the row is for.
-  const wide = useWideScreen();
   // A run in this feed can be one somebody is playing right now, so its live
   // column has to open the board rather than a record the archive does not have
   // yet. The lobby's list is what tells them apart.
@@ -201,7 +208,9 @@ export default function BotHistoryFeed({
         at: Math.max(...played.map((match) => match.finishedAtUnixMs)),
         key: `t:${tournamentId}`,
         tournament,
-        games: played.length,
+        // Per game rather than per event: an event's games are rated unless
+        // an entrant is barred from ranked play, and then only theirs are not.
+        ranked: played.some((match) => match.ranked),
       });
     }
     for (const match of loose) {
@@ -254,21 +263,17 @@ export default function BotHistoryFeed({
             if (entry.kind === 'tournament') {
               return (
                 <TournamentEntry
-                  games={entry.games}
                   key={entry.key}
                   onOpen={() =>
                     router.push(links.tournaments(entry.tournament.tournamentId))
                   }
+                  ranked={entry.ranked}
                   tournament={entry.tournament}
                   when={relativeTime(entry.at)}
                 />
               );
             }
-            return (
-              <View key={entry.key} style={styles.looseRow}>
-                <GameEntry match={entry.match} when={relativeTime(entry.at)} wide={wide} />
-              </View>
-            );
+            return <GameEntry key={entry.key} match={entry.match} when={relativeTime(entry.at)} />;
           })}
         </View>
       )}
@@ -279,87 +284,97 @@ export default function BotHistoryFeed({
 interface GameEntryProps {
   match: BotMatch;
   when: string;
-  wide: boolean;
 }
 
-// A bot game that belonged to no run and no event: one row, in its place in the
-// order, with the two things a row about a stored game can offer — the review,
-// and the address of that review for somebody who is not here.
-function GameEntry({ match, when, wide }: GameEntryProps) {
+// A bot game that belonged to no run and no event: one card, in its place in
+// the order, with the review it can be read back in.
+function GameEntry({ match, when }: GameEntryProps) {
   const between = `${match.redPlayer.username} versus ${match.bluePlayer.username}`;
-  const actions = (
-    <View style={[styles.actions, !wide && styles.actionsStacked]}>
-      <CopyLinkButton
-        accessibilityLabel={`Copy a link to ${between}`}
-        url={gameReviewURL(match.gameId)}
-      />
-      <GhostLink
-        accessibilityLabel={`Review ${between}`}
-        compact
-        href={links.review(match.gameId)}
-        label="REVIEW"
-      />
-    </View>
-  );
-
   return (
-    <ListRow
-      detail={wide ? undefined : actions}
-      divided={false}
-      meta={`${match.modeName} · ${match.moveNumber} moves · ${when}`}
-      style={wide ? undefined : styles.rowStacked}
-      title={<ResultLine record={match} />}
-      trailing={wide ? actions : undefined}
-    />
+    <View style={styles.entryCard}>
+      <View style={styles.entryHeader}>
+        <OccasionTag occasion={singleGameOccasion(match.ranked)} />
+        <Text style={styles.entryWhen}>{when}</Text>
+      </View>
+      <ResultLine record={match} />
+      <Text style={styles.entryMeta}>{match.modeName}</Text>
+      <View style={styles.entryLinks}>
+        <GhostLink
+          accessibilityLabel={`Review ${between}`}
+          compact
+          href={links.review(match.gameId)}
+          label="REVIEW ›"
+        />
+      </View>
+    </View>
   );
 }
 
 interface TournamentEntryProps {
   tournament: Tournament;
-  games: number;
+  ranked: boolean;
   when: string;
   onOpen: () => void;
 }
+
+/** An event's state in the feed's own words, so it reads beside a run's. */
+const eventStatus = (status: string): { label: string; tone: 'live' | 'neutral' | 'danger' } => {
+  switch (status) {
+    case 'in_progress':
+      return { label: 'LIVE', tone: 'live' };
+    case 'completed':
+      return { label: 'FINISHED', tone: 'neutral' };
+    case 'cancelled':
+      return { label: 'CANCELLED', tone: 'danger' };
+    default:
+      return { label: 'OPEN', tone: 'neutral' };
+  }
+};
 
 // An event, summarised rather than listed.
 //
 // A round robin between eight engines is twenty-eight games, and drawing those
 // here would push every other occasion off the page. What belongs here is what
-// the event *was* — who is leading it, how far along it is — with the games
-// themselves a click away on the page that already draws them properly.
-function TournamentEntry({ games, onOpen, tournament, when }: TournamentEntryProps) {
-  const status = String(tournament.status).toLowerCase();
-  const leader = tournament.standings?.[0];
-  const played = tournament.matches?.filter((match) => match.result !== 'pending').length ?? 0;
-  const total = tournament.matches?.length ?? 0;
+// the event *was* — which kind, who is leading it, how far along it is — with
+// the games themselves a click away on the page that already draws them.
+function TournamentEntry({ onOpen, ranked, tournament, when }: TournamentEntryProps) {
+  const status = eventStatus(String(tournament.status).toLowerCase());
+  // Everybody level at the top, and nobody before a result: at the start the
+  // whole field is level on nothing, which is not a lead.
+  const leaders = tableHasResults(tournament) ? leadersOf(tournament) : [];
+  const leader = leaders[0];
+  const finished = status.label === 'FINISHED';
 
   return (
-    <View style={styles.tournamentCard}>
-      <View style={styles.tournamentHeader}>
-        <Text numberOfLines={1} style={styles.tournamentName}>
-          {tournament.name}
-        </Text>
-        <Badge
-          label={status === 'completed' ? 'COMPLETED' : status.toUpperCase()}
-          tone={status === 'in_progress' ? 'live' : status === 'completed' ? 'accent' : 'neutral'}
-        />
+    <View style={[styles.entryCard, styles.tournamentCard]}>
+      <View style={styles.entryHeader}>
+        <OccasionTag occasion={tournamentOccasion(isWeekendArena(tournament), ranked)} />
+        <View style={styles.entryStatus}>
+          <Badge label={status.label} tone={status.tone} />
+          <Text style={styles.entryWhen}>{when}</Text>
+        </View>
       </View>
-      <Text style={styles.tournamentMeta}>
-        {tournament.modeName} · {tournament.players?.length ?? 0} entrants ·{' '}
-        {total > 0 ? `${played} of ${total} matches` : `${games} bot games`} · {when}
+      <Text numberOfLines={1} style={styles.tournamentName}>
+        {tournament.name}
+      </Text>
+      <Text style={styles.entryMeta}>
+        {tournament.modeName} · {tournament.players?.length ?? 0} entrants
       </Text>
       {leader ? (
         <Text style={styles.tournamentLeader}>
-          {status === 'completed' ? 'Won by' : 'Leading'} {leader.ign} · {leader.points} pts
-          {' · '}
-          {leader.wins}W {leader.losses}L {leader.draws}D
+          {finished ? 'Won by' : 'Leading'} {joinNames(leaders.map((row) => row.ign))}
+          {/* A knockout's survivors share first on rounds rather than points,
+              so a shared lead only quotes a score when it is the same one. */}
+          {leaders.length === 1 || leaders.every((row) => row.points === leader.points)
+            ? ` · ${leader.points} pts`
+            : ''}
         </Text>
       ) : null}
-      <View style={styles.tournamentActions}>
+      <View style={styles.entryLinks}>
         <GhostButton
           accessibilityLabel={`Open ${tournament.name}`}
           compact
-          label="EVENT DETAILS ›"
+          label="VIEW EVENT ›"
           onPress={onOpen}
         />
       </View>
@@ -371,29 +386,37 @@ const styles = themedSheet(() => ({
   help: { ...type.body, color: colors.textFaint, marginTop: space.small },
   feed: { gap: space.small, marginTop: space.medium },
 
-  actions: { flexDirection: 'row', alignItems: 'center', gap: space.snug },
-  actionsStacked: { marginTop: space.small, marginBottom: space.tight, flexWrap: 'wrap' },
-  rowStacked: { alignItems: 'flex-start', paddingTop: space.snug },
-
-  looseRow: {
-    paddingHorizontal: space.medium,
-    borderWidth: 1,
-    borderColor: colors.borderSoft,
-    borderRadius: 10,
-    backgroundColor: colors.surfaceWell,
-  },
-
-  tournamentCard: {
-    gap: space.snug,
+  // The run card's shape, so an event and a lone game sit in the feed as the
+  // same kind of thing as the runs around them.
+  entryCard: {
+    gap: space.small,
     padding: space.medium,
     borderWidth: 1,
-    borderColor: colors.goldBorder,
-    borderRadius: 10,
-    backgroundColor: colors.goldSurfaceDeep,
+    borderColor: colors.borderSoft,
+    borderRadius: radius.medium,
+    backgroundColor: colors.surfaceWell,
   },
-  tournamentHeader: { flexDirection: 'row', alignItems: 'center', gap: space.snug },
-  tournamentName: { ...type.cardTitle, color: colors.goldSoft, flexShrink: 1, minWidth: 0 },
-  tournamentMeta: { ...type.meta, color: colors.goldMuted },
+  entryHeader: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    columnGap: space.medium,
+    rowGap: space.snug,
+  },
+  entryStatus: { flexDirection: 'row', alignItems: 'center', gap: space.snug },
+  entryWhen: { ...type.meta, color: colors.textFaint },
+  entryMeta: { ...type.meta, color: colors.textFaint },
+  entryLinks: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+    gap: space.snug,
+  },
+
+  // An event is a prize, and gold is the colour this app keeps for one.
+  tournamentCard: { borderColor: colors.goldBorder, backgroundColor: colors.goldSurfaceDeep },
+  tournamentName: { ...type.cardTitle, color: colors.goldSoft, minWidth: 0 },
   tournamentLeader: { ...type.body, color: colors.textSoft },
-  tournamentActions: { flexDirection: 'row', marginTop: space.hair },
 }));

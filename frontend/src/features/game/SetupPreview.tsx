@@ -272,10 +272,10 @@ const styles = themedSheet(() => ({
   bulletCard: { gap: space.small },
   icon: { ...type.label, color: colors.textFaint, width: 10, textAlign: 'center' },
   iconCard: { fontSize: 12, width: 14 },
-  iconCustom: { color: colors.accentSoft },
+  iconCustom: { color: colors.textStrong },
   label: { ...type.meta, flex: 1, fontSize: 9, lineHeight: 12, color: colors.textFaint },
   labelCard: { ...type.body, flex: 1, minWidth: 0, color: colors.textMuted },
-  labelCustom: { color: colors.accentText, fontWeight: '700' },
+  labelCustom: { color: colors.textStrong, fontWeight: '700' },
 
   caption: {
     ...type.meta,

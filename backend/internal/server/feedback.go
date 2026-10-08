@@ -25,13 +25,15 @@ import (
 // there, answered — and that person is not signed in, because they arrived
 // five minutes ago and something broke.
 //
-// Writing takes a Discord-verified account, which is a higher bar than anything
-// else a player can do here: chat needs only a browser, and a report needs
-// nothing at all. The difference is that a report is read once by one person
-// and a post is read by everybody, forever, and carries a tally that decides
-// what gets fixed first. Every browser that opens this site owns an account
-// already, so anything short of Discord would make the vote count a measure of
-// how many times somebody cleared their cookies.
+// Writing takes an account Discord or Apple has vouched for, which is a higher
+// bar than anything else a player can do here: chat needs only a browser, and
+// a report needs nothing at all. The difference is that a report is read once
+// by one person and a post is read by everybody, forever, and carries a tally
+// that decides what gets fixed first. Every browser that opens this site owns
+// an account already, so anything short of a provider's word would make the
+// vote count a measure of how many times somebody cleared their cookies. An
+// Apple ID costs as much to make as a Discord account, so either clears it; the
+// last of the password accounts do not, until they link one.
 //
 // The bar is also the reason the refusals below name the page that clears it.
 // "Sign in" is not an instruction when the player is already signed in.
@@ -56,8 +58,8 @@ const (
 
 /* ----------------------------------------------------------- who is asking -- */
 
-// requireVerifiedAccount resolves a Discord-verified account, writing the
-// refusal itself and returning false when there is not one.
+// requireVerifiedAccount resolves an account with a linked sign-in — Discord or
+// Apple — writing the refusal itself and returning false when there is not one.
 //
 // Three different refusals rather than one, because they need three different
 // things done about them and a single "you may not post" leaves the player
@@ -71,10 +73,15 @@ func (server *Server) requireVerifiedAccount(
 	if !ok {
 		return persistence.Account{}, false
 	}
-	if !account.DiscordVerified {
+	linked, err := server.data.AccountHoldsIdentity(request.Context(), account.UserID)
+	if err != nil {
+		writePersistenceError(writer, err)
+		return persistence.Account{}, false
+	}
+	if !linked {
 		writeAPIError(
 			writer, http.StatusForbidden,
-			"verify your account with Discord before you can "+what,
+			"link Discord or Apple to your account before you can "+what,
 		)
 		return persistence.Account{}, false
 	}
@@ -175,12 +182,13 @@ func (server *Server) feedbackPolicy(writer http.ResponseWriter, request *http.R
 		})
 	}
 
-	mayPost, refusal := false, "sign in with Discord to post on the board"
+	mayPost, refusal := false, "sign in to post on the board"
 	if account, ok := server.optionalSession(request); ok {
 		muted := server.mutedRefusal(account.UserID, "post on the board")
+		linked, err := server.data.AccountHoldsIdentity(request.Context(), account.UserID)
 		switch {
-		case !account.DiscordVerified:
-			refusal = "verify your account with Discord to post on the board"
+		case err != nil || !linked:
+			refusal = "link Discord or Apple to your account to post on the board"
 		case muted != "":
 			refusal = muted
 		default:

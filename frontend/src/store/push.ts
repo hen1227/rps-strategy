@@ -5,8 +5,8 @@
 // and a pair of encryption keys against a device token — but everything in
 // common above it: the same offer, the same statuses, the same one notification,
 // and the same rule that what holds a place in the queue is an address the
-// *server* knows about. Only `detect`, `enable` and `disable` branch, and the
-// iOS half of each lives in `pushApns.ts`.
+// *server* knows about. Only `detect`, `enable`, `disable` and the two helpers
+// they share branch, and the iOS half of each lives in `pushApns.ts`.
 //
 // A store of its own rather than a slice of the game store, following
 // `bottomInset` and `reviewHandoff`: nothing in the game store needs push, and
@@ -201,25 +201,26 @@ const webPushCapability = (): PushCapability => {
  * Permission alone is not the bargain, exactly as on the web: what holds a
  * place in the queue is a token the server is holding, so a granted permission
  * with no token of ours reports as unasked and offers to fix itself. The token
- * is re-read on every launch because iOS is entitled to hand back a different
- * one — after a restore from backup, most often — and a stored token nobody
- * re-posts is a subscription that goes quietly stale.
+ * is re-read on every look because iOS is entitled to hand back a different
+ * one — after a restore from backup, most often — and re-posted on every look
+ * whether it changed or not, for the reasons on `refreshRegistration`.
+ *
+ * A permission that has gone is the opposite case, and only this side can see
+ * it: see `withdrawRegistration`.
  */
 const detectDevice = async (sessionToken: string | null): Promise<Partial<PushStore>> => {
   const apns = await import('./pushApns');
   if (pushCapabilityFrom(apns.apnsFacts()) !== 'ready') return { status: 'unsupported' };
 
   const permission = await apns.apnsPermission();
-  if (permission === 'denied') return { status: 'denied' };
-  if (permission !== 'granted') return { status: 'unasked' };
-
-  const known = readPushEndpoint();
-  if (!known) return { status: 'unasked', endpoint: null };
-  const token = await apns.apnsDeviceToken();
-  if (token !== known) {
-    await savePushDevice(token, identity(sessionToken));
-    savePushEndpoint(token);
+  if (permission !== 'granted') {
+    await withdrawRegistration('apns', sessionToken);
+    return { status: permission === 'denied' ? 'denied' : 'unasked', endpoint: null };
   }
+
+  if (!readPushEndpoint()) return { status: 'unasked', endpoint: null };
+  const token = await apns.apnsDeviceToken();
+  await refreshRegistration(token, () => savePushDevice(token, identity(sessionToken)));
   return { status: 'granted', endpoint: token, error: null };
 };
 
@@ -247,6 +248,66 @@ const identity = (sessionToken: string | null): PushIdentity => ({
   sessionToken,
 });
 
+/**
+ * Re-post the address this device holds, whether or not it has changed.
+ *
+ * On every look rather than only when the address moves, because the server's
+ * copy can go wrong while the address stays exactly the same. A row belongs to
+ * whoever registered it, so signing in here as somebody else — any sign-in the
+ * guest merge does not cover — leaves this device summoned for the guest while
+ * the account it now plays as looks unreachable. A row the server has dropped
+ * is invisible from here too. The upsert moves an address to whoever posted it
+ * last, so one request settles both.
+ *
+ * Only a new address is waited for, because only a new one changes the answer:
+ * it is not this device's until the server holds it, and a failure means alerts
+ * are not on. One the server held a moment ago very probably still is held, so
+ * that request goes on in the background and a failure is not reported. A slow
+ * network is no reason to hold the panel at its old answer on every launch, and
+ * a blip on the way past is no reason to tell somebody their alerts are off.
+ */
+const refreshRegistration = async (
+  address: string,
+  post: () => Promise<unknown>,
+): Promise<void> => {
+  if (address !== readPushEndpoint()) {
+    await post();
+    savePushEndpoint(address);
+    return;
+  }
+  void post().catch(() => undefined);
+};
+
+/**
+ * Take back an address this device registered and can no longer honour.
+ *
+ * APNs never reports a permission withdrawn in Settings. It goes on accepting
+ * every summons for the token, and the phone quietly shows none of them — so a
+ * row nobody withdraws holds a place in the queue for ever on the strength of
+ * an address that delivers nothing, which is the ghost the away queue must not
+ * contain. A browser does get there by itself, when its push service answers
+ * 410 at the next send, but only by losing that send.
+ *
+ * The local copy is cleared only once the server has let go, so a request that
+ * fails is made again at the next look instead of forgetting the one address
+ * that still needs withdrawing.
+ */
+const withdrawRegistration = async (
+  transport: PushTransport,
+  sessionToken: string | null,
+): Promise<void> => {
+  const known = readPushEndpoint();
+  if (!known) return;
+  try {
+    if (transport === 'apns') await deletePushDevice(known, identity(sessionToken));
+    else await deletePushSubscription(known, identity(sessionToken));
+    clearPushEndpoint();
+  } catch {
+    // Kept for the next look. Nothing to tell the player: from their side
+    // alerts are already off.
+  }
+};
+
 export interface PushStore {
   status: PushStatus;
   endpoint: string | null;
@@ -268,6 +329,11 @@ export const usePushStore = create<PushStore>()((set, get) => ({
   snoozedUntil: 0,
 
   detect: async (sessionToken) => {
+    // An enable in flight settles the status itself. On a phone its permission
+    // prompt makes the app inactive and then active again, which starts another
+    // look, and that look would land in the gap before the token is posted and
+    // flash "unasked" over "turning on".
+    if (get().status === 'enabling') return;
     set({ snoozedUntil: readAlertsSnoozedUntil() });
     const transport = activePushTransport();
     if (!transport) {
@@ -295,12 +361,15 @@ export const usePushStore = create<PushStore>()((set, get) => ({
       set({ status: 'unsupported' });
       return;
     }
-    if (notification.permission === 'denied') {
-      set({ status: 'denied' });
-      return;
-    }
     if (notification.permission !== 'granted') {
-      set({ status: 'unasked' });
+      // Blocked, or reset in the site settings, since the last look. The
+      // address goes back to the server now rather than at the first summons
+      // to fail.
+      await withdrawRegistration('web-push', sessionToken);
+      set({
+        status: notification.permission === 'denied' ? 'denied' : 'unasked',
+        endpoint: null,
+      });
       return;
     }
 
@@ -311,15 +380,17 @@ export const usePushStore = create<PushStore>()((set, get) => ({
       const registration = await serviceWorkerApi()?.getRegistration('/');
       const subscription = await registration?.pushManager.getSubscription();
       if (!subscription) {
+        // An address this browser no longer holds is one the server must not
+        // go on holding either.
+        await withdrawRegistration('web-push', sessionToken);
         set({ status: 'unasked', endpoint: null });
         return;
       }
-      // Chrome rotates endpoints. Re-posting a changed one silently is what
-      // keeps a long-standing subscription from quietly going stale.
-      if (subscription.endpoint !== readPushEndpoint()) {
-        await savePushSubscription(payloadFrom(subscription), identity(sessionToken));
-        savePushEndpoint(subscription.endpoint);
-      }
+      // Chrome rotates endpoints, and the server's copy can go wrong while the
+      // endpoint stays the same, so it is re-posted on every look.
+      await refreshRegistration(subscription.endpoint, () =>
+        savePushSubscription(payloadFrom(subscription), identity(sessionToken)),
+      );
       set({ status: 'granted', endpoint: subscription.endpoint, error: null });
     } catch {
       // A failure here must never break matchmaking: the queue still works,

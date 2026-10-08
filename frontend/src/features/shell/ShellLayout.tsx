@@ -1,4 +1,4 @@
-import { Slot } from 'expo-router';
+import { Slot, usePathname } from 'expo-router';
 import { useEffect } from 'react';
 import { StyleSheet, View, type LayoutChangeEvent } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -31,6 +31,8 @@ import { useGameStore } from '@/store/gameStore';
 
 export default function ShellLayout() {
   const isWide = useWideScreen();
+  const pathname = usePathname();
+  const tournamentBoard = pathname === '/tournaments';
   const setBottomInset = useBottomInset((state) => state.setBottomInset);
   const error = useGameStore((state) => state.error);
   const clearError = useGameStore((state) => state.clearError);
@@ -117,7 +119,9 @@ export default function ShellLayout() {
           </View>
         </View>
         {isWide ? (
-          <LiveRail />
+          // The tournament board carries its own live matches. Give its
+          // standings the space otherwise occupied by unrelated activity.
+          tournamentBoard ? null : <LiveRail />
         ) : (
           /*
             The tab bar and nothing else. A one-line summary of the live rail

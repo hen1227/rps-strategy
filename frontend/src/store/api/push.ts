@@ -78,15 +78,31 @@ export const deletePushDevice = (token: string, identity: PushIdentity) =>
   });
 
 /**
+ * What a test notification came to, counted by address.
+ *
+ * `removed` and `failed` are absent from a server older than them, which
+ * counted every attempt as delivered.
+ */
+export interface TestPushReport {
+  /** Addresses a push service accepted it for. */
+  delivered: number;
+  /** Addresses that had gone for good, and were forgotten. */
+  removed?: number;
+  /** Addresses that refused it or could not be reached, and were kept. */
+  failed?: number;
+}
+
+/**
  * Ask the server to send this device one notification, now.
  *
  * The only way to tell a working subscription from one that stores cleanly and
  * silently delivers nothing — which are otherwise indistinguishable right up
- * until somebody misses a game. `delivered` is how many devices it went to, so
- * zero is a real answer and not a failure.
+ * until somebody misses a game. `delivered` counts only what a push service
+ * accepted, so zero is a real answer and not a failure, and the other two say
+ * why the rest did not go.
  */
 export const sendTestPush = (identity: PushIdentity) =>
-  request<{ delivered: number }>(`/api/push/test${identityScope(identity)}`, {
+  request<TestPushReport>(`/api/push/test${identityScope(identity)}`, {
     method: 'POST',
     body: {},
     token: identityCredential(identity),

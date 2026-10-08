@@ -1,18 +1,22 @@
 import {
-  completeDiscordSignup,
-  exchangeDiscordTicket,
+  completeSignup,
+  exchangeSignInTicket,
+  finishAppleNativeAuth,
   loginAccount,
   logoutAccount,
+  startAppleNativeAuth,
+  startAppleWebAuth,
   startDiscordAuth,
+  type SignInProvider,
+  type SignInReply,
 } from './api/bots';
-import {
-  isDiscordSignInAvailable,
-  signInThroughDiscord,
-} from './discordAuth';
+import { isAppleSignInAvailable, signInThroughApple } from './appleAuth';
+import { isDiscordSignInAvailable, signInThroughDiscord } from './discordAuth';
 import { type DiscordOutcome } from './discordAuth.types';
 import { deviceStorage } from './deviceStorage';
-import { getOrCreateUserId } from './localIdentity';
+import { getOrCreateUserId, replaceDeviceIdentity } from './localIdentity';
 import type { GameStore } from './types';
+import { failureMessage } from '@/errors';
 import type { Account } from '@/types/protocol';
 import type { StateCreator } from 'zustand';
 
@@ -26,6 +30,11 @@ import type { StateCreator } from 'zustand';
 // Everything here goes through `applyAccountUpdate`, which reconnects the
 // socket. Signing in that does not change who you are in the lobby would be
 // the confusing half-measure.
+//
+// Two providers reach it: Discord, and Apple beside it. They start differently
+// — a browser for Discord everywhere and for Apple on the website, Apple's own
+// sheet on the phone — and finish identically, in a reply that is a session, a
+// request for a name, or a request for an older account's password.
 
 const SESSION_TOKEN_KEY = 'rps.sessionToken.v1';
 
@@ -47,24 +56,51 @@ const writeSessionToken = (token: string | null) => {
   }
 };
 
+// Whose session the stored token is, kept beside it. The server can refuse a
+// session — expired, revoked, the account deleted from another device — before
+// it has said whose it was, and `clearSession` has to know whether the account
+// being left is this device's own. See there.
+const SESSION_ACCOUNT_KEY = 'rps.sessionAccountId.v1';
+
+const readSessionAccountId = (): string | null => {
+  try {
+    return deviceStorage()?.getItem(SESSION_ACCOUNT_KEY) ?? null;
+  } catch {
+    return null;
+  }
+};
+
+const writeSessionAccountId = (userId: string | null) => {
+  try {
+    if (userId) deviceStorage()?.setItem(SESSION_ACCOUNT_KEY, userId);
+    else deviceStorage()?.removeItem(SESSION_ACCOUNT_KEY);
+  } catch {
+    // Without it, a session refused before the lobby answered is left the way
+    // every session used to be left: with this device's key.
+  }
+};
+
 /**
- * What a Discord sign-in produced once the ticket has been redeemed.
+ * What a sign-in produced once the provider had answered.
  *
  * `named` means there is a session and nothing else to do. `unnamed` means the
  * player is new and still has to agree a username; the ticket stays live for
- * that second step. `pending` is the web redirect having been issued, and
+ * that second step. `pending` is a web redirect having been issued, and
  * nothing after it runs.
  */
-export type DiscordSignIn =
+export type SignInOutcome =
   | { kind: 'named'; account: Account }
-  | { kind: 'unnamed'; ticket: string; suggestedUsername: string; discordHandle: string }
+  | ({ kind: 'unnamed' } & PendingSignup)
   | { kind: 'pending' }
   | { kind: 'cancelled' }
   | { kind: 'failed'; message: string };
 
 /** A signup that has proved who it is and still needs a name. */
-export interface PendingDiscordSignup {
+export interface PendingSignup {
   ticket: string;
+  /** Who vouched for it, which the naming step says. */
+  provider: SignInProvider;
+  /** Empty for Apple, which offers no name to suggest one from. */
   suggestedUsername: string;
   discordHandle: string;
   /**
@@ -82,29 +118,35 @@ export interface PendingDiscordSignup {
 export interface SessionSlice {
   sessionToken: string | null;
   /**
-   * Set when Discord has vouched for somebody who has no account here yet.
+   * Set when a provider has vouched for somebody who has no account here yet.
    *
-   * In the store rather than passed between screens because the two platforms
-   * arrive at it from different directions: the web build redeems its ticket on
-   * the callback page and then navigates, while the native build redeems in
-   * place when the sheet closes. Parking it here means one panel handles both.
+   * In the store rather than passed between screens because the platforms
+   * arrive at it from different directions: the web build redeems its ticket
+   * on the callback page and then navigates, while the phone redeems in place
+   * when the sheet closes. Parking it here means one panel handles every one.
    */
-  pendingDiscordSignup: PendingDiscordSignup | null;
-  dismissDiscordSignup: () => void;
+  pendingSignup: PendingSignup | null;
+  dismissSignup: () => void;
   /** Whether this build can offer Discord at all. See `discordAuth.types`. */
   discordSignInAvailable: boolean;
-  signInWithDiscord: () => Promise<DiscordSignIn>;
+  /**
+   * Whether this build can offer Apple at all. See `appleAuth.types` — and
+   * `useSignInProviders`, for whether the server can complete it.
+   */
+  appleSignInAvailable: boolean;
+  signInWithDiscord: () => Promise<SignInOutcome>;
+  signInWithApple: () => Promise<SignInOutcome>;
   /** Redeem a ticket the browser came back with. The web half's second step. */
-  redeemDiscordTicket: (ticket: string) => Promise<DiscordSignIn>;
+  redeemSignInTicket: (ticket: string) => Promise<SignInOutcome>;
   /**
    * Finish the naming step.
    *
    * Resolves to the account when it is done. Resolves to null when the server
    * has asked for a password instead — the name given is an older account's,
-   * and `pendingDiscordSignup.claimingUsername` now says which. The ticket is
-   * still live either way, so nothing is lost by answering.
+   * and `pendingSignup.claimingUsername` now says which. The ticket is still
+   * live either way, so nothing is lost by answering.
    */
-  claimDiscordUsername: (
+  claimUsername: (
     ticket: string,
     username: string,
     password?: string,
@@ -128,108 +170,163 @@ export const isSignedIn = (
   account: Account | null | undefined,
 ) => Boolean(sessionToken && account?.registered);
 
-export const createSessionSlice: StateCreator<GameStore, [], [], SessionSlice> = (set, get) => ({
-  sessionToken: readSessionToken(),
+export const createSessionSlice: StateCreator<GameStore, [], [], SessionSlice> = (set, get) => {
+  // Who is asking, for a sign-in that is starting. A session token when there
+  // is one, which is how a signed-in player adds a second way in rather than
+  // starting again. Otherwise the local key, which proves the guest whose
+  // history the sign-in may keep — the same proof registering used to need.
+  const requester = () => ({
+    userId: getOrCreateUserId(),
+    credential: get().sessionToken ?? get().profileKey,
+  });
 
-  discordSignInAvailable: isDiscordSignInAvailable(),
-  pendingDiscordSignup: null,
-
-  // Dropping the ticket is the only way out of the naming step, and it costs
-  // the player nothing but another trip through Discord: no account was created
-  // and no name was held.
-  dismissDiscordSignup: () => set({ pendingDiscordSignup: null }),
-
-  // Signing in with Discord upgrades this browser's anonymous account in place
-  // where it can, keeping the rating, the record and the games. The local key
-  // goes with the request because that is what proves the history being claimed
-  // belongs to the caller — the same proof registering used to need.
-  //
-  // A session token is sent instead when there is one, which is how an account
-  // that still has a password links Discord to itself rather than starting again.
-  signInWithDiscord: async () => {
-    const outcome: DiscordOutcome = await signInThroughDiscord((redirectUri) =>
-      startDiscordAuth(redirectUri, {
-        userId: getOrCreateUserId(),
-        credential: get().sessionToken ?? get().profileKey,
-      }).then((reply) => reply.authorizeUrl),
-    );
-    switch (outcome.kind) {
-      case 'ticket':
-        return get().redeemDiscordTicket(outcome.ticket);
-      case 'pending':
-        // The browser is navigating away, so nothing after this runs.
-        return { kind: 'pending' };
-      case 'cancelled':
-        return { kind: 'cancelled' };
-      default:
-        return { kind: 'failed', message: outcome.message };
-    }
-  },
-
-  redeemDiscordTicket: async (ticket) => {
-    const reply = await exchangeDiscordTicket(ticket);
+  // The one reading of a finished sign-in, whichever provider it came from.
+  const acceptReply = (reply: SignInReply, ticket: string): SignInOutcome => {
     if (reply.needsUsername) {
-      const pending: PendingDiscordSignup = {
-        ticket,
+      const pending: PendingSignup = {
+        ticket: reply.ticket || ticket,
+        provider: reply.provider ?? 'discord',
         suggestedUsername: reply.suggestedUsername ?? '',
         discordHandle: reply.discordHandle ?? '',
       };
-      set({ pendingDiscordSignup: pending });
+      set({ pendingSignup: pending });
       return { kind: 'unnamed', ...pending };
     }
     if (!reply.token || !reply.account) {
       return { kind: 'failed', message: 'That sign-in did not complete. Try again.' };
     }
     return { kind: 'named', account: get().adoptSession(reply.token, reply.account) };
-  },
+  };
 
-  claimDiscordUsername: async (ticket, username, password = '', reservationToken = '') => {
-    const reply = await completeDiscordSignup(ticket, username, password, reservationToken);
-    if (reply.needsPassword) {
-      // Not a failure, so not thrown: the name is an existing account's, and
-      // its password finishes the same step. Recorded against the pending
-      // signup so the panel can ask, and so a different name typed next clears
-      // it again.
-      const pending = get().pendingDiscordSignup;
-      if (pending) set({ pendingDiscordSignup: { ...pending, claimingUsername: username } });
-      return null;
-    }
-    if (!reply.token || !reply.account) {
-      throw new Error('That sign-in did not complete. Try again.');
-    }
-    set({ pendingDiscordSignup: null });
-    return get().adoptSession(reply.token, reply.account);
-  },
+  return {
+    sessionToken: readSessionToken(),
 
-  signIn: (username, password) =>
-    loginAccount(username, password).then(({ token, account }) =>
-      get().adoptSession(token, account),
-    ),
+    discordSignInAvailable: isDiscordSignInAvailable(),
+    appleSignInAvailable: isAppleSignInAvailable(),
+    pendingSignup: null,
 
-  signOut: async () => {
-    const token = get().sessionToken;
-    // Locally first: coming back as this browser's anonymous identity is what
-    // actually signs the player out, and it must not wait on the server.
-    get().clearSession();
-    try {
-      if (token) await logoutAccount(token);
-    } catch {
-      // A token the server has already forgotten is still gone from here.
-    }
-  },
+    // Dropping the ticket is the only way out of the naming step, and it costs
+    // the player nothing but another trip through the provider: no account was
+    // created and no name was held.
+    dismissSignup: () => set({ pendingSignup: null }),
 
-  adoptSession: (token, account) => {
-    writeSessionToken(token);
-    set({ sessionToken: token });
-    get().applyAccountUpdate(account);
-    return account;
-  },
+    // Signing in upgrades this device's anonymous account in place where it
+    // can, keeping the rating, the record and the games.
+    signInWithDiscord: async () => {
+      const outcome: DiscordOutcome = await signInThroughDiscord((redirectUri) =>
+        startDiscordAuth(redirectUri, requester()).then((reply) => reply.authorizeUrl),
+      );
+      switch (outcome.kind) {
+        case 'ticket':
+          return get().redeemSignInTicket(outcome.ticket);
+        case 'pending':
+          // The browser is navigating away, so nothing after this runs.
+          return { kind: 'pending' };
+        case 'cancelled':
+          return { kind: 'cancelled' };
+        default:
+          return { kind: 'failed', message: outcome.message };
+      }
+    },
 
-  // For when the server refuses the token: there is nothing left to revoke,
-  // and the only state left to be in is anonymous.
-  clearSession: () => {
-    writeSessionToken(null);
-    set({ sessionToken: null, pendingDiscordSignup: null });
-    get().applyAccountUpdate(null);
-  },
-});
+    signInWithApple: async () => {
+      const outcome = await signInThroughApple({
+        nonce: () => startAppleNativeAuth(requester()).then((reply) => reply.nonce),
+        authorize: (returnTo) =>
+          startAppleWebAuth(returnTo, requester()).then((reply) => reply.authorizeUrl),
+      });
+      switch (outcome.kind) {
+        case 'credential':
+          try {
+            const reply = await finishAppleNativeAuth(
+              outcome.nonce, outcome.identityToken, outcome.authorizationCode,
+            );
+            return acceptReply(reply, reply.ticket ?? '');
+          } catch (caught) {
+            return { kind: 'failed', message: failureMessage(caught, 'Apple sign-in did not work.') };
+          }
+        case 'pending':
+          return { kind: 'pending' };
+        case 'cancelled':
+          return { kind: 'cancelled' };
+        default:
+          return { kind: 'failed', message: outcome.message };
+      }
+    },
+
+    // Never throws: a sign-in button waiting on this spins until it settles,
+    // and an exception nobody caught would leave it spinning for good.
+    redeemSignInTicket: async (ticket) => {
+      try {
+        return acceptReply(await exchangeSignInTicket(ticket), ticket);
+      } catch (caught) {
+        return { kind: 'failed', message: failureMessage(caught, 'That sign-in did not work.') };
+      }
+    },
+
+    claimUsername: async (ticket, username, password = '', reservationToken = '') => {
+      const reply = await completeSignup(ticket, username, password, reservationToken);
+      if (reply.needsPassword) {
+        // Not a failure, so not thrown: the name is an existing account's, and
+        // its password finishes the same step. Recorded against the pending
+        // signup so the panel can ask, and so a different name typed next clears
+        // it again.
+        const pending = get().pendingSignup;
+        if (pending) set({ pendingSignup: { ...pending, claimingUsername: username } });
+        return null;
+      }
+      if (!reply.token || !reply.account) {
+        throw new Error('That sign-in did not complete. Try again.');
+      }
+      set({ pendingSignup: null });
+      return get().adoptSession(reply.token, reply.account);
+    },
+
+    signIn: (username, password) =>
+      loginAccount(username, password).then(({ token, account }) =>
+        get().adoptSession(token, account),
+      ),
+
+    signOut: async () => {
+      const token = get().sessionToken;
+      // Locally first: coming back as this device's anonymous identity is what
+      // actually signs the player out, and it must not wait on the server.
+      get().clearSession();
+      try {
+        if (token) await logoutAccount(token);
+      } catch {
+        // A token the server has already forgotten is still gone from here.
+      }
+    },
+
+    adoptSession: (token, account) => {
+      writeSessionToken(token);
+      writeSessionAccountId(account.userId);
+      set({ sessionToken: token });
+      get().applyAccountUpdate(account);
+      return account;
+    },
+
+    // For signing out, and for when the server refuses the token: there is
+    // nothing left to revoke, and the only state left to be in is anonymous.
+    //
+    // Anonymous has to mean a guest, though. When the account being left is
+    // this device's own — its guest, upgraded in place by signing in — the key
+    // this device holds still opens it, so reconnecting with that key would
+    // quietly sign straight back in. The device gets a new guest instead, written
+    // before the reconnect below goes looking for it. Whose account it was is
+    // the lobby's answer when there has been one, and otherwise what was stored
+    // with the token, since a session refused at launch is refused before the
+    // lobby has said anything.
+    clearSession: () => {
+      const leaving = get().account?.userId ?? readSessionAccountId();
+      if (leaving && leaving === getOrCreateUserId()) {
+        set({ profileKey: replaceDeviceIdentity().profileKey });
+      }
+      writeSessionToken(null);
+      writeSessionAccountId(null);
+      set({ sessionToken: null, pendingSignup: null });
+      get().applyAccountUpdate(null);
+    },
+  };
+};

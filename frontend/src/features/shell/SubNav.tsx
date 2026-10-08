@@ -86,7 +86,7 @@ const styles = themedSheet(() => ({
     borderColor: colors.border,
     backgroundColor: colors.surface,
   },
-  chipCurrent: { borderColor: colors.accent, backgroundColor: colors.accentSurfaceQuiet },
+  chipCurrent: { borderColor: colors.borderLight, backgroundColor: colors.surfaceRaised },
   label: { ...type.label, color: colors.textMuted, letterSpacing: 0.4 },
   labelCurrent: { color: colors.textStrong },
   away: { ...type.meta, color: colors.textFaint },

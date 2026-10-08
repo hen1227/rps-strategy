@@ -82,18 +82,19 @@ const styles = themedSheet(() => ({
     borderColor: colors.goldBorder,
     backgroundColor: colors.goldSurfaceDeep,
   },
+  // On now: the live colour, which is kept for exactly this.
   bannerLive: {
-    borderColor: colors.accentBorder,
-    backgroundColor: colors.accentSurface,
+    borderColor: colors.liveBorder,
+    backgroundColor: colors.liveSurface,
   },
   markColumn: { paddingHorizontal: space.hair },
   dot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.goldDot },
-  dotLive: { backgroundColor: colors.accent },
+  dotLive: { backgroundColor: colors.live },
   // `minWidth: 0` so the sentence wraps instead of shoving the chevron off the
   // end of the strip on a phone. See the note in MobileTopBar.
   copy: { flex: 1, minWidth: 0, gap: space.hair },
   eyebrow: { ...type.eyebrow, color: colors.goldMuted },
-  eyebrowLive: { color: colors.accentText },
+  eyebrowLive: { color: colors.liveSoft },
   title: { ...type.rowTitle, color: colors.textStrong, fontSize: 13 },
   detail: { ...type.body, color: colors.textMuted, marginTop: space.hair },
   chevron: { color: colors.textFaint, fontSize: 18 },

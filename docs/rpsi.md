@@ -32,9 +32,9 @@ accounts, rules, clocks, and game records.
 > isready
 < readyok
 > position fen 3SSS3/3PPP3/3RRR3/9/9/9/3rrr3/3ppp3/3sss3 b 3bbb3/3bbb3/3bbb3/9/9/9/3rrr3/3rrr3/3rrr3 moves d3-d4 d7-d6
-> legalmoves d4-c5 d4-d5 d4-e5 e3-e4 e3-f4 f3-f4 f3-g4 d2-d3 e2-e3 f2-f3
+> legalmoves d1-c1 d1-c2 f1-g1 f1-g2 d2-c1 d2-c2 d2-c3 d2-d3 e2-d3 f2-g1 f2-g2 f2-g3 e3-d3 e3-e4 e3-f4 f3-g2 f3-g3 f3-e4 f3-f4 f3-g4 d4-c3 d4-d3 d4-c4 d4-e4 d4-c5 d4-d5 d4-e5
 > go rtime 300000 btime 298400 rinc 3000 binc 3000
-< info depth 8 seldepth 14 multipv 1 score cp 137 confidence 82 nodes 1204551 nps 1830000 time 658 pv f3-f4 f7-f6 e3xf4
+< info depth 8 seldepth 14 multipv 1 score cp 137 confidence 82 nodes 1204551 nps 1830000 time 658 pv f3-f4 f7-f6 e3-e4
 < bestmove f3-f4
 > quit
 ```
@@ -58,12 +58,14 @@ A position has three space-separated fields: pieces, side to move, and territory
 3SSS3/3PPP3/3RRR3/9/9/9/3rrr3/3ppp3/3sss3 b 3bbb3/3bbb3/3bbb3/9/9/9/3rrr3/3rrr3/3rrr3
 ```
 
-Rows run from rank 1 to rank 9, separated by `/`. Digits count empty tiles.
+Rows run from rank 1 to rank 9, separated by `/`; chess FEN runs the other way.
+Digits count empty tiles.
 `R`, `P`, and `S` mean rock, paper, and scissors. Uppercase is Blue; lowercase is Red.
-The side to move is `r`, `b`, or `-`. Blue starts a standard game.
+The side to move is `r` or `b`: whoever moves first from this board. Blue starts
+a standard game.
 
 Only Total War (`V5`) uses territory. The host always sends it; other modes may
-ignore it. Input may omit territory, in which case ownership follows the pieces.
+ignore it.
 
 ## Host to engine
 
@@ -87,7 +89,8 @@ go rtime 300000 btime 298400 rinc 3000 binc 3000
 
 Times are in milliseconds. `rtime` and `btime` are Red's and Blue's remaining time;
 `rinc` and `binc` are their per-move increments. Both clocks are sent. Your side is
-the side to move in the preceding `position`.
+whoever is to move after the moves in the preceding `position`, which is not
+always the FEN's side to move.
 
 Optional search limits can be combined:
 

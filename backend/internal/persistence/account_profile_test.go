@@ -81,8 +81,8 @@ func TestAccountProfileRenameCannotTakeAClaimedName(t *testing.T) {
 		); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := store.ClaimAccountWithDiscord(
-			ctx, account.userID, account.username, "discord-"+account.userID, account.username,
+		if _, err := store.ClaimAccountWithIdentity(
+			ctx, account.userID, account.username, DiscordIdentity("discord-"+account.userID, account.username),
 		); err != nil {
 			t.Fatal(err)
 		}
@@ -116,8 +116,8 @@ func TestExistingAccountIsClaimedByFirstLocalKey(t *testing.T) {
 	}
 	// The display name they have been playing under for months comes with them
 	// into the account system, minus the space the username rule does not take.
-	registered, err := store.ClaimAccountWithDiscord(
-		t.Context(), "legacy-user", "LegacyName", "discord-legacy-user", "legacyname",
+	registered, err := store.ClaimAccountWithIdentity(
+		t.Context(), "legacy-user", "LegacyName", DiscordIdentity("discord-legacy-user", "legacyname"),
 	)
 	if err != nil {
 		t.Fatal(err)

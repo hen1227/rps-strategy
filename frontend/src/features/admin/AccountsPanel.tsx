@@ -27,6 +27,7 @@ import {
   purgeAccount,
   purgeBot,
   revokeAccountTitle,
+  setAdminGameRanked,
   updateAccountFlags,
   type AccountDetail,
   type AccountQuery,
@@ -241,7 +242,7 @@ export default function AccountsPanel({ admin }: AccountsPanelProps) {
                 </View>
                 {account.kind === 'bot' ? <Badge label="BOT" tone="neutral" /> : null}
                 {account.isAdmin ? <Badge label="ADMIN" tone="accent" /> : null}
-                {account.disabled ? <Badge label="DISABLED" tone="live" /> : null}
+                {account.disabled ? <Badge label="DISABLED" tone="danger" /> : null}
                 {/*
                   Sanctions on the row rather than only inside it, so a host
                   scanning for the person they muted yesterday does not have to
@@ -415,7 +416,7 @@ export default function AccountsPanel({ admin }: AccountsPanelProps) {
                               </Text>
                             </View>
                             {bot.retired ? <Badge label="RETIRED" tone="neutral" /> : null}
-                            {bot.disabled ? <Badge label="DISABLED" tone="live" /> : null}
+                            {bot.disabled ? <Badge label="DISABLED" tone="danger" /> : null}
                             <ConfirmButton
                               armed={confirming === `bot:${bot.botId}`}
                               busy={busy}
@@ -457,6 +458,14 @@ export default function AccountsPanel({ admin }: AccountsPanelProps) {
                               run(
                                 () => deleteGame(admin.token, game.gameId, true),
                                 'Game deleted. Both players have their rating back.',
+                              )
+                            }
+                            onToggleRanked={() =>
+                              run(
+                                () => setAdminGameRanked(admin.token, game.gameId, !game.ranked),
+                                game.ranked
+                                  ? 'Game made casual. The bot ladder no longer counts it.'
+                                  : 'Game made ranked. The bot ladder counts it now.',
                               )
                             }
                           />

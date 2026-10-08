@@ -288,6 +288,57 @@ test('the schedule drops rounds that have already started and marks the next', (
   assert.equal(rows[0].next, true);
 });
 
+test('the schedule stops at the first round the weekly arena has', () => {
+  // Every round from the start of the pause is marked, since nobody knows when
+  // the arena ends. Listing them all would forecast that it runs all night.
+  const round = (atUnixMs: number, pausedFor?: string) => ({
+    modeId: 'V6' as const,
+    initialTimeMs: 180_000,
+    incrementMs: 1_000,
+    atUnixMs,
+    entered: 0,
+    ...(pausedFor ? { pausedFor } : {}),
+  });
+  const rows = scheduleRows(
+    [
+      round(3_600_000),
+      round(7_200_000, 'Weekend Bot Arena #3'),
+      round(10_800_000, 'Weekend Bot Arena #3'),
+    ],
+    MODES,
+    0,
+  );
+  assert.deepEqual(
+    rows.map((row) => [row.atUnixMs, row.pausedFor]),
+    [
+      [3_600_000, null],
+      [7_200_000, 'Weekend Bot Arena #3'],
+    ],
+  );
+  assert.equal(rows[0].next, true);
+});
+
+test('an engine ready for a round the arena has is not promised one', () => {
+  // Between the last round before the arena and the pause itself, the engine
+  // is free and a press still works — but the next round is off.
+  assert.equal(
+    ownedStatus({ bot: owned('a'), entered: true, field: engine('a') }, 'Weekend Bot Arena #3'),
+    'Entered. No rounds until Weekend Bot Arena #3 ends.',
+  );
+  // Once the pause has begun the server says so itself, and its words stand.
+  assert.equal(
+    ownedStatus(
+      {
+        bot: owned('a'),
+        entered: true,
+        field: out('a', 'ranked games are paused until Weekend Bot Arena #3 ends'),
+      },
+      'Weekend Bot Arena #3',
+    ),
+    'Entered, but ranked games are paused until Weekend Bot Arena #3 ends.',
+  );
+});
+
 test('a mode this client has never heard of is drawn as its id, not dropped', () => {
   const rows = scheduleRows(
     [{ modeId: 'V9' as never, initialTimeMs: 60_000, incrementMs: 0, atUnixMs: 9_000, entered: 0 }],

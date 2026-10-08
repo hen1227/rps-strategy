@@ -172,12 +172,13 @@ type TournamentDeletion struct {
 	ByesDeleted    int              `json:"byesDeleted"`
 	// ChampionUserIDs is whoever won it, when it was a completed event.
 	//
-	// Reported because of a consequence that is otherwise invisible: the
-	// Tournament Champion title is *recomputed* from this table rather than
-	// stored as a fact — see tournamentTitles — so deleting the event takes the
-	// title away from whoever won it, the next time titles are evaluated. A
-	// host deleting a played event should be told whose title they are about to
-	// remove.
+	// Reported so a host can be told what deleting it does to them, which is
+	// different for a person and for an engine. A person keeps any title it
+	// earned them: an award is permanent, and evaluating again only ever adds —
+	// see EvaluateTitles. An engine's tags are recomputed from the events still
+	// on record, so a cup's Cup Winner goes with it unless another win still
+	// earns it, and an arena's win stops counting toward its crowns — see
+	// bot_titles.go.
 	ChampionUserIDs []string `json:"championUserIds,omitempty"`
 	// GamesKept is how many recorded games mentioned this event and are staying.
 	//
@@ -557,8 +558,8 @@ UPDATE tournaments SET cancelled_at_unix_ms = ?, description = ? WHERE tournamen
 //   - *is* still readable at its own address, so an old link and the placement
 //     on somebody's profile page both still work;
 //   - is still counted everywhere it was counted — the analytics totals, the
-//     entrants' profile histories, and the Tournament Champion title, which is
-//     recomputed from `status` and does not consult this flag at all.
+//     entrants' profile histories, and the Tournament Champion title, whose
+//     rule reads `status` and does not consult this flag at all.
 //
 // So it is a listing decision, not a record decision. That distinction is the
 // whole point: a board that accumulates every test event and every finished
@@ -611,10 +612,10 @@ UPDATE tournaments SET hidden_at_unix_ms = ? WHERE tournament_id = ?
 // *games* do not — see TournamentDeletion.GamesKept for why they are not this
 // function's to delete — and neither does anything in the archive.
 //
-// The returned report is not decoration. Deleting a completed event silently
-// removes the Tournament Champion title from whoever won it, because that title
-// is recomputed from this table rather than stored; the report names them so a
-// caller can say so before doing it.
+// The returned report is not decoration: it names whoever won a completed
+// event, because what the deletion does to them is easy to get wrong. A person
+// keeps the title it earned them, and an engine loses the tag — see
+// TournamentDeletion.ChampionUserIDs.
 func (store *Store) DeleteTournament(
 	ctx context.Context,
 	tournamentID string,

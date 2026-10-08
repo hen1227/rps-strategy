@@ -389,6 +389,64 @@ func TestBotMasterFollowsAnEnginesTournamentWin(t *testing.T) {
 	}
 }
 
+// Deleting a finished event names its champion, and does not take their title
+// back: evaluating afterwards only ever adds, so the row the event earned stays.
+func TestDeletingAnEventLeavesItsChampionTheTitle(t *testing.T) {
+	store := authTestStore(t)
+	registeredOwner(t, store, "ada", "Ada")
+	registeredOwner(t, store, "grace", "Grace")
+
+	completedTournament(t, store, "cup", "ada", "grace")
+	if awarded := evaluate(t, store, "ada"); len(awarded) != 1 ||
+		awarded[0] != TitleTournamentChampion {
+		t.Fatalf("expected Tournament Champion, got %v", awarded)
+	}
+
+	deletion, err := store.DeleteTournament(t.Context(), "cup")
+	if err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if len(deletion.ChampionUserIDs) != 1 || deletion.ChampionUserIDs[0] != "ada" {
+		t.Fatalf("expected the deletion to name ada, got %v", deletion.ChampionUserIDs)
+	}
+	evaluate(t, store, "ada")
+	if !holds(t, store, "ada", TitleTournamentChampion) {
+		t.Fatal("the champion lost Tournament Champion with the event")
+	}
+}
+
+// An engine's Cup Winner does go with the event, because the engine rulebook
+// recomputes rather than collects. Its owner's Bot Master, earned by the same
+// win, is a person's title and stays.
+func TestDeletingAnEventTakesBackAnEnginesCup(t *testing.T) {
+	store := authTestStore(t)
+	alpha, beta := twoEngines(t, store)
+
+	completedTournament(t, store, "cup", beta.UserID, alpha.UserID)
+	syncBots(t, store)
+	if _, err := store.EvaluateTitlesFor(t.Context(), beta.UserID); err != nil {
+		t.Fatalf("evaluate for the owner: %v", err)
+	}
+	if !holds(t, store, beta.UserID, TitleCupWinner) || !holds(t, store, "grace", TitleBotMaster) {
+		t.Fatal("expected the win to earn Cup Winner and Bot Master")
+	}
+
+	if _, err := store.DeleteTournament(t.Context(), "cup"); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	// What the delete route does next.
+	syncBots(t, store)
+	if _, err := store.EvaluateTitlesFor(t.Context(), beta.UserID); err != nil {
+		t.Fatalf("evaluate for the owner: %v", err)
+	}
+	if holds(t, store, beta.UserID, TitleCupWinner) {
+		t.Error("the engine kept Cup Winner with no event behind it")
+	}
+	if !holds(t, store, "grace", TitleBotMaster) {
+		t.Error("the owner lost Bot Master with the event")
+	}
+}
+
 func TestWearingATitleRequiresOwningIt(t *testing.T) {
 	store := authTestStore(t)
 	registeredOwner(t, store, "ada", "Ada")
@@ -772,8 +830,8 @@ func TestDiscordVerifiedFollowsTheLink(t *testing.T) {
 		t.Fatalf("an unlinked account is verified by nobody, got %v", titleIDs(awarded))
 	}
 
-	if _, err := store.ClaimAccountWithDiscord(
-		ctx, "anon", "Anon", "80351110224678912", "anon",
+	if _, err := store.ClaimAccountWithIdentity(
+		ctx, "anon", "Anon", DiscordIdentity("80351110224678912", "anon"),
 	); err != nil {
 		t.Fatalf("claim with discord: %v", err)
 	}

@@ -166,16 +166,15 @@ type apnsBody struct {
 	Data apnsData `json:"body"`
 }
 
-// send delivers one summons to one device, and reports whether that device is
-// gone for good.
+// send delivers one summons to one device, and reports what Apple made of it.
 //
-// True means the token will never work again — the app was deleted, or the
+// Gone means the token will never work again — the app was deleted, or the
 // token was never valid for this server's environment — and the caller is
-// expected to forget it. Every other failure returns false: a push service
+// expected to forget it. Every other failure is merely failed: a push service
 // having a bad five minutes is not a reason to make somebody unreachable.
-func (sender *apnsSender) send(ctx context.Context, token string, payload pushPayload) (gone bool) {
+func (sender *apnsSender) send(ctx context.Context, token string, payload pushPayload) deliveryOutcome {
 	if !sender.enabled {
-		return false
+		return deliveryFailed
 	}
 	body, err := json.Marshal(apnsBody{
 		APS: apnsAps{
@@ -186,12 +185,12 @@ func (sender *apnsSender) send(ctx context.Context, token string, payload pushPa
 	})
 	if err != nil {
 		log.Printf("encode APNs payload: %v", err)
-		return false
+		return deliveryFailed
 	}
 	providerToken, err := sender.providerToken()
 	if err != nil {
 		log.Printf("sign APNs provider token: %v", err)
-		return false
+		return deliveryFailed
 	}
 
 	request, err := http.NewRequestWithContext(
@@ -202,7 +201,7 @@ func (sender *apnsSender) send(ctx context.Context, token string, payload pushPa
 	)
 	if err != nil {
 		log.Printf("build APNs request: %v", err)
-		return false
+		return deliveryFailed
 	}
 	request.Header.Set("authorization", "bearer "+providerToken)
 	request.Header.Set("content-type", "application/json")
@@ -227,16 +226,16 @@ func (sender *apnsSender) send(ctx context.Context, token string, payload pushPa
 	response, err := sender.client.Do(request)
 	if err != nil {
 		log.Printf("send APNs notification: %v", err)
-		return false
+		return deliveryFailed
 	}
 	defer response.Body.Close()
 	return sender.readOutcome(response)
 }
 
 // readOutcome turns Apple's answer into the one decision the caller needs.
-func (sender *apnsSender) readOutcome(response *http.Response) (gone bool) {
+func (sender *apnsSender) readOutcome(response *http.Response) deliveryOutcome {
 	if response.StatusCode == http.StatusOK {
-		return false
+		return deliveryAccepted
 	}
 	var failure struct {
 		Reason string `json:"reason"`
@@ -262,7 +261,7 @@ func (sender *apnsSender) readOutcome(response *http.Response) (gone bool) {
 				"valid for the environment it was minted in, and this server is "+
 				"talking to %s — check RPS_APNS_ENVIRONMENT", sender.host)
 		}
-		return true
+		return deliveryGone
 	case response.StatusCode == http.StatusForbidden:
 		// Nothing about the device is wrong, so nothing about the device is
 		// dropped. An expired token is worth throwing away though — the likely
@@ -273,10 +272,10 @@ func (sender *apnsSender) readOutcome(response *http.Response) (gone bool) {
 		}
 		log.Printf("APNs refused this server's key (%s): check RPS_APNS_KEY_ID, "+
 			"RPS_APNS_TEAM_ID and that the key is enabled for push", failure.Reason)
-		return false
+		return deliveryFailed
 	default:
 		log.Printf("APNs rejected a notification: %s %s", response.Status, failure.Reason)
-		return false
+		return deliveryFailed
 	}
 }
 

@@ -1,29 +1,35 @@
-// The colours this app shipped with, frozen.
+// The default look, frozen.
 //
 // Not documentation and not a default: this is the fixture
 // `snapshot.test.mts` holds `buildTheme(forest, forest)` against. Turning one
-// palette into a theme system is a refactor nobody should be able to see, and
-// this file is what proves it — every value below was read out of the old
-// `theme.ts` the hour before it was replaced.
+// palette into a theme system was a refactor nobody should have been able to
+// see, and this file is what proved it — its values were first read out of the
+// old `theme.ts` the hour before that file was replaced.
 //
-// A change here is a change to how the original theme looks. If you meant that,
+// It has been rewritten once on purpose since, in September 2026, when the
+// surfaces were put in order (cards above the page, the sidebar below it), the
+// faintest text was lifted to a readable contrast, and the primary button got
+// letters of its own. The changelog says so.
+//
+// A change here is a change to how the default theme looks. If you meant that,
 // say so in the changelog; if you did not, the test has just caught something.
 
 export const FOREST_SNAPSHOT = {
   "colors": {
-    "background": "#312e2b",
-    "surface": "#262522",
-    "surfaceRaised": "#302e2a",
-    "surfaceSunken": "#211f1d",
-    "surfaceMuted": "#3a3833",
-    "surfaceWell": "#1f1e1b",
-    "surfaceDeep": "#171613",
-    "border": "#45423e",
-    "borderStrong": "#514e49",
-    "borderSoft": "#3d3a36",
+    "background": "#211f1d",
+    "surface": "#2b2926",
+    "surfaceRaised": "#34322e",
+    "surfaceSunken": "#1a1917",
+    "surfaceMuted": "#3d3a36",
+    "surfaceWell": "#1c1b18",
+    "surfaceDeep": "#121110",
+    "border": "#3b3834",
+    "borderStrong": "#4a4742",
+    "borderSoft": "#34312e",
     "borderLight": "#68645e",
     "borderFaint": "#53514c",
     "accent": "#81b64c",
+    "onAccent": "#171613",
     "accentBright": "#a3d160",
     "accentSoft": "#b8d993",
     "accentText": "#a9c497",
@@ -38,8 +44,8 @@ export const FOREST_SNAPSHOT = {
     "textSoft": "#d9d6d0",
     "textSubtle": "#c2bfb9",
     "textMuted": "#aaa7a2",
-    "textDim": "#8f8c86",
-    "textFaint": "#77736d",
+    "textDim": "#a19e98",
+    "textFaint": "#97938d",
     "textInverse": "#211f1d",
     "discordBorder": "#3f77aa",
     "discordSurface": "#2f3f52",
@@ -146,6 +152,8 @@ export const FOREST_SNAPSHOT = {
     "darkTile": "#337533",
     "lightTileOverArt": "rgba(215, 197, 163, 0.62)",
     "darkTileOverArt": "rgba(51, 117, 51, 0.62)",
+    "previewLightTile": "#c2b59f",
+    "previewDarkTile": "#3a673a",
     "labelOnLight": "rgba(138, 101, 18, 0.85)",
     "labelOnDark": "rgba(215, 197, 163, 0.9)",
     "goalOutline": "rgba(255, 255, 255, 0.28)",
@@ -189,8 +197,8 @@ export const FOREST_SNAPSHOT = {
     },
     {
       "text": "#d9d6d0",
-      "surface": "#302e2a",
-      "border": "#514e49"
+      "surface": "#34322e",
+      "border": "#4a4742"
     },
     {
       "text": "#c99160",
@@ -213,7 +221,7 @@ export const FOREST_SNAPSHOT = {
     "blunder": "#f0643e"
   },
   "evaluationChart": {
-    "background": "#171613",
+    "background": "#121110",
     "blueArea": "#2f3f52",
     "blueHighlight": "#3f77aa",
     "redArea": "#5a302d",
@@ -231,7 +239,7 @@ export const FOREST_SNAPSHOT = {
     "badgeOnBlueText": "#d8ecff"
   },
   "clock": {
-    "idleSurface": "#3a3833",
+    "idleSurface": "#3d3a36",
     "idleText": "#c2bfb9",
     "idlePulse": "#68645e",
     "activeSurface": "#e9e5dc",

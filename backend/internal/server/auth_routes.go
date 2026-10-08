@@ -60,6 +60,28 @@ func (server *Server) currentAccount(writer http.ResponseWriter, request *http.R
 	writeJSON(writer, http.StatusOK, authResponse{Account: account})
 }
 
+// signInMethods tells the signed-in player what their account signs in with.
+//
+// A route of its own rather than fields on the account, because the account is
+// also served to anybody who asks for it by id, and this is only its owner's
+// business. The Account screen lists the answer, offers to add whichever of
+// Discord and Apple is missing, and asks it whether to show the "Link your
+// Discord" prompt — which a store review account must never see: the prompt is
+// the first thing on the page, and the link it offers is one the server
+// refuses.
+func (server *Server) signInMethods(writer http.ResponseWriter, request *http.Request) {
+	account, ok := server.requireSession(writer, request)
+	if !ok {
+		return
+	}
+	methods, err := server.data.SignInMethods(request.Context(), account.UserID)
+	if err != nil {
+		writePersistenceError(writer, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, methods)
+}
+
 // identityPolicy publishes the username rule so the frontend applies the same
 // one instead of keeping its own copy, which is how the two drifted before.
 func (server *Server) identityPolicy(writer http.ResponseWriter, _ *http.Request) {
@@ -84,6 +106,10 @@ func writeAuthError(writer http.ResponseWriter, err error) {
 		writeAPIError(writer, http.StatusForbidden, "this account is not registered")
 	case errors.Is(err, persistence.ErrIdentityAlreadyLinked):
 		writeAPIError(writer, http.StatusConflict, err.Error())
+	case errors.Is(err, persistence.ErrStoreReviewLink):
+		writeAPIError(writer, http.StatusForbidden, err.Error())
+	case errors.Is(err, persistence.ErrInvalidIdentity):
+		writeAPIError(writer, http.StatusBadRequest, err.Error())
 	case errors.Is(err, persistence.ErrInvalidUsername):
 		writeAPIError(writer, http.StatusBadRequest, err.Error())
 	case errors.Is(err, persistence.ErrInvalidAccountProfile):

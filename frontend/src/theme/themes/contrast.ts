@@ -44,6 +44,7 @@ export const contrast: ThemeSpec = {
   },
   accent: {
     accent: '#5ee07a',
+    onAccent: '#000000',
     accentBright: '#7ff593',
     accentSoft: '#a8ffb8',
     accentText: '#b6ffc4',

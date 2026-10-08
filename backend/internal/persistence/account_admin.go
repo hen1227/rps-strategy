@@ -52,10 +52,13 @@ type AccountSummary struct {
 	BotCount    int   `json:"botCount"`
 	CreatedAtMs int64 `json:"createdAtUnixMs"`
 	// DiscordVerified is whether Discord vouched for this account, which is a
-	// narrower thing than Registered: that also admits the password accounts
-	// still on the books. It is here because it is one of the filters, and a
-	// filtered list should show the property it was filtered on.
+	// narrower thing than Registered: that also admits Apple and the password
+	// accounts still on the books. It is here because it is one of the
+	// filters, and a filtered list should show the property it was filtered on.
 	DiscordVerified bool `json:"discordVerified"`
+	// AppleLinked is whether this account signs in with Apple, for the same
+	// reason. Admin-only: a player's public account says neither.
+	AppleLinked bool `json:"appleLinked"`
 	// LastPlayedAtMs is when they last finished a game, and nil for an account
 	// that never has — which is the great majority of them. The honest version
 	// of "last seen" on a site whose whole purpose is playing, and what makes
@@ -84,10 +87,12 @@ type AccountFilter struct {
 	// cannot. Nil for either. This is the one that hides the Guests.
 	Registered *bool
 	// DiscordLinked restricts to accounts Discord has vouched for. Narrower than
-	// Registered, which also admits the remaining password accounts.
+	// Registered, which also admits Apple and the remaining password accounts.
 	DiscordLinked *bool
-	Disabled      *bool
-	IsAdmin       *bool
+	// AppleLinked restricts to accounts that sign in with Apple.
+	AppleLinked *bool
+	Disabled    *bool
+	IsAdmin     *bool
 	// Kind is AccountKindHuman or AccountKindBot; empty for both.
 	Kind string
 	// ActiveSinceUnixMs restricts to accounts that finished a game since an
@@ -183,7 +188,7 @@ func (store *Store) SearchAccounts(
 	query := `
 SELECT user_id, kind, username, discord, title, registered, is_admin, disabled,
        elo, games_played, created_at_unix_ms, bot_count, discord_verified,
-       last_played_at
+       apple_linked, last_played_at
 FROM (
     SELECT a.user_id, a.kind, a.username, a.discord, a.title,
            ` + registeredSQL("a") + ` AS registered,
@@ -194,7 +199,8 @@ FROM (
            (SELECT COUNT(*) FROM bots b
              WHERE b.owner_user_id = a.user_id AND b.retired_at_unix_ms IS NULL)
              AS bot_count,
-           a.discord_user_id <> '' AS discord_verified,
+           ` + discordVerifiedSQL("a") + ` AS discord_verified,
+           ` + appleLinkedSQL("a") + ` AS apple_linked,
            (SELECT MAX(played) FROM (
                SELECT MAX(g.finished_at_unix_ms) AS played FROM game_history g
                 WHERE g.red_player_id = a.user_id
@@ -222,7 +228,7 @@ LIMIT ? OFFSET ?
 			&summary.UserID, &summary.Kind, &summary.Username, &summary.Discord,
 			&summary.Title, &summary.Registered, &summary.IsAdmin, &summary.Disabled,
 			&summary.Elo, &summary.GamesPlayed, &summary.CreatedAtMs, &summary.BotCount,
-			&summary.DiscordVerified, &lastPlayed,
+			&summary.DiscordVerified, &summary.AppleLinked, &lastPlayed,
 		); err != nil {
 			return AccountPage{}, fmt.Errorf("read account row: %w", err)
 		}
@@ -257,9 +263,16 @@ func (filter AccountFilter) conditions() (string, []any) {
 	}
 	if filter.DiscordLinked != nil {
 		if *filter.DiscordLinked {
-			clauses = append(clauses, "a.discord_user_id <> ''")
+			clauses = append(clauses, discordVerifiedSQL("a"))
 		} else {
-			clauses = append(clauses, "a.discord_user_id = ''")
+			clauses = append(clauses, "NOT "+discordVerifiedSQL("a"))
+		}
+	}
+	if filter.AppleLinked != nil {
+		if *filter.AppleLinked {
+			clauses = append(clauses, appleLinkedSQL("a"))
+		} else {
+			clauses = append(clauses, "NOT "+appleLinkedSQL("a"))
 		}
 	}
 	if filter.Disabled != nil {
@@ -419,6 +432,13 @@ SELECT (SELECT COUNT(*) FROM game_history WHERE red_player_id = ?1 OR blue_playe
 	// behind an id that no longer resolves.
 	if err := AnonymizeFeedbackAuthorshipTx(ctx, transaction, userID, anonymousName); err != nil {
 		return 0, err
+	}
+	// Every sign-in goes, in both branches, so the identity is free again for
+	// the person to sign up with afresh — a stripped row still holding it would
+	// lock them out for good. Deleting the rows is also what queues the
+	// revocation of an Apple token; see identity_revocation.go.
+	if err := deleteAccountIdentitiesTx(ctx, transaction, userID); err != nil {
+		return 0, fmt.Errorf("anonymize account: %w", err)
 	}
 
 	if appearances == 0 {

@@ -2,7 +2,7 @@ import type { GradeKey } from '@/engine/gameReview';
 
 import type { SideColor } from '@/types/game';
 
-import { REACH_BANDS, reachRamp, withAlpha } from './color';
+import { REACH_BANDS, previewTile, reachRamp, withAlpha } from './color';
 import type { BoardSpec, PlayerSeed, ThemeSpec } from './spec';
 
 // One theme's worth of tokens, assembled from a spec.
@@ -114,6 +114,12 @@ export const buildTheme = (spec: ThemeSpec, boardSpec: BoardSpec) => {
     // here rather than in the rule format.
     lightTileOverArt: withAlpha(boardSpec.lightTile, 0.62),
     darkTileOverArt: withAlpha(boardSpec.darkTile, 0.62),
+    // The same two squares in a thumbnail: a board somebody is looking *at*
+    // rather than playing on. Quieter and leaning towards the card, so a row of
+    // three mode cards reads as three cards with a board on each rather than as
+    // three chequerboards with some text beside them. See `previewTile`.
+    previewLightTile: previewTile(boardSpec.lightTile, spec.surface.surface),
+    previewDarkTile: previewTile(boardSpec.darkTile, spec.surface.surface),
     labelOnLight: withAlpha(boardSpec.labelOnLight, 0.85),
     labelOnDark: withAlpha(boardSpec.labelOnDark, 0.9),
 

@@ -34,8 +34,8 @@ func registeredSession(
 	); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := data.ClaimAccountWithDiscord(
-		t.Context(), userID, username, "discord-"+userID, username,
+	if _, err := data.ClaimAccountWithIdentity(
+		t.Context(), userID, username, persistence.DiscordIdentity("discord-"+userID, username),
 	); err != nil {
 		t.Fatal(err)
 	}

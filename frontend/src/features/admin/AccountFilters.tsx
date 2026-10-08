@@ -99,7 +99,9 @@ export default function AccountFilters({
   onChange,
 }: AccountFiltersProps) {
   // A press on an active toggle clears it. See the note on `Toggle`.
-  const toggle = (key: 'registered' | 'discordVerified' | 'disabled' | 'isAdmin') =>
+  const toggle = (
+    key: 'registered' | 'discordVerified' | 'appleLinked' | 'disabled' | 'isAdmin',
+  ) =>
     onChange({ ...filter, [key]: filter[key] ? undefined : true });
 
   const guestsHidden = filter.registered === true;
@@ -155,6 +157,12 @@ export default function AccountFilters({
           disabled={busy}
           label="Discord linked"
           onPress={() => toggle('discordVerified')}
+        />
+        <Toggle
+          active={filter.appleLinked === true}
+          disabled={busy}
+          label="Apple linked"
+          onPress={() => toggle('appleLinked')}
         />
         <Toggle
           active={filter.kind === 'bot'}

@@ -43,20 +43,20 @@ how a move, a tag or a FEN is written belongs in both.
 [Ranked "true"]
 [Termination "Red wins by resignation"]
 [EndReason "resignation"]
-[PlyCount "12"]
-[MoveNumber "12"]
+[PlyCount "3"]
+[MoveNumber "3"]
 [UTCDate "2026.08.21"]
 [UTCTime "16:29:56"]
 [StartTimeUnixMs "1787329796329"]
 [EndTimeUnixMs "1787329912480"]
-[FinalFEN "3SSS3/3PPP3/3R5/6R2/2R6/3r1r3/3p5/2rp2p2/2s1ss3 r 3bbb3/…"]
+[FinalFEN "2S1SS3/3PPP3/3RR4/5R3/9/9/3rrr3/3pp4/3sssp2 r 2bbbb3/3bbb3/3bbb3/5b3/9/9/3rrr3/3rrr3/3rrrr2"]
 [Generator "rps-strategy-pgn/2"]
 
 1. Sd1-c1 {[%emt 2.104] [%clk 0:05:00.000 0:05:00.896]} 1... Pf8-g9
-{[%emt 1.550] [%clk 0:05:01.450 0:05:00.896]} 2. Rf3xf4
+{[%emt 1.55] [%clk 0:05:01.450 0:05:00.896]} 2. Rf3-f4
 {[%emt 0.981] [%clk 0:05:01.450 0:05:02.915]}
 {[%act draw_offer Red] [%emt 4.002] [%clk 0:04:57.448 0:05:02.915]}
-{[%end resignation Blue] [%emt 1.204] [%clk 0:04:57.448 0:05:01.711]} 1-0
+{[%end resignation Blue] [%emt 1.204] [%clk 0:04:56.244 0:05:02.915]} 1-0
 ```
 
 ### Squares
@@ -131,11 +131,18 @@ left off — ownership then follows the pieces — so a board written by hand fo
 mode where ownership decides nothing need not spell it out. The app's own
 "copy position" writes such a board: outside Total War the field would record
 where the pieces used to be, because a tile no rule reads keeps the colour of
-whoever last stood on it. Rows run from rank 1 to rank
-9 separated by `/`, digits count consecutive empty (or unowned) tiles,
+whoever last stood on it. Rows run from rank 1 upward
+separated by `/`, digits count consecutive empty (or unowned) tiles,
 uppercase letters are Blue pieces and lowercase are Red — the same convention a
-mode's `StartingPosition` uses. Territory is a separate field because a tile
+mode's `StartingPosition` uses, and the reverse of chess FEN's row order, which
+starts from the far side. Territory is a separate field because a tile
 can be owned by a player who has no piece on it, which decides Total War.
+
+A position carries no move counters. The no-capture draw is counted from the
+moves, so a `FinalFEN` on its own cannot say how close its game came to one.
+Its side to move is whoever was on move when the game ended, except after a
+move that ended it: a mode that ends the game on a move returns before passing
+the turn, so the player who made that move is still the one named.
 
 `FEN` is the board the game was actually played from, so replaying an old
 record survives a later redesign of the mode's opening position.

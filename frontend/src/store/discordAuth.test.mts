@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { discordRefusalMessage, ticketFromCallbackURL } from './discordAuth.types.ts';
+import { signInRefusalMessage, ticketFromCallbackURL } from './signInReturn.ts';
 // Importing the *native* half in Node is the assertion that matters most here.
 // Node's loader knows nothing of Metro's `.web.ts`, so this is the file it
 // resolves — and if `expo-web-browser` or `expo-linking` were reached at module
@@ -56,9 +56,9 @@ test('a percent-encoded ticket comes back decoded', () => {
 });
 
 test('every refusal has words, including one nobody planned for', () => {
-  assert.match(discordRefusalMessage('access_denied'), /cancelled/i);
-  assert.match(discordRefusalMessage('expired'), /again/i);
-  assert.notEqual(discordRefusalMessage('something_new'), '');
+  assert.match(signInRefusalMessage('access_denied'), /cancelled/i);
+  assert.match(signInRefusalMessage('expired'), /again/i);
+  assert.notEqual(signInRefusalMessage('something_new'), '');
 });
 
 test('the native half reports no browser module under the test loader', () => {

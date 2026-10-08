@@ -77,26 +77,14 @@ export const canStartSeries = ({
   !busy && Boolean(mode) && Boolean(first) && Boolean(second) && first !== second;
 
 /**
- * The run in one line: what it is played at, how long it is, on what clock.
+ * The run in a few words: how long it is and on what clock. Whether it counts
+ * is the RANKED/CASUAL chip beside it, and the mode is the page's own.
  *
- * Shared by the panel's summary and the pinned bar, so the two cannot describe
- * the same run differently. `pairs` is the raw field text rather than a number
- * because that is what the form holds and what the request will clamp.
+ * Shared by the pinned bar and anything else that describes a run about to
+ * start, so two places cannot describe the same run differently.
  */
-export const seriesSettingsLine = ({
-  casual,
-  clock,
-  mode,
-  pairs,
-}: {
-  casual?: boolean;
-  clock: TimeControl;
-  mode: ModeDefinition;
-  pairs: string;
-}): string =>
-  `${mode.name} · ${pairs} pairs, colours swapped · ${timeControlLabel(clock)}${
-    casual ? ' · casual' : ''
-  }`;
+export const seriesSettingsLine = ({ clock, games }: { clock: TimeControl; games: number }): string =>
+  `${games} game${games === 1 ? '' : 's'} · ${timeControlLabel(clock)}`;
 
 export interface PitBarView {
   /** Whether the bar belongs on screen at all. */
@@ -124,21 +112,26 @@ export const pitBarView = ({
   available,
   clock,
   first,
+  games,
   mode,
-  pairs,
+  ranked,
   second,
 }: {
   /** How many engines could be entered right now. */
   available: number;
   clock: TimeControl;
   first: BotPresence | null;
+  /** How many games the run will ask for. */
+  games: number;
   mode: ModeDefinition;
-  pairs: string;
+  /** A host's run that will count. See `BotSeriesForm.press`. */
+  ranked?: boolean;
   second: BotPresence | null;
 }): PitBarView => {
-  const casual = sameBotOwner(first, second);
-  const settings = seriesSettingsLine({ casual, clock, mode, pairs });
-  const label = casual ? 'START CASUAL SERIES ▶' : 'START SERIES ▶';
+  const counted = Boolean(ranked) && !sameBotOwner(first, second);
+  const settings = seriesSettingsLine({ clock, games });
+  const stakes = counted ? 'ranked' : 'casual';
+  const label = `START ${stakes.toUpperCase()} ▶`;
 
   if (first && second) {
     return {
@@ -147,9 +140,7 @@ export const pitBarView = ({
       hint: null,
       settings,
       label,
-      action: `Start a ${pairs}-pair ${casual ? 'casual ' : ''}${mode.name} series: ${
-        first.name
-      } against ${second.name}`,
+      action: `Start a ${games}-game ${stakes} ${mode.name} series: ${first.name} against ${second.name}`,
     };
   }
 

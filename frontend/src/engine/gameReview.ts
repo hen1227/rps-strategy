@@ -22,6 +22,7 @@
 import {
   allValidMoves,
   applyAnalysisMove,
+  createAnalysisGame,
   createAnalysisGameFrom,
   startingPositionFromGrid,
   type AnalysisGame,
@@ -653,13 +654,16 @@ export const reviewSourceFromPGN = (
   if (!modeId) throw new ReviewError('This record does not say which mode it was played in.');
   const mode = modeFor(modes, modeId, parsed.tag('Variant'));
 
+  // A record with no FEN began from its own mode's opening, the way a chess
+  // PGN with no SetUp began from the standard position. `startingFENOf` in
+  // `backend/internal/notation/parse.go` reads such a file from the same board.
   const setUp = parsed.tag('FEN');
   const start = setUp
     ? (() => {
         const { grid, currentTurn } = decodePosition(setUp);
         return createAnalysisGameFrom(mode, grid, currentTurn, eraOf(mode, grid, currentTurn));
       })()
-    : createAnalysisGameFrom(mode, decodePosition(MODE_FALLBACK_ROWS.join('/')).grid);
+    : createAnalysisGame(mode);
 
   const positions: AnalysisGame[] = [start];
   const moves: RecordedMove[] = [];

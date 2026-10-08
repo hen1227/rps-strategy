@@ -13,7 +13,13 @@ import { createBot, createSeededRandom, type Bot } from '@/engine/bots/engine';
 import { BOT_TUNING, botProfile } from '@/engine/bots/profiles';
 import { inferMoveBetweenGrids } from '@/engine/moveDiff';
 import { openingLineOf } from '@/engine/openingLine';
-import { encodePGN, encodePosition, resultFor, type WritableMove } from '@/engine/pgn';
+import {
+  boardSizeTag,
+  encodePGN,
+  encodePosition,
+  resultFor,
+  type WritableMove,
+} from '@/engine/pgn';
 import { analyzeExclusive } from '@/engine/rpsfish/client';
 import {
   opposingColor,
@@ -663,7 +669,7 @@ export const createBotSlice: StateCreator<GameStore, [], [], BotSlice> = (set, g
           { name: 'GameId', value: botSession.gameId },
           { name: 'Variant', value: botGame.mode.name },
           { name: 'ModeId', value: botGame.mode.id },
-          { name: 'BoardSize', value: '9' },
+          { name: 'BoardSize', value: boardSizeTag(start.grid) },
           { name: 'SetUp', value: '1' },
           { name: 'FEN', value: encodePosition(start.grid, start.currentTurn) },
           { name: 'RedId', value: ids.Red },

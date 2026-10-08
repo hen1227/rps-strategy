@@ -5,6 +5,7 @@ import (
 	"crypto/ecdh"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,6 +14,13 @@ import (
 
 	"rps-strategy/backend/internal/persistence"
 )
+
+// everyTransport is both kinds of address, for a test asking whether a row
+// exists at all rather than whether this server could use it.
+var everyTransport = []persistence.PushTransport{
+	persistence.TransportWebPush,
+	persistence.TransportAPNs,
+}
 
 // A VAPID pair, generated once so the tests below cost one key generation
 // rather than one each.
@@ -142,7 +150,7 @@ func TestAGoneSubscriptionIsPrunedAndItsSeekDropped(t *testing.T) {
 
 	server.push.Send("ada", pushPayload{Title: "hello"})
 
-	reachable, err := server.data.HasPushSubscription(context.Background(), "ada")
+	reachable, err := server.data.HasPushSubscription(context.Background(), "ada", everyTransport...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,12 +182,155 @@ func TestAServerErrorDoesNotPrune(t *testing.T) {
 
 	server.push.Send("ada", pushPayload{Title: "hello"})
 
-	reachable, err := server.data.HasPushSubscription(context.Background(), "ada")
+	reachable, err := server.data.HasPushSubscription(context.Background(), "ada", everyTransport...)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !reachable {
 		t.Fatal("a transient failure must not cost somebody their subscription")
+	}
+}
+
+// A phone registered under an Apple key this deployment no longer has is no way
+// in. Counting it would keep a seek on the board for somebody no summons can
+// reach, which is the one thing the away queue must never do.
+func TestAnAddressThisServerCannotSendToIsNoWayIn(t *testing.T) {
+	server, endpoint := pushTestServer(t, func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusCreated)
+	})
+	server.push.apns = &apnsSender{}
+	seedAccount(t, server, "ada")
+	if _, err := server.data.SavePushSubscription(context.Background(), persistence.PushSubscription{
+		Endpoint:  testDeviceToken,
+		UserID:    "ada",
+		Transport: persistence.TransportAPNs,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if server.push.Reachable(context.Background(), "ada") {
+		t.Fatal("a phone this server has no Apple key for must not count as reachable")
+	}
+
+	if _, err := server.data.SavePushSubscription(
+		context.Background(),
+		testSubscription(t, "ada", endpoint.URL+"/laptop"),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if !server.push.Reachable(context.Background(), "ada") {
+		t.Fatal("a browser this server can encrypt for is a way in")
+	}
+}
+
+// The same rule at the other end. A browser that has gone was the last way in
+// even with a phone row beside it, when that phone is one this server cannot
+// reach — so the seek left behind has to come off the board.
+func TestTheLastSendableAddressGoingDropsTheSeek(t *testing.T) {
+	server, endpoint := pushTestServer(t, func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusGone)
+	})
+	server.push.apns = &apnsSender{}
+	seedAccount(t, server, "ada")
+	if _, err := server.data.SavePushSubscription(
+		context.Background(),
+		testSubscription(t, "ada", endpoint.URL+"/laptop"),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := server.data.SavePushSubscription(context.Background(), persistence.PushSubscription{
+		Endpoint:  testDeviceToken,
+		UserID:    "ada",
+		Transport: persistence.TransportAPNs,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	dropped := make(chan string, 1)
+	server.push.onUnreachable = func(userID string) { dropped <- userID }
+
+	server.push.Send("ada", pushPayload{Title: "hello"})
+
+	select {
+	case userID := <-dropped:
+		if userID != "ada" {
+			t.Fatalf("the wrong person was dropped: %s", userID)
+		}
+	default:
+		t.Fatal("a phone this server cannot reach must not keep the seek alive")
+	}
+}
+
+// "Sent" is a claim the test button repeats to a person, so only what a push
+// service took counts as sent. A refusal and a gone address are reported apart,
+// because each asks something different of whoever pressed the button.
+func TestASendReportsOnlyWhatWasAccepted(t *testing.T) {
+	server, endpoint := pushTestServer(t, func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/took-it":
+			writer.WriteHeader(http.StatusCreated)
+		case "/gone":
+			writer.WriteHeader(http.StatusGone)
+		default:
+			writer.WriteHeader(http.StatusForbidden)
+		}
+	})
+	seedAccount(t, server, "ada")
+	for _, path := range []string{"/took-it", "/gone", "/refused"} {
+		if _, err := server.data.SavePushSubscription(
+			context.Background(),
+			testSubscription(t, "ada", endpoint.URL+path),
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	report := server.push.SendTo("ada", pushPayload{Title: "hello"})
+	if report != (pushReport{Delivered: 1, Removed: 1, Failed: 1}) {
+		t.Fatalf("expected one delivered, one removed and one failed, got %+v", report)
+	}
+	remaining, err := server.data.PushSubscriptionsFor(context.Background(), "ada")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(remaining) != 2 {
+		t.Fatalf("only the gone address should be forgotten, %d remain", len(remaining))
+	}
+}
+
+// The case the report exists for: an Apple key this server has wrong. Whoever
+// pressed the button must hear that it was refused, not "sent, check your
+// settings" — the fault is not on their phone.
+func TestTheTestRouteSaysWhenAppleRefusedIt(t *testing.T) {
+	server, endpoint := pushTestServer(t, func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(writer).Encode(map[string]string{"reason": "InvalidProviderToken"})
+	})
+	withAPNs(t, server, endpoint)
+	claimAccount(t, server.data, "ada")
+	if _, err := server.data.SavePushSubscription(context.Background(), persistence.PushSubscription{
+		Endpoint:  testDeviceToken,
+		UserID:    "ada",
+		Transport: persistence.TransportAPNs,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "/api/push/test?userId=ada", strings.NewReader("{}"))
+	request.Header.Set("Authorization", "Bearer "+testProfileKey)
+	recorder := httptest.NewRecorder()
+	server.Routes().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", recorder.Code, recorder.Body)
+	}
+	var answer struct {
+		Delivered int `json:"delivered"`
+		Removed   int `json:"removed"`
+		Failed    int `json:"failed"`
+	}
+	if err := json.NewDecoder(recorder.Body).Decode(&answer); err != nil {
+		t.Fatal(err)
+	}
+	if answer.Delivered != 0 || answer.Removed != 0 || answer.Failed != 1 {
+		t.Fatalf("a refused key must be reported as a failure, got %+v", answer)
 	}
 }
 

@@ -251,6 +251,12 @@ type ladderPoolState struct {
 	// yardsticks is which bots are reference engines, filled on first use. See
 	// botIsYardstick.
 	yardsticks map[string]bool
+	// arena is the weekly arena the pool stands down for, under its own lock.
+	// See ladder_pause.go.
+	arena ladderArena
+	// stoodDown is the last slot skipped for it, so that the skip is logged once
+	// rather than on every look inside the grace.
+	stoodDown time.Time
 }
 
 // runLadderRound is the ticker's entry point: a clock check almost every time,
@@ -311,6 +317,26 @@ func (server *Server) runLadderRound(now time.Time) {
 	server.ladderPool.mu.Lock()
 	server.ladderPool.held = nil
 	server.ladderPool.mu.Unlock()
+
+	// An hour the weekly arena has is skipped, the way a drained one is. See
+	// ladder_pause.go.
+	//
+	// Not marked, unlike an hour that found nobody online. No round ran, so the
+	// row keeps naming the last one that did — which is what the page reports as
+	// the last round — and the slot stays owed for the rest of its grace. That
+	// matters on the one evening the arena is called off for want of a field: it
+	// is called off a minute after the hour, the stand-down lifts with it, and
+	// the round still owed is seated then rather than lost.
+	if refusal := server.ladderPausedFor(now); refusal != nil {
+		server.ladderPool.mu.Lock()
+		first := !server.ladderPool.stoodDown.Equal(slot)
+		server.ladderPool.stoodDown = slot
+		server.ladderPool.mu.Unlock()
+		if first {
+			log.Printf("ladder pool: skipped the %s round: %v", slot.Format("15:04 MST"), refusal)
+		}
+		return
+	}
 
 	seated := server.seatLadderRound(ctx, now)
 	// Marked whether or not anything was seated. A round with nobody online is
@@ -481,6 +507,11 @@ func (server *Server) ladderBotStanding(
 	}
 	if server.botsAreBenched(time.Now()) {
 		return out("all engines are benched")
+	}
+	// Every engine at once, like the bench, but for ranked games only: the arena
+	// and anything casual are unaffected. See ladder_pause.go.
+	if refusal := server.ladderPausedFor(time.Now()); refusal != nil {
+		return out(refusal.Error())
 	}
 	if botHasOwnDrain(client) {
 		return out("shutting down")
@@ -760,6 +791,11 @@ type LadderRoundPreview struct {
 	// Entered is how many engines are online, consenting and able to play this
 	// round's mode.
 	Entered int `json:"entered"`
+	// PausedFor names the weekly arena this round will not run for, and is
+	// empty for a round that will. The arena's end is not known until it comes,
+	// so every round from the start of the stand-down on carries it; the first
+	// is the one worth reading. See ladder_pause.go.
+	PausedFor string `json:"pausedFor,omitempty"`
 }
 
 // ladderSchedule is this round and the next few, with the current field size.
@@ -775,6 +811,7 @@ func (server *Server) ladderSchedule(ctx context.Context, now time.Time, ahead i
 		return nil
 	}
 	next := nextLadderRound(now, time.UnixMilli(state.LastRoundAtUnixMs))
+	stand := server.ladderStandDown(now)
 
 	previews := make([]LadderRoundPreview, 0, ahead)
 	for index := range ahead {
@@ -788,6 +825,9 @@ func (server *Server) ladderSchedule(ctx context.Context, now time.Time, ahead i
 		}
 		if index == 0 {
 			preview.Entered = server.ladderFieldSize(ctx, modeID)
+		}
+		if stand.covers(at) {
+			preview.PausedFor = stand.event
 		}
 		previews = append(previews, preview)
 	}

@@ -1,13 +1,15 @@
 import { useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
 
 import BotHistoryFeed from './BotHistoryFeed';
 import BotIcon from './BotIcon';
-import { seriesSettingsLine } from './pitSelection';
+import { StakesChip } from './OccasionTag';
+import { notEntered } from './rankedMatch';
 import { MIN_MINUTES, type BotSeriesForm } from './useBotSeriesForm';
 import { engineElo } from '@/features/live/liveSelectors';
 import { links } from '@/navigation/links';
 import { botIconUrl } from '@/store/api/bots';
+import { useGameStore } from '@/store/gameStore';
 import { timeControlLabel } from '@/store/setupSelectors';
 import { colors, radius, space, themedSheet, type } from '@/theme';
 import LinkRow from '@/ui/LinkRow';
@@ -15,6 +17,7 @@ import {
   Banner,
   EmptyState,
   GhostButton,
+  GhostLink,
   LabeledInput,
   Panel,
   PrimaryButton,
@@ -35,7 +38,7 @@ import type { BotPresence } from '@/types/protocol';
 // server-side limits: at most three pairs, at most ten minutes each, and one
 // running series per person. The HOST CONTROLS button below lifts all three for
 // somebody who holds the host token, which is what a fifty-pair run at a real
-// time control needs.
+// time control needs — and lets that run count on the ladder.
 //
 // The four numbers that shape a run sit behind a toggle. Every one of them has a
 // sensible default, none of them is the decision anybody came here to make, and
@@ -70,6 +73,7 @@ import type { BotPresence } from '@/types/protocol';
  */
 function PitSlot({
   bot,
+  drawn,
   mirrored,
   mode,
   onClear,
@@ -77,6 +81,12 @@ function PitSlot({
   stacked,
 }: {
   bot: BotPresence | null;
+  /**
+   * An empty side the server will fill: a ranked match against an engine it
+   * draws. Still a `?` — nobody knows who it will be — but the line under it
+   * says where the answer comes from instead of asking for a pick.
+   */
+  drawn?: boolean;
   /**
    * The two sides are one above the other. `flexBasis` is a *height* on a
    * column axis, so the side-by-side basis has to be given back or each slot
@@ -122,7 +132,7 @@ function PitSlot({
           which is the one string on this panel that has to be readable.
         */}
         <Text numberOfLines={2} style={[styles.slotHint, align]}>
-          PICK ONE ON A CARD ABOVE
+          {drawn ? 'RANDOM OPPONENT' : 'PICK AN ENGINE ABOVE'}
         </Text>
       </View>
     </>
@@ -157,6 +167,68 @@ function PitSlot({
     >
       {body}
     </Pressable>
+  );
+}
+
+/**
+ * RANKED or CASUAL, as two cards that each say their rule in a few words.
+ *
+ * The one decision on this panel, so it is the first thing in it and it is
+ * offered to everybody — it used to appear only for a host, or for an owner
+ * with one of their engines already in the pit, so most people never learned
+ * a series could count.
+ *
+ * Selection is neutral, the way every chip on the site is: the brightest
+ * border and the strongest letters. Green is for the button that starts it.
+ */
+function StakesPicker({
+  asHost,
+  onChange,
+  ranked,
+}: {
+  asHost: boolean;
+  onChange: (ranked: boolean) => void;
+  ranked: boolean;
+}) {
+  const options = [
+    {
+      value: true,
+      title: 'Ranked',
+      detail: asHost ? 'Counts toward ratings. Your settings.' : 'Counts toward ratings. 2 games.',
+    },
+    { value: false, title: 'Casual', detail: "Doesn't count. Your length and clock." },
+  ];
+  return (
+    <View accessibilityRole="radiogroup" style={styles.stakesRow}>
+      {options.map((option) => {
+        const selected = option.value === ranked;
+        return (
+          <Pressable
+            accessibilityLabel={`${option.title}. ${option.detail}`}
+            accessibilityRole="radio"
+            accessibilityState={{ selected }}
+            aria-checked={selected}
+            key={option.title}
+            onPress={() => onChange(option.value)}
+            style={({ pressed }) => [
+              styles.stakesOption,
+              selected && styles.stakesOptionSelected,
+              pressed && styles.pressed,
+            ]}
+          >
+            <View style={styles.stakesTop}>
+              <View style={[styles.radio, selected && styles.radioSelected]}>
+                {selected ? <View style={styles.radioDot} /> : null}
+              </View>
+              <StakesChip ranked={option.value} />
+            </View>
+            <Text style={[styles.stakesDetail, selected && styles.stakesDetailSelected]}>
+              {option.detail}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </View>
   );
 }
 
@@ -200,14 +272,22 @@ export default function BotSeriesPanel({
   // the space it actually has. Safe against oscillation because the row fills
   // its parent either way, so the flag cannot change the width it is read from.
   const [narrow, setNarrow] = useState(false);
+  const accountId = useGameStore((state) => state.accountId);
 
-  const { admin, asHost } = form;
+  const { admin, asHost, press } = form;
+  // A ranked match against an engine the server draws: the empty side is the
+  // drawn opponent rather than a pick still to make.
+  const drawn = form.serverFormat && press.kind === 'random';
+  // An engine of the viewer's own that is not in the ranked ladder is one press
+  // away on the rounds page, so that refusal comes with the way to fix it.
+  const missing = form.ranked ? notEntered(press) : undefined;
+  const ownMissing = Boolean(missing?.ownerUserId) && missing?.ownerUserId === accountId;
 
   return (
     <>
       <Panel style={asHost ? styles.adminPanel : undefined}>
         <SectionHeading
-          eyebrow={asHost ? 'HOST' : 'ANYBODY'}
+          eyebrow={asHost ? 'HOST' : 'BOT SERIES'}
           title="Pit two engines against each other"
           trailing={
             admin.bySession ? undefined : (
@@ -249,156 +329,172 @@ export default function BotSeriesPanel({
         {form.error ? (
           <Banner message={form.error} onDismiss={form.dismissError} tone="error" />
         ) : null}
+        {form.notice ? <Banner message={form.notice} onDismiss={form.dismissNotice} /> : null}
 
         {available < 2 ? (
           <EmptyState
             detail={
               available === 1
-                ? "One engine is available. A series needs two."
-                : "No engines are available. A series needs two."
+                ? 'One engine is available. A series needs two.'
+                : 'No engines are available. A series needs two.'
             }
             title="Not enough free engines"
           />
         ) : (
           <>
-        {/*
-          The fight itself, at the size of the decision. Both slots and the SWAP
-          between them are the same control the cards above are — press a card's
-          green button to fill a side, press a portrait here to empty one.
-        */}
-        <View
-          onLayout={(event) => setNarrow(event.nativeEvent.layout.width < 520)}
-          style={[styles.pit, narrow && styles.pitStacked]}
-        >
-          <PitSlot
-            bot={first}
-            mode={mode}
-            onClear={() => onClear('first')}
-            role="FIRST"
-            stacked={narrow}
-          />
-          <View style={[styles.versus, narrow && styles.versusStacked]}>
-            <Text style={styles.versusText}>VS</Text>
-            <GhostButton
-              accessibilityLabel="Exchange the two engines"
-              compact
-              disabled={!first && !second}
-              label="SWAP"
-              onPress={onSwap}
-            />
-          </View>
-          {/*
-            Facing inward only while the two are side by side. Stacked, a
-            right-aligned second slot is not a fight, it is one box of text
-            hanging off the wrong edge.
-          */}
-          <PitSlot
-            bot={second}
-            mirrored={!narrow}
-            mode={mode}
-            onClear={() => onClear('second')}
-            role="SECOND"
-            stacked={narrow}
-          />
-        </View>
+            <StakesPicker asHost={asHost} onChange={form.setRanked} ranked={form.ranked} />
 
-        {/*
-          The same sentence the bar carries, from the same place, so the two
-          cannot describe one run differently.
-        */}
-        <Text style={styles.summary}>
-          {first && second
-            ? seriesSettingsLine({ clock: form.clock, mode, pairs: form.pairs })
-            : `Pick two engines to play a casual ${mode.name} series.`}
-        </Text>
+            {/*
+              The fight itself, at the size of the decision. Both slots and the
+              SWAP between them are the same control the cards above are —
+              press a card's button to fill a side, press a portrait here to
+              empty one.
+            */}
+            <View
+              onLayout={(event) => setNarrow(event.nativeEvent.layout.width < 520)}
+              style={[styles.pit, narrow && styles.pitStacked]}
+            >
+              <PitSlot
+                bot={first}
+                drawn={drawn}
+                mode={mode}
+                onClear={() => onClear('first')}
+                role="FIRST"
+                stacked={narrow}
+              />
+              <View style={[styles.versus, narrow && styles.versusStacked]}>
+                <Text style={styles.versusText}>VS</Text>
+                <GhostButton
+                  accessibilityLabel="Exchange the two engines"
+                  compact
+                  disabled={!first && !second}
+                  label="SWAP"
+                  onPress={onSwap}
+                />
+              </View>
+              {/*
+                Facing inward only while the two are side by side. Stacked, a
+                right-aligned second slot is not a fight, it is one box of text
+                hanging off the wrong edge.
+              */}
+              <PitSlot
+                bot={second}
+                drawn={drawn}
+                mirrored={!narrow}
+                mode={mode}
+                onClear={() => onClear('second')}
+                role="SECOND"
+                stacked={narrow}
+              />
+            </View>
 
-        {/*
-          Where the button is. This panel describes a run and no longer starts
-          one, and a settings form with no action in it is a form somebody will
-          hunt for the action in.
-        */}
-        <Text style={styles.help}>Press START SERIES below when ready.</Text>
+            {/*
+              Only what stops the press. What the run will be is on the bar at
+              the foot of the page, beside the button that starts it.
+            */}
+            {form.ranked && form.rankedBlocker ? (
+              <View style={styles.blockerRow}>
+                <Text style={styles.blocker}>{form.rankedBlocker}</Text>
+                {ownMissing ? (
+                  <GhostLink compact href={links.rounds()} label="ENTER IT ›" />
+                ) : null}
+              </View>
+            ) : null}
 
-        {form.sameOwner ? (
-          <Text style={styles.help}>
-            These are both your engines. Series are casual and do not affect ratings.
-          </Text>
-        ) : null}
+            {optionsOpen && !form.serverFormat ? (
+              <View style={styles.fields}>
+                <LabeledInput
+                  hint={`Two games each · max ${form.maxPairs}`}
+                  keyboardType="number-pad"
+                  label="PAIRS"
+                  onChangeText={form.setPairs}
+                  value={form.pairs}
+                />
+                <LabeledInput
+                  hint={`Random first moves · max ${form.maxPlies}`}
+                  keyboardType="number-pad"
+                  label="OPENING PLIES"
+                  onChangeText={form.setPlies}
+                  value={form.plies}
+                />
+                <LabeledInput
+                  hint="Optional"
+                  keyboardType="number-pad"
+                  label="SEED"
+                  onChangeText={form.setSeed}
+                  value={form.seed}
+                />
+                <LabeledInput
+                  hint={`${MIN_MINUTES} to ${form.maxMinutes}`}
+                  keyboardType="decimal-pad"
+                  label="MINUTES EACH"
+                  onChangeText={form.setMinutes}
+                  value={form.minutes}
+                />
+              </View>
+            ) : null}
 
-        {optionsOpen ? (
-          <View style={styles.fields}>
-            <LabeledInput
-              hint={`Played twice each, colours swapped · max ${form.maxPairs}`}
-              keyboardType="number-pad"
-              label="PAIRS"
-              onChangeText={form.setPairs}
-              value={form.pairs}
-            />
-            <LabeledInput
-              hint={`Random moves both bots start from · max ${form.maxPlies}`}
-              keyboardType="number-pad"
-              label="OPENING PLIES"
-              onChangeText={form.setPlies}
-              value={form.plies}
-            />
-            <LabeledInput
-              hint="Blank picks one"
-              keyboardType="number-pad"
-              label="SEED"
-              onChangeText={form.setSeed}
-              value={form.seed}
-            />
-            <LabeledInput
-              hint={`${MIN_MINUTES} is a six-second bullet clock · max ${form.maxMinutes}`}
-              keyboardType="decimal-pad"
-              label="MINUTES EACH"
-              onChangeText={form.setMinutes}
-              value={form.minutes}
-            />
-          </View>
-        ) : null}
-
-        <View style={styles.actions}>
-          <GhostButton
-            compact
-            label={
-              optionsOpen
-                ? 'HIDE OPTIONS'
-                : `${form.pairs} PAIRS · ${form.plies} PLIES · ${timeControlLabel(form.clock)}`
-            }
-            onPress={() => setOptionsOpen(!optionsOpen)}
-          />
-        </View>
+            {/*
+              A ranked match has no settings to open: its length and clock are
+              the server's, which is the whole of why it counts.
+            */}
+            {form.serverFormat ? null : (
+              <View style={styles.actions}>
+                <GhostButton
+                  compact
+                  label={
+                    optionsOpen
+                      ? 'HIDE OPTIONS'
+                      : `${form.games} GAMES · ${timeControlLabel(form.clock)}`
+                  }
+                  onPress={() => setOptionsOpen(!optionsOpen)}
+                />
+              </View>
+            )}
           </>
         )}
 
         {/*
-        Where these runs end up. The standings used to be copied onto this page
-        as well, which made a page about starting a run twice as long as the
-        run's own scoreboard.
-      */}
-        <LinkRow
-          detail="Ranked engine standings, and every game behind them."
-          href={links.leaderboard()}
-          title="The bot ladder"
-        />
+          Where these runs end up. The standings used to be copied onto this page
+          as well, which made a page about starting a run twice as long as the
+          run's own scoreboard.
+        */}
+        <LinkRow detail="Ratings and results." href={links.leaderboard()} title="The bot ladder" />
       </Panel>
 
       {/*
-      The same feed the Leaderboard carries, because it is the same question.
-      What this page adds is the one thing only it can: a STOP button on a run
-      you started, which needs the identity and the admin token the form is
-      already holding.
-    */}
+        The same feed the Leaderboard carries, because it is the same question.
+        What this page adds is the one thing only it can: a STOP button on a run
+        you started, which needs the identity and the admin token the form is
+        already holding.
+      */}
       <BotHistoryFeed
-        emptyDetail="Pick two engines above, then press START SERIES."
+        emptyDetail="Pick two engines above to start one."
         eyebrow="RESULTS"
         refreshKey={form.changed}
-        seriesAction={(run) =>
-          String(run.status).toLowerCase() === 'running' && (asHost || form.mine(run)) ? (
-            <GhostButton compact label="STOP" onPress={() => form.stop(run)} />
-          ) : null
-        }
+        seriesAction={(run) => {
+          if (String(run.status).toLowerCase() === 'running') {
+            // A ranked run plays both its games whoever asked for it — the
+            // server refuses anybody but a host — so its requester is offered
+            // no STOP to be refused by.
+            return asHost || (form.mine(run) && run.casual) ? (
+              <GhostButton compact label="STOP" onPress={() => form.stop(run)} />
+            ) : null;
+          }
+          // A host may move a finished run to the other side of ranked and
+          // casual, games and all; the ladder is refitted as it happens.
+          return asHost ? (
+            <GhostButton
+              accessibilityLabel={`${run.casual ? 'Make ranked' : 'Make casual'}: ${
+                run.firstBotName ?? 'first engine'
+              } against ${run.secondBotName ?? 'second engine'}`}
+              compact
+              disabled={form.moving === run.seriesId}
+              label={run.casual ? 'MAKE RANKED' : 'MAKE CASUAL'}
+              onPress={() => form.reclassify(run)}
+            />
+          ) : null;
+        }}
         title="Recent runs"
       />
     </>
@@ -407,8 +503,43 @@ export default function BotSeriesPanel({
 
 const styles = themedSheet(() => ({
   adminPanel: { borderColor: colors.goldBorder, backgroundColor: colors.goldSurfaceDeep },
-  help: { ...type.body, color: colors.textMuted, marginTop: space.small },
-  summary: { ...type.body, color: colors.textDim, marginTop: space.medium },
+  blocker: { ...type.label, color: colors.accentSoft },
+  blockerRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: space.small,
+    marginTop: space.small,
+  },
+
+  // Side by side while there is room, one above the other on a phone — a
+  // basis rather than a measured flag, since each option wraps its own text.
+  stakesRow: { flexDirection: 'row', flexWrap: 'wrap', gap: space.small, marginTop: space.medium },
+  stakesOption: {
+    flexBasis: 240,
+    flexGrow: 1,
+    gap: space.snug,
+    padding: space.medium,
+    borderRadius: radius.medium,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceSunken,
+  },
+  stakesOptionSelected: { borderColor: colors.borderLight, backgroundColor: colors.surfaceMuted },
+  stakesTop: { flexDirection: 'row', alignItems: 'center', gap: space.small },
+  stakesDetail: { ...type.body, color: colors.textMuted },
+  stakesDetailSelected: { color: colors.textSoft },
+  radio: {
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    borderWidth: 1.5,
+    borderColor: colors.borderLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  radioSelected: { borderColor: colors.textStrong },
+  radioDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.textStrong },
   pit: {
     flexDirection: 'row',
     alignItems: 'stretch',

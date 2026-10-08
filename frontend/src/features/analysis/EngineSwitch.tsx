@@ -72,9 +72,9 @@ const styles = themedSheet(() => ({
     borderColor: colors.borderStrong,
     backgroundColor: colors.surface,
   },
-  buttonActive: { borderColor: colors.accent, backgroundColor: colors.accentSurfaceRaised },
+  buttonActive: { borderColor: colors.borderLight, backgroundColor: colors.surfaceMuted },
   buttonText: { color: colors.textMuted, fontSize: 7, fontWeight: '900' },
-  buttonTextActive: { color: colors.accentSoft },
+  buttonTextActive: { color: colors.textStrong },
   status: { color: colors.textMuted, fontSize: 7, fontWeight: '900', flexShrink: 1, minWidth: 0 },
   pressed: { opacity: 0.68 },
 }));

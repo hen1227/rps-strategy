@@ -11,7 +11,7 @@ import (
 	"rps-strategy/backend/internal/notation"
 )
 
-// Folding a guest account into a Discord account that has never played.
+// Folding a guest account into a signed-in account that has never played.
 //
 // The narrow rule is what makes this affordable. A general two-way merge would
 // have to arbitrate two Elos, reconcile two head-to-head records, and cope with
@@ -68,7 +68,7 @@ func (store *Store) MergeAccountHistory(
 	if target.disabled != 0 || source.disabled != 0 {
 		return 0, ErrAccountDisabled
 	}
-	if accountIsRegistered(source.passwordHash, source.discordUserID) {
+	if source.registered {
 		return 0, ErrMergeSourceIsRegistered
 	}
 	if target.gamesPlayed > 0 {
@@ -177,16 +177,15 @@ WHERE user_id = ?
 }
 
 type mergeAccount struct {
-	kind          string
-	disabled      int
-	passwordHash  string
-	discordUserID string
-	username      string
-	elo           int
-	wins          int
-	losses        int
-	draws         int
-	gamesPlayed   int
+	kind        string
+	disabled    int
+	registered  bool
+	username    string
+	elo         int
+	wins        int
+	losses      int
+	draws       int
+	gamesPlayed int
 }
 
 func readMergeAccount(
@@ -196,11 +195,11 @@ func readMergeAccount(
 ) (mergeAccount, error) {
 	var account mergeAccount
 	err := transaction.QueryRowContext(ctx, `
-SELECT kind, disabled, password_hash, discord_user_id, username,
+SELECT kind, disabled, `+registeredSQL("")+`, username,
        elo, wins, losses, draws, games_played
 FROM accounts WHERE user_id = ?
 `, userID).Scan(
-		&account.kind, &account.disabled, &account.passwordHash, &account.discordUserID,
+		&account.kind, &account.disabled, &account.registered,
 		&account.username, &account.elo, &account.wins, &account.losses,
 		&account.draws, &account.gamesPlayed,
 	)

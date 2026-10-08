@@ -168,10 +168,11 @@ export interface TournamentDeletion {
   /**
    * Whoever won it, when it was a finished event.
    *
-   * Reported because of a consequence that is otherwise invisible: the
-   * Tournament Champion title is recomputed from the tournament table rather
-   * than stored, so deleting the event takes the title away from whoever won
-   * it. The screen says so before the second press.
+   * Reported so the notice after a deletion can say what it did to them, which
+   * is easy to get wrong. A person keeps any title the event earned them, since
+   * an award is permanent. An engine's tags are recomputed from the events still
+   * on record, so a cup's Cup Winner goes with it, and an arena's win stops
+   * counting toward its crowns.
    */
   championUserIds?: string[];
   /**

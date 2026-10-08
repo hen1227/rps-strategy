@@ -12,13 +12,14 @@ import (
 
 // Password hashing for the accounts that still have one.
 //
-// This file is on its way out. Discord is the only way to create an account
-// now, so nothing in production derives a *new* hash any more: hashPassword and
-// the length rule below survive because the tests that cover legacy sign-in
-// have to build a legacy fixture, and a fixture built with anything other than
-// the real derivation would not be testing the real thing. The read path —
-// verifyPassword and burnPasswordTime — is still live, and stays until the last
-// password account has linked a Discord identity.
+// Discord is the only way a player can create an account now. The one thing in
+// production that still derives a *new* hash is a store review account — the
+// sign-in handed to App Review and Google Play's reviewers, who cannot get
+// through Discord — and store_review.go only derives one for an account it made
+// itself. The tests that cover legacy sign-in use hashPassword too, because a
+// fixture built with anything other than the real derivation would not be
+// testing the real thing. The read path — verifyPassword and burnPasswordTime —
+// stays for as long as either kind of password account exists.
 //
 // The profile key next door is a 256-bit random string, so an unsalted SHA-256
 // of it is fine: there is nothing to guess. A password is the opposite — low

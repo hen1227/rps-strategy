@@ -119,3 +119,22 @@ test('the view carries the server own count of the field', () => {
   // is the one figure available before that route answers.
   assert.equal(ladderRoundView(pool(), MODES, 0)?.entered, 3);
 });
+
+test('a round the weekly arena has is paused, and says for what', () => {
+  // The server marks it; the view only has to carry it, so that neither the
+  // rail nor the page counts down to a round that is not coming.
+  const arena = pool({
+    schedule: [
+      {
+        modeId: 'V5',
+        initialTimeMs: 180_000,
+        incrementMs: 1_000,
+        atUnixMs: 3_600_000,
+        entered: 0,
+        pausedFor: 'Weekend Bot Arena #3',
+      },
+    ],
+  });
+  assert.equal(ladderRoundView(arena, MODES, 0)?.pausedFor, 'Weekend Bot Arena #3');
+  assert.equal(ladderRoundView(pool(), MODES, 0)?.pausedFor, null);
+});

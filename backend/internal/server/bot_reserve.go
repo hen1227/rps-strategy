@@ -31,7 +31,9 @@ import (
 // such path for free. It is also precisely wrong here: the whole point of a
 // reservation is that *tournament* pairings still go through. Reserve is a
 // narrower answer asked at the two doors that lead somewhere else — a challenge
-// and a series — and nowhere near the pairing code.
+// and a series — and nowhere near the pairing code. A series that was already
+// running when the event began is asked again at its next pair boundary, and
+// ends there; see playNextSeriesGame.
 //
 // # Why it is cached
 //
@@ -79,6 +81,9 @@ func (server *Server) refreshBotReservations() {
 	server.reservations.mu.Lock()
 	server.reservations.byUserID = held
 	server.reservations.mu.Unlock()
+	// The same read answers whether the ranked pool is standing down for the
+	// weekly arena, and it changes at the same moments. See ladder_pause.go.
+	server.ladderPool.arena.observeEvents(tournaments)
 }
 
 // botReservation returns the name of the event holding a bot account, or empty

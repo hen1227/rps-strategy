@@ -1178,7 +1178,7 @@ const styles = themedSheet(() => ({
   },
   effortRow: { flexDirection: 'row', justifyContent: 'flex-end', paddingBottom: 8 },
   titleCopy: { flex: 1, minWidth: 0, paddingHorizontal: 10 },
-  kicker: { color: colors.accentBright, fontSize: 8, fontWeight: '900', letterSpacing: 1.35 },
+  kicker: { color: colors.textFaint, fontSize: 8, fontWeight: '900', letterSpacing: 1.35 },
   title: { color: colors.textStrong, fontSize: 18, fontWeight: '900', marginTop: 2 },
   // Riding inside the title's line, at the size of an eyebrow rather than of
   // the names: a phone header holds `RED Henhen1227 vs BLUE Guest` at these

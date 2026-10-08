@@ -164,12 +164,21 @@ type Server struct {
 	// and therefore the only reason a seek may outlive its socket.
 	push *pushSender
 
-	// Discord sign-in, and the two short-lived maps it needs: one for a flow
-	// that is out at Discord's consent screen, one for a finished conversation
-	// waiting to be redeemed. Both are in memory on purpose — see ttlStore.
-	discord        *discordAuth
-	discordFlows   *ttlStore[discordFlow]
-	discordTickets *ttlStore[discordTicket]
+	// Signing in, and the short-lived maps it needs: a Discord flow out at its
+	// consent screen; an Apple sign-in out at the phone's sheet (keyed by its
+	// nonce) or at Apple's website (keyed by its state); and a finished
+	// sign-in from either provider, waiting to be redeemed. All in memory on
+	// purpose — see ttlStore.
+	discord       *discordAuth
+	discordFlows  *ttlStore[discordFlow]
+	apple         *appleAuth
+	appleNonces   *ttlStore[appleFlow]
+	appleFlows    *ttlStore[appleFlow]
+	signInTickets *ttlStore[signInTicket]
+	// revocations wakes the worker that tells Apple a deleted account's token
+	// is no longer wanted, so a deletion is followed by an attempt at once
+	// rather than at the next minute. See identity_revocation.go.
+	revocations chan struct{}
 	// Pairs that have been made but not seated: the thirty seconds in which a
 	// summoned player can still come and take their seat. Guarded by mu, like
 	// the tournament readiness maps they are modelled on.
@@ -303,8 +312,12 @@ func NewWithRegistryAndStore(
 		botSeriesRuns:      newBotSeriesRunner(),
 		push:               newPushSender(data),
 		discord:            newDiscordAuth(),
-		discordFlows:       newTTLStore[discordFlow](discordFlowLifetime, discordMaximumPending),
-		discordTickets:     newTTLStore[discordTicket](discordTicketLifetime, discordMaximumPending),
+		discordFlows:       newTTLStore[discordFlow](discordFlowLifetime, signInMaximumPending),
+		apple:              newAppleAuth(),
+		appleNonces:        newTTLStore[appleFlow](appleFlowLifetime, signInMaximumPending),
+		appleFlows:         newTTLStore[appleFlow](appleFlowLifetime, signInMaximumPending),
+		signInTickets:      newTTLStore[signInTicket](signInTicketLifetime, signInMaximumPending),
+		revocations:        make(chan struct{}, 1),
 	}
 	server.update.exit = make(chan struct{})
 	// The board stops pairing while the server is being replaced. Asked as a
@@ -338,6 +351,10 @@ func NewWithRegistryAndStore(
 
 func (server *Server) Run(ctx context.Context) {
 	go server.seeks.Run(ctx)
+	// Its own goroutine, because every attempt is a call to Apple and none of
+	// them may hold up a game. See identity_revocation.go.
+	go server.runTokenRevocations(ctx)
+	go server.apple.checkKey(ctx)
 	// Its own goroutine, not the lobby ticker: a compile replays every archived
 	// game in the mode. See opening_stats.go.
 	go server.runOpeningStats(ctx)
@@ -395,7 +412,9 @@ func (server *Server) Run(ctx context.Context) {
 			server.openingNameLimiter.sweep()
 			server.pruneRestrictions(now)
 			server.discordFlows.sweep()
-			server.discordTickets.sweep()
+			server.appleNonces.sweep()
+			server.appleFlows.sweep()
+			server.signInTickets.sweep()
 		case now := <-clockTicker.C:
 			server.expireGames(now)
 		}
@@ -479,7 +498,7 @@ func (server *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/reports/categories", server.reportCategories)
 	mux.HandleFunc("POST /api/reports", server.fileReport)
 	// The feedback board. Reading is open to anybody, including a visitor with
-	// no account at all; writing takes a Discord-verified one. See
+	// no account at all; writing takes one Discord or Apple vouched for. See
 	// feedback.go for why the two ends are set so far apart.
 	mux.HandleFunc("GET /api/feedback", server.getFeedback)
 	mux.HandleFunc("GET /api/feedback/policy", server.feedbackPolicy)
@@ -517,16 +536,31 @@ func (server *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/push/devices", server.registerPushDevice)
 	mux.HandleFunc("DELETE /api/push/devices", server.unregisterPushDevice)
 	mux.HandleFunc("POST /api/push/test", server.sendTestPush)
-	// No register route: an account is created by signing in with Discord.
+	// No register route: an account is created by signing in with Discord or
+	// Apple. The exchange and the naming step are shared by both, under
+	// /api/auth; Discord's own names for them stay, because every build of the
+	// app before Apple calls those.
 	// Login stays for the accounts that still hold a password, and goes when
 	// the last of them has linked.
+	mux.HandleFunc("GET /api/auth/providers", server.signInProviders)
+	mux.HandleFunc("POST /api/auth/exchange", server.exchangeSignInTicket)
+	mux.HandleFunc("POST /api/auth/complete", server.completeSignIn)
 	mux.HandleFunc("POST /api/auth/discord/start", server.startDiscordAuth)
 	mux.HandleFunc("GET /api/auth/discord/callback", server.discordCallback)
-	mux.HandleFunc("POST /api/auth/discord/exchange", server.exchangeDiscordTicket)
-	mux.HandleFunc("POST /api/auth/discord/complete", server.completeDiscordSignup)
+	mux.HandleFunc("POST /api/auth/discord/exchange", server.exchangeSignInTicket)
+	mux.HandleFunc("POST /api/auth/discord/complete", server.completeSignIn)
+	// The phone asks for a nonce, then hands back what Apple's sheet returned.
+	// The website goes the long way round, the way Discord does: out to Apple,
+	// and back to a callback that Apple may reach with either method.
+	mux.HandleFunc("POST /api/auth/apple/nonce", server.startAppleNativeAuth)
+	mux.HandleFunc("POST /api/auth/apple/native", server.finishAppleNativeAuth)
+	mux.HandleFunc("POST /api/auth/apple/start", server.startAppleWebAuth)
+	mux.HandleFunc("GET /api/auth/apple/callback", server.appleCallback)
+	mux.HandleFunc("POST /api/auth/apple/callback", server.appleCallback)
 	mux.HandleFunc("POST /api/auth/login", server.loginAccount)
 	mux.HandleFunc("POST /api/auth/logout", server.logoutAccount)
 	mux.HandleFunc("GET /api/auth/me", server.currentAccount)
+	mux.HandleFunc("GET /api/auth/sign-in-methods", server.signInMethods)
 
 	mux.HandleFunc("GET /api/bots", server.listBots)
 	mux.HandleFunc("POST /api/bots", server.createBot)
@@ -536,8 +570,9 @@ func (server *Server) Routes() http.Handler {
 	mux.HandleFunc("DELETE /api/bots/{botID}", server.deleteBot)
 	mux.HandleFunc("POST /api/bots/{botID}/shutdown", server.shutdownBot)
 	mux.HandleFunc("DELETE /api/bots/{botID}/shutdown", server.resumeBot)
-	// The hourly round, seated now. Owner-only, and the one other place besides
-	// the pairer that may set the ladder flag; see ladder_match.go.
+	// A ranked match, now: this engine against one the server draws, which is
+	// the hourly round on a button, or against one named. Anybody signed in;
+	// see ladder_match.go.
 	mux.HandleFunc("POST /api/bots/{botID}/ranked-match", server.startLadderMatch)
 	// Answers to a bot id or to a bot's account id, so every list that shows a
 	// bot can build this URL from whichever of the two it already carries.
@@ -563,6 +598,10 @@ func (server *Server) Routes() http.Handler {
 	mux.HandleFunc(
 		"POST /api/admin/bot-series/{seriesID}/abort",
 		server.adminOnly(server.abortAdminBotSeries),
+	)
+	mux.HandleFunc(
+		"PUT /api/admin/bot-series/{seriesID}/ranked",
+		server.adminOnly(server.setAdminBotSeriesRanked),
 	)
 	mux.HandleFunc("GET /api/bot/version", server.getBotClientVersion)
 	mux.HandleFunc("GET /api/bot/guide", server.getBotGuide)
@@ -674,6 +713,16 @@ func (server *Server) Routes() http.Handler {
 		"DELETE /api/admin/accounts/{userID}/purge",
 		server.adminOnly(server.purgeAccount),
 	)
+	// The sign-ins handed to App Review and Google Play's reviewers. See
+	// store_review_routes.go.
+	mux.HandleFunc(
+		"GET /api/admin/store-review-accounts",
+		server.adminOnly(server.listStoreReviewAccounts),
+	)
+	mux.HandleFunc(
+		"PUT /api/admin/store-review-accounts/{label}",
+		server.adminOnly(server.resetStoreReviewAccount),
+	)
 	mux.HandleFunc("DELETE /api/admin/bots/{botID}", server.adminOnly(server.deleteAdminBot))
 	mux.HandleFunc(
 		"PUT /api/admin/bots/{botID}/reference", server.adminOnly(server.setBotReference),
@@ -713,6 +762,9 @@ func (server *Server) Routes() http.Handler {
 	)
 	mux.HandleFunc("GET /api/admin/games", server.adminOnly(server.listAdminGames))
 	mux.HandleFunc("DELETE /api/admin/games/{gameID}", server.adminOnly(server.deleteAdminGame))
+	mux.HandleFunc(
+		"PUT /api/admin/games/{gameID}/ranked", server.adminOnly(server.setAdminGameRanked),
+	)
 	mux.HandleFunc("GET /api/admin/games/pgn", server.adminOnly(server.exportGamePGNs))
 	// The tournament builder. Create and start keep their addresses; the rest
 	// of the lifecycle — editing a draft, publishing it, calling it off — is
@@ -983,6 +1035,9 @@ func (server *Server) handleWebSocket(writer http.ResponseWriter, request *http.
 		// reason the sanctions above are: the client needs it before the first
 		// message arrives, not after it has already painted one.
 		BlockedUserIDs: server.blockedUserIDs(account.UserID),
+		// What a ranked match is played at, so the Bots page can say so
+		// before anybody presses for one.
+		RankedTerms: rankedMatchTerms(),
 	})
 	go client.writePump()
 	client.readPump()

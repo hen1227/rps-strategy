@@ -7,7 +7,8 @@
 //
 // See `discordAuth.ts` for the native side.
 
-import { ACCOUNT_CALLBACK_PATH, type Authorize, type DiscordOutcome } from './discordAuth.types';
+import { type Authorize, type DiscordOutcome } from './discordAuth.types';
+import { ACCOUNT_CALLBACK_PATH } from './signInReturn';
 
 /**
  * Always true, and deliberately a constant.

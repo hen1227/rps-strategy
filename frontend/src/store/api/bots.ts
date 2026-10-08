@@ -14,13 +14,14 @@ import type {
   AccountKind,
   BotDrain,
   BotPresence,
+  BotSeriesPairing,
   GameRecord,
   Restriction,
   TitleID,
   Tournament,
 } from '@/types/protocol';
 
-export type { BotDrain };
+export type { BotDrain, BotSeriesPairing };
 
 const request = apiClient('bot registry');
 
@@ -57,20 +58,29 @@ export const startDiscordAuth = (
   });
 
 /**
- * What redeeming a ticket produced: a session, a request for a username, or a
+ * What a finished sign-in produced: a session, a request for a username, or a
  * request for the password of an account that already holds the name offered.
  *
  * Which one depends on facts only the server has — whether this Discord account
- * has been seen before, and whether the name typed is already somebody's — so
- * the app cannot know in advance and has to branch on `needsUsername` and
- * `needsPassword`.
+ * or Apple ID has been seen before, and whether the name typed is already
+ * somebody's — so the app cannot know in advance and has to branch on
+ * `needsUsername` and `needsPassword`. Both providers answer in this shape.
  */
-export interface DiscordExchangeReply {
+export interface SignInReply {
   account?: Account;
   token?: string;
   needsUsername?: boolean;
   suggestedUsername?: string;
   discordHandle?: string;
+  /** Who vouched, on a `needsUsername` reply. Absent from a server that
+   *  predates Apple, which only ever meant Discord. */
+  provider?: SignInProvider;
+  /**
+   * The ticket the naming step finishes, on a `needsUsername` reply. Apple's
+   * sign-in on the phone never sees one otherwise: its ticket is issued and
+   * redeemed inside the one call.
+   */
+  ticket?: string;
   /**
    * The name just offered belongs to an account made before Discord sign-in.
    * Not a refusal: its password links it, and the player signs in as that
@@ -80,11 +90,20 @@ export interface DiscordExchangeReply {
   needsPassword?: boolean;
 }
 
-export const exchangeDiscordTicket = (ticket: string) =>
-  request<DiscordExchangeReply>('/api/auth/discord/exchange', {
+/** The providers an account can sign in with. */
+export type SignInProvider = 'discord' | 'apple';
+
+// Redeeming a ticket and finishing the naming step use Discord's names for the
+// two routes, for both providers. They are the same handlers as
+// /api/auth/exchange and /api/auth/complete, and the only names a server from
+// before Apple knows — so a website deployed ahead of its backend still signs
+// people in with Discord.
+
+export const exchangeSignInTicket = (ticket: string) =>
+  request<SignInReply>('/api/auth/discord/exchange', {
     method: 'POST',
     body: { ticket },
-    what: 'Finishing Discord sign-in',
+    what: 'Finishing sign-in',
   });
 
 /**
@@ -95,23 +114,75 @@ export const exchangeDiscordTicket = (ticket: string) =>
  * with `needsPassword` — so this is typed as the exchange reply and not as a
  * `SessionReply`.
  */
-export const completeDiscordSignup = (
+export const completeSignup = (
   ticket: string,
   username: string,
   password = '',
   reservationToken = '',
 ) =>
-  request<DiscordExchangeReply>('/api/auth/discord/complete', {
+  request<SignInReply>('/api/auth/discord/complete', {
     method: 'POST',
     body: { ticket, username, password, reservationToken },
     what: password ? 'Signing in to your account' : 'Claiming your username',
   });
 
 /**
+ * Begin a sign-in with Apple on the phone: the nonce Apple's sheet must sign.
+ *
+ * The credential says who is asking, exactly as it does for Discord: a session
+ * links Apple to that account, and a profile key with its user id offers this
+ * device's guest for upgrading.
+ */
+export const startAppleNativeAuth = (identity: { userId: string; credential: string | null }) =>
+  request<{ nonce: string }>('/api/auth/apple/nonce', {
+    method: 'POST',
+    token: identity.credential,
+    body: { userId: identity.userId },
+    what: 'Starting Sign in with Apple',
+  });
+
+/** Hand back what Apple's sheet returned. Answered as a redeemed ticket is. */
+export const finishAppleNativeAuth = (
+  nonce: string,
+  identityToken: string,
+  authorizationCode: string,
+) =>
+  request<SignInReply>('/api/auth/apple/native', {
+    method: 'POST',
+    body: { nonce, identityToken, authorizationCode },
+    what: 'Finishing Sign in with Apple',
+  });
+
+/** Begin a sign-in with Apple on the website: the address to send it to. */
+export const startAppleWebAuth = (
+  returnTo: string,
+  identity: { userId: string; credential: string | null },
+) =>
+  request<{ authorizeUrl: string }>('/api/auth/apple/start', {
+    method: 'POST',
+    token: identity.credential,
+    body: { returnTo, userId: identity.userId },
+    what: 'Starting Sign in with Apple',
+  });
+
+/** Which ways in this server can complete. See `useSignInProviders`. */
+export interface SignInProviders {
+  discord: boolean;
+  /** Apple's sheet, on the phone. */
+  apple: boolean;
+  /** Apple's website, which needs more of the server's configuration. */
+  appleWeb: boolean;
+}
+
+export const signInProviders = () =>
+  request<SignInProviders>('/api/auth/providers', { what: 'Loading the sign-in options' });
+
+/**
  * Sign in with a password.
  *
  * Legacy, and the only thing left of the old system: no new password account
- * can be created, and this goes when the last one has linked a Discord account.
+ * can be created, and this goes when the last one has linked Discord or Apple —
+ * except for the store review accounts, which keep theirs.
  */
 export const loginAccount = (username: string, password: string) =>
   request<SessionReply>('/api/auth/login', {
@@ -125,6 +196,33 @@ export const logoutAccount = (token: string) =>
 
 export const currentAccount = (token: string) =>
   request<Account>('/api/auth/me', { token, what: 'Loading the account' });
+
+/**
+ * What the signed-in account signs in with. Only its owner can ask, which is
+ * why it is not on the account itself: that is served to anybody.
+ */
+export interface SignInMethods {
+  /** The providers linked to the account, in the order to list them. */
+  methods: string[];
+  /**
+   * A password account that still has to link an identity: the one the "Link
+   * Discord or Apple" prompt is for. Never true for a store review account,
+   * which the server refuses a link.
+   */
+  awaitingLink: boolean;
+  /**
+   * Whether the server would accept a link at all: false for a store review
+   * account. Absent from a server that predates Apple, which never refused one
+   * here.
+   */
+  canLink?: boolean;
+}
+
+export const getSignInMethods = (token: string) =>
+  request<SignInMethods>('/api/auth/sign-in-methods', {
+    token,
+    what: 'Loading your sign-in methods',
+  });
 
 /** The username rules, so the client and the server cannot disagree on them. */
 export interface IdentityPolicy {
@@ -307,22 +405,24 @@ export const resumeBot = (token: string, botId: string) =>
   });
 
 /**
- * Play this bot's hourly round now, against an opponent the server draws.
+ * Play a ranked match with this bot now: against an opponent the server draws,
+ * or against the engine named.
  *
- * Takes no options, and that is the feature rather than an omission: the
- * opponent, the mode and the clock are the server's to pick, and a rated game
+ * The opponent is the only thing a caller supplies, and that is the feature
+ * rather than an omission: the mode, the clock and the length are the server's
+ * to pick — one pair at a clock drawn from the rotation — because a rated game
  * whose conditions the requester chose is the thing the ladder was rebuilt to
- * get rid of. What the press supplies is the timing. See
- * backend/internal/server/ladder_match.go.
+ * get rid of. See backend/internal/server/ladder_match.go.
  *
  * Answers with the run, so a caller can link to its score table. 409 is the
- * ordinary failure — the engine is in a game, or nobody else is free — and its
- * message is written to be shown as it stands.
+ * ordinary failure — an engine is in a game, not entered, or nobody else is
+ * free — and its message is written to be shown as it stands.
  */
-export const startRankedMatch = (token: string, botId: string) =>
+export const startRankedMatch = (token: string, botId: string, opponentBotId?: string) =>
   request<BotSeries>(`/api/bots/${botId}/ranked-match`, {
     method: 'POST',
     token,
+    body: opponentBotId ? { opponentBotId } : undefined,
     what: 'Starting a ranked match',
   });
 
@@ -363,12 +463,19 @@ export interface BotSeries {
   firstBotUserId?: string;
   secondBotUserId?: string;
   /**
-   * A run between two engines one person registered, which does not move the
-   * ladder — the games are seated casual, and the ladder drops the pair however
-   * they were flagged. Derived by the server from the two owners on every read,
-   * so it is right about runs played before the rule existed.
+   * A run that does not move the ladder: one that was not seated ranked —
+   * every hand-started run, unless a host asked for ranked or moved it
+   * afterwards — and one between two engines one person registered, which the
+   * ladder drops however its games were flagged. Derived by the server on
+   * every read, so the owner half is right about runs played before the rule.
    */
   casual: boolean;
+  /**
+   * Who picked the two engines: the hourly round, the server on an owner's
+   * press, or a person. Absent from a server older than it; read it through
+   * `seriesKind`, which falls back to `chosen`.
+   */
+  pairing?: BotSeriesPairing;
   /** Who asked for the run. Absent on one started with the host token. */
   requestedByUserId?: string;
   requestedByName?: string;
@@ -400,6 +507,11 @@ export interface StartBotSeriesOptions {
   seed?: string;
   /** Omitted means the server's default. */
   timeControl?: TimeControl;
+  /**
+   * Seat every game ranked. A host's to ask for: the server refuses it from
+   * anybody else, and for two engines one person registered.
+   */
+  ranked?: boolean;
 }
 
 export const listBotSeries = (limit?: number) =>
@@ -469,6 +581,29 @@ export const abortAdminBotSeries = (adminToken: string, seriesId: string) =>
     method: 'POST',
     token: adminToken,
     what: 'Stopping the series',
+  });
+
+/** What moving a game, or a whole run, between ranked and casual did. */
+export interface Reclassification {
+  ranked: boolean;
+  /** Games whose flag changed. Zero when the record already said so. */
+  changed: number;
+  modeId: ModeID;
+}
+
+/**
+ * Move a finished run, and every game it filed, to ranked or to casual.
+ *
+ * The server refits the bot ladder in the same step, so the ratings shown next
+ * are the ones the record now supports. Refused while any of the run is still
+ * being played.
+ */
+export const setAdminBotSeriesRanked = (adminToken: string, seriesId: string, ranked: boolean) =>
+  request<Reclassification>(`/api/admin/bot-series/${encodeURIComponent(seriesId)}/ranked`, {
+    method: 'PUT',
+    token: adminToken,
+    body: { ranked },
+    what: ranked ? 'Making the series ranked' : 'Making the series casual',
   });
 
 /* ---------------------------------------------------------------- matches -- */
@@ -645,9 +780,11 @@ export interface AccountSummary {
   createdAtUnixMs: number;
   /**
    * Whether Discord vouched for this account — narrower than `registered`,
-   * which also admits the password accounts still on the books.
+   * which also admits Apple and the password accounts still on the books.
    */
   discordVerified: boolean;
+  /** Whether this account signs in with Apple. Absent from an older server. */
+  appleLinked?: boolean;
   /**
    * When they last finished a game, absent for an account that never has —
    * which is the great majority. The honest version of "last seen" here, and
@@ -678,6 +815,7 @@ export interface AccountQuery {
   /** True hides the Guests. False shows only them. Omitted shows both. */
   registered?: boolean;
   discordVerified?: boolean;
+  appleLinked?: boolean;
   disabled?: boolean;
   isAdmin?: boolean;
   kind?: 'human' | 'bot';
@@ -720,6 +858,7 @@ export const listAccounts = (adminToken: string, filter: AccountQuery = {}) => {
   if (filter.discordVerified !== undefined) {
     params.set('discord', String(filter.discordVerified));
   }
+  if (filter.appleLinked !== undefined) params.set('apple', String(filter.appleLinked));
   if (filter.disabled !== undefined) params.set('disabled', String(filter.disabled));
   if (filter.isAdmin !== undefined) params.set('admin', String(filter.isAdmin));
   if (filter.kind) params.set('kind', filter.kind);
@@ -780,7 +919,7 @@ export const anonymizeAccount = (adminToken: string, userId: string) =>
 export interface AccountDetail {
   account: Account;
   bots: Bot[];
-  games: GameRecord[];
+  games: AdminGameRecord[];
 }
 
 export const accountDetail = (adminToken: string, userId: string, limit = 25) =>
@@ -821,11 +960,30 @@ export interface GameDeletion {
   ratingsReverted: boolean;
 }
 
+/** A game as the admin browsers list it. */
+export interface AdminGameRecord extends GameRecord {
+  /**
+   * Both seats were engines, which is the only kind of game that can be moved
+   * between ranked and casual: a bot rating is refitted from the whole record,
+   * while a person's is a running total that cannot be replayed.
+   */
+  engineGame?: boolean;
+}
+
 export const listAdminGames = (adminToken: string, query = '', limit = 50) =>
-  request<GameRecord[]>(
+  request<AdminGameRecord[]>(
     `/api/admin/games?query=${encodeURIComponent(query)}&limit=${limit}`,
     { token: adminToken, what: 'Loading games' },
   );
+
+/** Move one finished engine game to ranked or to casual. See `setAdminBotSeriesRanked`. */
+export const setAdminGameRanked = (adminToken: string, gameId: string, ranked: boolean) =>
+  request<Reclassification>(`/api/admin/games/${encodeURIComponent(gameId)}/ranked`, {
+    method: 'PUT',
+    token: adminToken,
+    body: { ranked },
+    what: ranked ? 'Making the game ranked' : 'Making the game casual',
+  });
 
 /**
  * Delete one game from the history and the archive.

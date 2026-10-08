@@ -9,13 +9,14 @@
 //
 // Pure functions over a GameSetup, in the same spirit as `spectateSelectors.ts`.
 
-import type {
-  GameSetup,
-  ModeDefinition,
-  RuleFlags,
-  SideColor,
-  StartingPosition,
-  TimeControl,
+import {
+  FIRST_TO_MOVE,
+  type GameSetup,
+  type ModeDefinition,
+  type RuleFlags,
+  type SideColor,
+  type StartingPosition,
+  type TimeControl,
 } from '@/types/game';
 
 /**
@@ -38,11 +39,17 @@ export type SeatChoice = SideColor | 'random';
  * RPSFish, and challenging somebody's engine — and it has to be the same three
  * words every time, because "EITHER" is a promise about what happens next and
  * the player cannot see which screen resolves it how.
+ *
+ * Which colour opens is read from the rules rather than written here. These
+ * said RED · FIRST for weeks after Blue started opening, which is the one
+ * thing a seat chip exists to get right.
  */
+const SECOND_TO_MOVE: SideColor = FIRST_TO_MOVE === 'Red' ? 'Blue' : 'Red';
+
 export const SEAT_CHOICES: readonly { value: SeatChoice; label: string }[] = [
   { value: 'random', label: 'EITHER' },
-  { value: 'Red', label: 'RED · FIRST' },
-  { value: 'Blue', label: 'BLUE · SECOND' },
+  { value: FIRST_TO_MOVE, label: `${FIRST_TO_MOVE.toUpperCase()} · FIRST` },
+  { value: SECOND_TO_MOVE, label: `${SECOND_TO_MOVE.toUpperCase()} · SECOND` },
 ];
 
 /** A seat choice as the wire spells it: a colour, or nothing for no preference. */

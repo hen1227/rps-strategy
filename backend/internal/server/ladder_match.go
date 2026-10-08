@@ -3,8 +3,10 @@ package server
 import (
 	"context"
 	"errors"
+	"io"
 	"math/rand/v2"
 	"net/http"
+	"strings"
 
 	"rps-strategy/backend/internal/game"
 	"rps-strategy/backend/internal/persistence"
@@ -31,13 +33,13 @@ import (
 // # What is deliberately not here
 //
 // No quota, no allowance, no cooling-off period. A press costs the two engines
-// a pairing and nothing else, and an author who wants to spend their evening
-// playing ranked games may. What bounds it is not a budget but the fact that an
-// engine can only be in one game at a time: `ladderBotStanding` refuses a bot
-// that is mid-run, so pressing again while a match is playing does nothing, and
-// the round at the top of the hour skips an engine that is still in one. The
-// HTTP throttle on the route is about somebody rattling the door, not about how
-// many ranked games anybody is allowed.
+// a pairing and nothing else, and somebody who wants to spend their evening
+// playing ranked games may. What bounds it is the rule every series has — one
+// running at a time per person, and a ceiling across the server — and the fact
+// that an engine can only be in one game at a time: `ladderBotStanding` refuses
+// a bot that is mid-run, and the round at the top of the hour skips an engine
+// that is still in one. The HTTP throttle on the route is about somebody
+// rattling the door, not about how many ranked games anybody is allowed.
 //
 // The thing that keeps this from being the old farmable series is that the
 // requester still names nobody. Opponent selection is the property the whole
@@ -58,6 +60,30 @@ import (
 // that is easy to describe on a button: *play somebody*. If ratings still feel
 // slow to settle, swapping this for chooseLadderPairings restricted to the one
 // engine is a small change and the rest of the route is unaffected.
+//
+// # Between any two engines
+//
+// The same match with the opponent named, from the same button, and pressed by
+// anybody signed in — neither engine has to be theirs. It was refused for a long
+// time on the reasoning at the top of ladder_pool.go — an author who picks their
+// own opponents picks the ones they beat — and then allowed only once the other
+// owner had accepted, with a day to answer and a day to seat. That was more
+// machinery than the risk it guarded against, and nobody could tell from the
+// page which of three ranked buttons did what.
+//
+// What bounds the risk is the fit rather than a question to anybody:
+// botRatingPairCap stops any one matchup counting for more than about twenty
+// games however many are played, a bot needs distinct opponents before it is
+// published at all, and one owner's engines never rate each other. And
+// everything but the names stays the rotation's — one pair, colours swapped, a
+// drawn mode and clock — so a named match cannot also be a chosen clock, and
+// it cannot be stopped after a bad first game (see AbortBotSeries).
+//
+// Both engines have to be entered in the ranked ladder. That switch is the
+// consent: it already lets the hour pair an engine with anyone, and a named
+// match asks nothing more of it. What a person pressing the button adds is
+// themselves, so that is what StartRankedMatch checks: a block between them and
+// either engine's owner refuses it, and so does a ranked-play sanction on them.
 
 // errLadderMatchNotEntered is a bot whose owner has not entered it in the pool.
 //
@@ -67,7 +93,7 @@ import (
 // next connect, so entering somebody's engine from here would be a state that
 // silently reverts.
 var errLadderMatchNotEntered = errors.New(
-	"this bot is not entered in the hourly rounds",
+	"this bot isn't in the ranked ladder",
 )
 
 // errLadderMatchNoOpponent is nobody to play: an empty field, or one where
@@ -88,6 +114,15 @@ var errLadderMatchNoOpponent = errors.New(
 type ladderMatchBusy struct{ reason string }
 
 func (busy ladderMatchBusy) Error() string { return busy.reason }
+
+// Refusals of a ranked match, each worded for whoever pressed the button.
+var (
+	errRankedEngineGone = errors.New("that engine is not playing any more")
+	errRankedOneOwner   = errors.New("one person's engines can't play each other ranked")
+	errRankedNotEntered = errors.New("that engine isn't in the ranked ladder")
+	errRankedBlocked    = errors.New("you can't start a ranked match with that engine")
+	errRankedBarred     = errors.New("this account can't start ranked matches right now")
+)
 
 // StartLadderMatch seats one ranked pairing for this bot, now.
 //
@@ -123,19 +158,38 @@ func (server *Server) StartLadderMatch(
 			OpeningPlies: ladderOpeningPlies,
 			Control:      ladderClocks[rand.IntN(len(ladderClocks))],
 			RequestedBy:  requestedBy,
-			// Privileged, for the same reason startLadderPairing is: the public
-			// ceilings in bot_series.go are about one visitor not monopolising
-			// other people's engines, and the consent being spent here is the
-			// ladder switch rather than the public-play one. It lifts no check
-			// that matters to this route — a busy engine is still busy, since
-			// freeBotConnection is not privilege-gated.
-			Privileged: true,
+			// Not privileged: anybody may press this for any entered engine, so
+			// the ceiling that keeps one visitor from holding every engine at
+			// once applies to it as it does to a casual run. The consent it
+			// spends is the ladder switch rather than the public-play one, which
+			// StartBotSeries reads off this flag.
+			//
 			// And the flag that makes it count. Set by the pairer and by here,
 			// and still by nothing a client can send.
 			Ladder: true,
 		})
 	}
 	return persistence.BotSeries{}, errLadderMatchNoOpponent
+}
+
+// RankedMatchTerms is what every ranked match is played at, published so the
+// Bots page can say so before anybody presses for one.
+type RankedMatchTerms struct {
+	// Modes are the ones a match can be played at. One is drawn when it is
+	// seated, among those both engines play.
+	Modes []game.ModeID `json:"modes"`
+	// Clocks is the rotation one is drawn from, at the same moment.
+	Clocks []game.TimeControl `json:"clocks"`
+	// Pairs is always one: two games, colours swapped.
+	Pairs int `json:"pairs"`
+}
+
+func rankedMatchTerms() *RankedMatchTerms {
+	return &RankedMatchTerms{
+		Modes:  append([]game.ModeID(nil), ladderModes...),
+		Clocks: append([]game.TimeControl(nil), ladderClocks...),
+		Pairs:  1,
+	}
 }
 
 // shuffledLadderModes is the rotation in a random order.
@@ -145,6 +199,131 @@ func shuffledLadderModes() []game.ModeID {
 		modes[one], modes[other] = modes[other], modes[one]
 	})
 	return modes
+}
+
+// StartRankedMatch seats one ranked pairing now, for whoever pressed the
+// button: between the two engines named, or between the first and an opponent
+// the server draws. Neither engine has to be the requester's; see "Between any
+// two engines" at the top of this file for why.
+func (server *Server) StartRankedMatch(
+	ctx context.Context,
+	requestedBy string,
+	botID string,
+	opponentBotID string,
+) (persistence.BotSeries, error) {
+	bot, err := server.rankedEngine(ctx, botID)
+	if err != nil {
+		return persistence.BotSeries{}, err
+	}
+	if server.restrictionOn(requestedBy, persistence.RestrictRanked) != nil {
+		return persistence.BotSeries{}, errRankedBarred
+	}
+	// A block is the owner having already said no to this person, and it
+	// covers their engines as much as their messages. See blocks.go.
+	if server.blockedBetween(requestedBy, bot.OwnerUserID) {
+		return persistence.BotSeries{}, errRankedBlocked
+	}
+	if strings.TrimSpace(opponentBotID) == "" {
+		return server.StartLadderMatch(ctx, bot.BotID, requestedBy)
+	}
+	opponent, err := server.rankedEngine(ctx, opponentBotID)
+	if err != nil {
+		return persistence.BotSeries{}, err
+	}
+	if opponent.BotID == bot.BotID {
+		return persistence.BotSeries{}, errSeriesSameBot
+	}
+	// Two engines one person owns produce no rating — see pickLadderOpponent.
+	if opponent.OwnerUserID == bot.OwnerUserID {
+		return persistence.BotSeries{}, errRankedOneOwner
+	}
+	if server.blockedBetween(requestedBy, opponent.OwnerUserID) {
+		return persistence.BotSeries{}, errRankedBlocked
+	}
+
+	// Entered-ness is the same whichever mode is asked about; the mode only
+	// decides which rating comes back with each row.
+	entrants, err := server.data.LadderEntrants(ctx, ladderModes[0])
+	if err != nil {
+		return persistence.BotSeries{}, err
+	}
+	entered := func(botID string) bool {
+		for _, entrant := range entrants {
+			if entrant.BotID == botID {
+				return true
+			}
+		}
+		return false
+	}
+	if !entered(bot.BotID) || !entered(opponent.BotID) {
+		return persistence.BotSeries{}, errRankedNotEntered
+	}
+
+	// The modes in a random order, taking the first both engines can play now.
+	// With one mode in the rotation the loop runs once and its refusal is the
+	// answer; with more, a mode one of the two does not play is a reason to try
+	// the next rather than to refuse. Each refusal carries the engine's name,
+	// since "shutting down" alone would not say whose.
+	var refusal error = errLadderMatchNoOpponent
+	for _, modeID := range shuffledLadderModes() {
+		if busy := busyRefusal(bot, server.ladderBotStanding(bot.BotID, modeID)); busy != nil {
+			refusal = busy
+			continue
+		}
+		if busy := busyRefusal(opponent, server.ladderBotStanding(opponent.BotID, modeID)); busy != nil {
+			refusal = busy
+			continue
+		}
+		return server.StartBotSeries(ctx, BotSeriesRequest{
+			FirstBotID:   bot.BotID,
+			SecondBotID:  opponent.BotID,
+			ModeID:       modeID,
+			Pairs:        1,
+			OpeningPlies: ladderOpeningPlies,
+			Control:      ladderClocks[rand.IntN(len(ladderClocks))],
+			RequestedBy:  requestedBy,
+			// Not privileged, for the reason StartLadderMatch is not; the
+			// consent spent is the ladder switch, checked above.
+			Chosen: true,
+		})
+	}
+	return persistence.BotSeries{}, refusal
+}
+
+// rankedEngine is a registered engine that can still be seated, or the refusal
+// to give whoever named it.
+func (server *Server) rankedEngine(ctx context.Context, botID string) (persistence.Bot, error) {
+	bot, err := server.data.Bot(ctx, strings.TrimSpace(botID))
+	if errors.Is(err, persistence.ErrBotNotFound) {
+		return persistence.Bot{}, errRankedEngineGone
+	}
+	if err != nil {
+		return persistence.Bot{}, err
+	}
+	// An engine with no owner on record has nobody to answer for it.
+	if !bot.Claimed || bot.UserID == "" || bot.OwnerUserID == "" || bot.Retired || bot.Disabled {
+		return persistence.Bot{}, errRankedEngineGone
+	}
+	return bot, nil
+}
+
+// busyRefusal is why an engine cannot be seated right now, with its name on,
+// or nil when it can.
+func busyRefusal(bot persistence.Bot, standing ladderBotStanding) error {
+	if standing.In && !standing.Waiting {
+		return nil
+	}
+	return ladderMatchBusy{reason: bot.Name + " can't play right now: " + standingReason(standing)}
+}
+
+// standingReason is why an engine cannot be seated, in the pairer's own words
+// where it gave any. The pairer gives none for an engine whose every slot is
+// taken.
+func standingReason(standing ladderBotStanding) string {
+	if standing.Reason != "" {
+		return standing.Reason
+	}
+	return "it is in a game"
 }
 
 // pickLadderOpponent draws an engine for this bot to play at this mode.
@@ -217,23 +396,37 @@ func (server *Server) pickLadderOpponent(
 	return candidates[rand.IntN(len(candidates))], nil
 }
 
+// rankedMatchRequest is the button's optional body.
+type rankedMatchRequest struct {
+	// OpponentBotID names the engine to play. Empty, or no body at all, lets
+	// the server draw one — which is what the button sent before it could name
+	// anybody, so an older client still gets PLAY NOW.
+	OpponentBotID string `json:"opponentBotId"`
+}
+
 // startLadderMatch is the button.
 //
-// Owner-only, through the same requireBotOwner every other write about a bot
-// goes through — a press spends this engine's owner's machine, and the switch
-// that consents to that is theirs. Throttled by the series limiter next door,
-// which is the door-rattling guard the public series route already uses and not
-// a ceiling on ranked games: six presses in five minutes is far more than an
-// engine playing two games at a time can consume.
+// Anybody signed in, for any engine: the engines' consent is their ranked-ladder
+// switch, which StartRankedMatch checks, and what the press needs from the
+// person is an account that can be held to a block or a sanction. Throttled by
+// the series limiter next door, which is the door-rattling guard the public
+// series route already uses and not a ceiling on ranked games.
 func (server *Server) startLadderMatch(writer http.ResponseWriter, request *http.Request) {
-	bot, ok := server.requireBotOwner(writer, request)
+	var input rankedMatchRequest
+	if err := decodeAPIRequest(writer, request, &input); err != nil && !errors.Is(err, io.EOF) {
+		writeAPIError(writer, http.StatusBadRequest, err.Error())
+		return
+	}
+	account, ok := server.requireSession(writer, request)
 	if !ok {
 		return
 	}
-	if !server.allowSeriesRequest(writer, request, bot.OwnerUserID) {
+	if !server.allowSeriesRequest(writer, request, account.UserID) {
 		return
 	}
-	series, err := server.StartLadderMatch(request.Context(), bot.BotID, bot.OwnerUserID)
+	series, err := server.StartRankedMatch(
+		request.Context(), account.UserID, request.PathValue("botID"), input.OpponentBotID,
+	)
 	if err != nil {
 		writeSeriesError(writer, err)
 		return

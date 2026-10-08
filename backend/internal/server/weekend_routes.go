@@ -629,6 +629,14 @@ func (server *Server) runWeekendNow(writer http.ResponseWriter, request *http.Re
 	}
 	now := time.Now().In(location)
 	today := now.Format("2006-01-02")
+	// Today's arena is over but still on record, and the id is the date, so a
+	// second one cannot be created beside it. Said here, because the insert
+	// fails into a log and the reply was only "could not be opened".
+	if existing, err := server.data.Tournament(ctx, weekendTournamentID(today)); err == nil {
+		writeAPIError(writer, http.StatusConflict, existing.Name+
+			" already ran today. To run it again, delete it under Tournaments first.")
+		return
+	}
 	startAt, err := config.WeekendStartFor(today)
 	if err != nil {
 		writeAPIError(writer, http.StatusBadRequest, "the configured start time is unreadable")
@@ -646,4 +654,35 @@ func (server *Server) runWeekendNow(writer http.ResponseWriter, request *http.Re
 		return
 	}
 	writeJSON(writer, http.StatusCreated, opened)
+}
+
+// startWeekendByHand is START on an arena that is taking entries.
+//
+// The same start the scheduler gives it at its published hour, done early. See
+// startWeekend.
+func (server *Server) startWeekendByHand(
+	writer http.ResponseWriter,
+	request *http.Request,
+	open persistence.Tournament,
+) {
+	ctx := request.Context()
+	if server.isUpdating() {
+		writeAPIError(writer, http.StatusConflict, server.updateRefusalMessage())
+		return
+	}
+	config, err := server.data.WeekendConfiguration(ctx)
+	if err != nil {
+		writeAPIError(writer, http.StatusInternalServerError, "the weekend arena is unavailable")
+		return
+	}
+	started, err := server.startWeekend(ctx, config, open, weekendEventDate(open), true)
+	var short weekendFieldShort
+	switch {
+	case errors.As(err, &short):
+		writeAPIError(writer, http.StatusConflict, "Not started: "+short.reason+".")
+	case err != nil:
+		writeTournamentError(writer, err)
+	default:
+		writeJSON(writer, http.StatusOK, started)
+	}
 }

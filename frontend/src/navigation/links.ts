@@ -12,7 +12,7 @@
 
 import type { Href } from 'expo-router';
 
-import { ACCOUNT_CALLBACK_PATH } from '@/store/discordAuth.types';
+import { ACCOUNT_CALLBACK_PATH } from '@/store/signInReturn';
 import { SITE_URL } from '@/store/serverConfig';
 import type { ModeID } from '@/types/game';
 

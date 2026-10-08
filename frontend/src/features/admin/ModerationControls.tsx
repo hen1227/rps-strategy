@@ -113,7 +113,7 @@ export default function ModerationControls({
       ) : (
         inForce.map((restriction) => (
           <View key={restriction.kind} style={adminStyles.subRow}>
-            <Badge label={KIND_LABEL[restriction.kind].toUpperCase()} tone="live" />
+            <Badge label={KIND_LABEL[restriction.kind].toUpperCase()} tone="danger" />
             <View style={adminStyles.rowCopy}>
               <Text numberOfLines={2} style={adminStyles.subRowName}>
                 {restriction.reason || 'No reason recorded'}

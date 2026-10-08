@@ -56,6 +56,65 @@ func (server *Server) deleteAdminGame(writer http.ResponseWriter, request *http.
 	writeJSON(writer, http.StatusOK, deletion)
 }
 
+// setAdminGameRanked moves one finished engine game to ranked or to casual.
+//
+// The correction beside delete, for the host whose question is "that shouldn't
+// have counted" — or the reverse — rather than "that shouldn't be here". Engine
+// games only; see persistence/reclassify.go for why a person's cannot be.
+func (server *Server) setAdminGameRanked(writer http.ResponseWriter, request *http.Request) {
+	ranked, ok := decodeRankedRequest(writer, request)
+	if !ok {
+		return
+	}
+	moved, err := server.data.SetGameRanked(request.Context(), request.PathValue("gameID"), ranked)
+	if err != nil {
+		writeReclassifyError(writer, err)
+		return
+	}
+	// The store refitted the mode in the same transaction; this tells the
+	// engines still connected what they are holding now.
+	if moved.Changed > 0 {
+		server.republishBotLadder(request.Context(), moved.ModeID)
+	}
+	writeJSON(writer, http.StatusOK, moved)
+}
+
+// decodeRankedRequest reads `{"ranked": true}` or `{"ranked": false}`.
+//
+// Required rather than defaulted: a body that forgot the field would otherwise
+// read as false, and a request that meant nothing would quietly move a ranked
+// game to casual.
+func decodeRankedRequest(writer http.ResponseWriter, request *http.Request) (bool, bool) {
+	var input struct {
+		Ranked *bool `json:"ranked"`
+	}
+	if err := decodeAPIRequest(writer, request, &input); err != nil {
+		writeAPIError(writer, http.StatusBadRequest, err.Error())
+		return false, false
+	}
+	if input.Ranked == nil {
+		writeAPIError(writer, http.StatusBadRequest, "say whether it should be ranked")
+		return false, false
+	}
+	return *input.Ranked, true
+}
+
+func writeReclassifyError(writer http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, persistence.ErrGameNotFound):
+		writeAPIError(writer, http.StatusNotFound, "no such game")
+	case errors.Is(err, persistence.ErrBotSeriesNotFound):
+		writeAPIError(writer, http.StatusNotFound, "no such series")
+	case errors.Is(err, persistence.ErrReclassifyNotEngineGame),
+		errors.Is(err, persistence.ErrReclassifySameOwner),
+		errors.Is(err, errSeriesStillRunning):
+		writeAPIError(writer, http.StatusConflict, err.Error())
+	default:
+		log.Printf("move a game between ranked and casual: %v", err)
+		writeAPIError(writer, http.StatusInternalServerError, "could not change the game")
+	}
+}
+
 // deleteAdminBot removes a bot entirely: its games, its series, and the account
 // it played under.
 //
@@ -180,6 +239,9 @@ func (server *Server) purgeAccount(writer http.ResponseWriter, request *http.Req
 		return
 	}
 	server.disconnectAccount(userID, "this account has been removed")
+	// An Apple token went into the revocation queue with the account's
+	// identities; this is the nudge that tries it now.
+	server.wakeTokenRevocations()
 	// The block rows went with the account, through the foreign key. The cache
 	// they are enforced from did not, and every path that hides a message reads
 	// the cache — so leaving it would hide a stranger and would put the account

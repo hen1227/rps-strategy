@@ -14,8 +14,8 @@ import (
 func ladderTestServer(t *testing.T) *Server {
 	t.Helper()
 	server := New(nil)
-	if _, err := server.data.ClaimAccountWithDiscord(
-		t.Context(), "owner", "Owner", "discord-owner", "owner",
+	if _, err := server.data.ClaimAccountWithIdentity(
+		t.Context(), "owner", "Owner", persistence.DiscordIdentity("discord-owner", "owner"),
 	); err != nil {
 		t.Fatalf("register owner: %v", err)
 	}
@@ -32,8 +32,8 @@ func ladderTestServer(t *testing.T) *Server {
 func connectLadderBot(t *testing.T, server *Server, name string) (persistence.Bot, *Client) {
 	t.Helper()
 	owner := "owner-" + strings.ToLower(name)
-	if _, err := server.data.ClaimAccountWithDiscord(
-		t.Context(), owner, "Owner_"+name, "discord-"+owner, owner,
+	if _, err := server.data.ClaimAccountWithIdentity(
+		t.Context(), owner, "Owner_"+name, persistence.DiscordIdentity("discord-"+owner, owner),
 	); err != nil {
 		t.Fatalf("register owner for %s: %v", name, err)
 	}

@@ -24,9 +24,10 @@ import (
 // # What "deleted" means here, exactly
 //
 // An account that has never appeared in a game is removed outright: the row is
-// gone. An account that has played is stripped instead — name, Discord handle
-// and id, password material, titles, sessions, and every copy of the name
-// inside stored game records and PGN text, including the archive. What remains
+// gone. An account that has played is stripped instead — name, Discord handle,
+// every linked sign-in, password material, titles, sessions, and every copy of
+// the name inside stored game records and PGN text, including the archive. An
+// Apple sign-in's token is revoked with Apple afterwards. What remains
 // is a disabled row nobody can sign into and a set of games that say "Deleted
 // player" where the name used to be.
 //
@@ -102,6 +103,10 @@ func (server *Server) deleteOwnAccount(writer http.ResponseWriter, request *http
 		"account %s deleted at its owner's request (%d records rewritten, %d bots retired)",
 		account.UserID, rewritten, retired,
 	)
+	// The deletion queued any Apple token the account held, in the same
+	// transaction. Telling Apple happens on the worker, never here: a player's
+	// right to leave does not wait on somebody else's server.
+	server.wakeTokenRevocations()
 	// The block rows cascaded away with the account. The cache did not, and a
 	// stale entry would go on hiding whoever is behind that id next.
 	server.forgetBlocksOf(account.UserID)

@@ -94,6 +94,34 @@ export const getOrCreateProfileKey = (): string => {
   return cachedProfileKey;
 };
 
+/**
+ * Give this device a new guest: a fresh user id and profile key, written to
+ * storage before anything reconnects with them.
+ *
+ * For leaving an account this device upgraded in place. Signing in turns the
+ * device's own guest into the account — same row, same key — so after signing
+ * out, the old key would still open the account it became, and a phone the
+ * screen calls signed out would go on playing ranked as that player. The new
+ * guest is what signing out has to mean: nobody, with nothing.
+ *
+ * The game this device was last seated in goes with the old identity, since it
+ * was that account's seat and the new guest cannot take it.
+ */
+export const replaceDeviceIdentity = (): { userId: string; profileKey: string } => {
+  cachedUserId = createUUID();
+  cachedProfileKey = createProfileKey();
+  const storage = deviceStorage();
+  try {
+    storage?.setItem(USER_ID_KEY, cachedUserId);
+    storage?.setItem(PROFILE_KEY_KEY, cachedProfileKey);
+    storage?.removeItem(GAME_SESSION_ID_KEY);
+  } catch {
+    // Without storage the new guest lasts as long as this launch, which is how
+    // every identity on such a device already behaves.
+  }
+  return { userId: cachedUserId, profileKey: cachedProfileKey };
+};
+
 export const readGameSessionId = (): string | null => {
   try {
     return deviceStorage()?.getItem(GAME_SESSION_ID_KEY) || null;

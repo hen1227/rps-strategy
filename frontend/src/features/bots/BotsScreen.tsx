@@ -1,5 +1,5 @@
 import {useRouter} from 'expo-router';
-import {useMemo, useState} from 'react';
+import {useMemo, useState, type ReactNode} from 'react';
 import {StyleSheet, Text, View} from 'react-native';
 
 import BotLevelPicker from './BotLevelPicker';
@@ -20,10 +20,11 @@ import {
     engineUnavailableMessage,
     isEngineAvailable,
 } from '@/engine/rpsfish/client';
-import {engineElo} from '@/features/live/liveSelectors';
+import {engineCanJoinSeries, engineElo} from '@/features/live/liveSelectors';
 import {useCalloutReserve} from '@/features/shell/CalloutLayer';
 import {links} from '@/navigation/links';
 import {useGameStore} from '@/store/gameStore';
+import {featuredModeOf, variantModesOf} from '@/store/modeSelectors';
 import {SEAT_CHOICES, type SeatChoice} from '@/store/setupSelectors';
 import { colors, contentWidth, space, themedSheet, type } from '@/theme';
 import LinkRow from '@/ui/LinkRow';
@@ -36,7 +37,7 @@ import {
     PrimaryButton,
     SectionHeading,
 } from '@/ui/primitives';
-import type {ModeID} from '@/types/game';
+import type {ModeDefinition, ModeID} from '@/types/game';
 import type {BotPresence} from '@/types/protocol';
 
 // Playing bots: one screen.
@@ -129,6 +130,13 @@ export default function BotsScreen() {
         () => playableModes.filter((mode) => engineSupportsMode(mode.id)),
         [playableModes],
     );
+    // Both rows of buttons below lead with the main game and put the variants
+    // under it, the order the lobby gives them and for the same reason: see
+    // `featuredModeOf`. Asked of the modes RPSFish plays rather than of the
+    // catalogue, so a tournament gate on the main game hands the lead to the
+    // next one instead of leaving the panel without a green button.
+    const practiceMain = useMemo(() => featuredModeOf(engineModes), [engineModes]);
+    const practiceVariants = useMemo(() => variantModesOf(engineModes), [engineModes]);
     const profileOptions = useMemo(
         () => BOT_PROFILES.map((profile) => ({label: profile.name, value: profile.id})),
         [],
@@ -166,13 +174,11 @@ export default function BotsScreen() {
     // unlike a private bot there is nobody, owner included, who can enter it. A
     // bot whose owner has not opened it to public play is still offered, because
     // its owner is allowed to enter it and the server is the one that knows who
-    // that is. `benched` as well as `draining`: the server refuses to start a
-    // series during a scheduled bench, so offering the engines would be a form
-    // that can only fail.
-    const pittable = useMemo(
-        () => engines.filter((bot) => !bot.busy && !bot.draining && !bot.benched),
-        [engines],
-    );
+    // that is. `benched` as well as `draining`, and an engine playing in a
+    // tournament: the server refuses to start a series in each case, so
+    // offering the engines would be a form that can only fail. See
+    // engineCanJoinSeries.
+    const pittable = useMemo(() => engines.filter(engineCanJoinSeries), [engines]);
 
     // Resolved against the free engines rather than trusted: a bot that has since
     // picked up a game empties its slot instead of arming a START button that the
@@ -193,7 +199,12 @@ export default function BotsScreen() {
     // The run itself — the four numbers, the host credential and the request.
     // Held here rather than in either component that draws it, because both of
     // them need it now. See useBotSeriesForm.
-    const form = useBotSeriesForm({first: pitFirst, mode: engineMode, second: pitSecond});
+    const form = useBotSeriesForm({
+        available: pittable.length,
+        first: pitFirst,
+        mode: engineMode,
+        second: pitSecond,
+    });
 
     // RPSFish runs in a browser Worker, so the bots that ship with the app are a
     // website feature. An engine on somebody else's machine is not, which is why
@@ -229,16 +240,6 @@ export default function BotsScreen() {
                 />
             ) : (
                 <>
-                    {/*
-              What the buttons cannot say for themselves. The half of this
-              paragraph that explained PLAY and VS is gone: the cards say which
-              engine a press would fight and how big a decision each button is,
-              which is the same sentence in a form somebody skimming a grid of
-              cards actually receives.
-            */}
-                    <Text style={styles.help}>
-                        Challenge community engines. Choose a mode to see their ratings.
-                    </Text>
                     {playableModes.length > 1 ? (
                         <OptionChips<ModeID | null>
                             label="MODE"
@@ -329,6 +330,23 @@ export default function BotsScreen() {
     // row on a desktop column and three on a phone.
     const barReserve = engineMode && (pitFirst || pitSecond) ? barHeight + space.medium : 0;
 
+    // One button per mode, for either row: the main game's on a line of its
+    // own, and the variants sharing the line under it.
+    const modeButtons = (button: (mode: ModeDefinition, main: boolean) => ReactNode) => (
+        <View style={styles.buttons}>
+            {practiceMain ? button(practiceMain, true) : null}
+            {practiceVariants.length > 0 ? (
+                <View style={styles.buttonRow}>
+                    {practiceVariants.map((mode) => (
+                        <View key={mode.id} style={styles.buttonCell}>
+                            {button(mode, false)}
+                        </View>
+                    ))}
+                </View>
+            ) : null}
+        </View>
+    );
+
     const practicePanel = (
         <Panel>
             <SectionHeading
@@ -369,20 +387,22 @@ export default function BotsScreen() {
                 />
             </View>
 
-            <View style={styles.buttonRow}>
-                {engineModes.map((mode) => (
-                    <View key={mode.id} style={styles.buttonCell}>
-                        <PrimaryButton
-                            accessibilityLabel={`Play ${mode.name} against ${profile.name} as ${seatDescription(practiceSeat)}`}
-                            disabled={launchBlocked}
-                            label={`PLAY ${mode.name.toUpperCase()} ▶`}
-                            onPress={() =>
-                                startBotGame({mode, playerColor: practiceSeat, profileId: profile.id})
-                            }
-                        />
-                    </View>
-                ))}
-            </View>
+            {/*
+        The main game's is the panel's one green button. The variants' are
+        grey and smaller, as they are on the lobby's cards.
+      */}
+            {modeButtons((mode, main) => (
+                <PrimaryButton
+                    accessibilityLabel={`Play ${mode.name} against ${profile.name} as ${seatDescription(practiceSeat)}`}
+                    compact={!main}
+                    disabled={launchBlocked}
+                    label={`PLAY ${mode.name.toUpperCase()} ▶`}
+                    onPress={() =>
+                        startBotGame({mode, playerColor: practiceSeat, profileId: profile.id})
+                    }
+                    tone={main ? 'accent' : 'quiet'}
+                />
+            ))}
 
             {/*
         Watching is the same choice one step further on — this bot against
@@ -397,28 +417,24 @@ export default function BotsScreen() {
                     options={profileOptions}
                     value={opponent.id}
                 />
-                <View style={styles.buttonRow}>
-                    {engineModes.map((mode) => (
-                        <View key={mode.id} style={styles.buttonCell}>
-                            <PrimaryButton
-                                accessibilityLabel={`Watch ${profile.name} fight ${opponent.name} in ${mode.name}`}
-                                compact
-                                disabled={launchBlocked}
-                                label={`WATCH ${mode.name.toUpperCase()} ▶`}
-                                onPress={() =>
-                                    router.push(
-                                        links.botBattle({
-                                            blue: opponent.id,
-                                            mode: mode.id,
-                                            red: profile.id,
-                                        }),
-                                    )
-                                }
-                                tone="quiet"
-                            />
-                        </View>
-                    ))}
-                </View>
+                {modeButtons((mode) => (
+                    <PrimaryButton
+                        accessibilityLabel={`Watch ${profile.name} fight ${opponent.name} in ${mode.name}`}
+                        compact
+                        disabled={launchBlocked}
+                        label={`WATCH ${mode.name.toUpperCase()} ▶`}
+                        onPress={() =>
+                            router.push(
+                                links.botBattle({
+                                    blue: opponent.id,
+                                    mode: mode.id,
+                                    red: profile.id,
+                                }),
+                            )
+                        }
+                        tone="quiet"
+                    />
+                ))}
             </View>
         </Panel>
     );
@@ -452,7 +468,10 @@ const styles = themedSheet(() => ({
     seat: {marginTop: space.small},
     blurb: {...type.body, color: colors.textDim, marginTop: space.small},
     blurbName: {color: colors.textSubtle, fontWeight: '900'},
-    buttonRow: {flexDirection: 'row', flexWrap: 'wrap', gap: space.small, marginTop: space.medium},
+    buttons: {gap: space.small, marginTop: space.medium},
+    buttonRow: {flexDirection: 'row', flexWrap: 'wrap', gap: space.small},
+    // Room for the longest label, WATCH INFILTRATION ▶, on one line: where two
+    // cells do not fit, each takes a line of its own rather than wrapping it.
     buttonCell: {flexBasis: 180, flexGrow: 1},
     watch: {
         marginTop: space.large,

@@ -107,14 +107,9 @@ test('a run needs two different engines, a mode, and nothing in flight', () => {
 });
 
 test('the run reads the same whoever asks for the line', () => {
-  assert.equal(
-    seriesSettingsLine({ clock: CLOCK, mode: MODE, pairs: '2' }),
-    'Total War · 2 pairs, colours swapped · 1+1',
-  );
-  assert.equal(
-    seriesSettingsLine({ casual: true, clock: CLOCK, mode: MODE, pairs: '3' }),
-    'Total War · 3 pairs, colours swapped · 1+1 · casual',
-  );
+  // Whether it counts is the chip beside the line, and the mode is the page's.
+  assert.equal(seriesSettingsLine({ clock: CLOCK, games: 4 }), '4 games · 1+1');
+  assert.equal(seriesSettingsLine({ clock: CLOCK, games: 1 }), '1 game · 1+1');
 });
 
 test('the bar stays away until an engine is entered', () => {
@@ -122,8 +117,8 @@ test('the bar stays away until an engine is entered', () => {
     available: 4,
     clock: CLOCK,
     first: null,
+    games: 4,
     mode: MODE,
-    pairs: '2',
     second: null,
   });
   assert.equal(view.visible, false);
@@ -135,8 +130,8 @@ test('one engine entered asks for the other, on the side that is empty', () => {
     available: 4,
     clock: CLOCK,
     first: alt,
+    games: 4,
     mode: MODE,
-    pairs: '2',
     second: null,
   });
   assert.equal(second.visible, true);
@@ -149,8 +144,8 @@ test('one engine entered asks for the other, on the side that is empty', () => {
     available: 4,
     clock: CLOCK,
     first: null,
+    games: 4,
     mode: MODE,
-    pairs: '2',
     second: alt,
   });
   assert.equal(first.empty, 'first');
@@ -163,8 +158,8 @@ test('with nothing left to press the bar stops asking for a press', () => {
     available: 1,
     clock: CLOCK,
     first: alt,
+    games: 4,
     mode: MODE,
-    pairs: '2',
     second: null,
   });
   assert.equal(view.visible, true);
@@ -172,30 +167,46 @@ test('with nothing left to press the bar stops asking for a press', () => {
 });
 
 test('both entered, the bar describes the run and names the fight', () => {
+  // Stakes are a choice everybody makes now, so the button says which.
   const view = pitBarView({
     available: 4,
     clock: CLOCK,
     first: engineBot('alt', 'ALTFish', { ownerUserId: 'henry' }),
+    games: 4,
     mode: MODE,
-    pairs: '2',
     second: engineBot('mocca', 'Mocca', { ownerUserId: 'someone-else' }),
   });
   assert.equal(view.hint, null);
-  assert.equal(view.settings, 'Total War · 2 pairs, colours swapped · 1+1');
-  assert.equal(view.label, 'START SERIES ▶');
-  assert.equal(view.action, 'Start a 2-pair Total War series: ALTFish against Mocca');
+  assert.equal(view.settings, '4 games · 1+1');
+  assert.equal(view.label, 'START CASUAL ▶');
+  assert.equal(view.action, 'Start a 4-game casual Total War series: ALTFish against Mocca');
 });
 
-test('one owner both sides says casual on the button as well as the line', () => {
+test('a host asking for ranked says so on the button', () => {
   const view = pitBarView({
     available: 4,
     clock: CLOCK,
     first: engineBot('alt', 'ALTFish', { ownerUserId: 'henry' }),
+    games: 4,
     mode: MODE,
-    pairs: '2',
+    ranked: true,
+    second: engineBot('mocca', 'Mocca', { ownerUserId: 'someone-else' }),
+  });
+  assert.equal(view.label, 'START RANKED ▶');
+  assert.equal(view.action, 'Start a 4-game ranked Total War series: ALTFish against Mocca');
+});
+
+test('one owner both sides stays casual even when a host asked for ranked', () => {
+  // The server refuses a ranked run between these two, so the bar must not
+  // offer one: what it would start is not what it says.
+  const view = pitBarView({
+    available: 4,
+    clock: CLOCK,
+    first: engineBot('alt', 'ALTFish', { ownerUserId: 'henry' }),
+    games: 4,
+    mode: MODE,
+    ranked: true,
     second: engineBot('mocca', 'Mocca', { ownerUserId: 'henry' }),
   });
-  assert.equal(view.label, 'START CASUAL SERIES ▶');
-  assert.equal(view.settings, 'Total War · 2 pairs, colours swapped · 1+1 · casual');
-  assert.equal(view.action, 'Start a 2-pair casual Total War series: ALTFish against Mocca');
+  assert.equal(view.label, 'START CASUAL ▶');
 });

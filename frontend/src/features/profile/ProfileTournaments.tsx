@@ -14,7 +14,7 @@ import type { BadgeTone } from '@/ui/tones';
 // with it, which is why the server publishes both.
 
 /** How a placement reads: the medal positions get a word, the rest a number. */
-const placementLabel = (placement: number): string => {
+const placementWord = (placement: number): string => {
   switch (placement) {
     case 1:
       return 'Champion';
@@ -26,6 +26,12 @@ const placementLabel = (placement: number): string => {
       return `${placement}th`;
   }
 };
+
+/** A shared place says so: two engines level on points are joint champions. */
+const placementLabel = (placement: number, tied = false): string =>
+  tied
+    ? `Joint ${placementWord(placement).toLowerCase()}`
+    : placementWord(placement);
 
 /** A placement's colour: gold for the win, warm for the rest of the podium. */
 const placementTone = (placement: number): BadgeTone => {
@@ -79,7 +85,7 @@ export default function ProfileTournaments({ tournaments }: ProfileTournamentsPr
               </View>
               {entry.placement ? (
                 <Badge
-                  label={`${placementLabel(entry.placement)} of ${entry.fieldSize}`}
+                  label={`${placementLabel(entry.placement, entry.tied)} of ${entry.fieldSize}`}
                   tone={placementTone(entry.placement)}
                 />
               ) : (

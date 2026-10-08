@@ -1,4 +1,5 @@
-import { StyleSheet, Text, View } from 'react-native';
+import { useState } from 'react';
+import { Text, View } from 'react-native';
 
 import { colors, radius, themedSheet } from '@/theme';
 import {
@@ -26,6 +27,8 @@ export interface TournamentMatchRowProps extends Partial<MatchActions> {
   accountId: string;
   /** Draw this row as the one the viewer should act on. */
   emphasise?: boolean;
+  /** Dense scoreboard treatment for the tournament's match center. */
+  compact?: boolean;
   match: TournamentMatch;
   spectateDisabled?: boolean;
   tournament: Tournament;
@@ -37,6 +40,7 @@ export interface TournamentMatchRowProps extends Partial<MatchActions> {
 export default function TournamentMatchRow({
   accountId,
   emphasise,
+  compact = false,
   match,
   onPlay,
   onWatch,
@@ -44,30 +48,41 @@ export default function TournamentMatchRow({
   spectateDisabled,
   tournament,
 }: TournamentMatchRowProps) {
+  const [width, setWidth] = useState(0);
   const state = matchStateFor(tournament, match.matchId);
   const seats = seatsFor(match, accountId);
   const readyUserIds = state.readyUserIds ?? [];
   const iAmReady = readyUserIds.includes(accountId);
-  const opponentReady = Boolean(seats) && readyUserIds.includes(seats?.opponent.userId ?? '');
+  const opponentReady =
+    Boolean(seats) && readyUserIds.includes(seats?.opponent.userId ?? '');
   const isDecided = match.result !== 'pending';
   const isMine = Boolean(seats);
   const score = matchScoreLabel(tournament, match);
+  const narrow = compact && width < 480;
+  const active = tournament.status === 'in_progress';
+  const live = active && !isDecided && state.live;
+  const hasActions = active && !isDecided && (isMine || live);
 
   return (
     <View
+      onLayout={(event) => setWidth(event.nativeEvent.layout.width)}
       style={[
         styles.row,
+        compact && styles.compactRow,
+        narrow && styles.narrowRow,
         emphasise && styles.rowEmphasised,
         isMine && !emphasise && styles.rowMine,
       ]}
     >
-      <View style={styles.copy}>
+      <View style={[styles.copy, narrow && styles.narrowCopy]}>
         <View style={styles.metaRow}>
           <Text style={styles.meta}>
             R{match.roundNumber} · MATCH {match.matchOrder}
           </Text>
-          {state.live && <Badge label="LIVE" tone="live" />}
-          {isMine && !isDecided && !state.live && <Badge label="YOUR MATCH" tone="accent" />}
+          {live && <Badge label="LIVE" tone="live" />}
+          {isMine && !isDecided && !live && (
+            <Badge label="YOUR MATCH" tone="accent" />
+          )}
         </View>
         <View style={styles.versusRow}>
           {/*
@@ -79,26 +94,48 @@ export default function TournamentMatchRow({
           <PlayerLink
             handle={match.player1?.userId ?? ''}
             name={match.player1?.ign ?? 'TBD'}
-            numberOfLines={1}
-            style={[styles.player, seats?.me === match.player1 && styles.playerMine]}
+            numberOfLines={narrow ? 2 : 1}
+            style={[
+              styles.player,
+              compact && styles.compactPlayer,
+              seats?.me === match.player1 && styles.playerMine,
+            ]}
           />
-          <Text style={styles.versus}>VS</Text>
+          <Text style={[styles.versus, compact && styles.compactScore]}>
+            {compact
+              ? (score?.split(' after ')[0] ??
+                (isDecided
+                  ? match.result === 'draw'
+                    ? '½–½'
+                    : match.result === 'player1_win'
+                      ? '1–0'
+                      : '0–1'
+                  : 'vs'))
+              : 'VS'}
+          </Text>
           <PlayerLink
             handle={match.player2?.userId ?? ''}
             name={match.player2?.ign ?? 'TBD'}
-            numberOfLines={1}
+            numberOfLines={narrow ? 2 : 1}
             style={[
               styles.player,
+              compact && styles.compactPlayer,
               styles.playerRight,
               seats?.me === match.player2 && styles.playerMine,
             ]}
           />
         </View>
-        {score ? <Text style={styles.score}>{score}</Text> : null}
-        <Text style={[styles.status, isDecided && styles.statusDecided]}>
+        {score && !compact ? <Text style={styles.score}>{score}</Text> : null}
+        <Text
+          style={[
+            styles.status,
+            compact && styles.compactStatus,
+            isDecided && styles.statusDecided,
+          ]}
+        >
           {isDecided
             ? matchResultLabel(match)
-            : state.live
+            : live
               ? 'Playing now'
               : readyUserIds.length === 1
                 ? `${
@@ -107,41 +144,46 @@ export default function TournamentMatchRow({
                       : match.player2?.ign
                   } is waiting to play`
                 : 'Not played yet'}
+          {compact && score?.includes(' after ') ? ` · ${score}` : ''}
         </Text>
       </View>
 
-      <View style={styles.actions}>
-        {isDecided ? null : isMine ? (
-          <>
-            {(state.live || opponentReady || !iAmReady) && (
-              <PrimaryButton
-                accessibilityLabel={`Play your match against ${seats?.opponent.ign}`}
-                compact
-                label={state.live || opponentReady ? 'PLAY NOW' : 'READY UP'}
-                onPress={() => onPlay?.(match)}
-              />
-            )}
-            {iAmReady && !state.live && (
+      {hasActions && (
+        <View style={[styles.actions, narrow && styles.narrowActions]}>
+          {isDecided ? null : isMine ? (
+            <>
+              {(live || opponentReady || !iAmReady) && (
+                <PrimaryButton
+                  accessibilityLabel={`Play your match against ${seats?.opponent.ign}`}
+                  compact
+                  label={live || opponentReady ? 'PLAY NOW' : 'READY UP'}
+                  onPress={() => onPlay?.(match)}
+                />
+              )}
+              {iAmReady && !live && (
+                <GhostButton
+                  accessibilityLabel="Leave the match queue"
+                  compact
+                  label="WAITING · LEAVE"
+                  onPress={() => onWithdraw?.(match)}
+                />
+              )}
+            </>
+          ) : (
+            live && (
               <GhostButton
-                accessibilityLabel="Leave the match queue"
+                accessibilityLabel={`Watch ${match.player1?.ign} versus ${match.player2?.ign}`}
                 compact
-                label="WAITING · LEAVE"
-                onPress={() => onWithdraw?.(match)}
+                disabled={spectateDisabled}
+                label="◉ WATCH"
+                onPress={() =>
+                  state.gameId ? onWatch?.(state.gameId) : undefined
+                }
               />
-            )}
-          </>
-        ) : (
-          state.live && (
-            <GhostButton
-              accessibilityLabel={`Watch ${match.player1?.ign} versus ${match.player2?.ign}`}
-              compact
-              disabled={spectateDisabled}
-              label="◉ WATCH"
-              onPress={() => (state.gameId ? onWatch?.(state.gameId) : undefined)}
-            />
-          )
-        )}
-      </View>
+            )
+          )}
+        </View>
+      )}
     </View>
   );
 }
@@ -158,15 +200,50 @@ const styles = themedSheet(() => ({
     backgroundColor: colors.surfaceRaised,
   },
   rowMine: { borderColor: colors.accentBorder },
-  rowEmphasised: { borderColor: colors.accent, backgroundColor: colors.accentSurfaceRaised },
+  rowEmphasised: {
+    borderColor: colors.accent,
+    backgroundColor: colors.accentSurfaceRaised,
+  },
   copy: { flex: 1 },
+  compactRow: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderColor: colors.borderSoft,
+  },
+  narrowRow: { flexDirection: 'column', alignItems: 'stretch', gap: 8 },
+  narrowCopy: { flex: 0, width: '100%' },
+  compactPlayer: { fontSize: 15 },
+  compactScore: {
+    color: colors.textStrong,
+    fontSize: 18,
+    minWidth: 46,
+    textAlign: 'center',
+    fontVariant: ['tabular-nums'],
+  },
+  compactStatus: { fontSize: 11, marginTop: 6 },
+  narrowActions: { flexDirection: 'row', justifyContent: 'flex-end' },
   metaRow: { flexDirection: 'row', alignItems: 'center', gap: 7 },
-  meta: { color: colors.textFaint, fontSize: 8, fontWeight: '900', letterSpacing: 0.8 },
+  meta: {
+    color: colors.textFaint,
+    fontSize: 8,
+    fontWeight: '900',
+    letterSpacing: 0.8,
+  },
   versusRow: { flexDirection: 'row', alignItems: 'center', marginTop: 7 },
-  player: { flex: 1, color: colors.textStrong, fontSize: 13, fontWeight: '900' },
+  player: {
+    flex: 1,
+    color: colors.textStrong,
+    fontSize: 13,
+    fontWeight: '900',
+  },
   playerRight: { textAlign: 'right' },
   playerMine: { color: colors.accentBright },
-  versus: { color: colors.textFaint, fontSize: 8, fontWeight: '900', marginHorizontal: 9 },
+  versus: {
+    color: colors.textFaint,
+    fontSize: 8,
+    fontWeight: '900',
+    marginHorizontal: 9,
+  },
   score: { color: colors.text, fontSize: 13, fontWeight: '800', marginTop: 5 },
   status: { color: colors.textMuted, fontSize: 10, marginTop: 5 },
   statusDecided: { color: colors.accentSoft, fontWeight: '800' },

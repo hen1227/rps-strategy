@@ -507,12 +507,11 @@ VALUES (?, ?, ?, 1, 1)
 	}
 }
 
-// Deleting a completed event names the champion it is about to un-crown.
+// Deleting a completed event names its champion.
 //
-// The Tournament Champion title is recomputed from this table rather than
-// stored — see tournamentTitles — so deleting the event takes the title away at
-// the next evaluation. That is invisible unless the deletion says so, which is
-// what the report is for.
+// What the deletion does to them is easy to get wrong — a person keeps the
+// title, an engine loses the tag, see TestDeletingAnEventLeavesItsChampionTheTitle
+// — so the report says who they are.
 func TestDeletingACompletedEventReportsItsChampion(t *testing.T) {
 	store, err := Open(":memory:")
 	if err != nil {

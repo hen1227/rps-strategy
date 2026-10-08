@@ -8,6 +8,7 @@ import {IOS_APP_URL, SOURCE_URL, iosAppIsBeta, links, webGoatGuy} from '@/naviga
 import { useGameStore } from '@/store/gameStore';
 import { colors, radius, space, themedSheet, type } from '@/theme';
 import GitHubMark from '@/ui/GitHubMark';
+import { hoverProps } from '@/ui/hover';
 
 // The desktop navigation.
 //
@@ -87,6 +88,7 @@ export default function SidebarNav() {
                 // middle-click, copy-link, crawlers — so the press feedback goes.
                 <Link asChild href={section.href} key={section.id} replace>
                   <Pressable
+                    {...hoverProps('row')}
                     accessibilityLabel={section.label}
                     accessibilityRole="link"
                     accessibilityState={{ selected: lit }}
@@ -192,16 +194,16 @@ const styles = themedSheet(() => ({
     paddingVertical: space.large,
     paddingHorizontal: space.medium,
     borderRightWidth: 1,
-    borderRightColor: colors.border,
+    borderRightColor: colors.borderSoft,
     backgroundColor: colors.surfaceSunken,
   },
   head: { gap: space.small, paddingHorizontal: space.snug, marginBottom: space.large },
   brand: { flexDirection: 'row', alignItems: 'center', gap: space.small },
   brandIcon: { width: 40, height: 40 },
-  brandName: { ...type.cardTitle, color: colors.accentBright, letterSpacing: 0.5 },
+  brandName: { ...type.cardTitle, color: colors.textStrong, letterSpacing: 0.2 },
   status: { flexDirection: 'row', alignItems: 'center', gap: space.snug },
   dot: { width: 7, height: 7, borderRadius: 4 },
-  dotOnline: { backgroundColor: colors.accent },
+  dotOnline: { backgroundColor: colors.textSoft },
   dotOffline: { backgroundColor: colors.textFaint },
   statusText: { ...type.eyebrow, color: colors.textMuted, letterSpacing: 0.8 },
 
@@ -222,7 +224,7 @@ const styles = themedSheet(() => ({
     paddingRight: space.snug,
     borderRadius: radius.medium,
   },
-  itemCurrent: { backgroundColor: colors.accentSurfaceQuiet },
+  itemCurrent: { backgroundColor: colors.surfaceRaised },
   // `alignSelf` rather than relying on the row's `alignItems`: `Link asChild`
   // renders this row as an anchor on the web, which does not carry the
   // Pressable's cross-axis alignment through, and the marker ended up pinned to
@@ -234,15 +236,16 @@ const styles = themedSheet(() => ({
     borderRadius: 2,
     backgroundColor: 'transparent',
   },
-  markerCurrent: { backgroundColor: colors.accent },
+  markerCurrent: { backgroundColor: colors.textStrong },
   itemLabel: {
     ...type.bodyStrong,
+    fontSize: 13,
     flex: 1,
     alignSelf: 'center',
     color: colors.textMuted,
-    fontWeight: '800',
+    fontWeight: '600',
   },
-  itemLabelCurrent: { color: colors.textStrong },
+  itemLabelCurrent: { color: colors.textStrong, fontWeight: '700' },
   away: { ...type.meta, color: colors.textFaint },
 
   foot: { gap: space.small, marginTop: space.medium },
@@ -255,7 +258,9 @@ const styles = themedSheet(() => ({
   },
   identityName: { ...type.rowTitle, color: colors.textStrong },
   identityMeta: { ...type.meta, color: colors.textFaint, marginTop: space.hair },
-  videoText: { ...type.label, color: colors.textSubtle, letterSpacing: 0.4 },
+  // Held at the old label size: the Discord button shares its row with the
+  // GitHub mark, and one more point wraps its name onto a second line.
+  videoText: { ...type.label, fontSize: 9, color: colors.textSubtle, letterSpacing: 0.4 },
   // Neutral, like the GitHub button beside Discord: the site's own two links
   // wear the surface, and only Discord wears its blue.
   app: {

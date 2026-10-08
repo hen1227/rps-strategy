@@ -896,7 +896,7 @@ const styles = themedSheet(() => ({
     borderRadius: radius.small,
     backgroundColor: colors.surfaceSunken,
   },
-  trailChipCurrent: { borderColor: colors.accentBorder, backgroundColor: colors.accentSurface },
+  trailChipCurrent: { borderColor: colors.borderLight, backgroundColor: colors.surfaceRaised },
   trailStart: { color: colors.textFaint, fontSize: 8, fontWeight: '900', letterSpacing: 1 },
   trailPly: { color: colors.textFaint, fontSize: 8, fontWeight: '900' },
   trailNotation: { color: colors.textSubtle, fontSize: 11, fontWeight: '800' },

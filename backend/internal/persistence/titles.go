@@ -229,7 +229,7 @@ var playerTitleCatalogue = []Title{
 		ID:          TitleTournamentChampion,
 		Name:        "Tournament Champion",
 		Kind:        TitleKindAchievement,
-		Requirement: "Finish a tournament on the most points.",
+		Requirement: "Finish first in a tournament.",
 	},
 	{
 		ID:          TitleBotArchitect,
@@ -810,7 +810,7 @@ SELECT MAX(elo) FROM account_mode_ratings WHERE user_id = ? AND games_played >= 
 	// reads a column rather than a record: what it asks about happened at the
 	// sign-in page rather than at a board, so there is nothing to count.
 	verified, err := store.exists(ctx, `
-SELECT 1 FROM accounts WHERE user_id = ? AND discord_user_id <> '' LIMIT 1
+SELECT 1 FROM accounts WHERE user_id = ? AND `+discordVerifiedSQL("")+` LIMIT 1
 `, userID)
 	if err != nil {
 		return nil, fmt.Errorf("evaluate titles: read discord link: %w", err)
@@ -1017,19 +1017,26 @@ WHERE t.status = ?
 // season and it would stop distinguishing anybody. The weekend arena has its
 // own marker instead — see WeekendWins and the rolling crown that reads it.
 
-// tournamentChampions is everybody who finished a completed tournament on the
-// most points, by user id.
+// tournamentChampions is everybody a completed tournament's standings rank
+// first, by user id.
 //
-// A set rather than the single rank-1 row, because the standings break a tie on
-// signup order and a lifetime title should not turn on who registered first.
-// Everyone level at the top won it.
+// Read off the rank rather than the points, because the rank is what each
+// format decides the event by. In a round robin or a Swiss the two pick out the
+// same rows. A knockout is ranked by the round each entrant went out in, and a
+// drawn final there knocks out the lower seed while scoring both finalists a
+// point, so the finalist it eliminates can finish level on points with the
+// survivor.
+//
+// A set, because a lifetime title should not turn on who registered first.
+// Everyone level at the top shares first place and won it. A completed bracket
+// has exactly one survivor, and so exactly one champion.
 func tournamentChampions(tournament Tournament) map[string]struct{} {
 	champions := make(map[string]struct{})
 	if tournament.Status != TournamentCompleted || len(tournament.Standings) == 0 {
 		return champions
 	}
-	best := tournament.Standings[0].Points
-	if best <= 0 {
+	// A table nobody scored on was not won by anybody.
+	if tournament.Standings[0].Points <= 0 {
 		return champions
 	}
 	userIDs := make(map[int64]string, len(tournament.Players))
@@ -1037,7 +1044,7 @@ func tournamentChampions(tournament Tournament) map[string]struct{} {
 		userIDs[player.PlayerID] = player.UserID
 	}
 	for _, standing := range tournament.Standings {
-		if standing.Points != best {
+		if standing.Rank != 1 {
 			continue
 		}
 		if userID, found := userIDs[standing.PlayerID]; found && userID != "" {

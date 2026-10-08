@@ -1,4 +1,4 @@
-import { useRouter } from 'expo-router';
+import { usePathname, useRouter } from 'expo-router';
 import { type ReactNode } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
@@ -38,7 +38,7 @@ function Block({ title, count, action, children }: BlockProps) {
     <View style={styles.block}>
       <View style={styles.blockHead}>
         <Text style={styles.blockTitle}>{title}</Text>
-        {count !== undefined && count > 0 ? <Badge label={String(count)} tone="live" /> : null}
+        {count !== undefined && count > 0 ? <Badge label={String(count)} /> : null}
         {action}
       </View>
       {children}
@@ -135,7 +135,12 @@ function EngineLine({ busy, onWatch, seat }: EngineLineProps) {
  * the clock and the door to it.
  */
 function LadderRoundBlock({ round }: { round: LadderRoundView }) {
-  const live = round.phase === 'live';
+  // The weekly arena has the evening, and a countdown to a round that will not
+  // run is the one thing this block must never show. The badge goes with it:
+  // the last round before the arena can still be on, but "ON NOW" above
+  // "Paused" reads as the pause being what is on.
+  const paused = round.pausedFor;
+  const live = round.phase === 'live' && !paused;
 
   return (
     // The badge belongs on the heading rather than beside the clock, and the
@@ -147,9 +152,13 @@ function LadderRoundBlock({ round }: { round: LadderRoundView }) {
     // "Next:" on the conditions closes the last of it.
     <Block action={live ? <Badge label="ON NOW" tone="live" /> : undefined} title="Ranked round">
       <View style={styles.roundHead}>
-        <Text style={styles.roundClock}>{round.countdown}</Text>
+        <Text style={styles.roundClock}>{paused ? 'Paused' : round.countdown}</Text>
         <Text numberOfLines={1} style={styles.roundConditions}>
-          {live ? `Next: ${ladderConditionsLine(round)}` : ladderConditionsLine(round)}
+          {paused
+            ? `for ${paused}`
+            : live
+              ? `Next: ${ladderConditionsLine(round)}`
+              : ladderConditionsLine(round)}
         </Text>
       </View>
       <GhostLink
@@ -178,7 +187,11 @@ export default function LiveRail() {
   // the server drops your seek the moment either one seats you.
   const busy =
     connectionStatus !== 'connected' || Boolean(gameState) || Boolean(spectatedGameId);
-  const waiting = waitingCount(snapshot);
+  // On the lobby the page itself lists everybody waiting — with a board each,
+  // and the challenges addressed to you — so the rail leaves them out there
+  // rather than drawing the same people twice, side by side.
+  const onLobby = usePathname() === '/';
+  const waiting = onLobby ? 0 : waitingCount(snapshot);
   // Already ranked, and already missing whatever the engine rows below draw for
   // themselves — so a bot series is one board in this rail, not two.
   const liveGames = snapshot.watchable;
@@ -427,7 +440,7 @@ const styles = themedSheet(() => ({
   railTitle: { ...type.sectionTitle, color: colors.textStrong },
   presence: { alignItems: 'flex-end', gap: space.hair },
   presenceLine: { flexDirection: 'row', alignItems: 'center', gap: space.tight },
-  presenceDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: colors.accent },
+  presenceDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: colors.textSoft },
   online: { ...type.meta, color: colors.textMuted, fontWeight: '800' },
   enginesOnline: { ...type.meta, color: colors.textFaint },
   scroll: { flex: 1 },

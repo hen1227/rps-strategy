@@ -6,7 +6,7 @@ import {
 } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
-import { View } from 'react-native';
+import { AppState, Platform, View } from 'react-native';
 
 import { GameSoundEffects } from '@/hooks/useGameSounds';
 import CalloutLayer from '@/features/shell/CalloutLayer';
@@ -83,6 +83,11 @@ function SessionBridge() {
   );
   const stopSpectating = useGameStore((state) => state.stopSpectating);
   const sessionToken = useGameStore((state) => state.sessionToken);
+  // Who the server last confirmed this connection as. Read only to look again
+  // when it changes: a sign-out that hands the device a fresh guest changes it
+  // once the socket has introduced that guest, which is the first moment a
+  // registration in the guest's name can succeed.
+  const accountUserId = useGameStore((state) => state.account?.userId ?? null);
   const detectPush = usePushStore((state) => state.detect);
 
   useQueuePresence();
@@ -94,13 +99,22 @@ function SessionBridge() {
     loadTournaments();
   }, [connect, loadTournaments]);
 
-  // Settle what this device can do and whether it is already set up, once.
-  // This asks the browser what it already knows; it never prompts, because a
-  // permission dialog nobody pressed a button for is the thing people block
-  // sites over.
+  // Settle what this device can do and whether it is already set up: at launch,
+  // whenever who this device plays as changes, and on a phone each time the app
+  // comes back to the front. That last is the only moment a permission switched
+  // off in Settings can be noticed, because APNs never says. A browser is left
+  // to its page loads: a look re-posts its subscription, and a tab switch is
+  // far too often for that. This asks what the device already knows; it never
+  // prompts, because a permission dialog nobody pressed a button for is the
+  // thing people block sites over.
   useEffect(() => {
     void detectPush(sessionToken ?? null);
-  }, [detectPush, sessionToken]);
+    if (Platform.OS === 'web') return;
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') void detectPush(sessionToken ?? null);
+    });
+    return () => subscription.remove();
+  }, [detectPush, sessionToken, accountUserId]);
 
   // On the web a notification is delivered to the service worker, which cannot
   // reach the store. It messages every open tab instead, and a visible one takes

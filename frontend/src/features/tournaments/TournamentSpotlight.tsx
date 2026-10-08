@@ -312,13 +312,13 @@ const styles = themedSheet(() => ({
     marginTop: 13,
     padding: 11,
     borderRadius: 9,
-    backgroundColor: colors.accentSurfaceRaised,
+    backgroundColor: colors.surfaceRaised,
   },
-  signedUpCheck: { color: colors.accentBright, fontSize: 18, fontWeight: '900' },
+  signedUpCheck: { color: colors.textStrong, fontSize: 18, fontWeight: '900' },
   signedUpCopy: { flex: 1, minWidth: 0 },
   cardBanner: { marginTop: 11 },
-  signedUpTitle: { color: colors.accentTextStrong, fontSize: 12, fontWeight: '900' },
-  signedUpMeta: { color: colors.accentText, fontSize: 10, marginTop: 2 },
+  signedUpTitle: { color: colors.textStrong, fontSize: 12, fontWeight: '900' },
+  signedUpMeta: { color: colors.textMuted, fontSize: 10, marginTop: 2 },
 
   group: { marginTop: 15, gap: 7 },
   groupLabel: {
@@ -330,9 +330,22 @@ const styles = themedSheet(() => ({
   moreNote: { color: colors.textFaint, fontSize: 10, marginTop: 2 },
 
   moreLink: { alignSelf: 'flex-start', paddingVertical: 4 },
-  moreLinkText: { color: colors.accentBright, fontSize: 11, fontWeight: '900' },
+  // Words that go somewhere, drawn the way every text link on the site is.
+  moreLinkText: {
+    color: colors.textSoft,
+    fontSize: 11,
+    fontWeight: '800',
+    textDecorationLine: 'underline',
+    textDecorationColor: colors.borderLight,
+  },
   boardLink: { marginTop: 14, alignSelf: 'flex-start' },
-  boardLinkText: { color: colors.accentBright, fontSize: 11, fontWeight: '900' },
+  boardLinkText: {
+    color: colors.textSoft,
+    fontSize: 11,
+    fontWeight: '800',
+    textDecorationLine: 'underline',
+    textDecorationColor: colors.borderLight,
+  },
   offlineNote: { color: colors.textFaint, fontSize: 10, marginTop: 8 },
   pressed: { opacity: 0.7 },
 }));

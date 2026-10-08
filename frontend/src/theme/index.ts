@@ -228,19 +228,19 @@ export const space = {
  * splitting that into three tokens would just move the guessing.
  */
 export const type = {
-  /** The tiny all-caps kicker above a heading. */
-  eyebrow: { fontSize: 8, fontWeight: '900', letterSpacing: 1.4 },
+  /** The tiny all-caps kicker above a heading, or a form field's label. */
+  eyebrow: { fontSize: 9, fontWeight: '800', letterSpacing: 1.1 },
   /** Button and badge lettering. */
-  label: { fontSize: 9, fontWeight: '900', letterSpacing: 0.8 },
+  label: { fontSize: 10, fontWeight: '800', letterSpacing: 0.6 },
   /** The dim second line of a row. */
   meta: { fontSize: 10, lineHeight: 15 },
   body: { fontSize: 11, lineHeight: 17 },
   bodyStrong: { fontSize: 12, lineHeight: 18 },
   /** The first line of a list row. */
   rowTitle: { fontSize: 12, fontWeight: '800' },
-  cardTitle: { fontSize: 15, fontWeight: '900' },
-  sectionTitle: { fontSize: 18, fontWeight: '900' },
-  screenTitle: { fontSize: 22, fontWeight: '900' },
+  cardTitle: { fontSize: 15, fontWeight: '800' },
+  sectionTitle: { fontSize: 18, fontWeight: '800', letterSpacing: -0.2 },
+  screenTitle: { fontSize: 22, fontWeight: '800', letterSpacing: -0.3 },
   hero: { fontSize: 26, fontWeight: '800' },
 } as const satisfies Record<string, TextStyle>;
 

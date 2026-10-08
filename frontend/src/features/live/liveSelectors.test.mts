@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  engineCanJoinSeries,
   engineElo,
   engineIsAvailable,
   engineStatus,
@@ -403,6 +404,32 @@ test('a benched engine is described as benched rather than as shutting down', ()
 test('a bench outranks the game a benched engine is still finishing', () => {
   const benched = engineBot('one', 'Waiting', { benched: true, busy: true, draining: true });
   assert.equal(engineStatus(benched).activity, 'benched');
+});
+
+// An engine playing in a tournament takes nothing else until the event is over,
+// and between its matches it looks exactly like an idle one. The server refuses
+// both a challenge and a series for it, so the page must not offer either.
+test('an engine in a tournament is not offered for a series or a challenge', () => {
+  const between = engineBot('one', 'Entrant', { reservedFor: 'Weekend Bot Arena #3' });
+  assert.equal(engineStatus(between).label, 'IN TOURNAMENT');
+  assert.equal(engineStatus(between).activity, 'reserved');
+  assert.equal(engineCanJoinSeries(between), false);
+  assert.equal(engineIsAvailable(between), false);
+
+  // At a board for one of its matches it still sorts with the boards, and says
+  // why it will not be free when that game ends.
+  const atBoard = engineBot('two', 'Entrant', {
+    reservedFor: 'Weekend Bot Arena #3',
+    busy: true,
+    activeGames: 1,
+  });
+  assert.equal(engineStatus(atBoard).label, 'IN TOURNAMENT');
+  assert.equal(engineStatus(atBoard).activity, 'playing');
+  assert.equal(engineCanJoinSeries(atBoard), false);
+
+  // A private engine is still offered for a series, to its owner; only the
+  // states in which no run can start are refused.
+  assert.equal(engineCanJoinSeries(engineBot('three', 'Private', { allowPublicPlay: false })), true);
 });
 
 test('an idle engine carries a rating in every mode it plays, not one number', () => {

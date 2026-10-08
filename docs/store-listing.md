@@ -21,7 +21,8 @@ questionnaires. Character counts are given as `used/limit` against each field.
 | Support URL | `https://henhen1227.com/support` (carries the contact line) |
 | Privacy policy URL | `https://rps.henhen1227.com/policy` |
 | Copyright | `© 2026 Henhen1227, LLC` |
-| Account required | No — an account is created on the device on first launch; Discord sign-in is optional |
+| Account required | No — an account is created on the device on first launch; signing in with Discord or Apple is optional |
+| Reviewer sign-in | One password account per store, made and reset by `deploy/store-review-account.sh`. The credentials live in the two consoles, never in this repository — see [Review accounts](#review-accounts) |
 | Works offline | Bots, local two-player games, the analysis board. Online play needs a connection |
 
 ---
@@ -134,7 +135,7 @@ noted.
 
 | Data type | What it is | Notes |
 | --- | --- | --- |
-| Identifiers → User ID | The device-generated account UUID, the username, and the Discord user ID and handle once you sign in with Discord | Discord is asked only for `identify`, so no email address is ever received |
+| Identifiers → User ID | The device-generated account UUID, the username, and once you sign in, the Discord user ID and handle or the identifier Apple makes for this app | Discord is asked only for `identify` and Apple for no scopes, so no name or email address is ever received. Apple's refresh token is kept only to revoke the app's access when the account is deleted |
 | Identifiers → Device ID | The APNs push token | Only for accounts that turn match alerts on — mark as optional |
 | User Content → Other User Content | In-game chat, and opening names players publish | Chat is held in server memory for the length of the game and never written to the database. It is still collected, so it is still declared |
 | Other Data | Finished game records, per-mode ratings, win/loss/draw totals, tournament entries | Product Interaction under Usage Data is the other defensible home for this. Pick one and use the same choice on Play |
@@ -142,9 +143,10 @@ noted.
 
 Not collected: contact info, location, health, financial, contacts, browsing
 history, search history. Legacy accounts predating Discord sign-in hold a
-salted PBKDF2 password hash; no new account can have one and the hash is
-deleted the moment a Discord account is linked. If you want that on the label,
-it belongs under Other Data.
+salted PBKDF2 password hash; no player's new account can have one and the hash
+is deleted the moment Discord or Apple is linked. The two store review
+accounts have one too, and they are ours rather than any user's. If you want
+that on the label, it belongs under Other Data.
 
 ### Age rating questionnaire
 
@@ -169,24 +171,39 @@ in](#what-is-already-in) for the wording to reuse.
 ### App Review Information
 
 Contact: Henry Abrahamsen, `support@henhen1227.com`.
-Sign-in required: **No**.
+Sign-in required: **Yes**. User name and Password are the `apple` review
+account's, from [Review accounts](#review-accounts). They go into App Store
+Connect and nowhere else.
 
-**Notes for the reviewer:**
+It used to say No, and that was wrong: signed out, online play is casual only,
+and blocking — which guideline 1.2 checks for — says "Sign in to block players."
+
+**Notes for the reviewer** — 1,891/4,000:
 
 ```
-No sign-in is needed. An account is created on the device on first launch, so the app is fully playable the moment it opens.
+Sign in with the user name and password above. Tap the You tab to open the Account screen, then tap "Sign in with a password", the small link under the Discord and Apple buttons. Sign in with Apple works too, with your own Apple ID: it asks for no name or email, and makes an ordinary account.
 
-To see the game without waiting for a human opponent:
-1. On the lobby, choose a mode and tap "Play a bot" — the opponent is an analysis engine bundled in the app and runs entirely offline.
+The app works without signing in too: every player starts with an account created on the device on first launch, without any third-party service. Signing in adds ranked play, blocking, and your own bots.
+
+To see a game without waiting for another player:
+1. On the lobby, choose a mode and tap "Play a bot". The opponent is an analysis engine bundled in the app and runs entirely offline.
 2. "Play someone next to you" opens a two-player board on this one device.
 3. The Study section's analysis board and the opening explorer need no opponent at all.
+Ranked online play matches you with whoever is in the queue, so it may wait if nobody else is online.
 
-Ranked online play matches you with whoever is in the queue, so it may sit waiting if nobody else is online. Everything above works regardless.
+Moderation: every chat message that is not yours has a ⋯ menu with Report, and every player's page has REPORT and BLOCK. Blocking needs the signed-in account.
 
-Discord sign-in is optional and only links an existing local account to a Discord identity so the same player can be recognised on another device. The primary account is created on the device without any third-party service, so the app does not depend on a social login to set up an account.
+Account deletion: at the bottom of the Account screen, "Delete account". Please try it after signing out. That deletes the account this device made for you and leaves the review account working for the next review. It works the same way while signed in.
+
+Linking Discord or Apple is turned off for the review account, so that its password keeps working. Entering a tournament needs a Discord-verified account, because the host reaches entrants through Discord, and posting on the feedback board needs an account signed in with Discord or Apple. You can browse both without one.
 
 The three game modes were invented by the YouTube creator WebGoatGuy. This app credits him on its own Credits page and links to his implementation and community rather than presenting the games as ours.
 ```
+
+The old notes also said Discord "only links" an account for use on another
+device. That stopped being true once ranked play and blocking needed a sign-in,
+so the claim is gone. Whether what is left is enough for guideline 4.8 is a
+decision rather than a fact: see [Before you submit](#before-you-submit).
 
 ### Assets
 
@@ -254,6 +271,24 @@ First release. Three game modes, ranked online play with a rating per mode, six 
 | Financial features | None |
 | Data deletion | Requires a URL — see [Before you submit](#before-you-submit) |
 
+### App access
+
+Answer **All or some functionality in my app is restricted**. Signed out,
+online play is casual only, and ranked play, blocking and your own bots need a
+sign-in. Add one set of instructions:
+
+| Field | Value |
+| --- | --- |
+| Name | Review account |
+| Username | The `google` review account's, from [Review accounts](#review-accounts) |
+| Password | Its password, from the same place. Never written in this file |
+
+**Any other information required to access your app** — 478 characters:
+
+```
+On the Account screen (the You tab), tap "Sign in with a password", the small link under the Discord button. Signed in, you can play ranked games, block players and add your own bots. Discord linking is turned off for this account so its password keeps working. Tournament entry and the feedback board need a Discord-verified account; both can be browsed without one. To try account deletion, sign out first: that deletes the account this device made and keeps this one working.
+```
+
 ### Data safety form
 
 **Does your app collect or share any required user data?** Yes, collects. **No
@@ -304,6 +339,52 @@ descriptor.
 | Phone screenshots | 2–8, 9:16 portrait, 1080×1920 or larger | See [Screenshot plan](#screenshot-plan) |
 | 7" and 10" tablet screenshots | Optional, but required for the tablet placements and for a "Designed for tablets" badge | Recommended |
 | Promo video | YouTube URL, optional | Skip for 1.0 |
+
+---
+
+## Review accounts
+
+Each store gets a password account of its own for its reviewers. Discord cannot
+sign a reviewer in: it asks somebody logging in from a new place to confirm by
+email, which a reviewer cannot do. No player can create a password account, so
+`deploy/store-review-account.sh` makes these, one per store. The route it calls
+ships with the backend, so deploy that first; the script says so if you have
+not.
+
+**Before every submission**, reset the store you are submitting to:
+
+```sh
+./deploy/store-review-account.sh apple --username <name>    # the first time
+./deploy/store-review-account.sh apple                      # every time after
+./deploy/store-review-account.sh google --username <name>   # the same for Play
+./deploy/store-review-account.sh --list                     # both, changing nothing
+```
+
+A reset puts the account back the way the store was told it is: its name,
+switched on, every device signed out. It keeps the password, because the store
+already has it. It prints a new password only when there is one: the first
+time, after a reviewer deleted the account, or with `--new-password`. Paste a
+new one into the console before you submit, or the review cannot sign in.
+
+**Where the credentials live.** App Store Connect, the Play Console, and your
+password manager. Not in this file, and not anywhere else in this repository,
+which is public. That includes the usernames. Sign-in allows eight attempts a
+minute per username, so anybody who knows one can keep a reviewer locked out
+for as long as they keep trying. Pick names that do not say what they are.
+
+**What the accounts can and cannot do.** They sign in like any player, and can
+play ranked, block, report and add bots. They cannot link Discord or Apple,
+because linking deletes the password and the password is what the store holds.
+So tournament entry, which needs Discord, and the feedback board, which needs
+Discord or Apple, stay browse-only on the review account, and the notes say so.
+An App Store reviewer who signs in with their own Apple ID gets an ordinary
+account instead, which can post on the board. They cannot be made
+administrators. Deleting one works, as both stores require, and the next reset
+makes a new account and prints its password. The notes ask reviewers to try
+deletion signed out instead, so it should rarely come to that.
+
+Two accounts rather than one, so that a reviewer at one store deleting theirs
+cannot break a review in progress at the other.
 
 ---
 
@@ -411,7 +492,18 @@ testers for 14 days** before it can apply for production access. Start that
 clock early; it is the longest lead time on this whole list, and it is not
 something a code change can shorten.
 
-Two more worth a decision rather than a fix:
+Three more worth a decision rather than a fix:
+
+- **Guideline 4.8, login services.** Answered by Sign in with Apple, which
+  sits beside Discord on the iPhone as an equal button, asks for no name or
+  email, and opens the same account Discord does once the two are linked from
+  the Account screen. Before submitting the first build that has it: the App ID
+  needs the Sign in with Apple capability, the build needs the
+  `com.apple.developer.applesignin` entitlement (prebuild adds it), the server
+  needs `RPS_APPLE_KEY_PATH`, `RPS_APPLE_KEY_ID` and `RPS_APPLE_TEAM_ID` (see
+  `backend/deploy/rps-strategy.env.example`), and its boot log should say Apple
+  accepts the key. Without the server half the app hides the button, and 4.8 is
+  open again.
 
 - **The games are someone else's invention.** Intransitive, Total War and
   Infiltration were designed by WebGoatGuy, who has his own implementation at

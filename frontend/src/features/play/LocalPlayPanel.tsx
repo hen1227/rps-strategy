@@ -1,6 +1,7 @@
 import { StyleSheet, Text, View } from 'react-native';
 
 import { useGameStore } from '@/store/gameStore';
+import { featuredModeOf } from '@/store/modeSelectors';
 import { colors, space, themedSheet, type } from '@/theme';
 import { Badge, Panel, PrimaryButton, SectionHeading } from '@/ui/primitives';
 import type { ModeDefinition } from '@/types/game';
@@ -15,7 +16,8 @@ import type { ModeDefinition } from '@/types/game';
 // One button per mode, the same shape the bot ladder uses, because the choice
 // really is that small: there is nothing to configure, since the two things a
 // game is usually set up with — a clock and a rating — are exactly what a board
-// two people share does not have.
+// two people share does not have. The main game's button is the wide one, for
+// the reason its card is the big one above: see `featuredModeOf`.
 
 export interface LocalPlayPanelProps {
   /** Whether some other board already owns the screen. */
@@ -27,11 +29,12 @@ export default function LocalPlayPanel({ disabled, modes }: LocalPlayPanelProps)
   const startLocalGame = useGameStore((state) => state.startLocalGame);
 
   if (modes.length === 0) return null;
+  const featured = featuredModeOf(modes);
+  const ordered = featured ? [featured, ...modes.filter((mode) => mode.id !== featured.id)] : modes;
 
   return (
     <Panel>
       <SectionHeading
-        eyebrow="ONE DEVICE"
         title="Pass and play"
         trailing={<Badge label="OFFLINE" />}
       />
@@ -39,8 +42,11 @@ export default function LocalPlayPanel({ disabled, modes }: LocalPlayPanelProps)
         Play against a friend on the same device.
       </Text>
       <View style={styles.buttonRow}>
-        {modes.map((mode) => (
-          <View key={mode.id} style={styles.buttonCell}>
+        {ordered.map((mode) => (
+          <View
+            key={mode.id}
+            style={[styles.buttonCell, mode.id === featured?.id && styles.buttonCellMain]}
+          >
             <PrimaryButton
               accessibilityLabel={`Play ${mode.name} against someone on this device`}
               disabled={disabled}
@@ -58,5 +64,7 @@ export default function LocalPlayPanel({ disabled, modes }: LocalPlayPanelProps)
 const styles = themedSheet(() => ({
   help: { ...type.body, color: colors.textMuted, marginTop: space.small },
   buttonRow: { flexDirection: 'row', flexWrap: 'wrap', gap: space.small, marginTop: space.medium },
-  buttonCell: { flexBasis: 180, flexGrow: 1 },
+  buttonCell: { flexBasis: 150, flexGrow: 1, flexShrink: 1, minWidth: 0 },
+  // Twice the share of the row, and on a phone a line of its own.
+  buttonCellMain: { flexBasis: 320, flexGrow: 2 },
 }));

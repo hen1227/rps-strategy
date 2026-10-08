@@ -22,7 +22,7 @@ import {
   withdrawTournamentPlayer,
   type TournamentConfig,
 } from '@/store/api/tournaments';
-import { statusOf } from '@/store/tournamentSelectors';
+import { isWeekendArena, statusOf } from '@/store/tournamentSelectors';
 import { colors, radius, space, themedSheet, type } from '@/theme';
 import type { Tournament } from '@/types/protocol';
 import {
@@ -53,8 +53,8 @@ import {
 // Getting an event off the board is three different operations, and the long
 // note under the list is the explanation a host reads. In short: cancel ends
 // one that is still going, hide tidies away one that is over, and delete
-// destroys it — including, invisibly, the champion's title, which is worked out
-// from the events on record rather than stored.
+// destroys it. A person keeps any title it earned them; an engine's tags are
+// worked out from the events on record, so those go with it.
 //
 // The public tournaments page keeps the match-day half — recording results
 // while you watch the bracket — because that is done with the standings in
@@ -266,7 +266,7 @@ export default function TournamentAdminPanel({ admin }: TournamentAdminPanelProp
                       — so when it does, it is the one thing on this screen a
                       host would otherwise have to reach into the database for.
                     */}
-                    {stuck ? <Badge label="NEEDS ADVANCING" tone="live" /> : null}
+                    {stuck ? <Badge label="NEEDS ADVANCING" tone="danger" /> : null}
 
                     {draft ? null : (
                       <GhostLink
@@ -436,12 +436,14 @@ export default function TournamentAdminPanel({ admin }: TournamentAdminPanelProp
                             admin.token,
                             tournament.tournamentId,
                           );
-                          // The champion is named in the notice because the
-                          // title going with the event is the part nobody
-                          // expects. See TournamentDeletion.championUserIds.
-                          const crowned = deletion.championUserIds?.length
-                            ? ` The Tournament Champion title has been taken from ${deletion.championUserIds.join(', ')}.`
-                            : '';
+                          // What happens to a finished event's winners is the
+                          // part a host gets wrong, and an arena's differs from
+                          // a cup's. See TournamentDeletion.championUserIds.
+                          const crowned = !deletion.championUserIds?.length
+                            ? ''
+                            : isWeekendArena(tournament)
+                              ? ' Its winner loses the arena win, and if this was the latest arena, Reigning Champion passes to the previous winner.'
+                              : " Titles people won here are kept; an engine's Cup Winner goes with the event.";
                           setNotice(
                             `Deleted ${deletion.name}: ${deletion.playersDeleted} entrants, ` +
                               `${deletion.matchesDeleted} matches. ` +

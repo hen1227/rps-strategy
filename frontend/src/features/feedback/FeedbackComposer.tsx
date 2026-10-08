@@ -224,10 +224,9 @@ export default function FeedbackComposer({
         ) : null}
 
         {/*
-          No `fullWidth`: that prop is `flexGrow: 1`, which is what makes a
-          button fill a *row* of actions. This one is in a column, where it
-          already stretches — and where flexGrow makes it grow downwards until
-          it fills the form.
+          No `fullWidth`: this is a column, which already stretches it. (That
+          prop used to be `flexGrow`, which in a column grew the button
+          downwards until it filled the form; it is a width now.)
         */}
         <PrimaryButton
           disabled={!canSend}

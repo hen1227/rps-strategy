@@ -259,7 +259,7 @@ const styles = themedSheet(() => ({
     borderWidth: 1,
     borderColor: 'transparent',
   },
-  cellActive: { borderColor: colors.accent, backgroundColor: colors.accentSurface },
+  cellActive: { borderColor: colors.borderLight, backgroundColor: colors.surfaceRaised },
   move: { flex: 1, color: colors.textSoft, fontSize: 9, fontWeight: '800' },
   pipPending: { width: 7, height: 7, borderRadius: 4, backgroundColor: colors.borderLight },
   bookMark: { color: colors.textFaint, fontSize: 9, fontStyle: 'italic' },

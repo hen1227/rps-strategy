@@ -66,8 +66,8 @@ const styles = themedSheet(() => ({
     padding: 12,
     borderRadius: radius.large,
     borderWidth: 1,
-    borderColor: colors.accentBorder,
-    backgroundColor: colors.accentSurfaceQuiet,
+    borderColor: colors.borderLight,
+    backgroundColor: colors.surfaceRaised,
     // Keeps the bar readable over the board on web and native alike.
     shadowColor: colors.surfaceDeep,
     shadowOffset: { width: 0, height: 6 },
@@ -75,14 +75,16 @@ const styles = themedSheet(() => ({
     shadowRadius: 12,
     elevation: 8,
   },
-  cardUrgent: { borderColor: colors.accentBright, backgroundColor: colors.accentSurfaceRaised },
+  // A match about to start is the one thing on screen that cannot wait, which
+  // is what the live colour is kept for.
+  cardUrgent: { borderColor: colors.liveBorder, backgroundColor: colors.liveSurface },
   pulse: {
     width: 9,
     height: 9,
     borderRadius: 5,
     backgroundColor: colors.textFaint,
   },
-  pulseUrgent: { backgroundColor: colors.accentBright },
+  pulseUrgent: { backgroundColor: colors.live },
   copy: { flex: 1 },
   title: { color: colors.textStrong, fontSize: 13, fontWeight: '900' },
   detail: { color: colors.textMuted, fontSize: 11, marginTop: 2 },

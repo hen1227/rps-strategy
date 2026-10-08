@@ -316,8 +316,11 @@ func movetextOf(pgn string) string {
 // whose second field is the side to move from the starting position.
 //
 // This, not the Generator tag, is the direct evidence of which rule set a game
-// was played under. Empty when the record carries no FEN, which every generated
-// record does.
+// was played under, because the server opens every game it plays with the side
+// the rules then said moves first -- a custom board too, whose layout carries
+// no side to move. That holds for the server's archive, not for records in
+// general: a board set up in the app can be handed to either side. Empty only
+// for a record with no FEN, and every record the server writes has one.
 func openerOf(tags []notation.Tag) string {
 	fields := strings.Fields(notation.TagValue(tags, "FEN"))
 	if len(fields) < 2 {

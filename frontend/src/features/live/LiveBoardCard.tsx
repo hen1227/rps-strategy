@@ -3,6 +3,8 @@ import { StyleSheet, Text, View, type LayoutChangeEvent } from 'react-native';
 
 import { liveGameGrid, liveMoveLabel } from './liveSelectors';
 import MiniBoard from '@/features/board/MiniBoard';
+import { PairingIcon, StakesChip } from '@/features/bots/OccasionTag';
+import { liveSeriesLabel } from '@/features/bots/seriesSummary';
 import { playerName, titledName } from '@/store/spectateSelectors';
 import { colors, players, radius, space, themedSheet, type } from '@/theme';
 import { FIRST_TO_MOVE, type ModeDefinition, type SideColor } from '@/types/game';
@@ -135,12 +137,31 @@ export default function LiveBoardCard({
     : 'Be first in the room';
 
   // The pieces, once, so the two arrangements below cannot drift apart.
+  //
+  // A bot series says whether it counts with the same chip its card in the
+  // feed leads with, and who paired it with the same drawing — the words
+  // themselves do not fit a rail card beside the mode.
+  const pairing = game.series?.pairing;
   const head = (
     <View style={styles.head}>
       <Badge label="LIVE" tone="live" />
       <Text numberOfLines={1} style={styles.mode}>
-        {game.series ? `${game.modeName} · BOT SERIES` : game.modeName}
+        {game.series && !pairing ? `${game.modeName} · BOT SERIES` : game.modeName}
       </Text>
+      {game.series && pairing ? (
+        <View
+          accessibilityLabel={liveSeriesLabel(game.series)}
+          accessible
+          style={styles.stakes}
+        >
+          <PairingIcon
+            color={game.series.casual ? colors.textMuted : colors.textStrong}
+            pairing={pairing}
+            size={12}
+          />
+          <StakesChip ranked={!game.series.casual} />
+        </View>
+      ) : null}
     </View>
   );
   const blueLine = (
@@ -170,6 +191,7 @@ export default function LiveBoardCard({
       <MiniBoard
         grid={grid}
         modeId={game.modeId}
+        muted
         size={boardSize}
       />
     </View>
@@ -231,7 +253,7 @@ const styles = themedSheet(() => ({
     padding: CARD_PAD,
     borderRadius: radius.large,
     borderWidth: 1,
-    borderColor: colors.liveBorder,
+    borderColor: colors.border,
     backgroundColor: colors.surfaceWell,
   },
   cardPage: { alignSelf: 'stretch', gap: space.small },
@@ -244,6 +266,7 @@ const styles = themedSheet(() => ({
   beside: { flex: 1, minWidth: 0, gap: space.small, justifyContent: 'space-between' },
   besideMiddle: { gap: space.snug },
   head: { flexDirection: 'row', alignItems: 'center', gap: space.small },
+  stakes: { flexDirection: 'row', alignItems: 'center', gap: space.tight },
   mode: { ...type.label, color: colors.textMuted, flex: 1, minWidth: 0, textAlign: 'right' },
 
   playerLine: {
@@ -258,7 +281,7 @@ const styles = themedSheet(() => ({
   playerNameRow: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: space.tight },
   playerName: { ...type.rowTitle, color: colors.text, flex: 1, minWidth: 0 },
   elo: { ...type.meta, color: colors.textFaint, fontWeight: '500' },
-  turn: { ...type.eyebrow, color: colors.accentSoft },
+  turn: { ...type.eyebrow, color: colors.textSoft },
 
   board: { alignItems: 'center' },
   facts: {

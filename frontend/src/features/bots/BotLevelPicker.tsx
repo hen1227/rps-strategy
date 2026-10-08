@@ -90,7 +90,7 @@ const styles = themedSheet(() => ({
   // Wide enough that six tiles wrap into two clean rows of three on a phone
   // and sit in one row on a desktop, rather than four and a ragged two.
   levelCompact: { minWidth: 84, paddingTop: space.tight, paddingBottom: space.tight },
-  levelSelected: { borderColor: colors.accent, backgroundColor: colors.accentSurfaceStrong },
+  levelSelected: { borderColor: colors.borderLight, backgroundColor: colors.surfaceMuted },
   art: {
     width: 56,
     height: 56,
@@ -100,8 +100,8 @@ const styles = themedSheet(() => ({
   },
   artCompact: { width: 40, height: 40, marginBottom: 0 },
   name: { ...type.body, color: colors.textSubtle, fontWeight: '900' },
-  nameSelected: { color: colors.accentTextStrong },
+  nameSelected: { color: colors.textStrong },
   rating: { fontSize: 9, fontWeight: '800', color: colors.textFaint, marginTop: space.hair },
-  ratingSelected: { color: colors.accentSoft },
+  ratingSelected: { color: colors.textSoft },
   pressed: { opacity: 0.7 },
 }));

@@ -913,7 +913,7 @@ const styles = themedSheet(() => ({
     marginBottom: 12,
   },
   titleCopy: { flex: 1, flexBasis: 140, minWidth: 0 },
-  kicker: { color: colors.accentBright, fontSize: 8, fontWeight: '900', letterSpacing: 1.35 },
+  kicker: { color: colors.textFaint, fontSize: 8, fontWeight: '900', letterSpacing: 1.35 },
   title: { color: colors.textStrong, fontSize: 20, fontWeight: '900', marginTop: 2 },
   resetButton: {
     minHeight: 38,
@@ -981,7 +981,15 @@ const styles = themedSheet(() => ({
   cardTitle: { color: colors.textStrong, fontSize: 17, fontWeight: '900', marginTop: 5 },
   cardBody: { color: colors.accentSoft, fontSize: 10, lineHeight: 15, marginTop: 8 },
   historyMeta: { color: colors.textFaint, fontSize: 7, fontWeight: '900', letterSpacing: 0.6 },
-  analysisModeRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 11 },
+  // Wraps, because on a phone the switch and its five buttons are wider than
+  // the column: without it the row ran 29 points off the right-hand edge.
+  analysisModeRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 11,
+  },
   analysisModeLabel: { color: colors.textFaint, fontSize: 7, fontWeight: '900', letterSpacing: 1 },
   analysisModeButton: {
     minHeight: 28,
@@ -989,12 +997,13 @@ const styles = themedSheet(() => ({
     paddingHorizontal: 9,
     borderRadius: radius.small,
     borderWidth: 1,
-    borderColor: colors.accentBorder,
+    borderColor: colors.borderStrong,
     backgroundColor: colors.surfaceRaised,
   },
-  analysisModeButtonActive: { borderColor: colors.accent, backgroundColor: colors.accentSurfaceRaised },
+  // On is neutral, like every other selected state: the accent is for pressing.
+  analysisModeButtonActive: { borderColor: colors.borderLight, backgroundColor: colors.surfaceMuted },
   analysisModeButtonText: { color: colors.textMuted, fontSize: 7, fontWeight: '900' },
-  analysisModeButtonTextActive: { color: colors.accentSoft },
+  analysisModeButtonTextActive: { color: colors.textStrong },
   setPositionButton: {
     minHeight: 28,
     justifyContent: 'center',
@@ -1002,9 +1011,9 @@ const styles = themedSheet(() => ({
     paddingHorizontal: 9,
     borderRadius: radius.small,
     borderWidth: 1,
-    borderColor: colors.accent,
+    borderColor: colors.borderStrong,
   },
-  setPositionButtonText: { color: colors.accentSoft, fontSize: 7, fontWeight: '900' },
+  setPositionButtonText: { color: colors.textSoft, fontSize: 7, fontWeight: '900' },
   bestMoveButton: {
     minHeight: 47,
     flexDirection: 'row',

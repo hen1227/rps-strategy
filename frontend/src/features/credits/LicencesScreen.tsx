@@ -184,7 +184,7 @@ function PackageRow({ data, entry, expanded, divided, onToggle }: PackageRowProp
 const styles = themedSheet(() => ({
   // The same opening as the credits page this sits under.
   hero: { gap: space.small, paddingBottom: space.snug },
-  heroEyebrow: { ...type.eyebrow, color: colors.accent, letterSpacing: 2.1 },
+  heroEyebrow: { ...type.eyebrow, color: colors.textFaint, letterSpacing: 2.1 },
   heroTitle: {
     color: colors.textStrong,
     fontSize: 34,
@@ -193,7 +193,7 @@ const styles = themedSheet(() => ({
   },
   heroSubtitle: { ...type.bodyStrong, color: colors.textMuted, lineHeight: 20 },
   body: { ...type.bodyStrong, color: colors.textMuted, lineHeight: 19 },
-  inlineLink: { color: colors.accentText, textDecorationLine: 'underline' },
+  inlineLink: { color: colors.textSoft, textDecorationLine: 'underline' },
   counts: { flexDirection: 'row', flexWrap: 'wrap', gap: space.tight },
 
   row: { paddingVertical: space.small },

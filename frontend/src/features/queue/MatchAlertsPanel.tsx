@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Platform, StyleSheet, Text, View } from 'react-native';
 
 import { failureMessage } from '@/errors';
-import { sendTestPush } from '@/store/api/push';
+import { sendTestPush, type TestPushReport } from '@/store/api/push';
 import { getOrCreateProfileKey, getOrCreateUserId } from '@/store/localIdentity';
 import { useGameStore } from '@/store/gameStore';
 import { usePushStore, type PushStatus } from '@/store/push';
@@ -239,6 +239,29 @@ function AlertsCard({
 }
 
 /**
+ * What a test came to, in words that send somebody to the right place.
+ *
+ * Only `delivered` means a push service took it. Everything else has to say
+ * whose problem it is: an address that has gone is cured by turning alerts off
+ * and on, and a refusal is this server's own fault. Telling somebody to check
+ * their settings for that sends them looking for a fault that is not theirs.
+ */
+const testResultMessage = ({ delivered, removed = 0, failed = 0 }: TestPushReport): string => {
+  if (delivered > 0) {
+    return `Sent to ${delivered} ${delivered === 1 ? DEVICE : `${DEVICE}s`}. If nothing appeared, ${
+      IS_NATIVE
+        ? 'check Settings › Notifications › RPS Strategy.'
+        : "check this device's notification settings for your browser."
+    }`;
+  }
+  if (failed > 0) return 'Nothing was sent. The problem is on our side, not in your settings.';
+  if (removed > 0) {
+    return 'Your registration had stopped working and was removed. Turn alerts off and on again here.';
+  }
+  return `This account has no registered ${DEVICE}s. Turn alerts off and on again here.`;
+};
+
+/**
  * Prove it works, from this device all the way back.
  *
  * A registration that stores cleanly and then silently delivers nothing looks
@@ -256,22 +279,12 @@ function TestAlertButton() {
   const send = async () => {
     setState({ busy: true, result: null });
     try {
-      const { delivered } = await sendTestPush({
+      const report = await sendTestPush({
         userId: getOrCreateUserId(),
         profileKey: getOrCreateProfileKey(),
         sessionToken: sessionToken ?? null,
       });
-      setState({
-        busy: false,
-        result:
-          delivered > 0
-            ? `Sent to ${delivered} ${delivered === 1 ? DEVICE : `${DEVICE}s`}. If nothing appeared, ${
-                IS_NATIVE
-                  ? 'check Settings › Notifications › RPS Strategy.'
-                  : "check this device's notification settings for your browser."
-              }`
-            : `This account has no registered ${DEVICE}s. Turn alerts off and on again here.`,
-      });
+      setState({ busy: false, result: testResultMessage(report) });
     } catch (requestError) {
       setState({ busy: false, result: failureMessage(requestError) });
     }

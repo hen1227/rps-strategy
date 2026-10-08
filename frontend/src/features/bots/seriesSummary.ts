@@ -1,6 +1,7 @@
 import { endReasonPhrase } from '@/features/game/resultLabels';
 import type { BotSeries, BotSeriesGame, BotSeriesResult } from '@/store/api/bots';
-import type { PlayerColor } from '@/types/game';
+import type { ModeDefinition, PlayerColor } from '@/types/game';
+import type { BotSeriesPairing } from '@/types/protocol';
 import { timeControlLabel } from '@/store/setupSelectors';
 import type { BadgeTone } from '@/ui/tones';
 
@@ -304,38 +305,101 @@ export const seriesContains = (
   Boolean(gameId) && (series?.games ?? []).some((game) => game.gameId === gameId);
 
 /**
+ * What an occasion in the bots' history was, which is what its card leads with.
+ *
+ * Two questions, answered apart because they are apart: did its games count on
+ * the bot ladder, and who picked the pairing. A run used to answer the first
+ * with the word "casual" somewhere in a line of settings and the second not at
+ * all, so an hourly round, a PLAY NOW and a hand-started run between the same
+ * two engines drew as the same card.
+ *
+ * One reader for every surface that draws a run — the feed's cards, the run's
+ * own page, a live board — so none of them can call the same run two things.
+ */
+export interface Occasion {
+  /** Its games count on the bot ladder. */
+  ranked: boolean;
+  /** Who picked it, or which event it was part of. */
+  pairing: BotSeriesPairing | 'tournament' | 'arena' | 'single';
+  /** "Hourly round", "Random opponent", "Chosen matchup", "Weekend Arena". */
+  title: string;
+}
+
+const PAIRING_TITLES: Record<BotSeriesPairing, string> = {
+  round: 'Hourly round',
+  random: 'Random opponent',
+  chosen: 'Chosen matchup',
+};
+
+/**
+ * A run's occasion. A server older than `pairing` sent only `casual`, and every
+ * run it knew about was either a round or a hand-started one, so a missing
+ * pairing reads as chosen — the answer that claims least.
+ */
+export const seriesOccasion = (series: Pick<BotSeries, 'casual' | 'pairing'>): Occasion => {
+  const pairing = series.pairing ?? 'chosen';
+  return { ranked: !series.casual, pairing, title: PAIRING_TITLES[pairing] };
+};
+
+/**
+ * A live board's one-line version: "RANKED · HOURLY ROUND", "CASUAL SERIES".
+ *
+ * Capitals and short, for the header of a board in the rail. A server older
+ * than `pairing` gets the old words, since it cannot say which this is.
+ */
+export const liveSeriesLabel = (series: { pairing?: BotSeriesPairing; casual?: boolean }): string => {
+  if (!series.pairing) return 'BOT SERIES';
+  if (series.casual) return 'CASUAL SERIES';
+  return `RANKED · ${PAIRING_TITLES[series.pairing].toUpperCase()}`;
+};
+
+/** A tournament's occasion: the weekend arena or any other event. */
+export const tournamentOccasion = (arena: boolean, ranked: boolean): Occasion => ({
+  ranked,
+  pairing: arena ? 'arena' : 'tournament',
+  title: arena ? 'Weekend Arena' : 'Tournament',
+});
+
+/** One bot game that was part of no run and no event. */
+export const singleGameOccasion = (ranked: boolean): Occasion => ({
+  ranked,
+  pairing: 'single',
+  title: 'Single game',
+});
+
+/**
  * How a run's state reads, and in what colour.
  *
  * Here rather than in the card that first needed it, because three surfaces now
  * badge the same word — the card in the feed, the run's own page, and anything
- * that lists runs next — and a run that is LIVE green in one place and grey in
- * the next is two runs to a reader.
+ * that lists runs next — and a run that is LIVE in one place and grey in the
+ * next is two runs to a reader.
  */
-export const seriesStatusTone = (series: BotSeries): BadgeTone => {
-  const tones: Record<string, BadgeTone> = { running: 'live', completed: 'accent' };
-  return tones[String(series.status).toLowerCase()] ?? 'neutral';
+export const seriesStatus = (series: BotSeries): { label: string; tone: BadgeTone } => {
+  switch (String(series.status).toLowerCase()) {
+    case 'running':
+      return { label: 'LIVE', tone: 'live' };
+    case 'completed':
+      return { label: 'FINISHED', tone: 'neutral' };
+    case 'aborted':
+      return { label: 'STOPPED', tone: 'neutral' };
+    default:
+      return { label: String(series.status).toUpperCase(), tone: 'neutral' };
+  }
 };
 
-/** "3 pairs · casual · 1+1 · started by ada" — a run's provenance. */
-export const seriesMetaLine = (series: BotSeries) => {
-  // A run still going says what it set out to play; one that stopped early says
-  // what it played. Advertising four pairs on a card showing one game is the
-  // same invention as drawing seven empty columns beside it.
-  const played = (series.games ?? []).filter((game) => game.result !== 'pending').length;
-  const parts =
-    String(series.status).toLowerCase() === 'running'
-      ? [`${series.pairs} pair${series.pairs === 1 ? '' : 's'}`]
-      : [`${played} game${played === 1 ? '' : 's'}`];
-  // Before the settings, because it is not one: it says whether the run counted
-  // for anything, which is the first thing somebody reading a scoreline wants
-  // and the reason a lopsided one may have moved nothing on the ladder.
-  if (series.casual) parts.push('casual');
-  if (series.openingPlies > 0) parts.push(`${series.openingPlies} opening plies`);
+/**
+ * "Intransitive · 1+1 · started by ada" — how a run was played, now that what
+ * it was is the tag above it and what it scored is the table below.
+ */
+export const seriesMetaLine = (series: BotSeries, modes?: readonly ModeDefinition[]) => {
+  const parts = [modes?.find((mode) => mode.id === series.modeId)?.name ?? series.modeId];
   // The clock in the notation the rest of the app writes it in, rather than a
   // minute count. A run can be played at 0.1+1, and rounding that to minutes
   // rounds it away entirely — which drops the one number that decides what its
   // result is worth. A row with no clock on it stays quiet.
   if (series.initialTimeMs > 0) parts.push(timeControlLabel(series));
+  // The hour asks for nobody, so a round has no one to credit.
   if (series.requestedByName) parts.push(`started by ${series.requestedByName}`);
   return parts.join(' · ');
 };

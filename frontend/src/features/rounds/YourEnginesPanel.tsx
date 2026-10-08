@@ -54,9 +54,15 @@ export interface YourEnginesPanelProps {
   field: LadderFieldEngine[];
   /** Called after a switch takes, so the field above redraws with it. */
   onChanged: () => void;
+  /** The weekly arena the next round is off for, if it is. See `ownedStatus`. */
+  pausedFor?: string | null;
 }
 
-export default function YourEnginesPanel({ field, onChanged }: YourEnginesPanelProps) {
+export default function YourEnginesPanel({
+  field,
+  onChanged,
+  pausedFor = null,
+}: YourEnginesPanelProps) {
   const router = useRouter();
   const token = useGameStore((state) => state.sessionToken);
   const clearSession = useGameStore((state) => state.clearSession);
@@ -180,12 +186,13 @@ export default function YourEnginesPanel({ field, onChanged }: YourEnginesPanelP
         choose, which is the half the old copy could promise a ceiling for and
         this one cannot.
 
-        What has not changed is the sentence that matters, so it is still here:
-        the server picks the opponent and the conditions. That is the whole of
-        why these games count and a hand-started series does not.
+        And what entering lets other people do, since that changed: anybody
+        can start a ranked match with an entered engine from the Bots page.
+        What stays the server's is the clock and the length, which is why
+        those games count and a hand-started series does not.
       */}
       <Text style={styles.help}>
-        Keep your engine connected for hourly pairings, or choose PLAY NOW for an extra pair. The server picks opponents and settings for both.
+        Entered engines play a ranked pair every hour, and anyone can start a ranked match with them.
       </Text>
       {error ? <Banner message={error} onDismiss={() => setError(null)} tone="error" /> : null}
 
@@ -211,7 +218,7 @@ export default function YourEnginesPanel({ field, onChanged }: YourEnginesPanelP
                   uri={botIconUrl(entry.bot.botId, entry.bot.iconSha256)}
                 />
               }
-              meta={ownedStatus(entry)}
+              meta={ownedStatus(entry, pausedFor)}
               metaLines={2}
               title={entry.bot.name || 'Unclaimed slot'}
               trailing={

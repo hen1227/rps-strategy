@@ -38,12 +38,6 @@ No file names, no function names, no internal vocabulary (segment, ply, SPSA,
 Fabric). A change that cannot be described without them probably does not
 belong in this file.
 
-### Budget
-
-One release's section must fit **500 characters**. That is Google Play's
-release-notes field, and the shipped section is pasted into it verbatim; the
-App Store's "What's New" allows 4,000, so 500 is the binding limit. If a
-release runs over, cut the smallest items — do not split the release.
 
 ### Releasing
 

@@ -4,14 +4,12 @@
 // shared declaration is the only thing that can keep them in step. Same
 // arrangement as `deviceStorage.types.ts` next door, for the same reason.
 //
-// The pure parser lives here rather than in either half because both need it:
-// the web build reads the ticket off its own address bar, and the native build
-// reads it off the URL the authentication sheet hands back. One definition,
-// testable in Node.
+// The return address and its parser are not Discord's alone — Apple's sign-in
+// on the website comes back the same way — so they live in `signInReturn.ts`.
+// The address is still exported from here as well, for the app layout, which
+// held the callback route open by this name before Apple and need not move.
 
-/** Where Discord sends the browser back to. One definition, so the route and
- *  the redirect address cannot drift apart. */
-export const ACCOUNT_CALLBACK_PATH = '/account/callback';
+export { ACCOUNT_CALLBACK_PATH } from './signInReturn';
 
 /**
  * What came of asking Discord.
@@ -48,45 +46,3 @@ export interface DiscordAuth {
   isDiscordSignInAvailable(): boolean;
   signInThroughDiscord(authorize: Authorize): Promise<DiscordOutcome>;
 }
-
-/**
- * Read the outcome out of a return address.
- *
- * Handles both shapes: `https://rps.henhen1227.com/account/callback?ticket=…`
- * on the web and `rps-strategy://account/callback?ticket=…` on a phone. The
- * query is split off by hand rather than through `new URL`, because a custom
- * scheme is not a "special" URL and engines disagree about what its parts are.
- */
-export const ticketFromCallbackURL = (
-  url: string,
-): { ticket: string | null; error: string | null } => {
-  const query = url.slice(url.indexOf('?') + 1);
-  if (!url.includes('?') || !query) return { ticket: null, error: null };
-  // The fragment is not ours, and leaving it on would make it part of the
-  // last parameter's value.
-  const parameters = new URLSearchParams(query.split('#')[0]);
-  return {
-    ticket: parameters.get('ticket') || null,
-    error: parameters.get('error') || null,
-  };
-};
-
-/**
- * Discord's error codes, in words somebody can act on.
- *
- * Shared rather than per-platform because both halves surface the same set:
- * the web build reads them off the callback address and the native build off
- * the URL the sheet returns.
- */
-export const discordRefusalMessage = (code: string) => {
-  switch (code) {
-    case 'access_denied':
-      return 'Discord sign-in was cancelled.';
-    case 'expired':
-      return 'That sign-in took too long. Try again.';
-    case 'discord_unavailable':
-      return 'Discord could not be reached. Try again in a moment.';
-    default:
-      return 'Discord sign-in did not work. Try again.';
-  }
-};

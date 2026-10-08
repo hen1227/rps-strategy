@@ -79,13 +79,14 @@ const styles = themedSheet(() => ({
     borderColor: colors.goldBorder,
     backgroundColor: colors.goldSurfaceDeep,
   },
-  promoLive: { borderColor: colors.accentBorder, backgroundColor: colors.accentSurface },
+  // On now: the live colour, as on the banner this links to.
+  promoLive: { borderColor: colors.liveBorder, backgroundColor: colors.liveSurface },
   dot: { width: 7, height: 7, borderRadius: 4, backgroundColor: colors.goldDot },
-  dotLive: { backgroundColor: colors.accent },
+  dotLive: { backgroundColor: colors.live },
   // `minWidth: 0` so the second line ellipsises inside a 232px sidebar rather
   // than pushing the card wider than the column. See the note in MobileTopBar.
   copy: { flex: 1, minWidth: 0 },
   label: { ...type.label, color: colors.goldBright, letterSpacing: 0.6 },
-  labelLive: { color: colors.accentTextStrong },
+  labelLive: { color: colors.liveSoft },
   detail: { ...type.meta, color: colors.textMuted, marginTop: space.hair },
 }));

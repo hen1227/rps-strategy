@@ -195,7 +195,7 @@ export default function BotManagerPanel() {
           a rating and the only one that spends your machine's time on a
           schedule, so an owner should not have to guess at either. */}
       <Text style={styles.switchHelp}>
-        Challengeable allows casual games. Tournaments enters scheduled events. Ranked ladder enters hourly rated pairs; PLAY NOW adds a pair on demand.
+        Challengeable allows casual games. Tournaments enters events. Ranked ladder enters ranked matches: hourly, and whenever someone starts one.
       </Text>
       {error ? <Banner message={error} onDismiss={() => setError(null)} tone="error" /> : null}
       {notice ? <Banner message={notice} onDismiss={() => setNotice(null)} /> : null}

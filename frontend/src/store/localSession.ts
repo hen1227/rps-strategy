@@ -8,7 +8,13 @@ import {
 } from '@/engine/analysisGame';
 import { inferMoveBetweenGrids } from '@/engine/moveDiff';
 import { openingLineOf } from '@/engine/openingLine';
-import { encodePGN, encodePosition, resultFor, type WritableMove } from '@/engine/pgn';
+import {
+  boardSizeTag,
+  encodePGN,
+  encodePosition,
+  resultFor,
+  type WritableMove,
+} from '@/engine/pgn';
 import {
   FIRST_TO_MOVE,
   opposingColor,
@@ -400,7 +406,7 @@ export const createLocalSlice: StateCreator<GameStore, [], [], LocalSlice> = (se
           { name: 'GameId', value: localSession.gameId },
           { name: 'Variant', value: localGame.mode.name },
           { name: 'ModeId', value: localGame.mode.id },
-          { name: 'BoardSize', value: '9' },
+          { name: 'BoardSize', value: boardSizeTag(start.grid) },
           { name: 'SetUp', value: '1' },
           { name: 'FEN', value: encodePosition(start.grid, start.currentTurn) },
           { name: 'RedId', value: 'local:red' },

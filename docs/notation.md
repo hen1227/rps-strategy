@@ -19,11 +19,14 @@ Three space-separated fields: pieces, side to move, and territory.
 3SSS3/3PPP3/3RRR3/9/9/9/3rrr3/3ppp3/3sss3 b 3bbb3/3bbb3/3bbb3/9/9/9/3rrr3/3rrr3/3rrr3
 ```
 
-- Rows run from rank 1 upward, separated by `/`.
+- Rows run from rank 1 upward, separated by `/`. Chess FEN runs the other way,
+  from the far side down.
 - `R`, `P`, and `S` mean rock, paper, and scissors. Uppercase is Blue; lowercase is Red.
 - Numbers count consecutive empty or unowned tiles. Eleven empty tiles are `11`.
 - The side to move is `r`, `b`, or `-`.
 - The rows and their lengths define the board dimensions.
+- There are no move counters. The no-capture draw counts from the moves, so
+  continue a game by replaying its record, not from its final position.
 
 Only Total War uses territory, which records ownership even on empty squares.
 Generated game records always include it. Input may omit it; ownership then
@@ -59,14 +62,14 @@ side. Read the opener from the `FEN` tag. Blue opens standard games.
 [FEN "3SSS3/3PPP3/3RRR3/9/9/9/3rrr3/3ppp3/3sss3 b 3bbb3/3bbb3/3bbb3/9/9/9/3rrr3/3rrr3/3rrr3"]
 [Termination "Red wins by resignation"]
 [EndReason "resignation"]
-[FinalFEN "3SSS3/3PPP3/3R5/6R2/2R6/3r1r3/3p5/2rp2p2/2s1ss3 r 3bbb3/…"]
+[FinalFEN "2S1SS3/3PPP3/3RR4/5R3/9/9/3rrr3/3pp4/3sssp2 r 2bbbb3/3bbb3/3bbb3/5b3/9/9/3rrr3/3rrr3/3rrrr2"]
 [Generator "rps-strategy-pgn/2"]
 
 1. Sd1-c1 {[%emt 2.104] [%clk 0:05:00.000 0:05:00.896]} 1... Pf8-g9
-{[%emt 1.550] [%clk 0:05:01.450 0:05:00.896]} 2. Rf3xf4
+{[%emt 1.55] [%clk 0:05:01.450 0:05:00.896]} 2. Rf3-f4
 {[%emt 0.981] [%clk 0:05:01.450 0:05:02.915]}
 {[%act draw_offer Red] [%emt 4.002] [%clk 0:04:57.448 0:05:02.915]}
-{[%end resignation Blue] [%emt 1.204] [%clk 0:04:57.448 0:05:01.711]} 1-0
+{[%end resignation Blue] [%emt 1.204] [%clk 0:04:56.244 0:05:02.915]} 1-0
 ```
 
 Records also include player IDs, ratings before and after, timestamps, and a game ID.
@@ -75,7 +78,7 @@ Records also include player IDs, ratings before and after, timestamps, and a gam
 | --- | --- |
 | `ModeId`, `Variant` | Mode ID and name. |
 | `SetUp`, `FEN` | Actual starting board and first side to move. |
-| `FinalFEN` | Final board. |
+| `FinalFEN` | Final board. After a move that ends the game, the side to move is still the player who made it. |
 | `BoardSize` | `9`, or `WxH` for a rectangle. |
 | `EndReason` | Machine-readable result alongside `Termination`. |
 | `Generator` | Record dialect. |

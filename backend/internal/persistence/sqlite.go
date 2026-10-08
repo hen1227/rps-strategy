@@ -49,9 +49,10 @@ type Account struct {
 	// path; this is the only thing that distinguishes it.
 	Kind     string `json:"kind"`
 	Username string `json:"username"`
-	// Registered reports whether this account has claimed a username and set a
-	// password. An unregistered account is the anonymous browser identity the
-	// game has always had, and remains fully playable.
+	// Registered reports whether this account can sign in: a linked Discord or
+	// Apple ID, or one of the remaining passwords. An unregistered account is
+	// the anonymous browser identity the game has always had, and remains fully
+	// playable. Which of those it is stays with its owner — see SignInMethods.
 	Registered bool   `json:"registered"`
 	IsAdmin    bool   `json:"isAdmin"`
 	Disabled   bool   `json:"disabled"`
@@ -407,6 +408,21 @@ CREATE INDEX IF NOT EXISTS tournament_matches_tournament_idx
 	if err := store.ensureAccountAuthColumns(ctx); err != nil {
 		return err
 	}
+	// Straight after the auth columns, which hold the Discord links it copies
+	// in, and before anything reads an account: registeredSQL, and with it every
+	// account read, asks this table. See account_identity.go.
+	if err := store.ensureIdentitySchema(ctx); err != nil {
+		return err
+	}
+	// After it, because its trigger watches that table.
+	if err := store.ensureIdentityRevocationSchema(ctx); err != nil {
+		return err
+	}
+	// Before anything asks awaitingIdentityLinkSQL, which reads this table — the
+	// count at the end of this function among them. See store_review.go.
+	if err := store.ensureStoreReviewSchema(ctx); err != nil {
+		return err
+	}
 	// After ensureAccountProfileColumns, which adds the `title` column this
 	// table's rows are chosen into.
 	if err := store.ensureTitleSchema(ctx); err != nil {
@@ -507,26 +523,59 @@ CREATE INDEX IF NOT EXISTS tournament_matches_tournament_idx
 
 // reportPasswordAccountsRemaining logs how much of the password era is left.
 //
-// Everything that still exists to serve password sign-in — the login route,
-// AuthenticateAccount, the whole of password.go, and half of registeredSQL —
-// can go when this reaches zero. Printing it at boot makes that moment
-// something somebody notices, rather than a date guessed at in advance and
-// then either missed or acted on too early.
+// Printing it at boot makes the moment the last legacy account links an
+// identity something somebody notices, rather than a date guessed at in advance
+// and then either missed or acted on too early.
+//
+// That moment no longer means password sign-in can go. The store review
+// accounts sign in with one too, for as long as the app is in the stores — see
+// store_review.go. What reaching zero frees is what exists only for the legacy
+// accounts: the paths that link an identity to a password account, and the
+// prompt that asks for it. The login route, AuthenticateAccount and password.go
+// stay.
 func (store *Store) reportPasswordAccountsRemaining(ctx context.Context) {
-	var remaining int
-	if err := store.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM accounts WHERE `+awaitingDiscordLinkSQL(""),
-	).Scan(&remaining); err != nil {
+	legacy, review, err := store.passwordAccountCounts(ctx)
+	if err != nil {
 		// Not worth failing a boot over a status line.
 		return
 	}
-	if remaining > 0 {
+	switch {
+	case legacy > 0:
 		log.Printf(
-			"%d account(s) still sign in with a password and have not linked Discord; "+
-				"password sign-in can be removed once this reaches zero",
-			remaining,
+			"%d account(s) still sign in with a password and have not linked Discord or Apple; "+
+				"the legacy link paths can be removed once this reaches zero",
+			legacy,
+		)
+	case review > 0:
+		log.Printf(
+			"password sign-in is only used by the %d store review account(s) now; "+
+				"the legacy link paths can be removed",
+			review,
 		)
 	}
+}
+
+// passwordAccountCounts splits the accounts that sign in with a password by why
+// they do: a legacy account that has not linked an identity yet, or a store
+// review account that never will.
+func (store *Store) passwordAccountCounts(ctx context.Context) (int, int, error) {
+	var legacy, review int
+	if err := store.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM accounts WHERE `+awaitingIdentityLinkSQL(""),
+	).Scan(&legacy); err != nil {
+		return 0, 0, fmt.Errorf("count legacy password accounts: %w", err)
+	}
+	// Joined rather than counted off the label table alone, because a label
+	// still points at the row a reviewer's deletion anonymized, and that row
+	// signs in with nothing.
+	if err := store.db.QueryRowContext(ctx, `
+SELECT COUNT(*) FROM store_review_accounts r
+JOIN accounts a ON a.user_id = r.user_id
+WHERE a.username_lower <> ''
+`).Scan(&review); err != nil {
+		return 0, 0, fmt.Errorf("count store review accounts: %w", err)
+	}
+	return legacy, review, nil
 }
 
 func (store *Store) EnsureAccount(
@@ -914,7 +963,7 @@ func normalizeIdentity(userID string, username string) (string, string, error) {
 // places and they have already drifted apart once.
 var accountSelect = `
 SELECT user_id, kind, username, ` + registeredSQL("") + `, is_admin, disabled,
-       discord, discord_user_id <> '', title, appearance, elo, wins, losses,
+       discord, ` + discordVerifiedSQL("") + `, title, appearance, elo, wins, losses,
        draws, games_played, created_at_unix_ms, updated_at_unix_ms
 FROM accounts`
 

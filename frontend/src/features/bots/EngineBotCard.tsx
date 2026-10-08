@@ -1,7 +1,12 @@
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import BotIcon from './BotIcon';
-import { engineElo, engineIsAvailable, engineStatus } from '@/features/live/liveSelectors';
+import {
+  engineCanJoinSeries,
+  engineElo,
+  engineIsAvailable,
+  engineStatus,
+} from '@/features/live/liveSelectors';
 import { botIconUrl } from '@/store/api/bots';
 import { colors, radius, space, themedSheet, type } from '@/theme';
 import type { ModeID } from '@/types/game';
@@ -130,9 +135,9 @@ export default function EngineBotCard({
   const playsThisMode = !bot.modes?.length || bot.modes.includes(modeId);
   const unavailable = !engineIsAvailable(bot) || !playsThisMode;
   // What the series form can accept, which is a different question: a private
-  // engine is enterable by its owner, and the server settles who that is. Only
-  // the three states in which no game can start at all are refused here.
-  const pittable = !bot.busy && !bot.draining && !bot.benched;
+  // engine is enterable by its owner, and the server settles who that is. See
+  // engineCanJoinSeries for the states refused here.
+  const pittable = engineCanJoinSeries(bot);
 
   return (
     <View style={[styles.card, mine && styles.cardMine, Boolean(pitRole) && styles.cardPitted]}>

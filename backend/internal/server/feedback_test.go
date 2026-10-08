@@ -13,9 +13,9 @@ import (
 // The board's doors, tested from the outside.
 //
 // The rules worth pinning here are the ones about *who*: reading is open to a
-// visitor with no account at all, writing takes Discord, and removing takes
-// either authorship or the host. persistence/feedback_test.go covers what the
-// board does once somebody is through the door.
+// visitor with no account at all, writing takes Discord or Apple, and removing
+// takes either authorship or the host. persistence/feedback_test.go covers what
+// the board does once somebody is through the door.
 
 // unverifiedSession is an account that has signed in and has no Discord link —
 // the case between a guest and a verified player, and the one the board's
@@ -513,11 +513,31 @@ func TestThePolicySaysWhetherYouMayPostAndWhyNot(t *testing.T) {
 	if may, refusal := read(""); may || !containsFold(refusal, "sign in") {
 		t.Fatalf("a signed-out visitor should be told to sign in, got %t / %q", may, refusal)
 	}
-	if may, refusal := read(unverified); may || !containsFold(refusal, "verify") {
-		t.Fatalf("an unverified account should be told to verify, got %t / %q", may, refusal)
+	if may, refusal := read(unverified); may || !containsFold(refusal, "link Discord or Apple") {
+		t.Fatalf("an unverified account should be told to link one, got %t / %q", may, refusal)
 	}
 	if may, refusal := read(verified); !may || refusal != "" {
 		t.Fatalf("a verified account should be able to post, got %t / %q", may, refusal)
+	}
+	// Apple clears the bar Discord does: an Apple ID costs as much to make, and
+	// the board's tally is what the bar protects.
+	if _, err := data.EnsureAccountWithProfileKey(
+		t.Context(), "apple-user", "Guest", routeTestAppleProfileKey,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := data.ClaimAccountWithIdentity(
+		t.Context(), "apple-user", "Orchard",
+		persistence.AppleIdentity("001234.feedback.0001", "", ""),
+	); err != nil {
+		t.Fatal(err)
+	}
+	apple, err := data.CreateSession(t.Context(), "apple-user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if may, refusal := read(apple); !may || refusal != "" {
+		t.Fatalf("an Apple account should be able to post, got %t / %q", may, refusal)
 	}
 }
 

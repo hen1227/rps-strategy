@@ -97,11 +97,12 @@ const styles = themedSheet(() => ({
     minWidth: 0,
   },
   tabFill: { flexGrow: 1, flexBasis: 0, alignItems: 'center' },
-  tabSelected: { borderColor: colors.accentBorder, backgroundColor: colors.accentSurfaceQuiet },
+  // Selection is neutral, as everywhere: the accent is for pressing.
+  tabSelected: { borderColor: colors.borderLight, backgroundColor: colors.surfaceRaised },
   pressed: { opacity: 0.7 },
 
   eyebrow: { ...type.eyebrow, color: colors.textFaint },
-  eyebrowSelected: { color: colors.accentBright },
+  eyebrowSelected: { color: colors.textSoft },
   label: { ...type.rowTitle, color: colors.textMuted, marginTop: space.hair },
   labelSelected: { color: colors.textStrong },
 
@@ -111,5 +112,5 @@ const styles = themedSheet(() => ({
     marginTop: space.snug,
     backgroundColor: 'transparent',
   },
-  markerSelected: { backgroundColor: colors.accentBright },
+  markerSelected: { backgroundColor: colors.textStrong },
 }));

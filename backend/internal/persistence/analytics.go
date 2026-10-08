@@ -56,16 +56,18 @@ type AdminAnalytics struct {
 // AccountTotals counts who has an account here.
 type AccountTotals struct {
 	Total int `json:"total"`
-	// Registered is accounts that can sign in — a linked Discord, or one of the
-	// remaining password accounts. See registeredSQL.
+	// Registered is accounts that can sign in — a linked Discord or Apple ID,
+	// or one of the remaining password accounts. See registeredSQL.
 	Registered int `json:"registered"`
-	// DiscordLinked is the subset Discord has vouched for, which is the number
-	// that matters for anything ranked and is the population with a profile
-	// page. See PublicProfile.
+	// DiscordLinked is the subset Discord has vouched for, which is the
+	// population a host can reach for a tournament.
 	DiscordLinked int `json:"discordLinked"`
-	Bots          int `json:"bots"`
-	Disabled      int `json:"disabled"`
-	Admins        int `json:"admins"`
+	// AppleLinked is the subset that signs in with Apple. An account can be in
+	// both, so the two do not add up to Registered.
+	AppleLinked int `json:"appleLinked"`
+	Bots        int `json:"bots"`
+	Disabled    int `json:"disabled"`
+	Admins      int `json:"admins"`
 	// NewLast7Days and NewLast30Days are arrivals, which is the only growth
 	// figure a server this size needs.
 	NewLast7Days  int `json:"newLast7Days"`
@@ -151,7 +153,8 @@ func (store *Store) Analytics(ctx context.Context) (AdminAnalytics, error) {
 	if err := store.db.QueryRowContext(ctx, `
 SELECT COUNT(*),
        COALESCE(SUM(CASE WHEN `+registeredSQL("")+` THEN 1 ELSE 0 END), 0),
-       COALESCE(SUM(CASE WHEN discord_user_id <> '' THEN 1 ELSE 0 END), 0),
+       COALESCE(SUM(CASE WHEN `+discordVerifiedSQL("")+` THEN 1 ELSE 0 END), 0),
+       COALESCE(SUM(CASE WHEN `+appleLinkedSQL("")+` THEN 1 ELSE 0 END), 0),
        COALESCE(SUM(CASE WHEN kind = ? THEN 1 ELSE 0 END), 0),
        COALESCE(SUM(CASE WHEN disabled = 1 THEN 1 ELSE 0 END), 0),
        COALESCE(SUM(CASE WHEN is_admin = 1 THEN 1 ELSE 0 END), 0),
@@ -162,6 +165,7 @@ FROM accounts
 		&analytics.Accounts.Total,
 		&analytics.Accounts.Registered,
 		&analytics.Accounts.DiscordLinked,
+		&analytics.Accounts.AppleLinked,
 		&analytics.Accounts.Bots,
 		&analytics.Accounts.Disabled,
 		&analytics.Accounts.Admins,

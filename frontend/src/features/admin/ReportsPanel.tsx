@@ -167,7 +167,7 @@ export default function ReportsPanel({ admin }: ReportsPanelProps) {
                         you.
                       */}
                       {(report.targetOpenReports ?? 0) > 1 ? (
-                        <Badge label={`${report.targetOpenReports} OPEN`} tone="live" />
+                        <Badge label={`${report.targetOpenReports} OPEN`} tone="danger" />
                       ) : null}
                     </View>
                     <Text style={adminStyles.rowMeta}>

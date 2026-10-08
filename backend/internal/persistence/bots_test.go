@@ -21,8 +21,8 @@ func registeredOwner(t *testing.T, store *Store, userID string, username string)
 	if _, err := store.EnsureAccountWithProfileKey(ctx, userID, username, key); err != nil {
 		t.Fatalf("create owner account: %v", err)
 	}
-	if _, err := store.ClaimAccountWithDiscord(
-		ctx, userID, username, "discord-"+userID, username,
+	if _, err := store.ClaimAccountWithIdentity(
+		ctx, userID, username, DiscordIdentity("discord-"+userID, username),
 	); err != nil {
 		t.Fatalf("claim owner: %v", err)
 	}
@@ -170,8 +170,8 @@ func TestBotNamesShareOneNamespaceWithPlayerNames(t *testing.T) {
 	if _, err := store.EnsureAccountWithProfileKey(ctx, "impostor", "Nobody", otherKey); err != nil {
 		t.Fatalf("create account: %v", err)
 	}
-	if _, err := store.ClaimAccountWithDiscord(
-		ctx, "impostor", "rival", "discord-impostor", "rival",
+	if _, err := store.ClaimAccountWithIdentity(
+		ctx, "impostor", "rival", DiscordIdentity("discord-impostor", "rival"),
 	); !errors.Is(err, ErrUsernameTaken) {
 		t.Fatalf("a bot's name must not be registrable by a person: %v", err)
 	}

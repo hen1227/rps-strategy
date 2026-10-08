@@ -3,6 +3,7 @@ package notation
 import (
 	"math/rand"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -330,6 +331,51 @@ func TestPGNRoundTripsAFullCustomStartingPosition(t *testing.T) {
 	encoded := Encode(replayed.Record(), Metadata{})
 	if !strings.Contains(encoded, `[FEN "`+startingFEN+`"]`) {
 		t.Fatalf("custom starting position was not preserved:\n%s", encoded)
+	}
+}
+
+// A record with no FEN began from its own mode's opening, not from one layout
+// shared by every mode: Intransitive's wedges are not Total War's ranks.
+func TestARecordWithNoFENBeginsFromItsModesOpening(t *testing.T) {
+	fenTag := regexp.MustCompile(`(?m)^\[(FEN|SetUp) "[^"]*"\]\n`)
+	for _, modeID := range game.DefaultModeRegistry.IDs() {
+		played := newTestGame(t, modeID)
+		playOut(t, played, 7, 30)
+		text := Encode(played.Record(), Metadata{})
+		stripped := fenTag.ReplaceAllString(text, "")
+		if strings.Contains(stripped, `[FEN "`) {
+			t.Fatalf("%s: the FEN tag was not removed", modeID)
+		}
+
+		parsed, err := Parse(stripped)
+		if err != nil {
+			t.Fatalf("%s: a record with no FEN does not parse: %v", modeID, err)
+		}
+		if err := game.Verify(parsed.Record); err != nil {
+			t.Fatalf("%s: a record with no FEN does not replay: %v", modeID, err)
+		}
+		mode, err := game.DefaultModeRegistry.New(modeID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := EncodeStartingPosition(mode.Definition().StartingPosition)
+		start := parsed.Record.InitialPosition
+		if got := EncodePosition(start.Grid, start.CurrentTurn); got != want {
+			t.Fatalf("%s: began from %q, want the mode's opening %q", modeID, got, want)
+		}
+	}
+}
+
+func TestARecordWithNoFENAndAnUnknownModeIsRefused(t *testing.T) {
+	_, err := Parse(strings.Join([]string{
+		`[ModeId "NOPE"]`,
+		`[TimeControl "300+0"]`,
+		`[FinalFEN "9/9/9/9/9/9/9/9/9 b"]`,
+		"",
+		"*",
+	}, "\n"))
+	if err == nil || !strings.Contains(err.Error(), "no FEN tag") {
+		t.Fatalf("got %v, want a refusal that names the missing FEN", err)
 	}
 }
 

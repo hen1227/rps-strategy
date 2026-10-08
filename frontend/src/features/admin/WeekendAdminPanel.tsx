@@ -266,6 +266,16 @@ export default function WeekendAdminPanel({ admin }: WeekendAdminPanelProps) {
             value={numberField(draft.roundRobinMax)}
           />
         </View>
+        <View style={styles.field}>
+          <LabeledInput
+            hint="Capped at one round per opponent. Blank is the shortest for the field: four rounds for nine engines."
+            keyboardType="number-pad"
+            label="SWISS ROUNDS"
+            onChangeText={(text) => change({ swissRounds: Number(text) || 0 })}
+            placeholder="auto"
+            value={numberField(draft.swissRounds ?? 0)}
+          />
+        </View>
       </View>
 
       <View style={styles.row}>

@@ -44,3 +44,47 @@ export const reachRamp = (hex: string, near: number, far: number): readonly stri
   Array.from({ length: REACH_BANDS }, (_unusedBand, moves) =>
     withAlpha(hex, near + ((far - near) * moves) / (REACH_BANDS - 1)),
   );
+
+const channels = (hex: string): [number, number, number] => {
+  const value = hex.replace('#', '');
+  const full =
+    value.length === 3
+      ? value
+          .split('')
+          .map((channel) => channel + channel)
+          .join('')
+      : value;
+  return [0, 2, 4].map((start) => parseInt(full.slice(start, start + 2), 16)) as [
+    number,
+    number,
+    number,
+  ];
+};
+
+const toHex = (rgb: readonly number[]) =>
+  `#${rgb
+    .map((channel) => Math.round(Math.max(0, Math.min(255, channel))).toString(16).padStart(2, '0'))
+    .join('')}`;
+
+/** `from` moved `amount` of the way to `to`, channel by channel. */
+export const mix = (from: string, to: string, amount: number) => {
+  const a = channels(from);
+  const b = channels(to);
+  return toHex(a.map((channel, index) => channel + (b[index]! - channel) * amount));
+};
+
+/**
+ * A square as a picture of a board draws it, rather than as the board does.
+ *
+ * Two moves, and both are needed. Taking out some of the colour is what stops a
+ * small, saturated chequer from being the loudest thing on a card; leaning the
+ * result towards the card it sits on is what makes it look placed there rather
+ * than pasted on. Neither moves the two squares far enough apart or together
+ * to change how a position reads.
+ */
+export const previewTile = (tile: string, surface: string) => {
+  const [red, green, blue] = channels(tile);
+  const grey = 0.299 * red + 0.587 * green + 0.114 * blue;
+  const quieter = toHex([red, green, blue].map((channel) => channel + (grey - channel) * 0.24));
+  return mix(quieter, surface, 0.1);
+};

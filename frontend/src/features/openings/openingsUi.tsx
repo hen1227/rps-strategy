@@ -9,7 +9,7 @@ import { StyleSheet, Text, TextInput, View, type TextInputProps } from 'react-na
 
 import { winPercent } from '@/engine/gameReview';
 import type { OpeningNameSuggestion } from '@/engine/openingBook';
-import { colors, players, radius, space, themedSheet } from '@/theme';
+import { colors, players, radius, space, themedSheet, type } from '@/theme';
 import { GhostButton, PrimaryButton } from '@/ui/primitives';
 import {
   FIRST_TO_MOVE,
@@ -154,7 +154,7 @@ export function SuggestionRow({
 
 export const ui = themedSheet(() => ({
   pressed: { opacity: 0.7 },
-  eyebrow: { color: colors.accentBright, fontSize: 8, fontWeight: '900', letterSpacing: 1.4 },
+  eyebrow: { ...type.eyebrow, color: colors.textFaint },
   fieldLabel: {
     color: colors.textMuted,
     fontSize: 8,

@@ -116,8 +116,8 @@ const styles = themedSheet(() => ({
     padding: space.medium,
     borderRadius: radius.large,
     borderWidth: 1,
-    borderColor: colors.accentBorder,
-    backgroundColor: colors.accentSurfaceQuiet,
+    borderColor: colors.borderLight,
+    backgroundColor: colors.surfaceRaised,
     // Keeps the bar readable over the board on web and native alike.
     shadowColor: colors.surfaceDeep,
     shadowOffset: { width: 0, height: 6 },
@@ -127,7 +127,9 @@ const styles = themedSheet(() => ({
   },
 
   row: { flexDirection: 'row', alignItems: 'center', gap: space.medium },
-  pulse: { width: 9, height: 9, borderRadius: 5, backgroundColor: colors.accentSoft },
+  // A search is something happening right now, so its dot is the live colour
+  // and the card around it is as neutral as every other state.
+  pulse: { width: 9, height: 9, borderRadius: 5, backgroundColor: colors.live },
   pulsePaused: { backgroundColor: colors.textFaint },
   copy: { flex: 1 },
   title: { ...type.rowTitle, color: colors.textStrong, fontWeight: '900' },
@@ -140,7 +142,7 @@ const styles = themedSheet(() => ({
     marginTop: space.small,
     paddingTop: space.small,
     borderTopWidth: 1,
-    borderTopColor: colors.accentBorder,
+    borderTopColor: colors.borderSoft,
   },
   pitchLine: { ...type.meta, flex: 1, color: colors.textMuted },
   dismiss: { paddingHorizontal: space.tight, paddingVertical: space.hair },

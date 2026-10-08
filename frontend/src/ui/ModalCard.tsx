@@ -119,7 +119,7 @@ const styles = themedSheet(() => ({
   },
   header: { flexDirection: 'row', alignItems: 'flex-start', gap: space.small },
   headerCopy: { flex: 1 },
-  eyebrow: { ...type.eyebrow, color: colors.accentBright },
+  eyebrow: { ...type.eyebrow, color: colors.textFaint },
   title: { ...type.screenTitle, color: colors.textStrong, marginTop: space.tight },
   subtitle: { ...type.meta, color: colors.textMuted, marginTop: space.tight },
   closeButton: {

@@ -1,13 +1,13 @@
 import { type ReactNode } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 
+import OccasionTag from './OccasionTag';
 import SeriesLink from './SeriesLink';
 import SeriesScoreTable from './SeriesScoreTable';
-import { seriesMetaLine, seriesStatusTone, seriesView } from './seriesSummary';
-import { seriesURL } from '@/navigation/links';
+import { seriesMetaLine, seriesOccasion, seriesStatus, seriesView } from './seriesSummary';
 import type { BotSeries } from '@/store/api/bots';
+import { useGameStore } from '@/store/gameStore';
 import { colors, radius, space, themedSheet, type } from '@/theme';
-import CopyLinkButton from '@/ui/CopyLinkButton';
 import { Badge } from '@/ui/primitives';
 
 // One run, drawn as the score table it is.
@@ -18,14 +18,18 @@ import { Badge } from '@/ui/primitives';
 // of order, in a flat history on the Leaderboard. Nothing on either page said
 // the six were the same six.
 //
-// So a run is a card, and the table inside it is the whole of it — both engines
-// named down the side, every game a column, the totals at the end. There is no
-// separate scoreline above it because there is nothing left for one to say.
+// So a run is a card, and the table inside it is the whole of its result — both
+// engines named down the side, every game a column, the totals at the end.
+//
+// What the table cannot say is what the run *was*, and that is the card's first
+// line: RANKED or CASUAL, and who picked the pairing — the hourly round, the
+// server on somebody's press, or a person. Those used to be a stray "casual" in
+// a line of settings, so an hourly round and a hand-started run between the
+// same two engines drew as the same card. See `seriesOccasion`.
 //
 // What the card cannot be is the run's *address*. A feed is a moving window —
-// this card will not be on the Bots page for long — so the two things underneath
-// it point at somewhere that does not scroll away: the run's own page, and a
-// link to that page for somebody who is not here.
+// this card will not be on the Bots page for long — so the link underneath it
+// points at somewhere that does not scroll away: the run's own page.
 
 export interface BotSeriesCardProps {
   series: BotSeries;
@@ -53,42 +57,49 @@ export default function BotSeriesCard({
   series,
   when,
 }: BotSeriesCardProps) {
+  const modes = useGameStore((state) => state.modes);
   const view = seriesView(series);
-  const meta = [
-    series.modeId,
-    // Only a run still going has a number of games left to describe. One that
-    // stopped early played what it played; see SeriesView.planned.
-    view.planned ? `game ${Math.min(view.played + 1, view.planned)} of ${view.planned}` : null,
-    seriesMetaLine(series),
-    when,
-  ]
-    .filter(Boolean)
-    .join(' · ');
+  const status = seriesStatus(series);
+  // Only a run still going has a game to be on. One that stopped early played
+  // what it played; see SeriesView.planned.
+  const progress = view.planned
+    ? `Game ${Math.min(view.played + 1, view.planned)} of ${view.planned}`
+    : null;
 
   return (
     <View style={styles.card}>
-      <View style={styles.top}>
-        <Badge label={String(series.status).toUpperCase()} tone={seriesStatusTone(series)} />
-        <Text numberOfLines={2} style={styles.meta}>
-          {meta}
-        </Text>
-        {action}
+      <View style={styles.header}>
+        <OccasionTag occasion={seriesOccasion(series)} />
+        <View style={styles.status}>
+          <Badge label={status.label} tone={status.tone} />
+          <Text numberOfLines={1} style={styles.when}>
+            {[progress, when].filter(Boolean).join(' · ')}
+          </Text>
+        </View>
+      </View>
+      <Text numberOfLines={2} style={styles.meta}>
+        {seriesMetaLine(series, modes)}
+      </Text>
+
+      <View style={styles.table}>
+        <SeriesScoreTable
+          currentGameId={currentGameId}
+          liveGameIds={liveGameIds}
+          onSelect={onSelectGame}
+          series={series}
+        />
       </View>
 
-      <SeriesScoreTable
-        currentGameId={currentGameId}
-        liveGameIds={liveGameIds}
-        onSelect={onSelectGame}
-        series={series}
-      />
-
-      <View style={styles.links}>
-        <CopyLinkButton
-          accessibilityLabel={`Copy a link to ${view.firstName} versus ${view.secondName}`}
-          label="COPY SERIES LINK"
-          url={seriesURL(series.seriesId)}
-        />
-        <SeriesLink seriesId={series.seriesId} />
+      <View style={styles.footer}>
+        {action ? <View style={styles.action}>{action}</View> : null}
+        {/*
+          One quiet link rather than two buttons: a feed is a column of these,
+          and a green button on every card is a column of primary actions. The
+          run's own page has the link to copy.
+        */}
+        <View style={styles.links}>
+          <SeriesLink label="VIEW SERIES ›" seriesId={series.seriesId} tone="default" />
+        </View>
       </View>
     </View>
   );
@@ -103,15 +114,43 @@ const styles = themedSheet(() => ({
     borderRadius: radius.medium,
     backgroundColor: colors.surfaceWell,
   },
-  top: { flexDirection: 'row', alignItems: 'center', gap: space.snug },
-  meta: { ...type.meta, color: colors.textFaint, flexShrink: 1, minWidth: 0 },
-  // Trailing rather than centred, and wrapping, so the pair reads as what to do
-  // *next* with the table above them rather than as the card's own footer.
+  // Wrapping, so on a phone the status drops under the tag rather than
+  // squeezing the pairing's name to an ellipsis.
+  header: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    columnGap: space.medium,
+    rowGap: space.snug,
+  },
+  status: { flexDirection: 'row', alignItems: 'center', gap: space.snug },
+  when: { ...type.meta, color: colors.textFaint },
+  meta: { ...type.meta, color: colors.textFaint },
+  // The table sits on its own band, so the result reads as the card's body
+  // rather than as another line of it.
+  table: {
+    paddingVertical: space.small,
+    borderTopWidth: 1,
+    borderBottomWidth: 1,
+    borderColor: colors.borderFaint,
+  },
+  footer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: space.snug,
+  },
+  action: { flexDirection: 'row', alignItems: 'center', gap: space.snug },
+  // Trailing and wrapping, so the pair reads as what to do *next* with the
+  // table above them rather than as the card's own footer.
   links: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     justifyContent: 'flex-end',
     alignItems: 'center',
     gap: space.snug,
+    marginLeft: 'auto',
   },
 }));

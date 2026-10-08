@@ -261,8 +261,8 @@ func (server *Server) setTournamentHidden(
 // deleteTournament removes an event and everything scheduling it.
 //
 // Any event now, not just a draft. The report goes back to the caller because
-// deleting a completed one quietly takes the champion's title with it — see
-// persistence.TournamentDeletion.
+// it names a completed event's champions, and what deleting it does to them is
+// easy to get wrong — see persistence.TournamentDeletion.
 func (server *Server) deleteTournament(writer http.ResponseWriter, request *http.Request) {
 	tournamentID := request.PathValue("tournamentID")
 	deletion, err := server.data.DeleteTournament(request.Context(), tournamentID)
@@ -274,15 +274,12 @@ func (server *Server) deleteTournament(writer http.ResponseWriter, request *http
 	// be paired now, and any engine it was holding is free.
 	server.releaseTournamentReadiness(tournamentID)
 	server.refreshBotReservations()
-	// The champions' rows are re-evaluated, so a title that no longer has an
-	// event behind it goes now rather than at some unrelated moment later.
-	if len(deletion.ChampionUserIDs) > 0 {
-		server.awardTitles(request.Context(), deletion.ChampionUserIDs...)
-	}
-	// Unconditionally, unlike the line above: an engine's crown is a reflection
-	// of the archive rather than something it keeps, so deleting an event can
-	// hand the crown back to whoever won the one before — an engine that is not
-	// in this deletion's champion list. See bot_titles.go.
+	// Only engines' tags move. A person keeps what the event earned them, and
+	// evaluating their titles again could only add. An engine's tags are a
+	// reflection of the archive rather than something it keeps, so this takes a
+	// cup's Cup Winner back with the event, and can hand an arena's crown back
+	// to whoever won the one before — an engine that is not in this deletion's
+	// champion list. See bot_titles.go.
 	server.syncBotTitles(request.Context())
 	server.broadcastTournaments()
 	writeJSON(writer, http.StatusOK, deletion)

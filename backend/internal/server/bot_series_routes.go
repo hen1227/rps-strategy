@@ -21,7 +21,8 @@ import (
 //
 // The administrative route stays, and not only for compatibility: it is the one
 // that can run fifty pairs at a long time control, which is what the host wants
-// when the question is which of two engines is actually better.
+// when the question is which of two engines is actually better — and, with
+// `ranked`, have the answer count on the ladder.
 
 type startSeriesRequest struct {
 	FirstBotID   string      `json:"firstBotId"`
@@ -34,6 +35,11 @@ type startSeriesRequest struct {
 	// JSON number cannot carry it there.
 	Seed        string            `json:"seed"`
 	TimeControl *game.TimeControl `json:"timeControl"`
+	// Ranked asks for the run's games to count. An administrator's to ask, on
+	// either route; anybody else sending it is refused rather than ignored, so a
+	// client cannot believe it started something it did not. See
+	// BotSeriesRequest.Ranked.
+	Ranked bool `json:"ranked"`
 }
 
 // ask fills in the parts of a run that come off the wire, leaving the caller to
@@ -55,6 +61,7 @@ func (input startSeriesRequest) ask() BotSeriesRequest {
 		OpeningPlies: input.OpeningPlies,
 		Seed:         seed,
 		Control:      control,
+		Ranked:       input.Ranked,
 	}
 }
 
@@ -140,6 +147,37 @@ func (server *Server) abortAdminBotSeries(writer http.ResponseWriter, request *h
 	writeJSON(writer, http.StatusOK, map[string]bool{"aborted": true})
 }
 
+// setAdminBotSeriesRanked moves a finished run, and every game it filed, to
+// ranked or to casual. See persistence.SetBotSeriesRanked.
+//
+// Not while any of it is still on the board. An aborted run leaves the map at
+// once and its last game plays on, seated with the flag the run began with, so
+// asking only whether the run is registered would let that game land on the
+// wrong side of the change a few minutes later.
+func (server *Server) setAdminBotSeriesRanked(writer http.ResponseWriter, request *http.Request) {
+	ranked, ok := decodeRankedRequest(writer, request)
+	if !ok {
+		return
+	}
+	seriesID := request.PathValue("seriesID")
+	server.botSeriesRuns.mu.Lock()
+	running := server.botSeriesRuns.series[seriesID] != nil
+	server.botSeriesRuns.mu.Unlock()
+	if running || server.seriesWithGamesInPlay()[seriesID] {
+		writeReclassifyError(writer, errSeriesStillRunning)
+		return
+	}
+	moved, err := server.data.SetBotSeriesRanked(request.Context(), seriesID, ranked)
+	if err != nil {
+		writeReclassifyError(writer, err)
+		return
+	}
+	if moved.Changed > 0 {
+		server.republishBotLadder(request.Context(), moved.ModeID)
+	}
+	writeJSON(writer, http.StatusOK, moved)
+}
+
 // seriesRequester names the account behind an administrative request, when
 // there is one. The shared host token is a secret rather than a person, so a run
 // started with it is attributed to nobody rather than to a guess.
@@ -206,9 +244,19 @@ func writeSeriesError(writer http.ResponseWriter, err error) {
 		errors.Is(err, errSeriesPublicPairs),
 		errors.Is(err, errSeriesPublicClock):
 		writeAPIError(writer, http.StatusBadRequest, err.Error())
-	case errors.Is(err, errSeriesBotPrivate), errors.Is(err, errSeriesNotYours):
+	case errors.Is(err, errSeriesBotPrivate),
+		errors.Is(err, errSeriesNotYours),
+		errors.Is(err, errSeriesRankedNoStop),
+		errors.Is(err, errSeriesRankedHostOnly):
 		writeAPIError(writer, http.StatusForbidden, err.Error())
-	case errors.Is(err, errLadderMatchNotEntered):
+	case errors.Is(err, errRankedEngineGone):
+		writeAPIError(writer, http.StatusNotFound, err.Error())
+	case errors.Is(err, errRankedBlocked),
+		errors.Is(err, errRankedBarred):
+		writeAPIError(writer, http.StatusForbidden, err.Error())
+	case errors.Is(err, errLadderMatchNotEntered),
+		errors.Is(err, errRankedNotEntered),
+		errors.Is(err, errRankedOneOwner):
 		// 409 rather than 403: the switch is the owner's own and one press away
 		// on the page they are already looking at, so this is a state to fix
 		// rather than a permission they do not have.
@@ -219,7 +267,9 @@ func writeSeriesError(writer http.ResponseWriter, err error) {
 		errors.Is(err, errSeriesBotReserved),
 		errors.Is(err, errSeriesAlreadyYours),
 		errors.Is(err, errSeriesServerBusy),
+		errors.Is(err, errSeriesRankedSameOwner),
 		errors.Is(err, errLadderMatchNoOpponent),
+		errors.Is(err, errLadderPaused),
 		errors.As(err, &ladderMatchBusy{}):
 		writeAPIError(writer, http.StatusConflict, err.Error())
 	case errors.Is(err, errSeriesServerUpdating):

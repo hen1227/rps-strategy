@@ -62,15 +62,15 @@ func TestASummonsIsSignedAndAddressedToTheDevice(t *testing.T) {
 	})
 
 	sent := time.Now()
-	gone := sender.send(context.Background(), testDeviceToken, pushPayload{
+	outcome := sender.send(context.Background(), testDeviceToken, pushPayload{
 		Kind:   "match_started",
 		Title:  "Your game has started",
 		Body:   "Grace is at the board",
 		Tag:    "rps-match",
 		GameID: "game-7",
 	})
-	if gone {
-		t.Fatal("a delivery Apple accepted must not cost somebody their device")
+	if outcome != deliveryAccepted {
+		t.Fatalf("a delivery Apple accepted must count as delivered, got %v", outcome)
 	}
 
 	mu.Lock()
@@ -149,31 +149,37 @@ func TestASummonsIsSignedAndAddressedToTheDevice(t *testing.T) {
 }
 
 // The two answers that mean this device will never be reachable again, and the
-// one that does not.
+// ones that do not. None of them is a delivery.
 func TestOnlyAPermanentFailureCostsADevice(t *testing.T) {
 	for name, answer := range map[string]struct {
 		status int
 		reason string
-		gone   bool
+		want   deliveryOutcome
 	}{
 		// The app was deleted.
-		"unregistered": {status: http.StatusGone, reason: "Unregistered", gone: true},
+		"unregistered": {status: http.StatusGone, reason: "Unregistered", want: deliveryGone},
 		// A sandbox token sent to production, or a token that was never ours.
-		"bad token": {status: http.StatusBadRequest, reason: "BadDeviceToken", gone: true},
+		"bad token": {status: http.StatusBadRequest, reason: "BadDeviceToken", want: deliveryGone},
 		// Apple having a bad five minutes is not a reason to forget somebody.
-		"apple is down": {status: http.StatusInternalServerError, reason: "InternalServerError"},
+		"apple is down": {
+			status: http.StatusInternalServerError, reason: "InternalServerError", want: deliveryFailed,
+		},
 		// A mistake in this server's own configuration. Nothing about the device
 		// is wrong, so nothing about the device is dropped.
-		"our key is wrong": {status: http.StatusForbidden, reason: "InvalidProviderToken"},
-		"we are throttled": {status: http.StatusTooManyRequests, reason: "TooManyRequests"},
+		"our key is wrong": {
+			status: http.StatusForbidden, reason: "InvalidProviderToken", want: deliveryFailed,
+		},
+		"we are throttled": {
+			status: http.StatusTooManyRequests, reason: "TooManyRequests", want: deliveryFailed,
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			sender, _ := apnsTestSender(t, func(writer http.ResponseWriter, _ *http.Request) {
 				writer.WriteHeader(answer.status)
 				_ = json.NewEncoder(writer).Encode(map[string]string{"reason": answer.reason})
 			})
-			if got := sender.send(context.Background(), testDeviceToken, pushPayload{Title: "hi"}); got != answer.gone {
-				t.Fatalf("expected gone=%v for %s, got %v", answer.gone, answer.reason, got)
+			if got := sender.send(context.Background(), testDeviceToken, pushPayload{Title: "hi"}); got != answer.want {
+				t.Fatalf("expected outcome %v for %s, got %v", answer.want, answer.reason, got)
 			}
 		})
 	}
@@ -257,8 +263,8 @@ func TestADisabledAPNsSenderIsAQuietNoOp(t *testing.T) {
 	})
 	sender.enabled = false
 
-	if sender.send(context.Background(), testDeviceToken, pushPayload{Title: "hi"}) {
-		t.Fatal("a disabled sender must not report anybody's device as gone")
+	if outcome := sender.send(context.Background(), testDeviceToken, pushPayload{Title: "hi"}); outcome != deliveryFailed {
+		t.Fatalf("a disabled sender delivers nothing and loses nobody's device, got %v", outcome)
 	}
 	if hits != 0 {
 		t.Fatal("a disabled sender must not talk to Apple")
@@ -298,8 +304,8 @@ func TestBothTransportsAreSummoned(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if reached := server.push.SendTo("ada", pushPayload{Title: "hello", Tag: "rps-match"}); reached != 2 {
-		t.Fatalf("expected both devices to be reached, got %d", reached)
+	if report := server.push.SendTo("ada", pushPayload{Title: "hello", Tag: "rps-match"}); report.Delivered != 2 {
+		t.Fatalf("expected both devices to be reached, got %+v", report)
 	}
 	mu.Lock()
 	defer mu.Unlock()
@@ -329,7 +335,7 @@ func TestALostDeviceDropsTheAwaySeek(t *testing.T) {
 
 	server.push.Send("ada", pushPayload{Title: "hello"})
 
-	reachable, err := server.data.HasPushSubscription(context.Background(), "ada")
+	reachable, err := server.data.HasPushSubscription(context.Background(), "ada", everyTransport...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -398,7 +404,7 @@ func TestRegisteringAPhoneMakesItReachable(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", recorder.Code, recorder.Body)
 	}
-	reachable, err := server.data.HasPushSubscription(t.Context(), "ada")
+	reachable, err := server.data.HasPushSubscription(t.Context(), "ada", everyTransport...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -419,7 +425,7 @@ func TestRegisteringAPhoneMakesItReachable(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", recorder.Code, recorder.Body)
 	}
-	reachable, err = server.data.HasPushSubscription(t.Context(), "ada")
+	reachable, err = server.data.HasPushSubscription(t.Context(), "ada", everyTransport...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -450,7 +456,7 @@ func TestTheDeviceRouteRefusesWhatItCannotUse(t *testing.T) {
 		t.Fatalf("expected 503 without an Apple key, got %d", recorder.Code)
 	}
 
-	reachable, err := server.data.HasPushSubscription(t.Context(), "ada")
+	reachable, err := server.data.HasPushSubscription(t.Context(), "ada", everyTransport...)
 	if err != nil {
 		t.Fatal(err)
 	}

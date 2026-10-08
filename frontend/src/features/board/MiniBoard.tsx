@@ -68,6 +68,13 @@ export interface MiniBoardProps {
   /** Overrides the piece artwork size, for a diagram tuned by hand. */
   pieceSize?: number;
   /**
+   * Draw the squares in the quieter preview pair rather than the board's own.
+   *
+   * For a board that illustrates something — a mode, a game being offered —
+   * rather than one somebody is following move by move. See `previewTile`.
+   */
+  muted?: boolean;
+  /**
    * The square the board is drawn inside, in points. A board that is not square
    * fills it by its longer side, so the picture keeps square tiles.
    */
@@ -84,6 +91,7 @@ export default memo(function MiniBoard({
   mover,
   overlay = null,
   pieceSize,
+  muted = false,
   size,
 }: MiniBoardProps) {
   // This component wears `memo()`, and none of its props move when the look
@@ -156,6 +164,7 @@ export default memo(function MiniBoard({
                 style={[
                   styles.tile,
                   (x + y) % 2 === 0 ? styles.lightTile : styles.darkTile,
+                  muted && ((x + y) % 2 === 0 ? styles.lightTilePreview : styles.darkTilePreview),
                   overArt && ((x + y) % 2 === 0 ? styles.lightTileOverArt : styles.darkTileOverArt),
                 ]}
               >
@@ -244,6 +253,8 @@ const styles = themedSheet(() => ({
   tile: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   lightTile: { backgroundColor: board.lightTile },
   darkTile: { backgroundColor: board.darkTile },
+  lightTilePreview: { backgroundColor: board.previewLightTile },
+  darkTilePreview: { backgroundColor: board.previewDarkTile },
   lightTileOverArt: { backgroundColor: board.lightTileOverArt },
   darkTileOverArt: { backgroundColor: board.darkTileOverArt },
   boardBackground: {

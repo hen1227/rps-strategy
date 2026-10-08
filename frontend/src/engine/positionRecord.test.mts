@@ -123,3 +123,24 @@ test('a position with no territory field lets ownership follow the pieces', () =
     }
   }
 });
+
+test('a record with no FEN replays from its own mode’s opening', () => {
+  // The chess convention — no SetUp, no FEN, the standard start — with each
+  // mode's own start. Intransitive's wedges are not Total War's ranks: `d2`
+  // is a rock in one and a paper boxed in by its own scissors in the other.
+  const handWritten = (mode: ModeDefinition, movetext: string) =>
+    [`[Variant "${mode.name}"]`, `[ModeId "${mode.id}"]`, '', movetext].join('\n');
+  for (const mode of ALL_TEST_MODES) {
+    const [first] = reviewSourceFromPGN(handWritten(mode, '*'), ALL_TEST_MODES.slice()).positions;
+    assert.ok(first, `${mode.name} should have a starting position`);
+    const opening = createAnalysisGame(mode);
+    assert.equal(
+      encodePosition(first.grid, first.currentTurn),
+      encodePosition(opening.grid, opening.currentTurn),
+      `${mode.name} should begin from its own opening`,
+    );
+  }
+  const intransitive = testMode('V6');
+  const source = reviewSourceFromPGN(handWritten(intransitive, '1. Rd2-d1 *'), [intransitive]);
+  assert.equal(source.moves.length, 1, 'a move legal only from Intransitive’s opening replays');
+});

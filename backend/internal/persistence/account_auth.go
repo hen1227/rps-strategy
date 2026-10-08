@@ -50,53 +50,99 @@ var (
 )
 
 // registeredSQL is the one definition of "a real account rather than the
-// anonymous browser identity": it holds a credential of some kind.
+// anonymous browser identity": it holds a credential of some kind — a password,
+// or an identity from any provider.
 //
 // This used to be spelled as an emptiness test on `password_hash`, at four
 // sites that did not share code, which is how they came to disagree — the human leaderboard filter
-// and the admin badge each kept their own copy. Discord turns that from
-// duplication into a bug: an account can now be real without ever having had a
+// and the admin badge each kept their own copy. Discord turned that from
+// duplication into a bug: an account can be real without ever having had a
 // password, so every copy that is not updated together starts answering a
-// different question.
+// different question. Apple is the second provider of that kind, and the reason
+// "an identity" is a lookup in `account_identities` rather than a column per
+// provider.
 //
 // The alias is for queries that join `accounts` under a name. Pass "" when the
-// columns are unqualified.
+// columns are unqualified and the table is `accounts` itself.
 func registeredSQL(alias string) string {
-	prefix := ""
-	if alias != "" {
-		prefix = alias + "."
-	}
-	return "(" + prefix + "password_hash <> '' OR " + prefix + "discord_user_id <> '')"
+	return "(" + columnPrefix(alias) + "password_hash <> '' OR " + hasIdentitySQL(alias) + ")"
 }
 
-// awaitingDiscordLinkSQL is the *other* narrow question: an account that still
+// hasIdentitySQL is "this account holds an identity from some provider". It is
+// what decides who has a player page, and whether a device key still names a
+// guest.
+func hasIdentitySQL(alias string) string {
+	return "EXISTS (SELECT 1 FROM account_identities linked WHERE linked.user_id = " +
+		outerUserID(alias) + ")"
+}
+
+// discordVerifiedSQL is "Discord has vouched for this account", which is
+// narrower than registeredSQL and narrower than hasIdentitySQL, and is still
+// the question for everything that needs to reach the person on Discord:
+// tournament entry, the weekend arena, the Discord Verified title, and the
+// read-only handle. An Apple ID does not answer it.
+func discordVerifiedSQL(alias string) string {
+	return providerIdentitySQL(alias, ProviderDiscord)
+}
+
+// appleLinkedSQL is "this account signs in with Apple", for the admin browser
+// and the analytics counts. Nothing a player can do is decided by it.
+func appleLinkedSQL(alias string) string {
+	return providerIdentitySQL(alias, ProviderApple)
+}
+
+// providerIdentitySQL is hasIdentitySQL narrowed to one provider. The provider
+// is spliced in as a literal, so only the constants in account_identity.go may
+// reach it; anything else answers false rather than reaching the query.
+func providerIdentitySQL(alias string, provider string) string {
+	if !knownProvider(provider) {
+		return "0"
+	}
+	return "EXISTS (SELECT 1 FROM account_identities linked WHERE linked.user_id = " +
+		outerUserID(alias) + " AND linked.provider = '" + provider + "')"
+}
+
+// awaitingIdentityLinkSQL is the *other* narrow question: an account that still
 // has a password and has not linked an identity.
 //
-// Not the negation of registeredSQL, and not derivable from it — a Discord
-// account is registered with no password at all, so "not registered" and "still
-// on a password" are different sets. This is the remainder of the password era:
-// the accounts the link paths exist for, and the count that has to reach zero
-// before password sign-in can be removed.
+// Not the negation of registeredSQL, and not derivable from it — an account
+// that signs in with Discord or Apple is registered with no password at all, so
+// "not registered" and "still on a password" are different sets. This is the
+// remainder of the password era: the accounts the link paths exist for, and the
+// count that has to reach zero before those paths can be removed.
+//
+// A store review account has a password and no identity too, and is left out:
+// it is on a password for good, and the link paths refuse it. Counting it here
+// would keep the boot log from ever reaching zero, and would offer a password
+// box to anybody who typed its name at the naming step. See store_review.go.
 //
 // It is a shared fragment for the same reason registeredSQL is. Two callers
 // want it — the boot-time count and the naming step deciding whether to offer a
 // password box — and this package has already been through what happens when a
 // predicate about credentials is written out by hand at several sites. See
 // registered_rule_test.go, which is what keeps both of these honest.
-func awaitingDiscordLinkSQL(alias string) string {
-	prefix := ""
-	if alias != "" {
-		prefix = alias + "."
-	}
-	return "(" + prefix + "password_hash <> '' AND " + prefix + "discord_user_id = '')"
+func awaitingIdentityLinkSQL(alias string) string {
+	return "(" + columnPrefix(alias) + "password_hash <> '' AND NOT " + hasIdentitySQL(alias) +
+		" AND NOT EXISTS (SELECT 1 FROM store_review_accounts review WHERE review.user_id = " +
+		outerUserID(alias) + "))"
 }
 
-// accountIsRegistered is the Go-side twin of registeredSQL, for the callers
-// that have already read the two columns and are deciding in Go. The two must
-// always agree: a rule enforced one way in SQL and another way in Go is the
-// same rule twice, which is the shape of the problem this pair exists to end.
-func accountIsRegistered(passwordHash string, discordUserID string) bool {
-	return passwordHash != "" || discordUserID != ""
+func columnPrefix(alias string) string {
+	if alias == "" {
+		return ""
+	}
+	return alias + "."
+}
+
+// outerUserID names the outer row's user_id from inside a subquery. Unqualified,
+// it would bind to the subquery's own table — comparing account_identities with
+// itself, which is true of every row — so an unaliased caller is taken to be
+// reading `accounts` by name.
+func outerUserID(alias string) string {
+	if alias == "" {
+		return "accounts.user_id"
+	}
+	return alias + ".user_id"
 }
 
 func (store *Store) ensureAccountAuthColumns(ctx context.Context) error {
@@ -120,9 +166,11 @@ func (store *Store) ensureAccountAuthColumns(ctx context.Context) error {
 		{name: "password_updated_at_unix_ms", definition: "INTEGER NOT NULL DEFAULT 0"},
 		{name: "disabled", definition: "INTEGER NOT NULL DEFAULT 0"},
 		{name: "is_admin", definition: "INTEGER NOT NULL DEFAULT 0"},
-		// The Discord snowflake, which is the identity; `discord` beside it holds
-		// the handle, which is only its display form and which Discord lets people
-		// change. Empty means this account has no linked identity.
+		// The Discord snowflake, from before identities had a table of their own.
+		// Still written beside `account_identities` for one release, so that a
+		// rolled-back build finds every Discord link where it looks, and nothing
+		// else reads it. See account_identity.go. `discord` beside it holds the
+		// handle, which is only the display form and stays where it is.
 		{name: "discord_user_id", definition: "TEXT NOT NULL DEFAULT ''"},
 		{name: "discord_linked_at_unix_ms", definition: "INTEGER NOT NULL DEFAULT 0"},
 	} {
@@ -152,7 +200,8 @@ CREATE INDEX IF NOT EXISTS accounts_kind_idx ON accounts(kind, disabled);
 
 -- Partial for the same reason the username index is: the great majority of
 -- rows have no linked identity and must stay legal, while a claimed snowflake
--- is exclusive. This is what stops one Discord account holding two of ours.
+-- is exclusive. The primary key of account_identities is what enforces that
+-- now; this stays while the column is written, so the two cannot disagree.
 CREATE UNIQUE INDEX IF NOT EXISTS accounts_discord_user_id_idx
     ON accounts(discord_user_id)
     WHERE discord_user_id <> '';
@@ -338,6 +387,16 @@ SELECT COUNT(*) FROM accounts WHERE is_admin = 1 AND disabled = 0 AND user_id <>
 		}
 		if remaining == 0 {
 			return errors.New("refusing to remove the last administrator")
+		}
+	} else {
+		// Its password is written into two app store consoles and read by the
+		// people reviewing there. See store_review.go.
+		review, err := isStoreReviewAccount(ctx, transaction, userID)
+		if err != nil {
+			return fmt.Errorf("set admin: %w", err)
+		}
+		if review {
+			return ErrStoreReviewAdmin
 		}
 	}
 	value := 0

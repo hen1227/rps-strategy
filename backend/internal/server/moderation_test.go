@@ -380,8 +380,8 @@ func linkAccountForTest(
 	if _, err := data.EnsureAccount(t.Context(), userID, username); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := data.ClaimAccountWithDiscord(
-		t.Context(), userID, username, snowflake, username,
+	if _, err := data.ClaimAccountWithIdentity(
+		t.Context(), userID, username, persistence.DiscordIdentity(snowflake, username),
 	); err != nil {
 		t.Fatalf("link %s: %v", userID, err)
 	}

@@ -191,7 +191,7 @@ func TestSuggestAvailableUsernameStepsAroundNamesAlreadyTaken(t *testing.T) {
 	ctx := t.Context()
 
 	anonymousAccount(t, store, "holder", "Yuki")
-	if _, err := store.ClaimAccountWithDiscord(ctx, "holder", "Yuki", "1", "yuki"); err != nil {
+	if _, err := store.ClaimAccountWithIdentity(ctx, "holder", "Yuki", DiscordIdentity("1", "yuki")); err != nil {
 		t.Fatalf("claim: %v", err)
 	}
 
@@ -213,7 +213,7 @@ func TestSuggestAvailableUsernameKeepsTheSuffixWhenTrimming(t *testing.T) {
 
 	long := strings.Repeat("a", MaximumUsernameLength)
 	anonymousAccount(t, store, "holder", long)
-	if _, err := store.ClaimAccountWithDiscord(ctx, "holder", long, "1", "a"); err != nil {
+	if _, err := store.ClaimAccountWithIdentity(ctx, "holder", long, DiscordIdentity("1", "a")); err != nil {
 		t.Fatalf("claim: %v", err)
 	}
 

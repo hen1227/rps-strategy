@@ -27,8 +27,8 @@ func poolBot(t *testing.T, server *Server, name string, owner string) persistenc
 	t.Helper()
 	// Registering the same owner twice is how a same-owner pairing is built, so
 	// a second claim under a name already taken is expected rather than fatal.
-	_, err := server.data.ClaimAccountWithDiscord(
-		t.Context(), owner, "Owner_"+owner, "discord-"+owner, owner,
+	_, err := server.data.ClaimAccountWithIdentity(
+		t.Context(), owner, "Owner_"+owner, persistence.DiscordIdentity("discord-"+owner, owner),
 	)
 	if err != nil && !ownerAlreadyRegistered(t, server, owner) {
 		t.Fatalf("register owner %s: %v", owner, err)

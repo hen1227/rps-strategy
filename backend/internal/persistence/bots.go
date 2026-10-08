@@ -452,11 +452,12 @@ func (store *Store) MintBotToken(ctx context.Context, ownerUserID string) (Bot, 
 	}
 	defer func() { _ = transaction.Rollback() }()
 
-	var passwordHash, discordUserID, kind string
+	var kind string
+	var registered bool
 	var disabled int
 	err = transaction.QueryRowContext(ctx, `
-SELECT password_hash, discord_user_id, kind, disabled FROM accounts WHERE user_id = ?
-`, ownerUserID).Scan(&passwordHash, &discordUserID, &kind, &disabled)
+SELECT `+registeredSQL("")+`, kind, disabled FROM accounts WHERE user_id = ?
+`, ownerUserID).Scan(&registered, &kind, &disabled)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Bot{}, "", ErrAccountNotFound
 	}
@@ -468,7 +469,7 @@ SELECT password_hash, discord_user_id, kind, disabled FROM accounts WHERE user_i
 	}
 	// Requiring a registered owner is the anti-spam control: anonymous
 	// accounts are free and unlimited, so bots hanging off them would be too.
-	if kind != AccountKindHuman || !accountIsRegistered(passwordHash, discordUserID) {
+	if kind != AccountKindHuman || !registered {
 		return Bot{}, "", ErrNotRegistered
 	}
 

@@ -185,10 +185,15 @@ export default function AnalyticsPanel({ admin }: AnalyticsPanelProps) {
             value={String(stored?.accounts.registered ?? 0)}
           />
           <Figure
-            detail="have a profile page"
+            detail="can enter tournaments"
             label="DISCORD"
             tone="gold"
             value={String(stored?.accounts.discordLinked ?? 0)}
+          />
+          <Figure
+            detail="sign in with Apple"
+            label="APPLE"
+            value={String(stored?.accounts.appleLinked ?? 0)}
           />
           <Figure
             detail="played in the last week"
@@ -274,7 +279,7 @@ export default function AnalyticsPanel({ admin }: AnalyticsPanelProps) {
           eyebrow="ANALYTICS"
           title="Events and moderation"
           trailing={
-            sanctions > 0 ? <Badge label={`${sanctions} IN FORCE`} tone="live" /> : null
+            sanctions > 0 ? <Badge label={`${sanctions} IN FORCE`} tone="danger" /> : null
           }
         />
         <View style={styles.figureRow}>

@@ -34,6 +34,7 @@ func (server *Server) listAccounts(writer http.ResponseWriter, request *http.Req
 		Query:         query.Get("query"),
 		Registered:    optionalBool(query.Get("registered")),
 		DiscordLinked: optionalBool(query.Get("discord")),
+		AppleLinked:   optionalBool(query.Get("apple")),
 		Disabled:      optionalBool(query.Get("disabled")),
 		IsAdmin:       optionalBool(query.Get("admin")),
 		Kind:          strings.TrimSpace(query.Get("kind")),
@@ -152,6 +153,7 @@ func (server *Server) deleteAccount(writer http.ResponseWriter, request *http.Re
 		return
 	}
 	server.disconnectAccount(userID, "this account has been removed")
+	server.wakeTokenRevocations()
 	// See the same call in deleteOwnAccount: an anonymized account keeps its
 	// row, but a never-played one is deleted outright and takes its block rows
 	// with it. The cache has to be told either way, since it is what every
@@ -178,7 +180,8 @@ func writeAdminAccountError(writer http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, persistence.ErrAccountNotFound):
 		writeAPIError(writer, http.StatusNotFound, "no such account")
-	case errors.Is(err, persistence.ErrLastAdministrator):
+	case errors.Is(err, persistence.ErrLastAdministrator),
+		errors.Is(err, persistence.ErrStoreReviewAdmin):
 		writeAPIError(writer, http.StatusConflict, err.Error())
 	default:
 		writeAPIError(writer, http.StatusInternalServerError, err.Error())

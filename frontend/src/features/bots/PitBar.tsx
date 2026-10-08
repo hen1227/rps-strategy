@@ -3,10 +3,11 @@ import { StyleSheet, Pressable, Text, View } from 'react-native';
 
 import BotIcon from './BotIcon';
 import { pitBarView } from './pitSelection';
+import { rankedButton } from './rankedMatch';
 import type { BotSeriesForm } from './useBotSeriesForm';
 import { botIconUrl } from '@/store/api/bots';
 import { colors, radius, space, themedSheet, type } from '@/theme';
-import { Banner, PrimaryButton } from '@/ui/primitives';
+import { Banner, OptionChips, PrimaryButton } from '@/ui/primitives';
 import type { ModeDefinition } from '@/types/game';
 import type { BotPresence } from '@/types/protocol';
 
@@ -142,15 +143,25 @@ export default function PitBar({
   // false on the very first client render, always, so a flag taken from it would
   // arrive a render late.
   const [narrow, setNarrow] = useState(false);
+  const hostRanked = form.ranked && form.press.kind === 'host';
   const view = pitBarView({
     available,
     clock: form.clock,
     first,
+    games: form.games,
     mode,
-    pairs: form.pairs,
+    ranked: hostRanked,
     second,
   });
   if (!view.visible) return null;
+
+  // A ranked match in the server's format, which is not a series this form
+  // configures and so has its own words: against a drawn engine when the other
+  // side is empty, against the named one when it is not. See rankedMatch.ts.
+  // The hint slot says why it cannot be pressed, when the server would refuse.
+  const ranked = form.serverFormat ? rankedButton(form.press) : null;
+  const hint = ranked ? form.rankedBlocker : view.hint;
+  const line = ranked ? (form.rankedBlocker ?? form.rankedLine) : (view.hint ?? view.settings);
 
   return (
     <View
@@ -182,6 +193,11 @@ export default function PitBar({
         {form.error ? (
           <View style={styles.banner}>
             <Banner message={form.error} onDismiss={form.dismissError} tone="error" />
+          </View>
+        ) : null}
+        {form.notice ? (
+          <View style={styles.banner}>
+            <Banner message={form.notice} onDismiss={form.dismissNotice} />
           </View>
         ) : null}
 
@@ -216,18 +232,30 @@ export default function PitBar({
             the settings of a run that cannot start yet are not the sentence
             somebody with one engine entered needs.
           */}
-          <Text
-            numberOfLines={2}
-            style={[styles.line, view.hint ? styles.hint : null, !narrow && styles.lineWide]}
-          >
-            {view.hint ?? view.settings}
-          </Text>
+          {/*
+            The line and the stakes — here as well as in the panel, because on
+            a phone the panel is two screens down and this is the card in view.
+            One control in two places, reading one state, like the portraits.
+          */}
+          <View style={[styles.middle, !narrow && styles.lineWide]}>
+            <Text numberOfLines={2} style={[styles.line, hint ? styles.hint : null]}>
+              {line}
+            </Text>
+            <OptionChips
+              onChange={form.setRanked}
+              options={[
+                { value: true, label: 'RANKED' },
+                { value: false, label: 'CASUAL' },
+              ]}
+              value={form.ranked}
+            />
+          </View>
 
           <PrimaryButton
-            accessibilityLabel={view.action}
+            accessibilityLabel={ranked?.action ?? view.action}
             disabled={!form.canStart}
             fullWidth={narrow}
-            label={view.label}
+            label={ranked?.label ?? view.label}
             loading={form.busy}
             onPress={() => void form.start()}
           />
@@ -289,6 +317,7 @@ const styles = themedSheet(() => ({
   query: { fontSize: 18, fontWeight: '900', color: colors.borderLight },
   versus: { ...type.meta, fontWeight: '900', color: colors.textFaint },
   line: { ...type.meta, color: colors.textMuted, minWidth: 0 },
+  middle: { gap: space.snug, minWidth: 0 },
   // `flex` only while the three parts share a row. In a column it would stretch
   // the line's *height* instead, which is the wrong axis and pushes the button
   // off the card.

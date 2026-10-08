@@ -82,6 +82,15 @@ export interface LadderRoundView {
   /** The server's own count of the engines it would seat, for this round only. */
   entered: number;
   /**
+   * The weekly arena this round stands down for, or null when it runs.
+   *
+   * Beside `phase` rather than folded into it: `phase` is about the round just
+   * run, which can still be on when the next one is already off. A countdown
+   * or an "ON NOW" drawn over this is a promise about a round that is not
+   * coming, so a caller checks it first.
+   */
+  pausedFor: string | null;
+  /**
    * No reference engine is designated, so the board is measured from its own
    * weakest engine rather than from chance.
    *
@@ -164,6 +173,7 @@ export const ladderRoundView = (
       incrementMs: next.incrementMs,
     }),
     entered: next.entered,
+    pausedFor: next.pausedFor ?? null,
     relativeScale: !pool.anchorBotId,
   };
 };

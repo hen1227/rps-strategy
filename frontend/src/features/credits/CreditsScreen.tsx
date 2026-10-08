@@ -187,7 +187,7 @@ const styles = themedSheet(() => ({
   // No padding on top: the trail that used to sit above this is gone, and
   // `ScreenShell` already opens every page with the same room.
   hero: { paddingBottom: space.snug },
-  heroEyebrow: { ...type.eyebrow, color: colors.accent, letterSpacing: 2.1 },
+  heroEyebrow: { ...type.eyebrow, color: colors.textFaint, letterSpacing: 2.1 },
   heroTitle: {
     color: colors.textStrong,
     fontSize: 34,

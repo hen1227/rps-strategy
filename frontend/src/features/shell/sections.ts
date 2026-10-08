@@ -156,7 +156,8 @@ export const SECTIONS: readonly Section[] = [
         // `/account/bots` beats `/account`. The URL keeps the reasoning
         // `links.myBots` gives — a bot belongs to an account — and the
         // navigation puts it where people look for it.
-        visible: ({account}) => Boolean(account?.discordVerified),
+        // Any signed-in account may own bots, whichever way it signs in.
+        visible: ({account}) => Boolean(account?.registered),
     },
     {
         id: 'bot-docs',

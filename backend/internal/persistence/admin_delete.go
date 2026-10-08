@@ -557,6 +557,12 @@ WHERE player1_id IN (SELECT player_id FROM tournament_players WHERE user_id = ?1
 	); err != nil {
 		return AccountPurge{}, fmt.Errorf("purge account: reviews: %w", err)
 	}
+	// Its sign-ins too, which would cascade anyway. Said out loud because it is
+	// also what queues the revocation of an Apple token — see
+	// identity_revocation.go — and that is worth finding by reading this.
+	if err := deleteAccountIdentitiesTx(ctx, transaction, userID); err != nil {
+		return AccountPurge{}, fmt.Errorf("purge account: %w", err)
+	}
 	// Sessions, mode ratings, and push subscriptions all cascade from here.
 	if _, err := transaction.ExecContext(ctx,
 		`DELETE FROM accounts WHERE user_id = ?`, userID,
@@ -589,6 +595,16 @@ SELECT game_id FROM game_pgn WHERE red_player_id = ?1 OR blue_player_id = ?1
 	return gameIDs, rows.Err()
 }
 
+// AdminGameRecord is one row of the admin game browser.
+type AdminGameRecord struct {
+	GameRecord
+	// EngineGame is a game between two engines, which is the only kind that can
+	// be moved between ranked and casual — see reclassify.go. On the row because
+	// "two bots played" is both players' account kind rather than a column, and
+	// the screen should offer the switch only where it works.
+	EngineGame bool `json:"engineGame"`
+}
+
 // SearchGames lists recorded games for the admin browser, newest first.
 //
 // It reads the history rather than the archive because the history is what the
@@ -600,7 +616,7 @@ func (store *Store) SearchGames(
 	query string,
 	limit int,
 	offset int,
-) ([]GameRecord, error) {
+) ([]AdminGameRecord, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
@@ -609,7 +625,12 @@ func (store *Store) SearchGames(
 	}
 	query = strings.TrimSpace(query)
 	pattern := "%" + strings.ToLower(query) + "%"
-	rows, err := store.db.QueryContext(ctx, gameRecordSelect+`
+	rows, err := store.db.QueryContext(ctx, `
+SELECT `+gameRecordColumns+`,
+       (SELECT COUNT(*) FROM accounts a
+        WHERE a.user_id IN (game_history.red_player_id, game_history.blue_player_id)
+          AND a.kind = ?) = 2
+FROM game_history
 WHERE ? = ''
    OR game_id = ?
    OR red_player_id = ?
@@ -618,19 +639,32 @@ WHERE ? = ''
    OR LOWER(blue_username) LIKE ?
 ORDER BY finished_at_unix_ms DESC, game_id DESC
 LIMIT ? OFFSET ?
-`, query, query, query, query, pattern, pattern, limit, offset)
+`, AccountKindBot, query, query, query, query, pattern, pattern, limit, offset)
 	if err != nil {
 		return nil, fmt.Errorf("search games: %w", err)
 	}
 	defer rows.Close()
 
-	records := make([]GameRecord, 0, limit)
+	records := make([]AdminGameRecord, 0, limit)
 	for rows.Next() {
-		record, err := scanGameRecord(rows)
+		var record AdminGameRecord
+		played, err := scanGameRecord(adminGameScanner{rows: rows, engineGame: &record.EngineGame})
 		if err != nil {
 			return nil, err
 		}
+		record.GameRecord = played
 		records = append(records, record)
 	}
 	return records, rows.Err()
+}
+
+// adminGameScanner lets scanGameRecord read a row that carries one extra
+// column, the way botMatchScanner does for two.
+type adminGameScanner struct {
+	rows       interface{ Scan(...any) error }
+	engineGame *bool
+}
+
+func (scanner adminGameScanner) Scan(destinations ...any) error {
+	return scanner.rows.Scan(append(destinations, scanner.engineGame)...)
 }

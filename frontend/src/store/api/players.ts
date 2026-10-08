@@ -33,6 +33,8 @@ export interface ProfileTournament {
   format: TournamentFormat;
   /** Where they finished, absent for an event still running. */
   placement?: number;
+  /** Somebody else finished level on the same placement. */
+  tied?: boolean;
   /** What a placement is out of: third of four is not third of forty. */
   fieldSize: number;
   enteredAtUnixMs: number;

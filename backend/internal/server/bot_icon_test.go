@@ -34,7 +34,7 @@ func iconTestServer(t *testing.T) (*Server, string) {
 	if _, err := data.EnsureAccountWithProfileKey(ctx, "owner", "Owner", key); err != nil {
 		t.Fatalf("owner account: %v", err)
 	}
-	if _, err := data.ClaimAccountWithDiscord(ctx, "owner", "Owner", "discord-owner", "owner"); err != nil {
+	if _, err := data.ClaimAccountWithIdentity(ctx, "owner", "Owner", persistence.DiscordIdentity("discord-owner", "owner")); err != nil {
 		t.Fatalf("register owner: %v", err)
 	}
 	_, token, err := data.MintBotToken(ctx, "owner")

@@ -27,7 +27,7 @@ func TestMergingAGuestIntoAnUnplayedDiscordAccount(t *testing.T) {
 	}
 
 	anonymousAccount(t, store, "discord", "Yuki")
-	if _, err := store.ClaimAccountWithDiscord(ctx, "discord", "Yuki", "8035111", "yuki"); err != nil {
+	if _, err := store.ClaimAccountWithIdentity(ctx, "discord", "Yuki", DiscordIdentity("8035111", "yuki")); err != nil {
 		t.Fatalf("claim: %v", err)
 	}
 
@@ -101,7 +101,7 @@ func TestMergingRefusesATargetThatHasAlreadyPlayed(t *testing.T) {
 
 	anonymousAccount(t, store, "guest", "Guest")
 	anonymousAccount(t, store, "discord", "Yuki")
-	if _, err := store.ClaimAccountWithDiscord(ctx, "discord", "Yuki", "8035111", "yuki"); err != nil {
+	if _, err := store.ClaimAccountWithIdentity(ctx, "discord", "Yuki", DiscordIdentity("8035111", "yuki")); err != nil {
 		t.Fatal(err)
 	}
 	playRankedGame(t, store, "game-1", "guest", "discord")
@@ -126,13 +126,13 @@ func TestMergingRefusesToAbsorbARegisteredAccount(t *testing.T) {
 	ctx := t.Context()
 
 	anonymousAccount(t, store, "established", "Ada")
-	if _, err := store.ClaimAccountWithDiscord(
-		ctx, "established", "Ada", "111", "ada",
+	if _, err := store.ClaimAccountWithIdentity(
+		ctx, "established", "Ada", DiscordIdentity("111", "ada"),
 	); err != nil {
 		t.Fatal(err)
 	}
 	anonymousAccount(t, store, "discord", "Yuki")
-	if _, err := store.ClaimAccountWithDiscord(ctx, "discord", "Yuki", "222", "yuki"); err != nil {
+	if _, err := store.ClaimAccountWithIdentity(ctx, "discord", "Yuki", DiscordIdentity("222", "yuki")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -157,7 +157,7 @@ func TestReseatingARecordLeavesTheMovetextUntouched(t *testing.T) {
 	anonymousAccount(t, store, "opponent", "Rival")
 	playRankedGame(t, store, "game-1", "guest", "opponent")
 	anonymousAccount(t, store, "discord", "Yuki")
-	if _, err := store.ClaimAccountWithDiscord(ctx, "discord", "Yuki", "8035111", "yuki"); err != nil {
+	if _, err := store.ClaimAccountWithIdentity(ctx, "discord", "Yuki", DiscordIdentity("8035111", "yuki")); err != nil {
 		t.Fatal(err)
 	}
 	before := movetext(t, onlyPGN(t, store, "game-1"))
