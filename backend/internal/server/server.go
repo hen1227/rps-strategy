@@ -233,8 +233,9 @@ type Server struct {
 	// botTitles is when the engine-title sweep last ran. See bot_titles.go.
 	botTitles *botTitleState
 
-	// ladder is when the bot ladder is next recomputed. See ladder_refit.go.
-	ladder *ladderRefitState
+	// ratings is when ratings held in memory next catch up with the store. See
+	// rating_refresh.go.
+	ratings *ratingRefreshState
 
 	// ladderPool is when the next round of ranked engine games is seated. See
 	// ladder_pool.go.
@@ -301,7 +302,7 @@ func NewWithRegistryAndStore(
 		tournamentChats: make(map[string]*chatRoom),
 		weekend:         newWeekendState(),
 		botTitles:       &botTitleState{},
-		ladder:          newLadderRefitState(),
+		ratings:         &ratingRefreshState{},
 		ladderPool:      &ladderPoolState{},
 
 		botSessions:        make(map[*Client]botSession),
@@ -392,13 +393,11 @@ func (server *Server) Run(ctx context.Context) {
 			// once a quarter of an hour. See bot_titles.go.
 			server.runBotTitles(now)
 			// After runBotTitles rather than before: the crowns are read off the
-			// ladder, so a sweep that refitted first would award them from numbers
-			// nobody has published yet and then publish those numbers a tick later.
-			server.runLadderRefits(now)
-			// And after the refit, so that a round pairs on the ratings the last
-			// round produced rather than on the ones before it. An hour apart in
-			// practice, but the ordering is what makes a restart's first round
-			// correct.
+			// ladder, so a sweep that republished first would award them from
+			// numbers nobody has seen yet and then show those numbers a tick later.
+			server.runRatingRefresh(now)
+			// And after the refresh, so that a round pairs on the ratings as they
+			// stand on the hour rather than as they stood an hour ago.
 			server.runLadderRound(now)
 			// And the pairings that round could not start, which is most ticks'
 			// share of the pool: an engine that was mid-game at the hour has its
@@ -607,8 +606,6 @@ func (server *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/bot/guide", server.getBotGuide)
 	mux.HandleFunc("GET /api/bot/rpsbot.py", server.getBotClientScript)
 	mux.HandleFunc("GET /api/bot/example_engine.py", server.getExampleEngine)
-	mux.HandleFunc("GET /api/bot/yardstick_random.py", server.getYardstickEngine)
-	mux.HandleFunc("GET /api/bot/yardstick_greedy.py", server.getGreedyEngine)
 
 	mux.HandleFunc("GET /api/admin/session", server.adminOnly(server.getAdminSession))
 	// The graceful restart: stop taking games, wait out the ones being played,
@@ -724,12 +721,6 @@ func (server *Server) Routes() http.Handler {
 		server.adminOnly(server.resetStoreReviewAccount),
 	)
 	mux.HandleFunc("DELETE /api/admin/bots/{botID}", server.adminOnly(server.deleteAdminBot))
-	mux.HandleFunc(
-		"PUT /api/admin/bots/{botID}/reference", server.adminOnly(server.setBotReference),
-	)
-	mux.HandleFunc(
-		"GET /api/admin/benchmarks", server.adminOnly(server.getBenchmarkDrift),
-	)
 	mux.HandleFunc(
 		"GET /api/admin/accounts/{userID}/restrictions",
 		server.adminOnly(server.listAccountRestrictions),
@@ -2600,15 +2591,12 @@ func (server *Server) finishSession(session *GameSession, state game.GameState) 
 		}
 		if err == nil {
 			server.updateSessionAccounts(session, ratingUpdate)
-			// A ranked game between two engines changes the whole mode's
-			// ladder, not just these two seats, so every engine on the roster
-			// is now publishing a rating from before it. The fit itself is not
-			// done here — it is a matrix inverse on a one-connection database
-			// and this is the path every finished game goes down — so this only
-			// asks for one. See ladder_refit.go.
+			// An engine's rating is on the roster every lobby is shown, so a
+			// game that moved one asks for the roster to be restated. Batched
+			// rather than sent here: see rating_refresh.go.
 			if ratingUpdate.Ranked &&
-				session.redClient.isBot() && session.blueClient.isBot() {
-				server.requestLadderRefit(ratingUpdate.ModeID)
+				(session.redClient.isBot() || session.blueClient.isBot()) {
+				server.requestRosterRefresh()
 			}
 		}
 		// Archived after the rating transaction so the stored game can name
@@ -2637,8 +2625,8 @@ func (server *Server) finishSession(session *GameSession, state game.GameState) 
 		server.retireSession(session)
 		server.recordTournamentMatchResult(session, state)
 		server.recordBotMatchResult(session, state)
-		// Last, so the ladder refit and the tournament standing this game may
-		// have just decided are both already written down. Both players, and
+		// Last, so the rating and the tournament standing this game may have
+		// just decided are both already written down. Both players, and
 		// through them the owner of either engine that was playing.
 		server.awardTitles(
 			context.Background(),
@@ -2660,52 +2648,47 @@ func (server *Server) updateSessionAccounts(
 ) {
 	server.mu.Lock()
 	defer server.mu.Unlock()
-	if session.redClient != nil {
-		session.redClient.account.RecordRatedGame(update.ModeID, update.RedEloAfter)
-	}
-	if session.blueClient != nil {
-		session.blueClient.account.RecordRatedGame(update.ModeID, update.BlueEloAfter)
+	// A game recorded before, and answered from history, carries no rows. The
+	// accounts already hold what it did to them.
+	for _, seat := range []struct {
+		client *Client
+		rating persistence.ModeRating
+	}{
+		{client: session.redClient, rating: update.RedRating},
+		{client: session.blueClient, rating: update.BlueRating},
+	} {
+		if seat.client == nil || seat.rating.ModeID == "" {
+			continue
+		}
+		seat.client.account.GamesPlayed++
+		seat.client.account.SetModeRating(seat.rating)
 	}
 }
 
-// republishBotLadder brings every connected engine's cached rating back in line
-// with the ladder, and restates the roster so the lobby is reading the same one.
+// refreshCachedRatings brings every connected account's ratings in the given
+// modes back in line with the store, and restates the bot roster so the lobby
+// is reading the same numbers.
 //
-// updateSessionAccounts above is enough for a per-game system, where a result
-// moves exactly the two accounts that earned it. The bot ladder is not one: it
-// is a fit over every pair's record, so a single game restates the whole mode
-// and there is nothing in one result to patch the other engines from. Without
-// this, every engine that was not in the game keeps publishing whatever it was
-// rated when it connected — which for a bot that connects once and plays all day
-// is the seed it started from, and never its rating.
-//
-// Called for ranked engine-versus-engine games and after an administrator
-// deletes something that refits, which are the two things that move the ladder.
-// Variadic because a game moves the one mode it was played in and a deletion can
-// move all of them, and either way the roster wants restating once at the end.
-func (server *Server) republishBotLadder(ctx context.Context, modes ...game.ModeID) {
+// updateSessionAccounts above is enough for a game, which moves exactly the two
+// accounts that played it. Everything else that moves ratings moves many at
+// once — an administrator's correction replays the whole record, and the hourly
+// republish moves every idle account a little — and leaves no single result to
+// patch from, so this reads the modes back.
+func (server *Server) refreshCachedRatings(ctx context.Context, modes ...game.ModeID) {
+	clients := server.connectedClients()
 	for _, modeID := range modes {
-		ratings, err := server.data.BotModeRatings(ctx, modeID)
+		ratings, err := server.data.ModeRatings(ctx, modeID)
 		if err != nil {
-			// Worth saying, not worth failing over: what moved the ladder is
-			// already written down, and the next thing that moves it will
-			// restate the roster.
-			log.Printf("refresh bot ladder for %s: %v", modeID, err)
+			// Worth saying, not worth failing over: what moved the ratings is
+			// already written down, and the next thing that moves them will
+			// restate them here.
+			log.Printf("refresh cached ratings for %s: %v", modeID, err)
 			continue
 		}
 		server.mu.Lock()
-		for _, connections := range server.bots {
-			for _, client := range connections {
-				rating, found := ratings[client.account.UserID]
-				if !found {
-					// A bot with no rating row in this mode has never finished
-					// a ranked game in it, so there is nothing to correct.
-					// Writing RatingFloor here would invent a mode rating the
-					// database does not have, and ModeElo already answers for a
-					// mode with none.
-					continue
-				}
-				client.account.SetModeElo(modeID, rating)
+		for _, client := range clients {
+			if rating, found := ratings[client.account.UserID]; found {
+				client.account.SetModeRating(rating)
 			}
 		}
 		server.mu.Unlock()
@@ -2713,8 +2696,8 @@ func (server *Server) republishBotLadder(ctx context.Context, modes ...game.Mode
 	server.broadcastBots()
 }
 
-// ratedModeIDs is every mode an engine can hold a rating in: what a refit that
-// did not name a mode may have moved.
+// ratedModeIDs is every mode an account can hold a rating in: what a change
+// that did not name a mode may have moved.
 func (server *Server) ratedModeIDs() []game.ModeID {
 	definitions := server.registry.Definitions()
 	modes := make([]game.ModeID, 0, len(definitions))

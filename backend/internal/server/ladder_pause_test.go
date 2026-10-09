@@ -183,7 +183,6 @@ func TestTheCalendarHoldsThePoolUntilTheDoorsOpen(t *testing.T) {
 func TestAnArenaOnTheHourHasTheHourToItself(t *testing.T) {
 	server, config := weekendServer(t, nil)
 	anchor := poolBot(t, server, "Anchor", "owner-anchor")
-	markLadderAnchor(t, server, anchor)
 	entrant := poolBot(t, server, "Entrant", "owner-entrant")
 	server.seriesDelay = time.Hour
 
@@ -231,7 +230,6 @@ func TestAnArenaOnTheHourHasTheHourToItself(t *testing.T) {
 func TestNothingRankedStartsWhileTheArenaIsOn(t *testing.T) {
 	server, arena := arenaUnderWay(t)
 	anchor := poolBot(t, server, "Anchor", "owner-anchor")
-	markLadderAnchor(t, server, anchor)
 	outsider := poolBot(t, server, "Outsider", "owner-outsider")
 	server.seriesDelay = time.Hour
 
@@ -306,8 +304,7 @@ func TestNothingRankedStartsWhileTheArenaIsOn(t *testing.T) {
 // begins, rather than starting into it the moment its engine comes free.
 func TestAHeldPairingIsLetGoForTheArena(t *testing.T) {
 	server, config := weekendServer(t, nil)
-	anchor := poolBot(t, server, "Anchor", "owner-anchor")
-	markLadderAnchor(t, server, anchor)
+	poolBot(t, server, "Anchor", "owner-anchor")
 	busy := poolBot(t, server, "Busy", "owner-busy")
 	server.seriesDelay = time.Hour
 

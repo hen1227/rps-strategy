@@ -133,7 +133,7 @@ export interface BotSeriesForm {
   stop: (run: BotSeries) => Promise<void>;
   /**
    * Move a finished run, and every game it filed, to the other side of ranked
-   * and casual. A host's action; the server refits the ladder as it does it.
+   * and casual. A host's action; the server recomputes the ratings as it does it.
    */
   reclassify: (run: BotSeries) => Promise<void>;
   /** The run being moved right now, so its button can wait for the answer. */

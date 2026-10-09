@@ -27,11 +27,12 @@ func postTestSeek(board *seekBoard, client *Client, setup game.GameSetup) *Seek 
 	testSeekCounter++
 	definition := game.ModeDefinition{ID: setup.ModeID}
 	seek := &Seek{
-		ID:     "seek-" + strconv.Itoa(testSeekCounter),
-		Owner:  seekOwnerKey(client),
-		Poster: client.profile,
-		Setup:  setup.Normalize(definition),
-		Elo:    matchmakingElo(client, setup.ModeID),
+		ID:       "seek-" + strconv.Itoa(testSeekCounter),
+		Owner:    seekOwnerKey(client),
+		Poster:   client.profile,
+		Setup:    setup.Normalize(definition),
+		Elo:      seatElo(client, setup.ModeID),
+		Strength: matchmakingStrength(client, setup.ModeID),
 		// Counted from this board rather than globally, so the same test reads
 		// the same whichever tests ran before it.
 		JoinedAt: board.now().Add(time.Duration(board.Len()+1) * time.Millisecond),
@@ -380,24 +381,36 @@ func TestPairingChoosesClosestEligibleRating(t *testing.T) {
 	}
 }
 
-func ratedClient(userID string, elo int) *Client {
+// ratedClient is a connection with a settled Total War rating of the given
+// strength, publishing about fifty under it the way a settled rating does.
+func ratedClient(userID string, strength int) *Client {
 	return &Client{
 		profile: game.PlayerProfile{UserID: userID},
-		account: persistence.Account{UserID: userID, Elo: elo},
+		account: persistence.Account{UserID: userID, ModeRatings: map[game.ModeID]persistence.ModeRating{
+			game.ModeTotalWar: {
+				ModeID: game.ModeTotalWar, Elo: strength - 50, Strength: strength,
+				Deviation: 50, RatedGames: 40, State: persistence.RatingStateRated,
+			},
+		}},
 	}
 }
 
+// A seek carries the published rating into its game and pairs on the strength
+// behind it, both read from the mode being sought.
 func TestSeeksWaitAtTheRatingOfTheChosenMode(t *testing.T) {
-	client := ratedClient("mode-rated", 1200)
-	client.account.ModeRatings = map[game.ModeID]persistence.ModeRating{
-		game.ModeTotalWar: {ModeID: game.ModeTotalWar, Elo: 1500},
-	}
+	client := ratedClient("mode-rated", 1550)
 	board, _ := testBoard(func(*Seek, *Seek) {})
 
-	if seek := standardSeek(board, client, game.ModeTotalWar); seek.Elo != 1500 {
-		t.Fatalf("expected the Total War rating, got %d", seek.Elo)
+	if seek := standardSeek(board, client, game.ModeTotalWar); seek.Elo != 1500 || seek.Strength != 1550 {
+		t.Fatalf("expected the Total War rating 1500 on strength 1550, got %d on %d",
+			seek.Elo, seek.Strength)
 	}
-	if seek := standardSeek(board, client, game.ModeInfiltration); seek.Elo != 1200 {
-		t.Fatalf("an unplayed mode should wait at the shared seed, got %d", seek.Elo)
+	// A mode never played is a newcomer's: no published rating to carry, and
+	// the middle of the scale to pair on, so a newcomer meets average players
+	// rather than whoever happens to publish 1150.
+	seek := standardSeek(board, client, game.ModeInfiltration)
+	if seek.Elo != 0 || seek.Strength != 1500 {
+		t.Fatalf("an unplayed mode should wait unrated on 1500, got %d on %d",
+			seek.Elo, seek.Strength)
 	}
 }

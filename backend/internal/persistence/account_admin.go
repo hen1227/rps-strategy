@@ -42,11 +42,8 @@ type AccountSummary struct {
 	Registered bool   `json:"registered"`
 	IsAdmin    bool   `json:"isAdmin"`
 	Disabled   bool   `json:"disabled"`
-	// Elo is the strongest of this account's mode ratings, which is the same
-	// summary the combined leaderboard publishes and for the same reason:
-	// ranked play moves `account_mode_ratings`, and `accounts.elo` is only the
-	// seed a new mode starts from, so a list built on that column would show
-	// every account — engines included — at RatingFloor for ever.
+	// Elo is the account's headline rating, its best rated mode — the same
+	// summary the combined leaderboard publishes. See headlineRatingSQL.
 	Elo         int   `json:"elo"`
 	GamesPlayed int   `json:"gamesPlayed"`
 	BotCount    int   `json:"botCount"`
@@ -193,8 +190,7 @@ FROM (
     SELECT a.user_id, a.kind, a.username, a.discord, a.title,
            ` + registeredSQL("a") + ` AS registered,
            a.is_admin, a.disabled,
-           COALESCE((SELECT MAX(r.elo) FROM account_mode_ratings r
-                      WHERE r.user_id = a.user_id), a.elo) AS elo,
+           a.elo,
            a.games_played, a.created_at_unix_ms,
            (SELECT COUNT(*) FROM bots b
              WHERE b.owner_user_id = a.user_id AND b.retired_at_unix_ms IS NULL)

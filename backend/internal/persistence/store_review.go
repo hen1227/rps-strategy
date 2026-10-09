@@ -229,7 +229,7 @@ INSERT INTO accounts (
     password_updated_at_unix_ms, created_at_unix_ms, updated_at_unix_ms
 ) VALUES (?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `,
-			userID, AccountKindHuman, username, UsernameKey(username), sealedHash, RatingFloor,
+			userID, AccountKindHuman, username, UsernameKey(username), sealedHash, RatingStart,
 			credential.hash, credential.salt, credential.algorithm, credential.iterations,
 			now, now, now,
 		); err != nil {

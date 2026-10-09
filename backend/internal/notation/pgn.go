@@ -17,12 +17,19 @@ const Generator = "rps-strategy-pgn/2"
 
 // RatingSystem names the scale the Elo tags are written on.
 //
-// "anchored/1" is the scale in persistence/rating_scale.go: 1 is an engine that
-// plays a uniformly random legal move, and twenty points is a doubling of the
-// odds of winning. A file with no such tag was written under the previous
-// system, which was chess Elo centred on 1200, and the two sets of numbers
-// cannot be compared or averaged together.
-const RatingSystem = "anchored/1"
+// "glicko2/1" is the system in persistence/rating.go: Glicko-2 on the familiar
+// 1500 scale, with the published number set one deviation under the strength.
+// Two older scales are in the archive and neither can be compared with it or
+// with each other:
+//
+//   - "anchored/1", where 1 was an engine playing a random legal move and
+//     twenty points doubled the odds of winning;
+//   - no tag at all, which is chess Elo centred on 1200.
+//
+// The archive is restated when ratings are rebuilt, so a record this server
+// still holds carries today's tag; the older two survive in files that have
+// already left it.
+const RatingSystem = "glicko2/1"
 
 // The numbered dialects, which differ in one thing: what "12." means.
 //
@@ -215,37 +222,10 @@ func buildTags(record game.Record, metadata Metadata) []Tag {
 	}
 	tags = appendIfSet(tags, "RedId", record.RedPlayer.UserID)
 	tags = appendIfSet(tags, "BlueId", record.BluePlayer.UserID)
-	if metadata.RedEloBefore > 0 {
-		tags = append(tags, Tag{"RedElo", strconv.Itoa(metadata.RedEloBefore)})
-	}
-	if metadata.BlueEloBefore > 0 {
-		tags = append(tags, Tag{"BlueElo", strconv.Itoa(metadata.BlueEloBefore)})
-	}
-	if metadata.RedEloAfter > 0 {
-		tags = append(tags, Tag{"RedEloAfter", strconv.Itoa(metadata.RedEloAfter)})
-		tags = append(tags, Tag{"RedRatingDiff", signed(metadata.RedEloAfter - metadata.RedEloBefore)})
-	}
-	if metadata.BlueEloAfter > 0 {
-		tags = append(tags, Tag{"BlueEloAfter", strconv.Itoa(metadata.BlueEloAfter)})
-		tags = append(tags, Tag{"BlueRatingDiff", signed(metadata.BlueEloAfter - metadata.BlueEloBefore)})
-	}
-	// The scale RedElo and BlueElo are written on, because the tag names are
-	// standard PGN and the numbers under them are not comparable across the
-	// change.
-	//
-	// This is not paranoia about a hypothetical reader. The archive is published
-	// and the two scales overlap: 200 is a plausible rating under both, a weak
-	// one on the old 1200-centred scale and a strong one on this. Nothing in the
-	// file would look wrong. A reader that averaged across the boundary would get
-	// an answer, and it would be meaningless.
-	//
-	// Named separately from Generator, which is about how the moves are
-	// numbered. Two independent things that can change independently, and folding
-	// them into one version number would mean a rating change silently claiming
-	// the moves had moved too.
-	if metadata.RedEloBefore > 0 || metadata.BlueEloBefore > 0 {
-		tags = append(tags, Tag{"RatingSystem", RatingSystem})
-	}
+	tags = append(tags, ratingTags(Ratings{
+		RedBefore: metadata.RedEloBefore, RedAfter: metadata.RedEloAfter,
+		BlueBefore: metadata.BlueEloBefore, BlueAfter: metadata.BlueEloAfter,
+	})...)
 	tags = append(tags, Tag{"Ranked", strconv.FormatBool(metadata.Ranked)})
 	tags = appendIfSet(tags, "TournamentId", metadata.TournamentID)
 	if metadata.BookPlies > 0 {

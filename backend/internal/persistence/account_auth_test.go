@@ -313,8 +313,14 @@ VALUES ('veteran', 'Veteran', 1550, 12, 1, 2);
 	if err != nil {
 		t.Fatalf("read migrated account: %v", err)
 	}
-	if account.Elo != 1550 || account.Wins != 12 {
+	if account.Wins != 12 {
 		t.Fatalf("migration lost account data: %#v", account)
+	}
+	// The one column that does not carry over, because it is not data: the
+	// headline rating is rebuilt from the record on every start, and this
+	// account has no ranked game on it.
+	if account.Elo != RatingStart {
+		t.Fatalf("the headline rating is %d, want %d", account.Elo, RatingStart)
 	}
 	if account.Kind != AccountKindHuman {
 		t.Fatalf("existing accounts must migrate as human, got %q", account.Kind)

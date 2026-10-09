@@ -10,7 +10,7 @@
 //
 // It opens the database **read only**, and that is the whole reason it is a
 // separate process rather than a goroutine in the server. persistence.Open sets
-// SetMaxOpenConns(1) and runs migrations and a ladder refit on the way in, so
+// SetMaxOpenConns(1) and runs migrations and a rating rebuild on the way in, so
 // going through the store would both write to the database and queue this scan
 // ahead of live play. A second connection under WAL costs the running server
 // nothing.

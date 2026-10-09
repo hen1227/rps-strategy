@@ -281,22 +281,15 @@ identity and history.
 
 ### What a rating means
 
-Every 20 rating points doubles the estimated odds of winning: a 20-point lead
-means 2:1 odds; 40 points means 4:1.
+Ratings use Glicko-2, the system Lichess uses, on the familiar 1500 scale. A
+200-point lead means about 3:1 odds; 400 points means about 10:1. People and
+bots are rated the same way, on separate boards.
 
-When reference engines are active, they anchor the scale:
-
-| Rating | Reference engine |
-| --- | --- |
-| 1 | Random legal moves: `GET /api/bot/yardstick_random.py` |
-| 100 | Capture when possible, otherwise random: `GET /api/bot/yardstick_greedy.py` |
-| 400 | RPSFish at 5 plies, without clock or opening book. |
-| 600 | RPSFish at 8 plies, without clock or opening book. |
-
-The Python references and their digests are public. Without designated reference
-engines, ratings are relative to the field: 1 is the weakest ranked engine.
-The leaderboard explains which scale is in use. Changing reference ratings
-recalculates the scale.
+Each rating is a strength and an uncertainty. The number shown is the strength
+minus the uncertainty, so every new bot starts at **1150** and climbs as it
+plays, settling about 50 points below its strength. Wins raise it and losses
+lower it; there is no ceiling. A rating is **Provisional** while it is still
+settling, which is roughly its first dozen ranked games, or after a long break.
 
 ### Where a rating comes from
 
@@ -329,31 +322,29 @@ for every bot, including bots that are not playing in the arena. Rounds resume
 on the first hour after the arena finishes.
 
 The pool prefers useful matchups: similar strength, unfamiliar opponents, and
-uncertain ratings. With reference engines active, new bots play one first.
+uncertain ratings.
 
-Other challenges and hand-arranged series do not affect bot ratings. Bot games
-against people are also casual, except for human ratings against reference engines.
+Other challenges and hand-arranged series do not affect bot ratings, and bot
+games against people are casual. Tournament games are rated.
 Infiltration and Total War keep their historical ratings but get no new hourly rounds.
 
 **Administrators can make exceptions.** An administrator can start a ranked
 series between two engines with different owners, and can move a finished engine
-game or series between ranked and casual. Ratings are refitted from the whole
-record straight away, so a change is exact and can be undone. Ranked series pause
-for the Weekend Bot Arena like every other ranked game.
+game or series between ranked and casual. Every rating is recomputed from the
+whole record straight away, so a change is exact and can be undone. Ranked
+series pause for the Weekend Bot Arena like every other ranked game.
 
-### Why it is not a running total
+### How a game moves a rating
 
-Bot ratings are fitted from the head-to-head record, with limits on repeated
-matchups and shared ownership:
+A ranked game moves both bots by how surprising the result was:
 
-- After about twenty games against the same engine, the result ratio matters more than the count.
-- Engines need enough independent opponents to establish a rating. Reference engines anchor otherwise uncertain comparisons.
-- An unplayed engine has unknown strength; beating it does not assume it was average.
+- Beating a much weaker engine is worth almost nothing, so farming one does not pay.
+- A win against a new engine counts for less, because its strength is still a guess.
 - Engines with the same owner do not rate each other.
+- Time away widens the uncertainty, so an idle rating drifts down slowly and comes back with play.
 
-Insufficient evidence shows as **Not enough data to rank**; thin ratings are
-**Provisional**. Results lose half their weight every three months, so inactive
-ratings become less certain.
+Ratings are a replay of the record: deleting a game or moving it between ranked
+and casual recomputes every rating as if it had always been that way.
 
 ### Series and tournaments
 
@@ -371,8 +362,8 @@ Draining, unsupported, or barred engines are skipped; the event page shows why.
 
 The server starts tournament matches automatically. Multiple games per match
 swap colours and use the aggregate result. During an event, engines are reserved
-for its matches and cannot accept challenges or series until it ends. Host-created
-tournaments are casual.
+for its matches and cannot accept challenges or series until it ends. Tournament
+games are rated.
 
 The **weekend arena** builds its field from eligible online engines. It is called
 off if too few are available. Use the weekend page to vote on the clock and mark
@@ -382,9 +373,9 @@ on that page.
 
 ## Licence
 
-This handout, the RPSI and notation references, `rpsbot.py`,
-`example_engine.py` and both yardstick engines are released under the MIT
-License, unlike the rest of RPS Strategy, which is AGPL-3.0. Copy or change any
+This handout, the RPSI and notation references, `rpsbot.py` and
+`example_engine.py` are released under the MIT License, unlike the rest of RPS
+Strategy, which is AGPL-3.0. Copy or change any
 of them for your own bot and license the result however you like; if you pass
 the files themselves on, keep their copyright notice with them. An engine you
 write yourself only talks to `rpsbot.py` over standard input and output, so it

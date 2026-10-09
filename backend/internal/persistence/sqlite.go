@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -36,8 +37,8 @@ type Store struct {
 }
 
 // Account holds one player's identity and lifetime totals across every mode.
-// Ranked play moves ModeRatings; Elo is only the shared seed a mode inherits
-// the first time this account finishes a game in it.
+// Ranked play moves ModeRatings; Elo is the account's headline rating, its best
+// rated mode or RatingStart before it has one (see headlineRatingSQL).
 // Account is serialized straight to JSON on GET /api/accounts/{userID} and
 // inside connection_ready, so no credential may ever become a field here.
 // Password material and bot keys live in their own unexported structs, read by
@@ -85,69 +86,64 @@ type Account struct {
 
 // ModeRating is an account's rating and record inside a single game mode. Every
 // mode rates independently, so a strong Total War player entering Infiltration
-// is not seeded by Total War results beyond the shared starting rating.
+// starts there as a newcomer.
 type ModeRating struct {
-	ModeID          game.ModeID `json:"modeId"`
-	Elo             int         `json:"elo"`
-	Wins            int         `json:"wins"`
-	Losses          int         `json:"losses"`
-	Draws           int         `json:"draws"`
-	GamesPlayed     int         `json:"gamesPlayed"`
-	UpdatedAtUnixMs int64       `json:"updatedAtUnixMs"`
-	// State is whether Elo is worth reading, and Confidence is the share of the
-	// measurement it kept. See RatingState.
+	ModeID game.ModeID `json:"modeId"`
+	// Elo is the published rating: Strength less Deviation, the number every
+	// board sorts on. See rating.go.
+	Elo             int   `json:"elo"`
+	Wins            int   `json:"wins"`
+	Losses          int   `json:"losses"`
+	Draws           int   `json:"draws"`
+	GamesPlayed     int   `json:"gamesPlayed"`
+	UpdatedAtUnixMs int64 `json:"updatedAtUnixMs"`
+	// RatedGames is how many ranked games the rating is built from, and State is
+	// how far it can be trusted. GamesPlayed above counts casual games too.
+	RatedGames int         `json:"ratedGames"`
 	State      RatingState `json:"ratingState"`
-	Confidence float64     `json:"ratingConfidence"`
+	// Strength and Deviation are the Glicko-2 estimate behind Elo, rounded.
+	// Matchmaking pairs on Strength, so a newcomer meets players of the strength
+	// they are assumed to have rather than of the number they start on.
+	Strength  int `json:"strength"`
+	Deviation int `json:"deviation"`
 }
 
-// ModeElo is the rating that decides ranked play in one mode.
-//
-// A mode this account has never finished a game in reads the account-level
-// number beside it, which for a person is what their strongest other mode
-// published as. What actually carries over when they first play the new mode is
-// the strength behind that, with the uncertainty of somebody who has proved
-// nothing here — see ensureModeRatingTx — so the number shown before the first
-// game and the number after it are talking about the same player rather than
-// about two different scales.
+// ModeElo is the published rating in one mode, and RatingStart for a mode this
+// account has never played.
 func (account Account) ModeElo(modeID game.ModeID) int {
 	if rating, found := account.ModeRatings[modeID]; found {
 		return rating.Elo
 	}
-	if account.Elo <= 0 {
-		return RatingFloor
-	}
-	return account.Elo
+	return RatingStart
 }
 
-// RecordRatedGame applies a finished game to an in-memory account copy, so a
-// connection that stays in the lobby keeps queueing at its new mode rating
-// without reloading the account.
-func (account *Account) RecordRatedGame(modeID game.ModeID, elo int) {
-	account.GamesPlayed++
+// ModeStrength is the strength matchmaking pairs on in one mode: the estimate
+// behind the published number, and the middle of the scale for a mode this
+// account has never played.
+func (account Account) ModeStrength(modeID game.ModeID) int {
+	if rating, found := account.ModeRatings[modeID]; found && rating.Strength > 0 {
+		return rating.Strength
+	}
+	return int(ratingStartStrength)
+}
+
+// SetModeRating restates one mode on an in-memory account copy, so a
+// connection that stays in the lobby keeps queueing, and keeps being listed, at
+// its current rating without reloading the account. The headline rating moves
+// with it.
+func (account *Account) SetModeRating(rating ModeRating) {
 	if account.ModeRatings == nil {
 		account.ModeRatings = make(map[game.ModeID]ModeRating)
 	}
-	rating := account.ModeRatings[modeID]
-	rating.ModeID = modeID
-	rating.Elo = elo
-	rating.GamesPlayed++
-	account.ModeRatings[modeID] = rating
-}
-
-// SetModeElo restates one mode's rating on an in-memory account copy, leaving
-// the record beside it alone.
-//
-// The bot ladder's counterpart to RecordRatedGame above. A refit moves the
-// rating of engines that did not play, so their games and their record are
-// exactly what they were and only the number in front of them is new.
-func (account *Account) SetModeElo(modeID game.ModeID, elo int) {
-	if account.ModeRatings == nil {
-		account.ModeRatings = make(map[game.ModeID]ModeRating)
+	account.ModeRatings[rating.ModeID] = rating
+	headline := RatingStart
+	rated := false
+	for _, mode := range account.ModeRatings {
+		if mode.RatedGames > 0 && (!rated || mode.Elo > headline) {
+			headline, rated = mode.Elo, true
+		}
 	}
-	rating := account.ModeRatings[modeID]
-	rating.ModeID = modeID
-	rating.Elo = elo
-	account.ModeRatings[modeID] = rating
+	account.Elo = headline
 }
 
 type RecordedPlayer struct {
@@ -192,6 +188,11 @@ type RatingUpdate struct {
 	RedEloAfter   int         `json:"redEloAfter"`
 	BlueEloBefore int         `json:"blueEloBefore"`
 	BlueEloAfter  int         `json:"blueEloAfter"`
+	// RedRating and BlueRating are each seat's whole mode row after the game,
+	// for the server to patch the accounts it holds in memory. Not sent: the
+	// four numbers above are what a client is told.
+	RedRating  ModeRating `json:"-"`
+	BlueRating ModeRating `json:"-"`
 }
 
 func Open(path string) (*Store, error) {
@@ -220,11 +221,11 @@ func Open(path string) (*Store, error) {
 		_ = database.Close()
 		return nil, err
 	}
-	// The bot ladder is derived, so it is rebuilt here rather than migrated. A
-	// database written by the old per-game system holds bot Elos that are a
-	// different function of the same games; one pass replaces them with the fit,
-	// and the same pass is the repair for any drift.
-	if err := store.RefitBotLadders(context.Background()); err != nil {
+	// Every rating is a function of the games on record, so it is rebuilt here
+	// rather than migrated: a database written under an older rating system
+	// holds numbers that are a different function of the same games, and one
+	// replay replaces them. The same pass is the repair for any drift.
+	if err := store.RebuildRatings(context.Background()); err != nil {
 		_ = database.Close()
 		return nil, err
 	}
@@ -255,7 +256,7 @@ CREATE TABLE IF NOT EXISTS accounts (
     username TEXT NOT NULL,
     discord TEXT NOT NULL DEFAULT '',
     profile_key_hash TEXT NOT NULL DEFAULT '',
-    elo INTEGER NOT NULL DEFAULT 1 CHECK (elo >= 0),
+    elo INTEGER NOT NULL DEFAULT 1150 CHECK (elo >= 0),
     wins INTEGER NOT NULL DEFAULT 0 CHECK (wins >= 0),
     losses INTEGER NOT NULL DEFAULT 0 CHECK (losses >= 0),
     draws INTEGER NOT NULL DEFAULT 0 CHECK (draws >= 0),
@@ -305,48 +306,19 @@ CREATE TABLE IF NOT EXISTS account_mode_ratings (
     losses INTEGER NOT NULL DEFAULT 0 CHECK (losses >= 0),
     draws INTEGER NOT NULL DEFAULT 0 CHECK (draws >= 0),
     games_played INTEGER NOT NULL DEFAULT 0 CHECK (games_played >= 0),
-    -- A person's strength and how sure of it we are, in the natural log units
-    -- the rating scale is defined in. The elo column beside them is what those
-    -- two publish as, stored rather than derived because it is read on every
-    -- leaderboard row and an index cannot help with an expression. Unused for a
-    -- bot, whose rating is a fit over the whole board rather than a state it
-    -- carries -- see bot_rating.go.
-    theta REAL NOT NULL DEFAULT 0,
-    theta_variance REAL NOT NULL DEFAULT 0,
-    -- Whether the number in the elo column is a measurement, and how much of one.
-    --
-    -- Both systems computed these in order to publish and then dropped them,
-    -- which left RatingFloor standing for "we have not measured this" and for
-    -- "we measured this and it plays no better than chance" at once. See
-    -- RatingState in rating_scale.go.
-    rating_placed INTEGER NOT NULL DEFAULT 0 CHECK (rating_placed IN (0, 1)),
-    rating_confidence REAL NOT NULL DEFAULT 0,
+    -- The rating: Glicko-2's strength, deviation and volatility on the 1500
+    -- scale, how many ranked games built it, and when the last one finished.
+    -- The elo column above is the number those publish as, stored because
+    -- every board sorts on it. See rating.go.
+    strength REAL NOT NULL DEFAULT 1500,
+    deviation REAL NOT NULL DEFAULT 350,
+    volatility REAL NOT NULL DEFAULT 0.06,
+    rated_games INTEGER NOT NULL DEFAULT 0 CHECK (rated_games >= 0),
+    last_rated_at_unix_ms INTEGER NOT NULL DEFAULT 0,
     created_at_unix_ms INTEGER NOT NULL,
     updated_at_unix_ms INTEGER NOT NULL,
     PRIMARY KEY (user_id, mode_id)
 );
-
--- Where a rating has been, as opposed to what moved it.
---
--- game_history's four Elo columns cannot answer this any more. They record what
--- a rating was when a game was played, and an engine's rating now also moves
--- when nothing is played at all: evidence decays, so a bot that stops playing
--- drifts back towards the floor with no game to hang the movement on. A series
--- of its own is the only place that drift can be seen.
---
--- One row per bot per mode per change, written by the refit when a number
--- actually moves. Not per refit: with decay the ladder is refitted on a clock,
--- and a row per pass would be a row per bot per hour for ever.
-CREATE TABLE IF NOT EXISTS rating_history (
-    user_id TEXT NOT NULL REFERENCES accounts(user_id) ON DELETE CASCADE,
-    mode_id TEXT NOT NULL,
-    rating INTEGER NOT NULL CHECK (rating >= 0),
-    at_unix_ms INTEGER NOT NULL,
-    PRIMARY KEY (user_id, mode_id, at_unix_ms)
-);
-
-CREATE INDEX IF NOT EXISTS rating_history_series_idx
-    ON rating_history(user_id, mode_id, at_unix_ms DESC);
 
 CREATE TABLE IF NOT EXISTS tournaments (
     tournament_id TEXT PRIMARY KEY,
@@ -461,13 +433,12 @@ CREATE INDEX IF NOT EXISTS tournament_matches_tournament_idx
 		return err
 	}
 	// After the account and rating tables exist, and before anything reads a
-	// rating: this is what moves people off the 1200-centred scale.
-	if err := store.ensureRatingScaleColumns(ctx); err != nil {
+	// rating. The numbers in the new columns are written by the replay that
+	// Open runs once this returns.
+	if err := store.ensureRatingColumns(ctx); err != nil {
 		return err
 	}
-	// After it, and for the same reason it runs before anything reads a rating:
-	// this is what lets a rating say it is not one.
-	if err := store.ensureRatingStateColumns(ctx); err != nil {
+	if err := store.ensureRatingSystemSchema(ctx); err != nil {
 		return err
 	}
 	if err := store.ensureLadderPoolSchema(ctx); err != nil {
@@ -598,7 +569,7 @@ ON CONFLICT(user_id) DO UPDATE SET
         ELSE excluded.username
     END,
     updated_at_unix_ms = excluded.updated_at_unix_ms
-`, userID, username, RatingFloor, now, now)
+`, userID, username, RatingStart, now, now)
 	if err != nil {
 		return Account{}, fmt.Errorf("ensure account: %w", err)
 	}
@@ -632,35 +603,21 @@ func (store *Store) modeRatings(
 	ctx context.Context,
 	userID string,
 ) (map[game.ModeID]ModeRating, error) {
-	rows, err := store.db.QueryContext(ctx, `
-SELECT mode_id, elo, wins, losses, draws, games_played, updated_at_unix_ms,
-       rating_placed, rating_confidence
-FROM account_mode_ratings
-WHERE user_id = ?
-`, userID)
+	rows, err := store.db.QueryContext(ctx,
+		"SELECT "+modeRatingColumns+" FROM account_mode_ratings WHERE user_id = ?", userID,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("read account mode ratings: %w", err)
 	}
 	defer rows.Close()
 
+	now := time.Now().UnixMilli()
 	ratings := make(map[game.ModeID]ModeRating)
 	for rows.Next() {
-		var rating ModeRating
-		var placed bool
-		if err := rows.Scan(
-			&rating.ModeID,
-			&rating.Elo,
-			&rating.Wins,
-			&rating.Losses,
-			&rating.Draws,
-			&rating.GamesPlayed,
-			&rating.UpdatedAtUnixMs,
-			&placed,
-			&rating.Confidence,
-		); err != nil {
+		rating, err := scanModeRating(rows, now)
+		if err != nil {
 			return nil, fmt.Errorf("read account mode ratings: %w", err)
 		}
-		rating.State = RatingStateOf(placed, rating.Confidence)
 		ratings[rating.ModeID] = rating
 	}
 	if err := rows.Err(); err != nil {
@@ -668,6 +625,87 @@ WHERE user_id = ?
 	}
 	return ratings, nil
 }
+
+// modeRatingColumns is the column list scanModeRating reads, in its order.
+const modeRatingColumns = `mode_id, elo, wins, losses, draws, games_played, updated_at_unix_ms,
+       strength, deviation, volatility, rated_games, last_rated_at_unix_ms`
+
+// scanModeRating reads one rating row, working out what it publishes as at
+// `now` from the rating behind it.
+func scanModeRating(scanner interface{ Scan(...any) error }, now int64) (ModeRating, error) {
+	var rating ModeRating
+	var glicko glickoRating
+	if err := scanner.Scan(
+		&rating.ModeID, &rating.Elo,
+		&rating.Wins, &rating.Losses, &rating.Draws, &rating.GamesPlayed,
+		&rating.UpdatedAtUnixMs,
+		&glicko.strength, &glicko.deviation, &glicko.volatility,
+		&glicko.games, &glicko.lastGameAt,
+	); err != nil {
+		return ModeRating{}, err
+	}
+	rating.RatedGames = glicko.games
+	rating.State = glicko.state(now)
+	rating.Strength = int(math.Round(glicko.strength))
+	rating.Deviation = int(math.Round(glicko.aged(now).deviation))
+	return rating, nil
+}
+
+// modeRatingTx reads one account's row in one mode.
+func modeRatingTx(
+	ctx context.Context,
+	transaction *sql.Tx,
+	userID string,
+	modeID game.ModeID,
+	now int64,
+) (ModeRating, error) {
+	rating, err := scanModeRating(transaction.QueryRowContext(ctx,
+		"SELECT "+modeRatingColumns+" FROM account_mode_ratings WHERE user_id = ? AND mode_id = ?",
+		userID, modeID,
+	), now)
+	if err != nil {
+		return ModeRating{}, fmt.Errorf("read mode rating: %w", err)
+	}
+	return rating, nil
+}
+
+// ModeRatings is every account's row in one mode, by user id, for a caller that
+// holds accounts in memory and needs to bring them up to date.
+func (store *Store) ModeRatings(
+	ctx context.Context,
+	modeID game.ModeID,
+) (map[string]ModeRating, error) {
+	rows, err := store.db.QueryContext(ctx,
+		"SELECT user_id, "+modeRatingColumns+" FROM account_mode_ratings WHERE mode_id = ?",
+		modeID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("read mode ratings: %w", err)
+	}
+	defer rows.Close()
+	now := time.Now().UnixMilli()
+	ratings := make(map[string]ModeRating)
+	for rows.Next() {
+		var userID string
+		rating, err := scanModeRating(scanFunc(func(destinations ...any) error {
+			return rows.Scan(append([]any{&userID}, destinations...)...)
+		}), now)
+		if err != nil {
+			return nil, fmt.Errorf("read mode rating: %w", err)
+		}
+		ratings[userID] = rating
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read mode ratings: %w", err)
+	}
+	return ratings, nil
+}
+
+// scanFunc adapts a function to the Scan method the row readers take, for a
+// query with a column in front of the ones a reader expects.
+type scanFunc func(...any) error
+
+func (scan scanFunc) Scan(destinations ...any) error { return scan(destinations...) }
 
 func (store *Store) RecordCompletedGame(
 	ctx context.Context,
@@ -716,18 +754,17 @@ func (store *Store) RecordCompletedGame(
 		return RatingUpdate{}, err
 	}
 
+	at := finishedAt.UnixMilli()
 	for _, userID := range []string{redID, blueID} {
-		if err := ensureModeRatingTx(
-			ctx, transaction, userID, state.Mode.ID, finishedAt.UnixMilli(),
-		); err != nil {
+		if err := ensureModeRatingTx(ctx, transaction, userID, state.Mode.ID, at); err != nil {
 			return RatingUpdate{}, err
 		}
 	}
-	redElo, err := modeEloTx(ctx, transaction, redID, state.Mode.ID)
+	red, err := ratingTx(ctx, transaction, redID, state.Mode.ID)
 	if err != nil {
 		return RatingUpdate{}, err
 	}
-	blueElo, err := modeEloTx(ctx, transaction, blueID, state.Mode.ID)
+	blue, err := ratingTx(ctx, transaction, blueID, state.Mode.ID)
 	if err != nil {
 		return RatingUpdate{}, err
 	}
@@ -737,49 +774,21 @@ func (store *Store) RecordCompletedGame(
 		return RatingUpdate{}, err
 	}
 
-	// Two rating systems, and who played decides which one applies.
-	//
-	// A person's rating is a transfer between the two seats, applied here, in the
-	// order games finish. An engine's is not a per-game quantity at all: it is a
-	// fit over every pair's head-to-head record, so one game restates the whole
-	// mode and there is no delta belonging to these two seats to write down.
-	//
-	// This used to run that fit inline and record its answer as the game's
-	// before-and-after. It does not any more, for two reasons. The fit is now a
-	// function of the clock as well as of the games — evidence decays, see
-	// bot_rating.go — so a number computed at the moment a game ended is already
-	// slightly wrong by the time anybody reads it, and refitting on a clock is
-	// the honest model. And the fit costs a Cholesky inverse, on a database
-	// pinned to one connection, which is a thing to do on a schedule rather than
-	// while holding the transaction every finished game goes through.
-	//
-	// So an engine's row records the rating as it stood, the same number on both
-	// sides, and the ladder moves when RefitBotLadder next runs — which the
-	// server schedules within seconds of this returning. The alternative was to
-	// keep manufacturing a per-game delta for a system that does not have one.
-	redAfter, blueAfter := redElo, blueElo
-	var redStrength, blueStrength *humanRating
+	// One rating system for everybody. A ranked game moves both seats, by the
+	// same rule the replay applies (see rateRecordedGame), so recording a game
+	// and replaying the record cannot disagree. The one ranked game that moves
+	// nothing is between two engines one person registered.
+	shared := false
 	if ranked {
-		bothBots, err := bothBotsTx(ctx, transaction, redID, blueID)
-		if err != nil {
+		if shared, err = sameBotOwnerTx(ctx, transaction, redID, blueID); err != nil {
 			return RatingUpdate{}, err
 		}
-		if !bothBots {
-			redStrength, blueStrength, err = rateHumanGameTx(
-				ctx, transaction, redID, blueID, state.Mode.ID,
-				redScore, finishedAt.UnixMilli(),
-			)
-			if err != nil {
-				return RatingUpdate{}, err
-			}
-			if redStrength != nil {
-				redAfter = redStrength.published()
-			}
-			if blueStrength != nil {
-				blueAfter = blueStrength.published()
-			}
-		}
 	}
+	red, blue, recorded := rateRecordedGame(red, blue, recordedGame{
+		gameID: state.GameID, modeID: state.Mode.ID,
+		redID: redID, blueID: blueID, finishedAt: at,
+		rated: ranked && !shared, redScore: redScore,
+	})
 	rankedInteger := 0
 	if ranked {
 		rankedInteger = 1
@@ -798,9 +807,9 @@ INSERT INTO game_history (
 		state.GameID, state.Mode.ID, state.Mode.Name,
 		redID, redName, blueID, blueName,
 		winnerID, state.Winner, outcome, state.EndReason, rankedInteger,
-		redElo, redAfter, blueElo, blueAfter,
+		recorded.redBefore, recorded.redAfter, recorded.blueBefore, recorded.blueAfter,
 		state.MoveNumber, state.TimeControl.InitialTimeMs, state.TimeControl.IncrementMs,
-		startedAt.UnixMilli(), finishedAt.UnixMilli(),
+		startedAt.UnixMilli(), at,
 	)
 	if err != nil {
 		return RatingUpdate{}, fmt.Errorf("record game: insert history: %w", err)
@@ -808,44 +817,42 @@ INSERT INTO game_history (
 
 	for _, result := range []struct {
 		userID string
-		elo    int
+		rating glickoRating
 		wins   int
 		losses int
 		draws  int
 	}{
-		{userID: redID, elo: redAfter, wins: redWins, losses: redLosses, draws: redDraws},
-		{userID: blueID, elo: blueAfter, wins: blueWins, losses: blueLosses, draws: blueDraws},
+		{userID: redID, rating: red, wins: redWins, losses: redLosses, draws: redDraws},
+		{userID: blueID, rating: blue, wins: blueWins, losses: blueLosses, draws: blueDraws},
 	} {
 		if err := updateAccountResult(
 			ctx, transaction, result.userID,
-			result.wins, result.losses, result.draws, finishedAt.UnixMilli(),
+			result.wins, result.losses, result.draws, at,
 		); err != nil {
 			return RatingUpdate{}, err
 		}
-		if err := updateModeRating(
-			ctx, transaction, result.userID, state.Mode.ID, result.elo,
-			result.wins, result.losses, result.draws, finishedAt.UnixMilli(),
+		if err := updateModeRecord(
+			ctx, transaction, result.userID, state.Mode.ID,
+			result.wins, result.losses, result.draws, at,
+		); err != nil {
+			return RatingUpdate{}, err
+		}
+		if err := writeRatingTx(ctx, transaction,
+			ratingKey{userID: result.userID, modeID: state.Mode.ID}, result.rating, at,
 		); err != nil {
 			return RatingUpdate{}, err
 		}
 	}
-	// And the strength behind the number, for whichever seats were people. The
-	// loop above writes what a rating publishes as; this writes what it is.
-	for _, side := range []struct {
-		userID   string
-		strength *humanRating
-	}{
-		{userID: redID, strength: redStrength},
-		{userID: blueID, strength: blueStrength},
-	} {
-		if side.strength == nil {
-			continue
-		}
-		if err := writeHumanRatingTx(
-			ctx, transaction, side.userID, state.Mode.ID, *side.strength,
-		); err != nil {
-			return RatingUpdate{}, err
-		}
+	if err := refreshHeadlineRatingsTx(ctx, transaction, redID, blueID); err != nil {
+		return RatingUpdate{}, err
+	}
+	redRating, err := modeRatingTx(ctx, transaction, redID, state.Mode.ID, at)
+	if err != nil {
+		return RatingUpdate{}, err
+	}
+	blueRating, err := modeRatingTx(ctx, transaction, blueID, state.Mode.ID, at)
+	if err != nil {
+		return RatingUpdate{}, err
 	}
 	if err := transaction.Commit(); err != nil {
 		return RatingUpdate{}, fmt.Errorf("record game: commit transaction: %w", err)
@@ -855,10 +862,12 @@ INSERT INTO game_history (
 		Recorded:      true,
 		Ranked:        ranked,
 		ModeID:        state.Mode.ID,
-		RedEloBefore:  redElo,
-		RedEloAfter:   redAfter,
-		BlueEloBefore: blueElo,
-		BlueEloAfter:  blueAfter,
+		RedEloBefore:  recorded.redBefore,
+		RedEloAfter:   recorded.redAfter,
+		BlueEloBefore: recorded.blueBefore,
+		BlueEloAfter:  recorded.blueAfter,
+		RedRating:     redRating,
+		BlueRating:    blueRating,
 	}, nil
 }
 
@@ -1009,16 +1018,15 @@ INSERT INTO accounts (
     user_id, username, elo, created_at_unix_ms, updated_at_unix_ms
 ) VALUES (?, ?, ?, ?, ?)
 ON CONFLICT(user_id) DO NOTHING
-`, userID, username, RatingFloor, now, now)
+`, userID, username, RatingStart, now, now)
 	if err != nil {
 		return fmt.Errorf("record game: ensure account: %w", err)
 	}
 	return nil
 }
 
-// ensureModeRatingTx creates the rating row for one account and mode. A mode a
-// player has never finished copies the account's shared rating, so switching
-// modes does not reset a player to the default.
+// ensureModeRatingTx creates the rating row for one account and mode, at a
+// newcomer's rating: modes rate independently, so nothing carries over.
 func ensureModeRatingTx(
 	ctx context.Context,
 	transaction *sql.Tx,
@@ -1026,74 +1034,69 @@ func ensureModeRatingTx(
 	modeID game.ModeID,
 	now int64,
 ) error {
-	// The new row starts from whichever mode this account is best established
-	// in, with the uncertainty of somebody who has proved nothing here.
-	//
-	// Both halves matter. Carrying the strength over is the existing intent —
-	// a player's first game in a new mode should start where the rest of their
-	// play left off rather than from scratch — and it is a good guess, because
-	// somebody strong at one mode is rarely hopeless at another. Carrying the
-	// full initial variance with it is what stops that guess from being a claim:
-	// the shrinkage publishes the new mode near the floor until it has been
-	// played, so what actually transfers is a head start on converging rather
-	// than a rating.
-	//
-	// Best established rather than highest, deliberately. Seeding from the
-	// player's best number would let somebody manufacture a flattering start in
-	// every mode by getting lucky in one, which is the same farm this whole
-	// system exists to close, just wearing a different hat.
-	// The strength carried over from whichever mode this account is best
-	// established in.
-	//
-	// Read first and inserted second rather than done in one statement, because
-	// what goes in the published column has to be the shrunk value of what goes
-	// in the strength column, and that shrink is a formula this package owns
-	// rather than something to restate in SQL. It used to copy `accounts.elo`
-	// straight across, which on this scale would put a number in front of a
-	// player that no strength of theirs backs — the first game in the mode would
-	// then appear to move them from 130 to 18 for winning.
-	var carried float64
-	err := transaction.QueryRowContext(ctx, `
-SELECT COALESCE((SELECT r.theta FROM account_mode_ratings r
-                  WHERE r.user_id = ? AND r.theta_variance > 0
-                  ORDER BY r.theta_variance ASC, r.mode_id ASC
-                  LIMIT 1), 0)
-`, userID).Scan(&carried)
-	if err != nil {
-		return fmt.Errorf("record game: read carried strength: %w", err)
-	}
-	seeded := humanRating{theta: carried, variance: humanInitialVariance}
-
+	fresh := newGlickoRating()
 	if _, err := transaction.ExecContext(ctx, `
 INSERT INTO account_mode_ratings (
-    user_id, mode_id, elo, theta, theta_variance, created_at_unix_ms, updated_at_unix_ms
+    user_id, mode_id, elo, strength, deviation, volatility,
+    created_at_unix_ms, updated_at_unix_ms
 )
-SELECT a.user_id, ?, ?, ?, ?, ?, ?
+SELECT a.user_id, ?, ?, ?, ?, ?, ?, ?
 FROM accounts a
 WHERE a.user_id = ?
 ON CONFLICT(user_id, mode_id) DO NOTHING
-`, modeID, seeded.published(), seeded.theta, seeded.variance, now, now, userID,
+`, modeID, fresh.shown(now), fresh.strength, fresh.deviation, fresh.volatility,
+		now, now, userID,
 	); err != nil {
 		return fmt.Errorf("record game: ensure mode rating: %w", err)
 	}
 	return nil
 }
 
-func modeEloTx(
+// ratingTx reads the rating behind one account's row in one mode.
+func ratingTx(
 	ctx context.Context,
 	transaction *sql.Tx,
 	userID string,
 	modeID game.ModeID,
-) (int, error) {
-	var elo int
-	if err := transaction.QueryRowContext(
-		ctx,
-		"SELECT elo FROM account_mode_ratings WHERE user_id = ? AND mode_id = ?",
-		userID, modeID,
-	).Scan(&elo); err != nil {
-		return 0, fmt.Errorf("record game: read mode Elo: %w", err)
+) (glickoRating, error) {
+	var rating glickoRating
+	if err := transaction.QueryRowContext(ctx, `
+SELECT strength, deviation, volatility, rated_games, last_rated_at_unix_ms
+FROM account_mode_ratings WHERE user_id = ? AND mode_id = ?
+`, userID, modeID).Scan(
+		&rating.strength, &rating.deviation, &rating.volatility,
+		&rating.games, &rating.lastGameAt,
+	); err != nil {
+		return glickoRating{}, fmt.Errorf("record game: read rating: %w", err)
 	}
-	return elo, nil
+	return rating, nil
+}
+
+// ensureRatingColumns adds the rating columns to a database from before them.
+// Their defaults are a newcomer's rating, and the replay Open runs next writes
+// the real ones.
+func (store *Store) ensureRatingColumns(ctx context.Context) error {
+	columns, err := tableColumns(ctx, store.db, "account_mode_ratings")
+	if err != nil {
+		return fmt.Errorf("inspect rating schema: %w", err)
+	}
+	for _, column := range []struct{ name, definition string }{
+		{"strength", "REAL NOT NULL DEFAULT 1500"},
+		{"deviation", "REAL NOT NULL DEFAULT 350"},
+		{"volatility", "REAL NOT NULL DEFAULT 0.06"},
+		{"rated_games", "INTEGER NOT NULL DEFAULT 0 CHECK (rated_games >= 0)"},
+		{"last_rated_at_unix_ms", "INTEGER NOT NULL DEFAULT 0"},
+	} {
+		if columns[column.name] {
+			continue
+		}
+		if _, err := store.db.ExecContext(ctx,
+			"ALTER TABLE account_mode_ratings ADD COLUMN "+column.name+" "+column.definition,
+		); err != nil {
+			return fmt.Errorf("add rating column %s: %w", column.name, err)
+		}
+	}
+	return nil
 }
 
 func existingRatingUpdate(
@@ -1153,92 +1156,6 @@ func gameOutcome(
 	}
 }
 
-// rateHumanGameTx applies a ranked game that had at least one person in it,
-// returning the new strength of each seat that was one.
-//
-// Three shapes reach this, and the third is the interesting one.
-//
-// Two people is the ordinary case: a mutual Bayesian update, both sides computed
-// from the other's pre-game state. See human_rating.go for why it is not the
-// fixed-K transfer this replaced — briefly, a transfer needs a reservoir of
-// points and a scale everybody starts at the bottom of does not have one.
-//
-// A person against one of the server's yardstick engines is the case that makes
-// the two boards comparable at all. The engine's rating is a fixed point that
-// also fixes every bot rating, so a person measured against it is measured on
-// the same scale as the engines without any human-versus-community-bot ranked
-// play having to exist. Only the person moves: a yardstick is frozen by
-// definition, and a bot's rating comes from the ladder fit rather than from
-// anything that happens here.
-//
-// A person against somebody else's engine does not reach this at all — those
-// games are casual, because an author can tune an engine to lose and a rating
-// that could be handed out by its owner is not one.
-func rateHumanGameTx(
-	ctx context.Context,
-	transaction *sql.Tx,
-	redID string,
-	blueID string,
-	modeID game.ModeID,
-	redScore float64,
-	now int64,
-) (*humanRating, *humanRating, error) {
-	redIsBot, err := accountIsBotTx(ctx, transaction, redID)
-	if err != nil {
-		return nil, nil, err
-	}
-	blueIsBot, err := accountIsBotTx(ctx, transaction, blueID)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	side := func(userID string, isBot bool) (humanRating, error) {
-		if !isBot {
-			return humanRatingTx(ctx, transaction, userID, modeID)
-		}
-		// The engine's side of a calibration game: exactly where the ladder puts
-		// it, with no uncertainty. See anchoredRating.
-		rating, err := modeEloTx(ctx, transaction, userID, modeID)
-		if err != nil {
-			return humanRating{}, err
-		}
-		return anchoredRating(rating), nil
-	}
-	red, err := side(redID, redIsBot)
-	if err != nil {
-		return nil, nil, err
-	}
-	blue, err := side(blueID, blueIsBot)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	updatedRed, updatedBlue := updateHumanRatings(red, blue, redScore, now)
-	var redResult, blueResult *humanRating
-	if !redIsBot {
-		redResult = &updatedRed
-	}
-	if !blueIsBot {
-		blueResult = &updatedBlue
-	}
-	return redResult, blueResult, nil
-}
-
-// accountIsBotTx reports whether one account is an engine.
-func accountIsBotTx(
-	ctx context.Context,
-	transaction *sql.Tx,
-	userID string,
-) (bool, error) {
-	var kind string
-	if err := transaction.QueryRowContext(ctx,
-		"SELECT kind FROM accounts WHERE user_id = ?", userID,
-	).Scan(&kind); err != nil {
-		return false, fmt.Errorf("record game: read account kind: %w", err)
-	}
-	return kind == AccountKindBot, nil
-}
-
 func updateAccountResult(
 	ctx context.Context,
 	transaction *sql.Tx,
@@ -1263,12 +1180,13 @@ WHERE user_id = ?
 	return nil
 }
 
-func updateModeRating(
+// updateModeRecord adds one game to an account's record in one mode. The
+// rating beside it is written by writeRatingTx.
+func updateModeRecord(
 	ctx context.Context,
 	transaction *sql.Tx,
 	userID string,
 	modeID game.ModeID,
-	elo int,
 	wins int,
 	losses int,
 	draws int,
@@ -1276,16 +1194,15 @@ func updateModeRating(
 ) error {
 	_, err := transaction.ExecContext(ctx, `
 UPDATE account_mode_ratings
-SET elo = ?,
-    wins = wins + ?,
+SET wins = wins + ?,
     losses = losses + ?,
     draws = draws + ?,
     games_played = games_played + 1,
     updated_at_unix_ms = ?
 WHERE user_id = ? AND mode_id = ?
-`, elo, wins, losses, draws, now, userID, modeID)
+`, wins, losses, draws, now, userID, modeID)
 	if err != nil {
-		return fmt.Errorf("record game: update mode rating: %w", err)
+		return fmt.Errorf("record game: update mode record: %w", err)
 	}
 	return nil
 }

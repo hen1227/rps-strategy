@@ -28,8 +28,7 @@ const engine = (name: string, extra: Partial<LadderFieldEngine> = {}): LadderFie
   botId: `bot-${name}`,
   userId: `user-${name}`,
   name,
-  reference: false,
-  rating: 100,
+  rating: 1500,
   ratingState: 'rated',
   online: true,
   ready: true,
@@ -75,28 +74,19 @@ const rounds = (extra: Partial<LadderRounds> = {}): LadderRounds =>
     schedule: [],
     field: [],
     last: null,
-    anchorBotId: 'anchor',
-    ratingFloor: 1,
-    ratingPointsPerDoubling: 20,
     ...extra,
   }) as LadderRounds;
 
-test('the field is split by why each engine is in it, and ready is counted across both', () => {
-  // The two groups are two different claims — one owner entered this, the host
-  // runs that one — and the count is about the round, which does not care.
+test('the field lists every engine that is here, and counts the ones that will play', () => {
   const groups = ladderFieldGroups([
     engine('mine'),
-    engine('anchor', { reference: true }),
+    engine('other'),
     out('wrongmode', 'does not play Intransitive'),
-    { ...out('rung', 'shutting down'), reference: true },
+    out('leaving', 'shutting down'),
   ]);
   assert.deepEqual(
     groups.entered.map((one) => one.name),
-    ['mine', 'wrongmode'],
-  );
-  assert.deepEqual(
-    groups.references.map((one) => one.name),
-    ['anchor', 'rung'],
+    ['mine', 'other', 'wrongmode', 'leaving'],
   );
   assert.equal(groups.inRound, 2);
   assert.equal(groups.away, 0);
@@ -130,16 +120,11 @@ test('an engine nobody is running is counted, not listed', () => {
   // An engine that is here and unavailable says something about the round. One
   // that is switched off says only that its owner's machine is off, and it
   // would say it every hour until they started it.
-  const groups = ladderFieldGroups([
-    engine('here'),
-    away('asleep'),
-    { ...away('dormant'), reference: true },
-  ]);
+  const groups = ladderFieldGroups([engine('here'), away('asleep'), away('dormant')]);
   assert.deepEqual(
     groups.entered.map((one) => one.name),
     ['here'],
   );
-  assert.deepEqual(groups.references, []);
   assert.equal(groups.away, 2);
   // And the summary counts the rows under it rather than the whole field, or it
   // is the same trap the rail's single number was.
@@ -391,11 +376,7 @@ test('the field summary carries both numbers, not one doing two jobs', () => {
   // The rail's old "7 engines entered" meant the number the round would seat
   // and was read as the size of the field. An owner whose engine was entered
   // and shutting down was inside one of those and outside the other.
-  const groups = ladderFieldGroups([
-    engine('a'),
-    out('b', 'shutting down'),
-    engine('anchor', { reference: true }),
-  ]);
+  const groups = ladderFieldGroups([engine('a'), out('b', 'shutting down'), engine('c')]);
   assert.equal(fieldSummary(groups), '2 of 3 in');
 });
 

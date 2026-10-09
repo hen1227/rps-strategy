@@ -26,8 +26,8 @@ func ladderTestServer(t *testing.T) *Server {
 // does — with the account read once, at connect time, which is the copy the
 // roster is published from.
 //
-// Each engine gets an owner of its own, because the ladder does not count games
-// between two bots one person registered and a roster of one owner's engines
+// Each engine gets an owner of its own, because games between two bots one
+// person registered never move a rating, and a roster of one owner's engines
 // would never move at all.
 func connectLadderBot(t *testing.T, server *Server, name string) (persistence.Bot, *Client) {
 	t.Helper()
@@ -65,27 +65,15 @@ func connectLadderBot(t *testing.T, server *Server, name string) (persistence.Bo
 	return bot, client
 }
 
-// markLadderAnchor makes a connected engine the yardstick the scale is measured
-// from. One column on an otherwise ordinary bot row, which is all a yardstick is
-// as far as the database is concerned.
-func markLadderAnchor(t *testing.T, server *Server, bot persistence.Bot) {
-	t.Helper()
-	if err := server.data.SetBotBenchmarkSlot(
-		t.Context(), bot.BotID, persistence.BenchmarkRandom,
-	); err != nil {
-		t.Fatalf("mark anchor: %v", err)
-	}
-}
-
-// settleLadder runs the refit the completion path asked for.
+// settleLadder runs the roster broadcast the completion path asked for.
 //
-// A finished engine game no longer fits the ladder itself — it flags the mode
-// and the lobby ticker picks it up, for the reasons in ladder_refit.go — so a
-// test that wants to see the ladder move has to let that tick happen. The clock
+// A finished engine game rates its two seats at once, and the roster that
+// publishes them waits for the games around it — see rating_refresh.go — so a
+// test that wants to see the roster move has to let that tick happen. The clock
 // is pushed past the debounce rather than slept through.
 func settleLadder(t *testing.T, server *Server) {
 	t.Helper()
-	server.runLadderRefits(time.Now().Add(2 * ladderRefitDebounce))
+	server.runRatingRefresh(time.Now().Add(2 * ratingRosterDebounce))
 }
 
 // finishLadderGame plays one ranked engine-versus-engine game to a resignation
@@ -131,26 +119,22 @@ func ladderRating(t *testing.T, server *Server, userID string) int {
 	return account.ModeElo(game.ModeTotalWar)
 }
 
-// The bot ladder is a fit over the whole board, so a game between two engines
-// restates the rating of engines that were not in it. The roster is published
-// from a copy of each account read when it connected, and nothing in one game's
-// result can patch the rest of it — so without a refresh, an engine that
-// connects once and plays all day keeps publishing the seed it started from.
-func TestAFinishedBotGameRestatesEveryConnectedEngine(t *testing.T) {
+// The roster is published from a copy of each account read when it connected,
+// so an engine that connects once and plays all day would keep publishing the
+// rating it connected with unless every game patched that copy. Each finished
+// game does, for both seats, and the roster restated after it says what the
+// ladder says.
+func TestTheRosterPublishesEachEnginesCurrentRating(t *testing.T) {
 	server := ladderTestServer(t)
 	alpha, alphaClient := connectLadderBot(t, server, "Alpha")
 	beta, betaClient := connectLadderBot(t, server, "Beta")
 	gamma, gammaClient := connectLadderBot(t, server, "Gamma")
-
-	// The yardstick, underneath the board. Every rating the fit publishes is a
-	// distance from this engine, so a board it has never played is one the fit
-	// declines to rate at all — see the anchor note in bot_rating.go.
 	anchorBot, anchorClient := connectLadderBot(t, server, "Anchor")
-	markLadderAnchor(t, server, anchorBot)
 
-	// A graded round robin: the first of each pair takes six of every eight. Not
-	// a sweep, which has no finite fit and collapses to the floor — see the
-	// note on the shrinkage in bot_rating.go.
+	// A graded round robin: the first of each pair takes six of every eight,
+	// losing the fourth and the eighth. Spread through the pairing because a
+	// rating is sequential, and six wins followed by two losses reads as an
+	// engine that got worse at the end.
 	pairs := [][2]*Client{
 		{alphaClient, betaClient},
 		{alphaClient, gammaClient},
@@ -164,7 +148,7 @@ func TestAFinishedBotGameRestatesEveryConnectedEngine(t *testing.T) {
 		for index := range 8 {
 			counter++
 			finishLadderGame(
-				t, server, fmt.Sprintf("ladder-%d", counter), pair[0], pair[1], index < 6,
+				t, server, fmt.Sprintf("ladder-%d", counter), pair[0], pair[1], index%4 != 3,
 			)
 		}
 	}
@@ -235,8 +219,7 @@ func TestMatchmakingReadsABotsCurrentLadderRating(t *testing.T) {
 	alpha, alphaClient := connectLadderBot(t, server, "Alpha")
 	_, betaClient := connectLadderBot(t, server, "Beta")
 	_, gammaClient := connectLadderBot(t, server, "Gamma")
-	anchorBot, anchorClient := connectLadderBot(t, server, "Anchor")
-	markLadderAnchor(t, server, anchorBot)
+	_, anchorClient := connectLadderBot(t, server, "Anchor")
 
 	pairs := [][2]*Client{
 		{alphaClient, betaClient},
@@ -251,7 +234,7 @@ func TestMatchmakingReadsABotsCurrentLadderRating(t *testing.T) {
 		for index := range 8 {
 			counter++
 			finishLadderGame(
-				t, server, fmt.Sprintf("seat-%d", counter), pair[0], pair[1], index < 6,
+				t, server, fmt.Sprintf("seat-%d", counter), pair[0], pair[1], index%4 != 3,
 			)
 		}
 	}
@@ -259,10 +242,18 @@ func TestMatchmakingReadsABotsCurrentLadderRating(t *testing.T) {
 	settleLadder(t, server)
 
 	stored := ladderRating(t, server, alpha.UserID)
-	if stored == persistence.RatingFloor {
+	if stored == persistence.RatingStart {
 		t.Fatalf("the board did not move, so this proves nothing: %d", stored)
 	}
-	if seated := matchmakingElo(alphaClient, game.ModeTotalWar); seated != stored {
+	if seated := seatElo(alphaClient, game.ModeTotalWar); seated != stored {
 		t.Errorf("matchmaking seats Alpha at %d, the ladder says %d", seated, stored)
+	}
+	account, err := server.data.Account(t.Context(), alpha.UserID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if paired, want := matchmakingStrength(alphaClient, game.ModeTotalWar),
+		account.ModeStrength(game.ModeTotalWar); paired != want {
+		t.Errorf("matchmaking pairs Alpha on %d, the ladder says %d", paired, want)
 	}
 }

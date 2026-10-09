@@ -48,14 +48,9 @@ type PublicProfile struct {
 	// with ratings and histories, and a bot's page is the natural place for its
 	// author's description of it.
 	Kind string `json:"kind"`
-	// Elo is the strongest mode this account has been measured in, and RatingState
-	// is whether that number is a measurement at all. Both come from
-	// profileRating, which is where the choice between modes is explained.
-	//
-	// The state is not decoration: on a board with no yardstick designated
-	// nothing is placed, so every engine's figure is a placeholder, and a page
-	// that printed it bare would be making a claim the ladder beside it
-	// withdraws. See RatingState.
+	// Elo is the account's best rated mode, and RatingState how far that number
+	// can be trusted, unrated for an account with no ranked game anywhere. Both
+	// come from profileRating.
 	Elo              int                        `json:"elo"`
 	RatingState      RatingState                `json:"ratingState"`
 	Wins             int                        `json:"wins"`
@@ -114,9 +109,8 @@ type ProfileBot struct {
 	Description string `json:"description,omitempty"`
 	IconSHA256  string `json:"iconSha256,omitempty"`
 	// Elo and RatingState are the engine's own, read the same way its page reads
-	// them — see profileRating. An owner's list of engines is a column of
-	// ratings, which is the shape that most needs to distinguish a low one from
-	// an absent one.
+	// them — see profileRating — so an engine with no ranked game reads unrated
+	// rather than at a number.
 	Elo         int         `json:"elo"`
 	RatingState RatingState `json:"ratingState"`
 	Username    string      `json:"username"`
@@ -145,45 +139,22 @@ type ProfileSummary struct {
 var ErrProfileNotFound = errors.New("no such player")
 
 // profileRating is the single number a page headlines, chosen the way the
-// combined leaderboard chooses the row it lists: the best *measured* mode, and
-// only then the best number.
-//
-// Two rules, and this used to get both wrong by being one line of `if
-// rating.Elo > profile.Elo`.
-//
-// **`accounts.elo` is a fallback, not a floor.** It is the seed a mode with no
-// row of its own inherits, and every other rollup on the site treats it as the
-// answer only when there is no mode row at all — `COALESCE(MAX(r.elo), a.elo)`
-// in SearchAccounts, in PublicProfiles and in botSelect. Seeding a maximum with
-// it instead is a different query, and the difference is exactly an account
-// whose measured ratings are *below* its seed. That is not a corner case: the
-// old scale seeded every account at 1200, restateSeededRatings resets it to
-// RatingFloor for people and deliberately leaves engines alone because nothing
-// was supposed to read it — so every engine that predates the rebuild carries
-// 1200, which on this scale is RatingCeiling. Those pages headlined the top of
-// the printable scale while the ladder they were reached from showed what the
-// engine had actually been measured at.
-//
-// **An unrated number does not represent an account.** RatingState exists to
-// say that a published figure is a placeholder rather than a measurement, and
-// the board sorts on it for this reason; a profile taking the plain maximum
-// would headline the one number the board declined to rank.
+// combined leaderboard chooses the row it lists: the best rated mode. An
+// account with no rated mode is unrated, at a newcomer's number.
 func profileRating(account Account) (int, RatingState) {
-	best, bestState, found := 0, RatingStateUnrated, false
-	for _, rating := range account.ModeRatings {
-		ranked := rating.State.Ranked()
-		if found && !strongerRating(ranked, rating.Elo, bestState.Ranked(), best) {
-			continue
+	modes := make([]game.ModeID, 0, len(account.ModeRatings))
+	for modeID := range account.ModeRatings {
+		modes = append(modes, modeID)
+	}
+	sort.Slice(modes, func(first, second int) bool { return modes[first] < modes[second] })
+	best, state := RatingStart, RatingStateUnrated
+	for _, modeID := range modes {
+		rating := account.ModeRatings[modeID]
+		if rating.State.Ranked() && (!state.Ranked() || rating.Elo > best) {
+			best, state = rating.Elo, rating.State
 		}
-		best, bestState, found = rating.Elo, rating.State, true
 	}
-	if !found {
-		// The seed, and unrated by construction: an account with no mode row has
-		// never been measured in anything, so the number beside it is the
-		// starting point rather than a result.
-		return account.Elo, RatingStateUnrated
-	}
-	return best, bestState
+	return best, state
 }
 
 // strongerRating is the leaderboard's `ranked DESC, elo DESC` as a comparison,
@@ -447,8 +418,8 @@ func (store *Store) profileBots(ctx context.Context, userID string) ([]ProfileBo
 		profiles = append(profiles, entry)
 	}
 	// Strongest first, in the board's order rather than by the number alone: an
-	// engine nobody has been able to place does not lead its author's list
-	// because its placeholder happens to read high.
+	// unrated engine does not lead its author's list because a newcomer's number
+	// happens to be higher than a rated one's.
 	sort.SliceStable(profiles, func(first, second int) bool {
 		return strongerRating(
 			profiles[first].RatingState.Ranked(), profiles[first].Elo,
@@ -478,8 +449,7 @@ func (store *Store) PublicProfiles(
 	pattern := "%" + UsernameKey(query) + "%"
 	rows, err := store.db.QueryContext(ctx, `
 SELECT a.user_id, a.username, a.discord, a.title, a.kind,
-       COALESCE((SELECT MAX(r.elo) FROM account_mode_ratings r
-                  WHERE r.user_id = a.user_id), a.elo),
+       a.elo,
        a.games_played,
        (SELECT COUNT(*) FROM account_titles t WHERE t.user_id = a.user_id)
 FROM accounts a

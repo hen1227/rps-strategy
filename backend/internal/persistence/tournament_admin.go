@@ -788,11 +788,11 @@ func (store *Store) seedField(ctx context.Context, tournament Tournament) ([]int
 
 	// Strongest first, by each entrant's rating in this event's own mode. An
 	// entrant with no account on record — which a hand-entered signup can be —
-	// seeds at the default rather than at zero, so a data gap does not read as
-	// a beginner and land in the bottom half of the bracket.
+	// seeds at a newcomer's rating rather than at zero, so a data gap does not
+	// read as the weakest player and land in the bottom half of the bracket.
 	ratings := make(map[int64]int, len(players))
 	for _, player := range players {
-		ratings[player.PlayerID] = RatingFloor
+		ratings[player.PlayerID] = RatingStart
 		account, err := store.Account(ctx, player.UserID)
 		if errors.Is(err, ErrAccountNotFound) {
 			continue

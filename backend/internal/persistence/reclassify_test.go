@@ -2,74 +2,62 @@ package persistence
 
 import (
 	"errors"
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"rps-strategy/backend/internal/game"
 	"rps-strategy/backend/internal/notation"
 )
 
-// reclassifyBoard is three rival engines and the anchor, every pair played,
-// fitted: a board the ladder actually rates. The first pair's games are rr-1 to
-// rr-6, which is seedBotRoundRobin's numbering.
-func reclassifyBoard(t *testing.T) (*Store, []Account) {
+// reclassifyBoard is three rival engines, every pair played and replayed: a
+// board the ladder actually rates. The first pair's games are rr-1 to rr-6.
+func reclassifyBoard(t *testing.T, start time.Time) (*Store, []Account) {
 	t.Helper()
 	store := botLadderStore(t)
-	first, second, third := threeBots(t, store)
-	bots := []Account{first, second, third}
-	seedBotRoundRobin(t, store, bots, 6, 5)
-	if err := store.RefitBotLadder(t.Context(), game.ModeTotalWar); err != nil {
-		t.Fatalf("refit: %v", err)
-	}
+	bots := []Account{rival(t, store, "First"), rival(t, store, "Second"), rival(t, store, "Third")}
+	seedReclassifyBoard(t, store, bots, start, true)
+	replay(t, store)
 	return store, bots
 }
 
-func ladderOf(t *testing.T, store *Store, bots []Account) []int {
+// seedReclassifyBoard files the board's games, leaving out the first pair's when
+// asked to, at the same moments either way so two boards can be compared.
+func seedReclassifyBoard(t *testing.T, store *Store, bots []Account, start time.Time, firstPair bool) {
 	t.Helper()
-	ratings := make([]int, 0, len(bots))
-	for _, bot := range bots {
-		ratings = append(ratings, botRating(t, store, bot.UserID))
+	if firstPair {
+		seedSeries(t, store, "rr", game.ModeTotalWar, bots[0], bots[1], 6, 5, start)
 	}
-	return ratings
+	seedSeries(t, store, "second-third", game.ModeTotalWar, bots[1], bots[2], 6, 5,
+		start.Add(time.Hour))
+	seedSeries(t, store, "first-third", game.ModeTotalWar, bots[0], bots[2], 6, 5,
+		start.Add(2*time.Hour))
 }
 
-func sameInts(one []int, other []int) bool {
-	if len(one) != len(other) {
-		return false
-	}
-	for index := range one {
-		if one[index] != other[index] {
-			return false
-		}
-	}
-	return true
-}
-
-// A casual game is one the fit never sees, so moving a pair's games to casual
-// has to give exactly the board on which that pair was never ranked — not an
-// approximation of it — and moving them back has to give the original.
-func TestMovingEngineGamesToCasualRefitsTheLadderExactly(t *testing.T) {
-	store, bots := reclassifyBoard(t)
+// A casual game is one the ratings never see, so moving a pair's games to
+// casual has to give exactly the board on which that pair was never ranked —
+// not an approximation of it — and moving them back has to give the original.
+func TestMovingEngineGamesToCasualReplaysTheLadderExactly(t *testing.T) {
+	start := recently()
+	store, bots := reclassifyBoard(t, start)
 	ctx := t.Context()
-	before := ladderOf(t, store, bots)
+	before := storedRatings(t, store, game.ModeTotalWar, bots...)
 
 	// The board the first pair's games would have left had they been casual
-	// from the start: the same seeding with that pair missing.
+	// from the start: the same games at the same moments, that pair missing.
 	reference := botLadderStore(t)
-	first, second, third := threeBots(t, reference)
-	seedAnchor(t, reference, []Account{first, second, third})
-	seedMatchup(t, reference, "second-third", second, third, 6, 5)
-	seedMatchup(t, reference, "first-third", first, third, 6, 5)
-	if err := reference.RefitBotLadder(ctx, game.ModeTotalWar); err != nil {
-		t.Fatalf("refit reference: %v", err)
-	}
-	want := ladderOf(t, reference, []Account{first, second, third})
-	if sameInts(want, before) {
+	others := []Account{rival(t, reference, "First"), rival(t, reference, "Second"), rival(t, reference, "Third")}
+	seedReclassifyBoard(t, reference, others, start, false)
+	replay(t, reference)
+	want := storedRatings(t, reference, game.ModeTotalWar, others...)
+	if before[0] == want[0] {
 		t.Fatalf("the fixture is too weak: dropping a pair moved nothing (%v)", before)
 	}
 
 	for index := 1; index <= 6; index++ {
-		moved, err := store.SetGameRanked(ctx, "rr-"+string(rune('0'+index)), false)
+		moved, err := store.SetGameRanked(ctx, fmt.Sprintf("rr-%d", index), false)
 		if err != nil {
 			t.Fatalf("move rr-%d: %v", index, err)
 		}
@@ -77,24 +65,29 @@ func TestMovingEngineGamesToCasualRefitsTheLadderExactly(t *testing.T) {
 			t.Fatalf("unexpected report for rr-%d: %#v", index, moved)
 		}
 	}
-	if got := ladderOf(t, store, bots); !sameInts(got, want) {
+	if got := storedRatings(t, store, game.ModeTotalWar, bots...); !slices.Equal(got, want) {
 		t.Fatalf("casual games left a board of %v, want %v", got, want)
+	}
+	// And the games themselves say they moved nobody.
+	if row := gameRow(t, store, "rr-3"); row.redBefore != row.redAfter || row.blueBefore != row.blueAfter {
+		t.Fatalf("a casual game still records a change: %+v", row)
 	}
 
 	for index := 1; index <= 6; index++ {
-		if _, err := store.SetGameRanked(ctx, "rr-"+string(rune('0'+index)), true); err != nil {
+		if _, err := store.SetGameRanked(ctx, fmt.Sprintf("rr-%d", index), true); err != nil {
 			t.Fatalf("restore rr-%d: %v", index, err)
 		}
 	}
-	if got := ladderOf(t, store, bots); !sameInts(got, before) {
+	if got := storedRatings(t, store, game.ModeTotalWar, bots...); !slices.Equal(got, before) {
 		t.Fatalf("moving the games back left %v, want the original %v", got, before)
 	}
 }
 
 // Every copy of the flag moves: the history the ladder reads, and the archive's
-// column and file, which are what a review, a download and an export read.
+// column and file, which are what a review, a download and an export read. The
+// ratings in the file move with it.
 func TestMovingAGameRewritesItsArchivedRecord(t *testing.T) {
-	store, bots := reclassifyBoard(t)
+	store, bots := reclassifyBoard(t, recently())
 	ctx := t.Context()
 	played, err := game.NewGame(
 		"rr-1", game.ModeTotalWar,
@@ -133,10 +126,20 @@ func TestMovingAGameRewritesItsArchivedRecord(t *testing.T) {
 		!strings.Contains(archived.PGN, `[Event "Bot Match"]`) {
 		t.Fatalf("the archived file was not rewritten:\n%s", archived.PGN)
 	}
+	row := gameRow(t, store, "rr-1")
+	for _, tag := range []string{
+		fmt.Sprintf(`[RedElo "%d"]`, row.redBefore),
+		`[RedRatingDiff "0"]`,
+		`[RatingSystem "` + notation.RatingSystem + `"]`,
+	} {
+		if !strings.Contains(archived.PGN, tag) {
+			t.Fatalf("the archived file does not carry %s:\n%s", tag, archived.PGN)
+		}
+	}
 }
 
-// A person's rating is a running total, so a game with a person in it is left
-// alone — with nothing written, rather than half of it.
+// The tool is for hosts correcting engine runs, so a game with a person in it is
+// left alone — with nothing written, rather than half of it.
 func TestAGameWithAPersonInItCannotBeMoved(t *testing.T) {
 	store := botLadderStore(t)
 	ctx := t.Context()
@@ -165,8 +168,8 @@ func TestAGameWithAPersonInItCannotBeMoved(t *testing.T) {
 	}
 }
 
-// Two engines one person registered can be made casual, which is what the fit
-// already treats them as, and cannot be made ranked, which would read as
+// Two engines one person registered can be made casual, which is what the
+// ratings already treat them as, and cannot be made ranked, which would read as
 // counting while moving nothing.
 func TestOneOwnersEnginesCannotBeMadeRanked(t *testing.T) {
 	store := botLadderStore(t)

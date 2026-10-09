@@ -5,6 +5,9 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"time"
+
+	"rps-strategy/backend/internal/game"
 )
 
 // How long an engine has been top of a mode, and who used to be.
@@ -28,12 +31,12 @@ import (
 //
 // # Why a reign is confirmed rather than observed
 //
-// A bot rating is the whole record solved again rather than a running total,
-// and evidence decays on a clock — so the leader of a mode can change with no
-// game played by anybody, and a refit can swap two engines that are a point
-// apart. Writing a reign the first time a new name appears on top would
-// manufacture reigns out of arithmetic noise and make "days at number one"
-// read as the interval between refits.
+// A published rating drifts on a clock as well as moving with every game — an
+// idle engine's number slowly falls, see rating.go — so the leader of a mode
+// can change with no game played by anybody, and two engines a point apart can
+// swap places on one result. Writing a reign the first time a new name appears
+// on top would manufacture reigns out of noise and make "days at number one"
+// read as the interval between sweeps.
 //
 // So a change of leader has to be seen twice in a row before it is written,
 // and the reign is then dated from the *first* of the two sightings rather
@@ -406,4 +409,181 @@ FROM bot_reigns WHERE user_id IN (%s)
 		entry.LeadingSinceUnixMs = leading[[2]string{entry.UserID, entry.ModeID}]
 	}
 	return nil
+}
+
+// rebuildBotReignsTx rewrites the ledger as the sweep would have written it had
+// today's ratings been the ones on the board from the first game.
+//
+// For a change of rating system, which changes who led and when: a ledger kept
+// under the old numbers would go on naming leaders the new ones never had. The
+// record is replayed with a sweep at the top of every hour, applying the rule
+// SyncBotReigns applies — a new leader is written once two sweeps in a row
+// agree, dated from the first — and the board's own rule for who is in front:
+// the highest published rating among engines with a ranked game in the mode,
+// then the most games, then the name. Current accounts decide who is disabled,
+// which is the one thing the record cannot say about the past.
+func rebuildBotReignsTx(
+	ctx context.Context,
+	transaction *sql.Tx,
+	games []recordedGame,
+	now int64,
+) error {
+	bots, err := boardBotsTx(ctx, transaction)
+	if err != nil {
+		return err
+	}
+
+	ledger := newRatingLedger()
+	current := make(map[game.ModeID]BotReign)
+	watch := make(map[game.ModeID]botReignCandidate)
+	var ended []BotReign
+
+	sweep := func(at int64) {
+		leaders := ledger.botLeaders(at, bots)
+		modes := make([]game.ModeID, 0, len(leaders)+len(current))
+		for modeID := range leaders {
+			modes = append(modes, modeID)
+		}
+		for modeID := range current {
+			if _, found := leaders[modeID]; !found {
+				modes = append(modes, modeID)
+			}
+		}
+		for _, modeID := range modes {
+			leader, hasLeader := leaders[modeID]
+			reigning, hasReign := current[modeID]
+			if hasLeader && hasReign && leader == reigning.UserID {
+				delete(watch, modeID)
+				continue
+			}
+			if !hasLeader {
+				if hasReign {
+					reigning.EndedAtUnixMs = max(at, reigning.StartedAtUnixMs)
+					ended = append(ended, reigning)
+					delete(current, modeID)
+				}
+				delete(watch, modeID)
+				continue
+			}
+			candidate, watched := watch[modeID]
+			if !watched || candidate.UserID != leader {
+				watch[modeID] = botReignCandidate{UserID: leader, SeenAtUnixMs: at}
+				continue
+			}
+			if hasReign {
+				reigning.EndedAtUnixMs = max(candidate.SeenAtUnixMs, reigning.StartedAtUnixMs)
+				ended = append(ended, reigning)
+			}
+			current[modeID] = BotReign{
+				UserID: leader, ModeID: string(modeID),
+				StartedAtUnixMs: candidate.SeenAtUnixMs,
+			}
+			delete(watch, modeID)
+		}
+	}
+
+	if len(games) > 0 {
+		hour := time.Hour.Milliseconds()
+		played := 0
+		for at := (games[0].finishedAt/hour + 1) * hour; at <= now; at += hour {
+			for played < len(games) && games[played].finishedAt <= at {
+				ledger.apply(games[played])
+				played++
+			}
+			sweep(at)
+		}
+		for ; played < len(games); played++ {
+			ledger.apply(games[played])
+		}
+		sweep(now)
+	}
+
+	for _, statement := range []string{"DELETE FROM bot_reigns", "DELETE FROM bot_reign_watch"} {
+		if _, err := transaction.ExecContext(ctx, statement); err != nil {
+			return fmt.Errorf("rebuild bot reigns: clear: %w", err)
+		}
+	}
+	for _, reign := range ended {
+		if _, err := transaction.ExecContext(ctx, `
+INSERT OR IGNORE INTO bot_reigns (user_id, mode_id, started_at_unix_ms, ended_at_unix_ms)
+VALUES (?, ?, ?, ?)
+`, reign.UserID, reign.ModeID, reign.StartedAtUnixMs, reign.EndedAtUnixMs); err != nil {
+			return fmt.Errorf("rebuild bot reigns: write: %w", err)
+		}
+	}
+	for _, reign := range current {
+		if _, err := transaction.ExecContext(ctx, `
+INSERT INTO bot_reigns (user_id, mode_id, started_at_unix_ms, ended_at_unix_ms)
+VALUES (?, ?, ?, NULL)
+`, reign.UserID, reign.ModeID, reign.StartedAtUnixMs); err != nil {
+			return fmt.Errorf("rebuild bot reigns: write current: %w", err)
+		}
+	}
+	for modeID, candidate := range watch {
+		if _, err := transaction.ExecContext(ctx, `
+INSERT INTO bot_reign_watch (mode_id, user_id, seen_at_unix_ms) VALUES (?, ?, ?)
+`, modeID, candidate.UserID, candidate.SeenAtUnixMs); err != nil {
+			return fmt.Errorf("rebuild bot reigns: write watch: %w", err)
+		}
+	}
+	return nil
+}
+
+// boardBot is what the board needs to know about an engine to rank it.
+type boardBot struct {
+	username string
+	disabled bool
+}
+
+// boardBotsTx is every engine account, by user id.
+func boardBotsTx(ctx context.Context, transaction *sql.Tx) (map[string]boardBot, error) {
+	rows, err := transaction.QueryContext(ctx,
+		"SELECT user_id, username, disabled FROM accounts WHERE kind = ?", AccountKindBot,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("read board bots: %w", err)
+	}
+	defer rows.Close()
+	bots := make(map[string]boardBot)
+	for rows.Next() {
+		var userID string
+		var bot boardBot
+		if err := rows.Scan(&userID, &bot.username, &bot.disabled); err != nil {
+			return nil, fmt.Errorf("read board bot: %w", err)
+		}
+		bots[userID] = bot
+	}
+	return bots, rows.Err()
+}
+
+// botLeaders is the engine in front of each mode at `at`, by the board's order.
+func (ledger *ratingLedger) botLeaders(at int64, bots map[string]boardBot) map[game.ModeID]string {
+	type front struct {
+		userID string
+		shown  int
+		played int
+		name   string
+	}
+	best := make(map[game.ModeID]front)
+	for key, rating := range ledger.ratings {
+		bot, found := bots[key.userID]
+		if !found || bot.disabled || rating.games == 0 {
+			continue
+		}
+		candidate := front{
+			userID: key.userID, shown: rating.shown(at),
+			played: ledger.played[key], name: bot.username,
+		}
+		leader, seen := best[key.modeID]
+		if !seen || candidate.shown > leader.shown ||
+			(candidate.shown == leader.shown && (candidate.played > leader.played ||
+				(candidate.played == leader.played && candidate.name < leader.name))) {
+			best[key.modeID] = candidate
+		}
+	}
+	leaders := make(map[game.ModeID]string, len(best))
+	for modeID, leader := range best {
+		leaders[modeID] = leader.userID
+	}
+	return leaders
 }

@@ -49,14 +49,13 @@ export type LadderRoundPhase = 'live' | 'soon' | 'waiting';
  * The part of the published pool a countdown is built from.
  *
  * Narrower than either payload that satisfies it, deliberately: `/api/ladder-pool`
- * and `/api/ladder-rounds` both carry these three fields and a good deal else,
+ * and `/api/ladder-rounds` both carry these fields and a good deal else,
  * and naming only what is read is what lets the rail and the rounds page share
  * one answer without the page having to fetch the rail's payload as well.
  */
 export interface LadderSchedule {
   schedule: LadderRoundPreview[];
   lastRoundAtUnixMs: number;
-  anchorBotId: string;
   /**
    * How late a slot may still be seated, from the server.
    *
@@ -90,16 +89,6 @@ export interface LadderRoundView {
    * coming, so a caller checks it first.
    */
   pausedFor: string | null;
-  /**
-   * No reference engine is designated, so the board is measured from its own
-   * weakest engine rather than from chance.
-   *
-   * Ratings are published either way — what changes is what 1 means. Said out
-   * loud rather than left to be inferred, because "1 is the weakest engine here"
-   * and "1 is no better than chance" print identically and are not the same
-   * claim, and the second is what the rest of the app's copy promises.
-   */
-  relativeScale: boolean;
 }
 
 /**
@@ -174,7 +163,6 @@ export const ladderRoundView = (
     }),
     entered: next.entered,
     pausedFor: next.pausedFor ?? null,
-    relativeScale: !pool.anchorBotId,
   };
 };
 

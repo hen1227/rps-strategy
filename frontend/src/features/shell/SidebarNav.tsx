@@ -4,6 +4,7 @@ import { Image, Platform, Pressable, ScrollView, StyleSheet, Text, View } from '
 import { sectionForPath, sectionsInGroup, visibleGroups } from './sections';
 import { useNavContext } from './useNavContext';
 import TournamentPromoLink from './TournamentPromoLink';
+import { headlineRating, ratingIsRankable } from '@/features/ratings/scale';
 import {IOS_APP_URL, SOURCE_URL, iosAppIsBeta, links, webGoatGuy} from '@/navigation/links';
 import { useGameStore } from '@/store/gameStore';
 import { colors, radius, space, themedSheet, type } from '@/theme';
@@ -120,7 +121,7 @@ export default function SidebarNav() {
                 {account.username}
               </Text>
               <Text style={styles.identityMeta}>
-                {account.elo} · {account.gamesPlayed} games
+                {identityMeta(account.modeRatings, account.gamesPlayed)}
               </Text>
             </Pressable>
           </Link>
@@ -303,3 +304,17 @@ const styles = themedSheet(() => ({
   discordMark: { color: colors.accentSoft, fontSize: 10 },
   discordText: { ...type.label, color: colors.textSubtle, letterSpacing: 0.4 },
 }));
+
+/**
+ * The line under the name: the account's headline rating and how much it has
+ * played. A player with no ranked game has no rating to print, so the line is
+ * the games alone rather than a dash in front of them.
+ */
+function identityMeta(
+  modeRatings: Parameters<typeof headlineRating>[0],
+  gamesPlayed: number,
+): string {
+  const games = `${gamesPlayed} game${gamesPlayed === 1 ? '' : 's'}`;
+  const headline = headlineRating(modeRatings);
+  return ratingIsRankable(headline.state) ? `${headline.elo} · ${games}` : games;
+}

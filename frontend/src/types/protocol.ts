@@ -131,6 +131,7 @@ export interface LiveGameSummary {
   modeName: string;
   redPlayer: PlayerProfile;
   bluePlayer: PlayerProfile;
+  /** Each seat's rating in the game's mode, or 0 for a player with no ranked game in it. */
   redElo: number;
   blueElo: number;
   spectatorCount: number;
@@ -193,23 +194,27 @@ export interface ModeRating {
   draws: number;
   gamesPlayed: number;
   updatedAtUnixMs: number;
-  /** Whether `elo` is a measurement. Absent from a server older than the field. */
+  /** How far `elo` can be trusted. Absent from a server older than the field. */
   ratingState?: RatingState;
-  /** The share of the measurement that survived the shrinkage, 0 to 1. */
-  ratingConfidence?: number;
+  /** How many ranked games the rating is built from; `gamesPlayed` counts casual ones too. */
+  ratedGames?: number;
+  /**
+   * The Glicko-2 estimate behind `elo`, which is `strength` less `deviation`.
+   * Absent from a server older than the field.
+   */
+  strength?: number;
+  deviation?: number;
 }
 
 /**
- * How much a published rating is worth reading.
+ * How far a published rating can be trusted.
  *
  * Decided on the server — see `RatingState` in
- * backend/internal/persistence/rating_scale.go — because the thresholds belong
- * beside the fit that produces them, and a client that disagreed with the board
- * about whether a number was a guess would be worse than either answer.
- *
- * The floor of this scale, 1, is a real measurement: "plays no better than
- * chance". It used to double as the value shown for anything unmeasured, which
- * is what this exists to undo.
+ * backend/internal/persistence/rating.go — so a client cannot disagree with the
+ * board about it. `unrated` is no ranked game in the mode: the number beside it
+ * is where everybody starts, not something earned. `provisional` is a rating
+ * whose deviation is still wide, so it is still climbing towards its owner's
+ * strength; a long absence makes a settled rating provisional again.
  */
 export type RatingState = 'unrated' | 'provisional' | 'rated';
 
@@ -360,7 +365,7 @@ export interface BotPresence {
   modes?: ModeID[];
   elo: number;
   modeRatings?: Partial<Record<ModeID, number>>;
-  /** Which of those numbers are measurements. A mode missing from it is unrated. */
+  /** How far each of those numbers can be trusted. A mode missing from it is unrated. */
   modeRatingStates?: Partial<Record<ModeID, RatingState>>;
   /**
    * The tag this engine wears, absent for most of them. Nobody chose it: an
@@ -586,16 +591,13 @@ export interface LeaderboardEntry {
   title?: TitleID;
   elo: number;
   /**
-   * Whether `elo` is worth reading. An `unrated` row has no meaningful number —
-   * it is the absence of a rating, not a low one — and the board is ordered with
-   * those rows last.
+   * How far `elo` can be trusted. The board lists only accounts with a ranked
+   * game, so a row is `provisional` or `rated`.
    *
    * Absent from a server older than the field, which readers should treat as
-   * `rated`: an old server has no way to say otherwise, and hiding every number
-   * on it would be worse than the ambiguity this replaces.
+   * `rated`: an old server has no way to say otherwise.
    */
   ratingState?: RatingState;
-  ratingConfidence?: number;
   wins: number;
   losses: number;
   draws: number;
@@ -623,11 +625,8 @@ export interface LeaderboardEntry {
   leadingSinceUnixMs?: number;
   /**
    * Whether this engine has held the top of its mode at some point, which is
-   * true of the current leader too.
-   *
-   * Reigns are only recorded from the day the ledger shipped, so `false` means
-   * "not since then" rather than "never" — which is why nothing reading it
-   * should phrase the absence as a claim about an engine's whole history.
+   * true of the current leader too. The ledger is rebuilt from the whole game
+   * record when the rating system changes, so this covers every game played.
    *
    * Absent from a server older than the field.
    */

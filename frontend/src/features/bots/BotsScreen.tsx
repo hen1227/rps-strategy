@@ -20,7 +20,12 @@ import {
     engineUnavailableMessage,
     isEngineAvailable,
 } from '@/engine/rpsfish/client';
-import {engineCanJoinSeries, engineElo} from '@/features/live/liveSelectors';
+import {
+    engineCanJoinSeries,
+    engineElo,
+    engineRatingState,
+} from '@/features/live/liveSelectors';
+import { ratingIsRankable } from '@/features/ratings/scale';
 import {useCalloutReserve} from '@/features/shell/CalloutLayer';
 import {links} from '@/navigation/links';
 import {useGameStore} from '@/store/gameStore';
@@ -155,19 +160,22 @@ export default function BotsScreen() {
     const ratedAt = engineMode?.id ?? ('V6' as ModeID);
 
     // Strongest first, which is the order somebody scanning a dozen engines for
-    // an opponent is scanning in. Deliberately not grouped by what each is doing:
-    // an engine mid-game is still the one worth challenging next, and a roster
-    // that reshuffles every time a bot picks up a game is one nobody can learn
-    // the shape of. Ties break by name so the order is stable between broadcasts.
-    const engines = useMemo(
-        () =>
-            [...engineBots].sort(
-                (left, right) =>
-                    engineElo(right, ratedAt) - engineElo(left, ratedAt) ||
-                    left.name.localeCompare(right.name),
-            ),
-        [engineBots, ratedAt],
-    );
+    // an opponent is scanning in, and unrated engines after every rated one —
+    // they hold the number everybody starts on, which is not a rating. Not
+    // grouped by what each is doing: an engine mid-game is still the one worth
+    // challenging next, and a roster that reshuffles every time a bot picks up a
+    // game is one nobody can learn the shape of. Ties break by name so the order
+    // is stable between broadcasts.
+    const engines = useMemo(() => {
+        const rated = (bot: (typeof engineBots)[number]) =>
+            ratingIsRankable(engineRatingState(bot, ratedAt)) ? 1 : 0;
+        return [...engineBots].sort(
+            (left, right) =>
+                rated(right) - rated(left) ||
+                engineElo(right, ratedAt) - engineElo(left, ratedAt) ||
+                left.name.localeCompare(right.name),
+        );
+    }, [engineBots, ratedAt]);
 
     // A bot that is mid-game cannot be entered into a new run, and neither can one
     // that is shutting down — that one is dropped rather than marked, because

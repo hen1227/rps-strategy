@@ -278,7 +278,7 @@ func challengeTestClient(userID string, username string) *Client {
 			UserID:     userID,
 			Username:   username,
 			Registered: true,
-			Elo:        persistence.RatingFloor,
+			Elo:        persistence.RatingStart,
 		},
 	}
 }

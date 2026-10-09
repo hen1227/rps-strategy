@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-
-	"rps-strategy/backend/internal/game"
 )
 
 // Hard deletion, for a host who wants a thing gone rather than hidden.
@@ -26,20 +24,11 @@ import (
 //
 // Two rules hold throughout:
 //
-//   - A deleted game gives its points back. Elo, win counts, and games played
-//     are all reversed for both players, so an opponent is not left holding
-//     rating from a game that no longer exists. For a human that reversal
-//     subtracts the delta the game stored rather than recomputing the ladder,
-//     which is exact for the last game played and an approximation for an older
-//     one; the alternative is replaying every game since, and a rating system
-//     that silently rewrites history behind a delete is worse than one that is
-//     slightly off.
-//
-//     A game between two bots is exact, because the bot ladder is not a running
-//     total to unwind. It is a fit over every pair's head-to-head record (see
-//     bot_rating.go), so the game is removed and the ladder is solved again,
-//     giving the numbers that would have stood had it never been played. The
-//     stored delta is ignored in that case — it was never a transfer.
+//   - A deleted game gives its points back, exactly. Every rating is a function
+//     of the record (see rating_replay.go), so once the game is gone the record
+//     is replayed and every account reads what it would have read had the game
+//     never been played — the two players, and everybody they have played
+//     since. Win counts and games played are reversed for both players too.
 //   - Deletes cascade by hand, not by declaration. Half these tables predate
 //     the foreign keys and several references were deliberately left off (see
 //     bot_series.requested_by_user_id), so the order below is the schema's real
@@ -82,11 +71,11 @@ type BotDeletion struct {
 
 // DeleteGame removes one game from the history, the archive, and the reviews.
 //
-// revertRatings decides whether both players get the game's rating effect
-// back. It is a parameter rather than always-on for the case that motivated
-// it: a game deleted for being unwatchable — a disconnect storm, a duplicate —
-// where the result itself was fair and the host is removing the record, not
-// the outcome.
+// revertRatings decides whether both players' win counts and games played give
+// the game back, for a game deleted for being unwatchable — a disconnect storm,
+// a duplicate — where the host is removing the record rather than the outcome.
+// The ratings themselves cannot keep a result the record no longer has, so they
+// are replayed either way.
 func (store *Store) DeleteGame(
 	ctx context.Context,
 	gameID string,
@@ -112,45 +101,33 @@ func (store *Store) DeleteGame(
 	return deletion, nil
 }
 
-// gameRatingEffect is what one recorded game did to two ratings, read back so
-// it can be undone.
+// gameRatingEffect is what one recorded game added to two records, read back
+// so it can be taken off them.
 type gameRatingEffect struct {
 	modeID  string
 	redID   string
 	blueID  string
 	outcome string
-	// redDelta and bluDelta are the per-game Elo transfer to undo. Both are
-	// zero for a game between two bots, whose ladder is refitted from the
-	// remaining games instead; the win counters below are reversed either way,
-	// since those are lifetime totals under both systems.
-	redDelta int
-	bluDelta int
-	bothBots bool
 }
 
-// refitLadder is false for a caller removing many games at once, which refits
-// the bot ladder itself when it has finished. Rebuilding it between every game
-// of a four-hundred-game purge would be the same answer computed four hundred
-// times, each pass reading every game that is left.
+// replay is false for a caller removing many games at once, which replays the
+// record itself when it has finished. Replaying between every game of a
+// four-hundred-game purge would be the same answer computed four hundred times,
+// each pass reading every game that is left.
 func deleteGameTx(
 	ctx context.Context,
 	transaction *sql.Tx,
 	gameID string,
 	revertRatings bool,
-	refitLadder bool,
+	replay bool,
 ) (GameDeletion, error) {
 	deletion := GameDeletion{GameID: gameID}
 
 	var effect gameRatingEffect
-	var redBefore, redAfter, blueBefore, blueAfter int
 	err := transaction.QueryRowContext(ctx, `
-SELECT mode_id, red_player_id, blue_player_id, outcome,
-       red_elo_before, red_elo_after, blue_elo_before, blue_elo_after
+SELECT mode_id, red_player_id, blue_player_id, outcome
 FROM game_history WHERE game_id = ?
-`, gameID).Scan(
-		&effect.modeID, &effect.redID, &effect.blueID, &effect.outcome,
-		&redBefore, &redAfter, &blueBefore, &blueAfter,
-	)
+`, gameID).Scan(&effect.modeID, &effect.redID, &effect.blueID, &effect.outcome)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		// Archive-only game. Still deletable; there is simply nothing to give
@@ -159,14 +136,6 @@ FROM game_history WHERE game_id = ?
 		return GameDeletion{}, fmt.Errorf("delete game: read history: %w", err)
 	default:
 		deletion.HistoryDeleted = true
-		effect.bothBots, err = bothBotsTx(ctx, transaction, effect.redID, effect.blueID)
-		if err != nil {
-			return GameDeletion{}, err
-		}
-		if !effect.bothBots {
-			effect.redDelta = redAfter - redBefore
-			effect.bluDelta = blueAfter - blueBefore
-		}
 	}
 
 	if deletion.HistoryDeleted && revertRatings {
@@ -209,19 +178,15 @@ FROM game_history WHERE game_id = ?
 	); err != nil {
 		return GameDeletion{}, fmt.Errorf("delete game: history: %w", err)
 	}
-	// After the row is gone, not before: the fit reads the games that remain.
+	// After the row is gone, not before: the replay reads the games that remain.
 	//
 	// Unconditional on revertRatings, which is the one thing that flag cannot
 	// ask for here. It means "remove the record, let the result stand", and a
-	// derived rating has no way to honour that: the record *is* the result. The
-	// alternative is leaving a ladder that counts a game the database no longer
-	// has, until the next bot game quietly refits it away — a lie with a
-	// randomly timed correction. The win counters below still follow the flag,
+	// rating that is a function of the record has no way to honour that: the
+	// record *is* the result. The win counters above still follow the flag,
 	// since those are a tally of games played and genuinely can be kept.
-	if deletion.HistoryDeleted && effect.bothBots && refitLadder {
-		if err := refitBotLadderTx(
-			ctx, transaction, game.ModeID(effect.modeID), time.Now().UnixMilli(),
-		); err != nil {
+	if deletion.HistoryDeleted && replay {
+		if _, err := replayRatingsTx(ctx, transaction, time.Now().UnixMilli()); err != nil {
 			return GameDeletion{}, err
 		}
 	}
@@ -231,7 +196,8 @@ FROM game_history WHERE game_id = ?
 	return deletion, nil
 }
 
-// revertGameRatingsTx subtracts one game's effect from both players.
+// revertGameRatingsTx takes one game off both players' records. Their ratings
+// are the replay's to restate.
 //
 // Every counter is floored at zero. Not because it should ever be needed —
 // each of these was incremented by the game being removed — but because the
@@ -246,21 +212,18 @@ func revertGameRatingsTx(
 	now := time.Now().UnixMilli()
 	for _, side := range []struct {
 		userID string
-		delta  int
 		wins   int
 		losses int
 		draws  int
 	}{
 		{
 			userID: effect.redID,
-			delta:  effect.redDelta,
 			wins:   boolToInt(effect.outcome == "red_win"),
 			losses: boolToInt(effect.outcome == "blue_win"),
 			draws:  boolToInt(effect.outcome == "draw"),
 		},
 		{
 			userID: effect.blueID,
-			delta:  effect.bluDelta,
 			wins:   boolToInt(effect.outcome == "blue_win"),
 			losses: boolToInt(effect.outcome == "red_win"),
 			draws:  boolToInt(effect.outcome == "draw"),
@@ -277,18 +240,15 @@ WHERE user_id = ?
 `, side.wins, side.losses, side.draws, now, side.userID); err != nil {
 			return fmt.Errorf("delete game: revert account totals: %w", err)
 		}
-		// An unranked game stored the same Elo before and after, so this
-		// subtracts nothing and needs no special case.
 		if _, err := transaction.ExecContext(ctx, `
 UPDATE account_mode_ratings
-SET elo = MAX(elo - ?, 0),
-    wins = MAX(wins - ?, 0),
+SET wins = MAX(wins - ?, 0),
     losses = MAX(losses - ?, 0),
     draws = MAX(draws - ?, 0),
     games_played = MAX(games_played - 1, 0),
     updated_at_unix_ms = ?
 WHERE user_id = ? AND mode_id = ?
-`, side.delta, side.wins, side.losses, side.draws, now,
+`, side.wins, side.losses, side.draws, now,
 			side.userID, effect.modeID,
 		); err != nil {
 			return fmt.Errorf("delete game: revert mode rating: %w", err)
@@ -316,6 +276,14 @@ func (store *Store) DeleteBot(ctx context.Context, botID string) (BotDeletion, e
 
 	deletion, err := deleteBotTx(ctx, transaction, botID)
 	if err != nil {
+		return BotDeletion{}, err
+	}
+	// Every mode, because a bot's games are gone from all of them and the
+	// opponents it beat should stop carrying a win over something the database
+	// no longer contains. Note that *retiring* a bot does none of this on
+	// purpose: its games stay, so a throwaway's losses stay on the record and
+	// retiring it cannot launder them.
+	if _, err := replayRatingsTx(ctx, transaction, time.Now().UnixMilli()); err != nil {
 		return BotDeletion{}, err
 	}
 	if err := transaction.Commit(); err != nil {
@@ -367,17 +335,9 @@ DELETE FROM bot_series WHERE first_bot_id = ?1 OR second_bot_id = ?1
 		deletion.AccountDeleted = true
 	}
 	// The icon cascades from the bot row; the bot row is last so nothing still
-	// points at it.
+	// points at it. The caller replays the record once this returns.
 	if _, err := transaction.ExecContext(ctx, `DELETE FROM bots WHERE bot_id = ?`, botID); err != nil {
 		return BotDeletion{}, fmt.Errorf("delete bot: %w", err)
-	}
-	// Every mode, because a bot's games are gone from all of them and the
-	// opponents it beat should stop carrying a win over something the database
-	// no longer contains. Note that *retiring* a bot does none of this on
-	// purpose: its games stay, so a throwaway's losses stay on the record and
-	// retiring it cannot launder them.
-	if err := refitAllBotLaddersTx(ctx, transaction, time.Now().UnixMilli()); err != nil {
-		return BotDeletion{}, err
 	}
 	return deletion, nil
 }
@@ -435,6 +395,9 @@ SELECT COUNT(*) FROM accounts WHERE is_admin = 1 AND disabled = 0 AND user_id <>
 		if err != nil {
 			return AccountPurge{}, err
 		}
+		if _, err := replayRatingsTx(ctx, transaction, time.Now().UnixMilli()); err != nil {
+			return AccountPurge{}, err
+		}
 		if err := transaction.Commit(); err != nil {
 			return AccountPurge{}, fmt.Errorf("purge account: commit: %w", err)
 		}
@@ -473,6 +436,12 @@ SELECT COUNT(*) FROM accounts WHERE is_admin = 1 AND disabled = 0 AND user_id <>
 	}
 	purge.GamesDeleted += own.GamesDeleted
 	purge.TournamentEntries = own.TournamentEntries
+	// Once, for every game the purge took: the opponents of all of them, and
+	// everybody those opponents have played since, read as though the games had
+	// never been played.
+	if _, err := replayRatingsTx(ctx, transaction, time.Now().UnixMilli()); err != nil {
+		return AccountPurge{}, err
+	}
 
 	if err := transaction.Commit(); err != nil {
 		return AccountPurge{}, fmt.Errorf("purge account: commit: %w", err)
@@ -514,7 +483,8 @@ func purgeAccountRowTx(
 	}
 	for _, gameID := range gameIDs {
 		// Reverting is the point rather than a nicety: an opponent should not
-		// keep rating won from a game that is being erased.
+		// keep a win from a game that is being erased. The caller replays the
+		// ratings once at the end.
 		if _, err := deleteGameTx(ctx, transaction, gameID, true, false); err != nil {
 			return AccountPurge{}, err
 		}

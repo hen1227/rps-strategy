@@ -108,9 +108,6 @@ export interface PlayerProfilePage {
   /**
    * Every spell this engine has spent top of a mode, newest first. Bot pages
    * only, and absent for an engine that has never led — which is most of them.
-   *
-   * Reigns are only recorded from the day the ledger shipped, so an empty list
-   * means "not since then" rather than "never".
    */
   reigns?: BotReign[];
   /**

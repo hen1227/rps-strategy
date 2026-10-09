@@ -77,7 +77,7 @@ func TestDeleteGameRemovesEveryCopyAndRefundsTheRating(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read account: %v", err)
 	}
-	if before.ModeElo(game.ModeTotalWar) <= RatingFloor || before.Wins != 1 {
+	if before.ModeElo(game.ModeTotalWar) <= RatingStart || before.Wins != 1 {
 		t.Fatalf("the game should have moved the rating first: %#v", before)
 	}
 
@@ -107,7 +107,7 @@ func TestDeleteGameRemovesEveryCopyAndRefundsTheRating(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read %s: %v", userID, err)
 		}
-		if account.ModeElo(game.ModeTotalWar) != RatingFloor {
+		if account.ModeElo(game.ModeTotalWar) != RatingStart {
 			t.Fatalf("%s kept rating from a deleted game: %d",
 				userID, account.ModeElo(game.ModeTotalWar))
 		}
@@ -122,8 +122,10 @@ func TestDeleteGameRemovesEveryCopyAndRefundsTheRating(t *testing.T) {
 }
 
 // Deleting the record without touching the result is the other case: a game
-// that was played fairly but should not be on display.
-func TestDeleteGameCanLeaveTheRatingAlone(t *testing.T) {
+// that was played fairly but should not be on display. The win counts stay;
+// the ratings cannot, because a rating is a function of the record and the game
+// is no longer on it.
+func TestDeleteGameCanKeepTheWinButNotTheRating(t *testing.T) {
 	store := authTestStore(t)
 	ctx := t.Context()
 	registeredOwner(t, store, "winner", "Winner")
@@ -145,9 +147,11 @@ func TestDeleteGameCanLeaveTheRatingAlone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read account: %v", err)
 	}
-	if after.ModeElo(game.ModeTotalWar) != before.ModeElo(game.ModeTotalWar) ||
-		after.Wins != before.Wins {
-		t.Fatalf("the rating moved anyway: %#v -> %#v", before, after)
+	if after.Wins != before.Wins || after.GamesPlayed != before.GamesPlayed {
+		t.Fatalf("the record moved anyway: %#v -> %#v", before, after)
+	}
+	if after.ModeElo(game.ModeTotalWar) != RatingStart {
+		t.Fatalf("a rating survived the only game behind it: %d", after.ModeElo(game.ModeTotalWar))
 	}
 }
 
@@ -220,7 +224,7 @@ func TestPurgeAccountTakesItsGamesAndLeavesTheOpponentWhole(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the opponent must survive: %v", err)
 	}
-	if victim.GamesPlayed != 0 || victim.ModeElo(game.ModeTotalWar) != RatingFloor {
+	if victim.GamesPlayed != 0 || victim.ModeElo(game.ModeTotalWar) != RatingStart {
 		t.Fatalf("the opponent kept a record of games that no longer exist: %#v", victim)
 	}
 	// And the name the purged account held is free again.
@@ -262,7 +266,7 @@ func TestDeleteBotRemovesTheBotItsAccountAndItsGames(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the opponent must survive: %v", err)
 	}
-	if human.GamesPlayed != 0 || human.ModeElo(game.ModeTotalWar) != RatingFloor {
+	if human.GamesPlayed != 0 || human.ModeElo(game.ModeTotalWar) != RatingStart {
 		t.Fatalf("the opponent kept rating from a deleted bot's game: %#v", human)
 	}
 	// The slot is free again, which is the difference from retiring.

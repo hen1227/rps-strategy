@@ -236,13 +236,13 @@ func TestASeriesBetweenOneOwnersBotsIsCasual(t *testing.T) {
 
 	// And the ladder is where that has to show: neither engine has a rating,
 	// because neither has a game the record will count.
+	ratings, err := server.data.ModeRatings(t.Context(), game.ModeTotalWar)
+	if err != nil {
+		t.Fatalf("read ladder: %v", err)
+	}
 	for _, bot := range []persistence.Bot{alpha, beta} {
-		ratings, err := server.data.BotModeRatings(t.Context(), game.ModeTotalWar)
-		if err != nil {
-			t.Fatalf("read ladder: %v", err)
-		}
-		if rating, rated := ratings[bot.UserID]; rated && rating != persistence.RatingFloor {
-			t.Fatalf("%s came out of a private series rated %d", bot.Name, rating)
+		if rating := ratings[bot.UserID]; rating.RatedGames != 0 {
+			t.Fatalf("%s came out of a private series rated %d", bot.Name, rating.Elo)
 		}
 	}
 }

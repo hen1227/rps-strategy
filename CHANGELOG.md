@@ -1,6 +1,18 @@
 # What's New
 
-# v0.9.2 
+## v0.9.4 — unreleased
+
+## v0.9.3 — 2026-10-09
+
+- Ratings are rebuilt for players and bots alike: a new rating starts at 1150, climbs as you play, and has no ceiling.
+- Every past ranked game has been re-scored, so leaderboards, profiles and game records all show the new numbers.
+- Fixed the leaderboards showing nearly every bot and player at 1 or as "Not enough data to rank".
+- A rating is marked provisional for roughly its first dozen ranked games, and drifts down slowly while you are away.
+- Leaderboards list only players and bots with a ranked game in the mode.
+- Matchmaking pairs a new player with players of average strength rather than with the lowest-rated ones.
+- Rating titles are earned at 1600, 1800, 2000 and 2200.
+
+## v0.9.2
 
 - The Play page leads with Intransitive, the main game; Total War and Infiltration are listed below it under More modes.
 - The Bots page's practice panel leads with Intransitive too, with smaller Total War and Infiltration buttons under it.

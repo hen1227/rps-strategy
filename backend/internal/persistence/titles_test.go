@@ -665,7 +665,7 @@ func TestTheLadderTopsOutAtGrandmaster(t *testing.T) {
 		t.Fatalf("there is nothing above GM to award, got %v", again)
 	}
 	for _, rung := range ratingLadder {
-		if rung.minimumElo > 2000 {
+		if rung.minimumElo > gmRung() {
 			t.Fatalf("the ladder has a rung above Grandmaster: %s", rung.id)
 		}
 	}

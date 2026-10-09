@@ -8,6 +8,7 @@ import { liveGameMeta, waitingCount, type EngineSeat, type LiveSnapshot } from '
 import { useLadderRound } from './useLadderRound';
 import { useLiveSnapshot } from './useLiveSnapshot';
 import BotIcon from '@/features/bots/BotIcon';
+import { ratingLabel } from '@/features/ratings/scale';
 import { links } from '@/navigation/links';
 import { botIconUrl } from '@/store/api/bots';
 import { useWatchGame } from '@/hooks/useWatchGame';
@@ -101,7 +102,8 @@ function EngineLine({ busy, onWatch, seat }: EngineLineProps) {
               {ratings.map((rating, index) => (
                 <Text key={rating.modeId}>
                   {index > 0 ? ' · ' : ''}
-                  {rating.shortCode} <Text style={styles.ratingValue}>{rating.elo}</Text>
+                  {rating.shortCode}{' '}
+                  <Text style={styles.ratingValue}>{ratingLabel(rating.elo, rating.state)}</Text>
                 </Text>
               ))}
             </Text>

@@ -5,6 +5,7 @@ import { Pressable, StyleSheet, Text, View, type ViewStyle } from 'react-native'
 import ReignNote from './ReignNote';
 import { RecordSummary, ladderRecord } from './ladderRecord';
 import BotIcon from '@/features/bots/BotIcon';
+import { ratingLabel } from '@/features/ratings/scale';
 import { links } from '@/navigation/links';
 import { botIconUrl } from '@/store/api/bots';
 import type { LeaderboardKind } from '@/store/api/leaderboard';
@@ -185,7 +186,9 @@ function TallCard({ entry, kind, you }: CardProps) {
           {entry.username}
         </Text>
       </View>
-      <Text style={[styles.elo, isFirst && styles.eloFirst]}>{entry.elo}</Text>
+      <Text style={[styles.elo, isFirst && styles.eloFirst]}>
+        {ratingLabel(entry.elo, entry.ratingState)}
+      </Text>
       <Byline entry={entry} kind={kind} />
       <ReignNote entry={entry} isBot={kind === 'bot'} />
       <RecordSummary result={result} />
@@ -221,7 +224,7 @@ function FlatCard({ entry, kind, you }: CardProps) {
         <ReignNote entry={entry} isBot={kind === 'bot'} />
         <RecordSummary result={result} />
       </View>
-      <Text style={styles.flatElo}>{entry.elo}</Text>
+      <Text style={styles.flatElo}>{ratingLabel(entry.elo, entry.ratingState)}</Text>
     </CardShell>
   );
 }

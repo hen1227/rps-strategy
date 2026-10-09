@@ -114,7 +114,7 @@ func TestWebSocketCanJoinQueue(t *testing.T) {
 	if ready.DefaultTimeControl == nil || *ready.DefaultTimeControl != game.DefaultTimeControl() {
 		t.Fatalf("expected connection default 5/+3, got %#v", ready.DefaultTimeControl)
 	}
-	if ready.Account == nil || ready.Account.Elo != persistence.RatingFloor {
+	if ready.Account == nil || ready.Account.Elo != persistence.RatingStart {
 		t.Fatalf("expected a persisted default account, got %#v", ready.Account)
 	}
 	if len(ready.ModePlayerCounts) != registered {
@@ -258,7 +258,7 @@ func TestPersistentAccountHistoryAndHeadToHeadRoutes(t *testing.T) {
 	if err := json.NewDecoder(accountRecorder.Body).Decode(&account); err != nil {
 		t.Fatal(err)
 	}
-	if account.Wins != 1 || account.ModeElo(game.ModeTotalWar) <= persistence.RatingFloor {
+	if account.Wins != 1 || account.ModeElo(game.ModeTotalWar) <= persistence.RatingStart {
 		t.Fatalf("unexpected account response: %#v", account)
 	}
 
@@ -907,13 +907,13 @@ func TestFinishedRankedGameMovesOnlyThePlayedModesRating(t *testing.T) {
 		QueueEntry{
 			Client:   redClient,
 			Setup:    game.GameSetup{ModeID: game.ModeTotalWar},
-			Elo:      matchmakingElo(redClient, game.ModeTotalWar),
+			Elo:      seatElo(redClient, game.ModeTotalWar),
 			JoinedAt: entryTime,
 		},
 		QueueEntry{
 			Client:   blueClient,
 			Setup:    game.GameSetup{ModeID: game.ModeTotalWar},
-			Elo:      matchmakingElo(blueClient, game.ModeTotalWar),
+			Elo:      seatElo(blueClient, game.ModeTotalWar),
 			JoinedAt: entryTime,
 		},
 		matchSetup{},
@@ -930,15 +930,15 @@ func TestFinishedRankedGameMovesOnlyThePlayedModesRating(t *testing.T) {
 	won := final.RatingUpdate.RedEloAfter
 
 	// The connection keeps playing, so its in-memory account has to carry the
-	// new Total War rating while every other mode stays on the shared seed.
-	if got := matchmakingElo(redClient, game.ModeTotalWar); got != won {
+	// new Total War rating while every other mode stays where it started.
+	if got := seatElo(redClient, game.ModeTotalWar); got != won {
 		t.Fatalf("expected the winner to queue at %d, got %d", won, got)
 	}
-	if got := matchmakingElo(blueClient, game.ModeTotalWar); got != final.RatingUpdate.BlueEloAfter {
+	if got := seatElo(blueClient, game.ModeTotalWar); got != final.RatingUpdate.BlueEloAfter {
 		t.Fatalf("expected the loser to queue at %d, got %d",
 			final.RatingUpdate.BlueEloAfter, got)
 	}
-	if got := matchmakingElo(redClient, game.ModeInfiltration); got != persistence.RatingFloor {
+	if got := seatElo(redClient, game.ModeInfiltration); got != 0 {
 		t.Fatalf("Infiltration must not inherit the Total War result, got %d", got)
 	}
 
@@ -946,8 +946,12 @@ func TestFinishedRankedGameMovesOnlyThePlayedModesRating(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored.ModeElo(game.ModeTotalWar) != won || stored.Elo != persistence.RatingFloor {
+	// The account's headline is its best rated mode, which is the one played.
+	if stored.ModeElo(game.ModeTotalWar) != won || stored.Elo != won {
 		t.Fatalf("unexpected stored account: %#v", stored)
+	}
+	if redClient.account.Elo != won {
+		t.Fatalf("the connection's headline is %d, want %d", redClient.account.Elo, won)
 	}
 }
 

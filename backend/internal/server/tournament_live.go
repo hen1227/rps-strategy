@@ -301,7 +301,7 @@ func (server *Server) startTournamentMatch(
 		return QueueEntry{
 			Client:   client,
 			Setup:    setup,
-			Elo:      matchmakingElo(client, tournament.ModeID),
+			Elo:      seatElo(client, tournament.ModeID),
 			JoinedAt: entryTime,
 		}
 	}

@@ -39,30 +39,23 @@ import (
 // # How pairs are chosen
 //
 // Not at random, and not strictly by nearest rating either. Each admissible pair
-// is scored by how much the fit would learn from the game:
+// is scored by how much the board would learn from the game:
 //
-//	value(i,j) = p(1-p) * headroom(i,j) * (var(i) + var(j))
+//	value(i,j) = (reduction(i,j) + reduction(j,i)) * headroom(i,j)
 //
-// and the three terms are not three heuristics. The first is literally the term
-// the Bradley-Terry information matrix contributes for that matchup — see
-// botStrengthVariance — so the pool is maximising exactly the quantity the
-// rating's error bars minimise. It peaks at even odds, which is what "pair bots
-// of similar strength" means once you write it down, and it falls off smoothly
-// rather than cutting off, so a mismatch still happens occasionally. That matters
-// more than it looks: a pool that only ever paired neighbours would leave the
-// ladder in bands with nothing joining them, and a rating is a distance from the
-// anchor along a chain of matchups.
+// The first term is Glicko-2's own answer — how far the game is expected to
+// narrow each engine's deviation, see persistence.UncertaintyReduction — so the
+// pool is seating exactly the games the ratings learn most from. It peaks at
+// even odds, which is what "pair bots of similar strength" means once you write
+// it down, and it falls off smoothly rather than cutting off, so a mismatch
+// still happens occasionally; a pool that only ever paired neighbours would
+// leave the ladder in bands with nothing joining them. It is also largest for
+// the engines the board is least sure of, which is new arrivals and anyone back
+// from a break.
 //
-// The second says a pair already played to the cap has nothing left to give, so
-// the pool spreads out and prefers an opponent you have not met. The third
-// prioritises the engines the board is least sure of, which is new arrivals and
-// anyone back from a break.
-//
-// A brand-new bot has maximum uncertainty and has played nobody, so its first
-// round is against whichever yardstick sits nearest the pairer's guess at it.
-// That is the on-ramp and the anti-farm guarantee in the same move: the games
-// that put a newcomer on the scale are against an engine it cannot have farmed,
-// because nobody owns it.
+// The second says a pair that has played LadderPairCap ranked games in the last
+// four weeks has had its turn, so the pool spreads out and prefers an opponent
+// you have not met lately.
 const (
 	// ladderRoundInterval is how far apart the round slots are.
 	//
@@ -152,8 +145,8 @@ const (
 //
 // **This does not retire the other boards.** V5 and V3 still have ladders, and
 // the games already in them still count — they simply stop gaining new ones, so
-// the evidence behind those numbers ages and the fit says so. See the decay in
-// botHeadToHeadTx.
+// the deviations behind those numbers widen and the published ratings drift
+// down. See persistence/rating.go.
 var (
 	ladderModes  = []game.ModeID{game.ModeIntransitive}
 	ladderClocks = []game.TimeControl{
@@ -248,9 +241,6 @@ type ladderPoolState struct {
 	// tick until they do or until the next round replaces them. See
 	// resumeHeldPairings.
 	held []ladderHeld
-	// yardsticks is which bots are reference engines, filled on first use. See
-	// botIsYardstick.
-	yardsticks map[string]bool
 	// arena is the weekly arena the pool stands down for, under its own lock.
 	// See ladder_pause.go.
 	arena ladderArena
@@ -360,17 +350,6 @@ func (server *Server) runLadderRound(now time.Time) {
 	}
 }
 
-// ladderSeat is one engine the round could use.
-type ladderSeat struct {
-	persistence.LadderCandidate
-	// variance is how unsure the board is about this engine, standing in for the
-	// fit's own error bar. Recomputing that here would mean running the fit a
-	// second time for a number the pairer only needs the ordering of, so this is
-	// read off the two things that actually drive it: how much evidence there is
-	// about the engine, and how long ago it arrived.
-	variance float64
-}
-
 // seatLadderRound pairs and starts one round, returning how many pairings it
 // seated.
 func (server *Server) seatLadderRound(ctx context.Context, now time.Time) int {
@@ -390,27 +369,11 @@ func (server *Server) seatLadderRound(ctx context.Context, now time.Time) int {
 		return 0
 	}
 
-	// Evidence per engine, summed over its matchups, so that the uncertainty
-	// term below can be read off it. A pair worth 20 decayed games says a lot
-	// about both of its ends; one worth 0.2 says almost nothing about either.
-	evidence := make(map[string]float64, len(entrants))
-	for pair, weight := range weights {
-		evidence[pair[0]] += weight
-		evidence[pair[1]] += weight
-	}
-
-	seats := make([]ladderSeat, 0, len(entrants))
+	seats := make([]persistence.LadderCandidate, 0, len(entrants))
 	for _, entrant := range entrants {
-		if !server.ladderBotIsAvailable(entrant.BotID, modeID) {
-			continue
+		if server.ladderBotIsAvailable(entrant.BotID, modeID) {
+			seats = append(seats, entrant)
 		}
-		// 1/(1+evidence): one for an engine nobody has played, falling towards
-		// zero as its record fills in. The shape matters more than the scale,
-		// because this only ever multiplies a comparison between two pairings.
-		seats = append(seats, ladderSeat{
-			LadderCandidate: entrant,
-			variance:        1 / (1 + evidence[entrant.UserID]),
-		})
 	}
 	if len(seats) < ladderMinimumField {
 		return 0
@@ -562,23 +525,20 @@ type ladderPairing struct {
 // how much a game would teach, so an exactly optimal set of approximate values
 // is not worth the code.
 func (server *Server) chooseLadderPairings(
-	seats []ladderSeat,
+	seats []persistence.LadderCandidate,
 	weights map[[2]string]float64,
 ) []ladderPairing {
 	candidates := make([]ladderPairing, 0, len(seats)*len(seats)/2)
 	for first := range seats {
 		for second := first + 1; second < len(seats); second++ {
 			one, other := seats[first], seats[second]
-			// Two engines one person owns produce no rating — the fit drops the
-			// pair whatever the flag on the game says — so seating them would
-			// spend both engines' round on a game the ladder never hears about.
+			// Two engines one person owns produce no rating — their games never
+			// move one, whatever the flag on the game says — so seating them
+			// would spend both engines' round on a game the ladder never hears
+			// about.
 			if one.OwnerUserID != "" && one.OwnerUserID == other.OwnerUserID {
 				continue
 			}
-			// Two yardsticks against each other is not wasted: the staircase is
-			// how the scale reaches the top of the board, and those rungs need
-			// measuring against each other like anybody else. It is only ever a
-			// small part of a round because the headroom term saturates.
 			value := ladderPairValue(one, other, weights)
 			if value <= 0 {
 				continue
@@ -616,18 +576,20 @@ func (server *Server) chooseLadderPairings(
 
 // ladderPairValue is how much the ladder would learn from playing these two.
 //
-// The three terms are explained at the top of the file. What is worth repeating
-// here is that the first of them is not a similarity heuristic dressed up: it is
-// the Bradley-Terry information contribution for this matchup, the same n*p(1-p)
-// the fit's error bars are built from, so the pool and the rating are optimising
+// Both terms are explained at the top of the file. What is worth repeating here
+// is that the first is not a similarity heuristic dressed up: it is how far the
+// game would narrow both deviations, so the pool and the ratings are optimising
 // one quantity from two directions.
 func ladderPairValue(
-	one ladderSeat,
-	other ladderSeat,
+	one persistence.LadderCandidate,
+	other persistence.LadderCandidate,
 	weights map[[2]string]float64,
 ) float64 {
-	chance := persistence.RatingWinProbability(one.Rating, other.Rating)
-	information := chance * (1 - chance)
+	information := persistence.UncertaintyReduction(
+		one.Strength, one.Deviation, other.Strength, other.Deviation,
+	) + persistence.UncertaintyReduction(
+		other.Strength, other.Deviation, one.Strength, one.Deviation,
+	)
 
 	low, high := one.UserID, other.UserID
 	if high < low {
@@ -635,13 +597,12 @@ func ladderPairValue(
 	}
 	headroom := 1 - weights[[2]string{low, high}]/persistence.LadderPairCap
 	if headroom <= 0 {
-		// Played to the cap and still fresh. Not zero, because the record decays
-		// and a pair that is finished with today is worth revisiting eventually,
-		// and because a small field could otherwise have no admissible pairing
-		// at all. Small enough that anything unplayed outranks it.
+		// Played to the cap lately. Not zero, because a small field could
+		// otherwise have no admissible pairing at all. Small enough that
+		// anything unplayed outranks it.
 		headroom = 0.01
 	}
-	return information * headroom * (one.variance + other.variance)
+	return information * headroom
 }
 
 // startLadderPairings seats the chosen pairings as ranked series.
@@ -862,11 +823,6 @@ func (server *Server) getLadderPool(writer http.ResponseWriter, request *http.Re
 		writeAPIError(writer, http.StatusInternalServerError, "could not read the ladder pool")
 		return
 	}
-	yardsticks, err := server.data.BotYardsticks(request.Context())
-	if err != nil {
-		writeAPIError(writer, http.StatusInternalServerError, "could not read the yardsticks")
-		return
-	}
 	writeJSON(writer, http.StatusOK, map[string]any{
 		"roundsRun":         state.RoundsRun,
 		"lastRoundAtUnixMs": state.LastRoundAtUnixMs,
@@ -877,55 +833,8 @@ func (server *Server) getLadderPool(writer http.ResponseWriter, request *http.Re
 		// moment in the past for as long as its round is still owed, and a
 		// reader who moved past it on that basis alone would count down to the
 		// wrong hour for the few minutes an hour that is true.
-		"graceMs":         ladderRoundGrace.Milliseconds(),
-		"gamesPerRound":   2 * ladderMaxRoundsPerBot,
-		"schedule":        server.ladderSchedule(request.Context(), time.Now(), 6),
-		"anchorBotId":     yardsticks.AnchorBotID,
-		"yardstickBotIds": append([]string{yardsticks.AnchorBotID}, yardsticks.RungBotIDs...),
-		// The two numbers that define the scale, served rather than restated in
-		// the client, so a front end cannot drift from the fit.
-		"ratingFloor":             persistence.RatingFloor,
-		"ratingPointsPerDoubling": persistence.RatingPointsPerDoubling,
+		"graceMs":       ladderRoundGrace.Milliseconds(),
+		"gamesPerRound": 2 * ladderMaxRoundsPerBot,
+		"schedule":      server.ladderSchedule(request.Context(), time.Now(), 6),
 	})
-}
-
-// botIsYardstick reports whether a bot is one of the server's reference engines.
-//
-// Cached on the server rather than read from the database, because it is asked
-// on the challenge path and the answer changes about once a year. The cache is
-// filled at startup and invalidated whenever an administrator sets a reference
-// kind, which are the only two moments it can move.
-func (server *Server) botIsYardstick(botID string) bool {
-	if botID == "" {
-		return false
-	}
-	server.ladderPool.mu.Lock()
-	defer server.ladderPool.mu.Unlock()
-	if server.ladderPool.yardsticks == nil {
-		yardsticks, err := server.data.BotYardsticks(context.Background())
-		if err != nil {
-			// Refusing to answer would make every challenge casual, which is the
-			// safe direction: a game that should have been rated and was not is
-			// a disappointment, and one that was rated on a guess is a wrong
-			// number on the board.
-			log.Printf("ladder pool: read yardsticks: %v", err)
-			return false
-		}
-		known := map[string]bool{}
-		if yardsticks.AnchorBotID != "" {
-			known[yardsticks.AnchorBotID] = true
-		}
-		for _, rung := range yardsticks.RungBotIDs {
-			known[rung] = true
-		}
-		server.ladderPool.yardsticks = known
-	}
-	return server.ladderPool.yardsticks[botID]
-}
-
-// forgetYardsticks drops the cache above, for the one route that can change it.
-func (server *Server) forgetYardsticks() {
-	server.ladderPool.mu.Lock()
-	defer server.ladderPool.mu.Unlock()
-	server.ladderPool.yardsticks = nil
 }

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"rps-strategy/backend/internal/game"
 )
@@ -76,11 +77,13 @@ type LadderCandidate struct {
 	BotID       string
 	UserID      string
 	OwnerUserID string
-	Rating      int
-	// Reference marks the server's own yardsticks, which are always in the pool
-	// whatever their owner's settings say. Consent is a question for a person who
-	// is lending their machine, and these run on ours.
-	Reference bool
+	// Rating is what the engine publishes in the mode, and State how far it can
+	// be trusted. Strength and Deviation are the estimate behind it, aged to
+	// now, which is what the pairer weighs a matchup by: see ExpectedScore.
+	Rating    int
+	State     RatingState
+	Strength  float64
+	Deviation float64
 
 	// The rest is nothing the pairer reads. It is here because the page that
 	// publishes the field reads the same rows, and the alternative was a second
@@ -93,20 +96,10 @@ type LadderCandidate struct {
 	Name       string
 	Owner      string
 	IconSHA256 string
-	// Entered is the owner's switch on its own, which is not the same question
-	// as being in the round: a reference engine is seated whatever this says.
-	// Published apart from Reference so a page can explain which of the two
-	// reasons an engine is in the field, rather than flattening them into one
-	// word that is true for different reasons.
-	Entered bool
-	// State is what the rating above is worth. A number at the floor is either
-	// a measured engine that is genuinely that weak or one nobody has placed,
-	// and those print identically. See RatingState.
-	State RatingState
 }
 
-// LadderEntrants is every engine that has consented to the pool, plus every
-// yardstick, with the rating each currently holds in one mode.
+// LadderEntrants is every engine that has consented to the pool, with the
+// rating each currently holds in one mode.
 //
 // Read from the database rather than from the connected roster because the
 // roster carries a copy of an account taken when it connected, and consent can
@@ -116,10 +109,13 @@ func (store *Store) LadderEntrants(
 	ctx context.Context,
 	modeID game.ModeID,
 ) ([]LadderCandidate, error) {
+	fresh := newGlickoRating()
 	rows, err := store.db.QueryContext(ctx, `
-SELECT b.bot_id, b.user_id, b.owner_user_id, b.reference_kind, b.enter_ladder,
+SELECT b.bot_id, b.user_id, b.owner_user_id,
        COALESCE(a.username, ''), COALESCE(o.username, ''), COALESCE(i.sha256, ''),
-       COALESCE(r.elo, ?), COALESCE(r.rating_placed, 0), COALESCE(r.rating_confidence, 0)
+       COALESCE(r.elo, ?), COALESCE(r.strength, ?), COALESCE(r.deviation, ?),
+       COALESCE(r.volatility, ?), COALESCE(r.rated_games, 0),
+       COALESCE(r.last_rated_at_unix_ms, 0)
 FROM bots b
 JOIN accounts a ON a.user_id = b.user_id AND a.kind = ?
 LEFT JOIN accounts o ON o.user_id = b.owner_user_id
@@ -129,30 +125,30 @@ WHERE b.user_id IS NOT NULL
   AND b.retired_at_unix_ms IS NULL
   AND b.disabled = 0
   AND a.disabled = 0
-  AND (b.enter_ladder = 1 OR b.reference_kind <> '')
+  AND b.enter_ladder = 1
 ORDER BY b.bot_id
-`, RatingFloor, AccountKindBot, modeID)
+`, RatingStart, fresh.strength, fresh.deviation, fresh.volatility, AccountKindBot, modeID)
 	if err != nil {
 		return nil, fmt.Errorf("read ladder entrants: %w", err)
 	}
 	defer rows.Close()
 
+	now := time.Now().UnixMilli()
 	entrants := make([]LadderCandidate, 0, 32)
 	for rows.Next() {
 		var entrant LadderCandidate
-		var kind string
-		var entered, placed int
-		var confidence float64
+		var rating glickoRating
 		if err := rows.Scan(
-			&entrant.BotID, &entrant.UserID, &entrant.OwnerUserID, &kind, &entered,
+			&entrant.BotID, &entrant.UserID, &entrant.OwnerUserID,
 			&entrant.Name, &entrant.Owner, &entrant.IconSHA256,
-			&entrant.Rating, &placed, &confidence,
+			&entrant.Rating, &rating.strength, &rating.deviation,
+			&rating.volatility, &rating.games, &rating.lastGameAt,
 		); err != nil {
 			return nil, fmt.Errorf("read ladder entrant: %w", err)
 		}
-		entrant.Reference = kind != ""
-		entrant.Entered = entered == 1
-		entrant.State = RatingStateOf(placed == 1, confidence)
+		entrant.State = rating.state(now)
+		entrant.Strength = rating.strength
+		entrant.Deviation = rating.aged(now).deviation
 		entrants = append(entrants, entrant)
 	}
 	if err := rows.Err(); err != nil {
@@ -161,41 +157,51 @@ ORDER BY b.bot_id
 	return entrants, nil
 }
 
-// LadderPairWeights is how much evidence the ladder already holds about each
-// matchup, by the same age-decayed count the fit reads.
+// LadderPairWeights is how many ranked games each pair of engines has played in
+// one mode over the last ladderPairWindow, keyed lower user id first so the
+// caller can ask about a pairing without caring which way round it seats it.
 //
-// The pairer wants it in order to prefer a matchup it has not seen. Deliberately
-// the *decayed* weight rather than a game count: a pair that ran to the cap two
-// years ago is worth playing again, and a raw count would say it was finished
-// with for ever.
-//
-// Keyed the way botPairKey is — lower user id first — so the caller can ask
-// about a pairing without caring which way round it seats it.
+// The pairer wants it in order to prefer a matchup it has not seen lately. A
+// pair that has played LadderPairCap games inside the window is played out for
+// now; one whose games have aged out of it is worth seating again.
 func (store *Store) LadderPairWeights(
 	ctx context.Context,
 	modeID game.ModeID,
 	now int64,
 ) (map[[2]string]float64, error) {
-	transaction, err := store.db.BeginTx(ctx, nil)
+	rows, err := store.db.QueryContext(ctx, `
+SELECT MIN(h.red_player_id, h.blue_player_id), MAX(h.red_player_id, h.blue_player_id),
+       COUNT(*)
+FROM game_history h
+JOIN accounts red ON red.user_id = h.red_player_id AND red.kind = ?
+JOIN accounts blue ON blue.user_id = h.blue_player_id AND blue.kind = ?
+WHERE h.mode_id = ? AND h.ranked = 1 AND h.finished_at_unix_ms >= ?
+GROUP BY 1, 2
+`, AccountKindBot, AccountKindBot, modeID, now-ladderPairWindow.Milliseconds())
 	if err != nil {
 		return nil, fmt.Errorf("read ladder pair weights: %w", err)
 	}
-	defer func() { _ = transaction.Rollback() }()
-
-	pairs, err := botHeadToHeadTx(ctx, transaction, modeID, now)
-	if err != nil {
-		return nil, err
+	defer rows.Close()
+	weights := make(map[[2]string]float64)
+	for rows.Next() {
+		var low, high string
+		var games float64
+		if err := rows.Scan(&low, &high, &games); err != nil {
+			return nil, fmt.Errorf("read ladder pair weight: %w", err)
+		}
+		weights[[2]string{low, high}] = games
 	}
-	weights := make(map[[2]string]float64, len(pairs))
-	for key, record := range pairs {
-		weights[[2]string{key.low, key.high}] = record.games
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read ladder pair weights: %w", err)
 	}
 	return weights, nil
 }
 
-// LadderPairCap is how much evidence one matchup is worth to the fit.
-//
-// Exported so the pairer can ask "is there anything left to learn from these
-// two" against the same number the rating uses, rather than against a second
-// copy of it that could drift.
-const LadderPairCap = botRatingPairCap
+const (
+	// LadderPairCap is how many recent ranked games make a pairing played out:
+	// past it the pairer looks elsewhere first.
+	LadderPairCap = 20.0
+
+	// ladderPairWindow is how far back LadderPairWeights counts.
+	ladderPairWindow = 28 * 24 * time.Hour
+)

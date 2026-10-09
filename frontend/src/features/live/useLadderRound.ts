@@ -46,14 +46,8 @@ export const useLadderRound = (): LadderRoundView | null => {
 };
 
 /**
- * The published schedule on its own, without the countdown.
- *
- * Split out because two callers want different halves of it: the rail wants the
- * next round and ticks every second for it, and the ladder page wants only
- * `anchorBotId` — whether a reference engine is standing, and therefore whether
- * `1` on that board means chance or means the weakest engine on it. Giving the
- * page the ticking hook would re-render a list of fifty rows once a second to
- * read a field that changes about once a year.
+ * The published schedule on its own, without the countdown, for a caller that
+ * does not want to re-render once a second.
  */
 export const useLadderPool = (): LadderPool | null => {
   const [pool, setPool] = useState<LadderPool | null>(null);

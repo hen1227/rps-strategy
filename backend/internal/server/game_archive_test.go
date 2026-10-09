@@ -47,11 +47,11 @@ func startArchiveTestMatch(server *Server, red, blue *Client, modeID game.ModeID
 	server.startConfiguredMatch(
 		QueueEntry{
 			Client: red, Setup: setup,
-			Elo: matchmakingElo(red, modeID), JoinedAt: entryTime,
+			Elo: seatElo(red, modeID), JoinedAt: entryTime,
 		},
 		QueueEntry{
 			Client: blue, Setup: setup,
-			Elo: matchmakingElo(blue, modeID), JoinedAt: entryTime,
+			Elo: seatElo(blue, modeID), JoinedAt: entryTime,
 		},
 		matchSetup{},
 	)
@@ -127,8 +127,9 @@ func TestFinishedGameIsArchivedAsReplayablePGN(t *testing.T) {
 	}
 	// The rating the game produced is part of the record, so a stored game
 	// explains the Elo it moved without a database join.
-	if parsed.Metadata.RedEloBefore != persistence.RatingFloor ||
-		parsed.Metadata.RedEloAfter <= parsed.Metadata.RedEloBefore {
+	if parsed.Metadata.RedEloBefore != persistence.RatingStart ||
+		parsed.Metadata.RedEloAfter <= parsed.Metadata.RedEloBefore ||
+		parsed.Metadata.RatingScale != notation.RatingSystem {
 		t.Fatalf("ratings did not reach the archive: %#v", parsed.Metadata)
 	}
 	if parsed.Record.Moves()[0].From != from || parsed.Record.Moves()[0].To != to {

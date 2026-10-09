@@ -2,15 +2,15 @@ package persistence
 
 import (
 	"testing"
+	"time"
 
 	"rps-strategy/backend/internal/game"
 )
 
 // seedRecord gives an account a lifetime record and one mode rating to carry it,
-// which is the shape a real ranked game leaves behind: the per-mode row moves,
-// and `accounts.elo` stays the seed a new mode inherits. The leaderboard reads
-// ratings and counts rather than replaying games, so seeding them directly keeps
-// these tests about the query.
+// which is the shape ranked games leave behind. The leaderboard reads ratings
+// and counts rather than replaying games, so seeding them directly keeps these
+// tests about the query.
 func seedRecord(t *testing.T, store *Store, userID string, elo int, played int) {
 	t.Helper()
 	if _, err := store.db.ExecContext(t.Context(), `
@@ -23,23 +23,20 @@ UPDATE accounts SET wins = ?, games_played = ? WHERE user_id = ?
 	}
 }
 
-// seedModeRating writes a rating the board will treat as measured, because that
-// is what a ranked game leaves behind: both write paths set rating_placed. A row
-// seeded without it is the unrated case, which seedUnplacedRating is for, and
-// leaving these on the default would quietly make every test below a test of a
-// board with nothing on it.
+// seedModeRating writes a settled rating, every one of its games ranked, with a
+// strength and deviation that publish as exactly elo.
 func seedModeRating(t *testing.T, store *Store, userID string, modeID game.ModeID, elo int, played int) {
 	t.Helper()
-	seedRatingRow(t, store, userID, modeID, elo, played, true, 1)
+	seedRatingRow(t, store, userID, modeID, elo, played, played)
 }
 
-// seedUnplacedRating is an account the rating system could not place: a bot the
-// fit left out, or a person who has not played the mode.
+// seedUnplacedRating is an account that has played a mode without a ranked
+// game in it, which leaves a row and no rating.
 func seedUnplacedRating(
 	t *testing.T, store *Store, userID string, modeID game.ModeID, elo int, played int,
 ) {
 	t.Helper()
-	seedRatingRow(t, store, userID, modeID, elo, played, false, 0)
+	seedRatingRow(t, store, userID, modeID, elo, played, 0)
 }
 
 func seedRatingRow(
@@ -49,16 +46,22 @@ func seedRatingRow(
 	modeID game.ModeID,
 	elo int,
 	played int,
-	placed bool,
-	confidence float64,
+	rated int,
 ) {
 	t.Helper()
+	deviation, ratedAt := ratingStartDeviation, int64(0)
+	if rated > 0 {
+		deviation, ratedAt = ratingMinimumDeviation, time.Now().UnixMilli()
+	}
 	if _, err := store.db.ExecContext(t.Context(), `
 INSERT INTO account_mode_ratings
     (user_id, mode_id, elo, wins, games_played,
-     rating_placed, rating_confidence, created_at_unix_ms, updated_at_unix_ms)
-VALUES (?, ?, ?, ?, ?, ?, ?, 1, 1)
-`, userID, modeID, elo, played, played, boolToInt(placed), confidence); err != nil {
+     strength, deviation, volatility, rated_games, last_rated_at_unix_ms,
+     created_at_unix_ms, updated_at_unix_ms)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1)
+`, userID, modeID, elo, played, played,
+		float64(elo)+ratingShownDeviations*deviation, deviation, ratingStartVolatility,
+		rated, ratedAt); err != nil {
 		t.Fatalf("seed mode rating for %s: %v", userID, err)
 	}
 }
@@ -150,8 +153,8 @@ func TestCombinedBoardRanksByTheStrongestMode(t *testing.T) {
 	ctx := t.Context()
 
 	// There is no single "how good is this player" number in a game with
-	// per-mode ratings, and `accounts.elo` is not it: ranked play never moves it,
-	// so a board ordered by it would sit everybody on the same seed for ever.
+	// per-mode ratings, so the combined board ranks each account by its strongest
+	// rated mode and says which one it was.
 	registeredOwner(t, store, "ada", "Ada")
 	registeredOwner(t, store, "grace", "Grace")
 	seedRecord(t, store, "ada", 1400, 10)
@@ -398,8 +401,8 @@ func TestBotBoardBreaksATieBetweenOneOwnersEngines(t *testing.T) {
 
 // An unknown owner is not a shared one. Two engines whose registry rows have
 // gone still have accounts and still have ratings, and grouping them together
-// would rank them as one person's — the same reading botHeadToHeadTx takes when
-// it decides whether a pair of bots may score against each other.
+// would rank them as one person's — the same reading sameOwner takes when it
+// decides whether a pair of bots may score against each other.
 func TestBotBoardKeepsEnginesWithNoOwnerApart(t *testing.T) {
 	store := authTestStore(t)
 	ctx := t.Context()
@@ -448,5 +451,62 @@ func TestHumanBoardIsNotGroupedByOwner(t *testing.T) {
 		if got := usernames(board); len(got) != 2 || got[0] != "Ada" || got[1] != "Grace" {
 			t.Fatalf("human board %+v: expected Ada then Grace, got %v", filter, got)
 		}
+	}
+}
+
+// An account that has only played casual games has no rating, only the number
+// everybody starts on, and the board lists ratings. It used to list these last
+// under "Not enough data to rank"; there is nothing to rank them by.
+func TestLeaderboardListsOnlyAccountsWithARankedGame(t *testing.T) {
+	store := authTestStore(t)
+	ctx := t.Context()
+
+	registeredOwner(t, store, "ada", "Ada")
+	registeredOwner(t, store, "casual", "Casual")
+	seedRecord(t, store, "ada", 1300, 4)
+	if _, err := store.db.ExecContext(ctx,
+		"UPDATE accounts SET games_played = 40 WHERE user_id = ?", "casual",
+	); err != nil {
+		t.Fatalf("seed casual record: %v", err)
+	}
+	seedUnplacedRating(t, store, "casual", game.ModeTotalWar, RatingStart, 40)
+
+	for _, filter := range []LeaderboardFilter{
+		{},
+		{ModeID: string(game.ModeTotalWar)},
+	} {
+		board, err := store.Leaderboard(ctx, filter)
+		if err != nil {
+			t.Fatalf("leaderboard %+v: %v", filter, err)
+		}
+		if got := usernames(board); len(got) != 1 || got[0] != "Ada" {
+			t.Fatalf("leaderboard %+v: expected only Ada, got %v", filter, got)
+		}
+		if board[0].State != RatingStateRated {
+			t.Fatalf("a settled row reads %q", board[0].State)
+		}
+	}
+}
+
+// A rating whose deviation is still wide says so, so the board can mark the
+// number as one that is still climbing towards its owner's strength.
+func TestLeaderboardMarksAProvisionalRating(t *testing.T) {
+	store := authTestStore(t)
+	ctx := t.Context()
+
+	registeredOwner(t, store, "ada", "Ada")
+	seedRecord(t, store, "ada", 1300, 3)
+	if _, err := store.db.ExecContext(ctx,
+		"UPDATE account_mode_ratings SET deviation = 180 WHERE user_id = ?", "ada",
+	); err != nil {
+		t.Fatalf("widen deviation: %v", err)
+	}
+
+	board, err := store.Leaderboard(ctx, LeaderboardFilter{})
+	if err != nil {
+		t.Fatalf("leaderboard: %v", err)
+	}
+	if len(board) != 1 || board[0].State != RatingStateProvisional {
+		t.Fatalf("a three-game rating should be provisional: %#v", board)
 	}
 }

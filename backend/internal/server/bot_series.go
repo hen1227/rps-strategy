@@ -268,8 +268,9 @@ type BotSeriesRequest struct {
 	// against anyone — and that the rest stays the rotation's: one pair, a drawn
 	// mode and clock, because being rated against somebody is not consent to be
 	// rated only at the clock their engine was tuned for. What bounds picking
-	// the opponents an engine beats is the fit's pair cap, which stops any one
-	// matchup counting for more than about twenty games.
+	// the opponents an engine beats is the rating itself: a win is worth less
+	// the more it was expected, so beating the same weak engine again and again
+	// soon pays nothing.
 	//
 	// Not Ladder either, for the reason Ranked is not: the pool did not arrange
 	// it, so it spends no hourly budget and is not the hour's results. Set by
@@ -520,17 +521,17 @@ func (server *Server) playNextSeriesGame(run *botSeries) {
 	// colours swapped, at a mode and clock the server draws, between two
 	// engines their owners entered in the ranked ladder. See ladder_pool.go for
 	// the hourly one and ladder_match.go for the two on a button. The opponent
-	// may be named, and what bounds picking the ones you beat is the fit's pair
-	// cap rather than this file. Everything else an author can start — trying a
+	// may be named, and what bounds picking the ones you beat is the rating
+	// itself rather than this file. Everything else an author can start — trying a
 	// new build against an old one, running a hundred games to test a change —
 	// still works and still shows up in the archive, and none of it moves a
 	// number.
 	//
 	// Same-owner is still refused on top, because a pair of engines one hand
 	// controls can be made to lose to each other on purpose. The pool will not
-	// choose such a pairing, so this is the belt to that braces; the fit drops
-	// the pair regardless, which is what covers the games recorded before either
-	// rule existed.
+	// choose such a pairing, so this is the belt to that braces; the ratings
+	// skip the pair regardless (see persistence's sameOwner), which is what
+	// covers the games recorded before either rule existed.
 	//
 	// Marked here, on the game, rather than filtered out further down, so that
 	// every place a game is shown reads it from the same flag: the history row,
@@ -545,7 +546,7 @@ func (server *Server) playNextSeriesGame(run *botSeries) {
 		return QueueEntry{
 			Client:   client,
 			Setup:    setup,
-			Elo:      matchmakingElo(client, run.modeID),
+			Elo:      seatElo(client, run.modeID),
 			JoinedAt: time.Now(),
 		}
 	}

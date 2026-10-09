@@ -43,14 +43,7 @@ export default function EngineHistory({ reigns, versions }: EngineHistoryProps) 
       {reigns.length > 0 ? (
         <View style={styles.section}>
           <Text style={styles.label}>TOP OF THE LADDER</Text>
-          {/*
-            Only from the day the ledger shipped. Said out loud because the
-            alternative is a reader taking an engine's first listed reign for
-            its first ever, and this page has no way to know that.
-          */}
-          <Text style={styles.help}>
-            Time at number one, newest first. Earlier reigns may not be recorded.
-          </Text>
+          <Text style={styles.help}>Time at number one, newest first.</Text>
           <View style={styles.list}>
             {reigns.map((reign) => (
               <View key={`${reign.modeId}-${reign.startedAtUnixMs}`} style={styles.row}>

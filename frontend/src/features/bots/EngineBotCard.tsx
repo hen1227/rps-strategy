@@ -5,8 +5,10 @@ import {
   engineCanJoinSeries,
   engineElo,
   engineIsAvailable,
+  engineRatingState,
   engineStatus,
 } from '@/features/live/liveSelectors';
+import { ratingLabel } from '@/features/ratings/scale';
 import { botIconUrl } from '@/store/api/bots';
 import { colors, radius, space, themedSheet, type } from '@/theme';
 import type { ModeID } from '@/types/game';
@@ -128,7 +130,7 @@ export default function EngineBotCard({
   onPit,
 }: EngineBotCardProps) {
   const status = engineStatus(bot);
-  const rating = engineElo(bot, modeId);
+  const rating = ratingLabel(engineElo(bot, modeId), engineRatingState(bot, modeId));
   // A bot that is busy, private, shutting down, or does not play this mode
   // cannot take the game being offered, so the button says so instead of
   // failing on press. The first three come from the same place the badge does.

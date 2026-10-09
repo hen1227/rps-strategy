@@ -5,9 +5,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
-	"strings"
 
-	"rps-strategy/backend/internal/game"
 	"rps-strategy/backend/internal/persistence"
 )
 
@@ -36,9 +34,9 @@ func (server *Server) listAdminGames(writer http.ResponseWriter, request *http.R
 
 // deleteAdminGame removes one game from the history and the archive.
 //
-// Ratings are given back unless the caller says otherwise, because that is the
-// answer that is right by default: the usual reason to delete a game is that
-// its result should not stand.
+// Win counts are given back unless the caller says otherwise, because that is
+// the answer that is right by default: the usual reason to delete a game is
+// that its result should not stand. Ratings are replayed either way.
 func (server *Server) deleteAdminGame(writer http.ResponseWriter, request *http.Request) {
 	revert := request.URL.Query().Get("revertRatings") != "false"
 	deletion, err := server.data.DeleteGame(
@@ -48,11 +46,10 @@ func (server *Server) deleteAdminGame(writer http.ResponseWriter, request *http.
 		writeAdminDeleteError(writer, err)
 		return
 	}
-	// Removing a bot game refits its ladder whether or not the ratings were
-	// reverted, because the fit is over the games on record and one of them is
-	// now gone. The deletion does not say which mode it was in, so this asks
-	// after all of them.
-	server.republishBotLadder(request.Context(), server.ratedModeIDs()...)
+	// The store replayed every rating, so anybody connected may be holding a
+	// number from before the game went. The deletion does not say which mode it
+	// was in, so this asks after all of them.
+	server.refreshCachedRatings(request.Context(), server.ratedModeIDs()...)
 	writeJSON(writer, http.StatusOK, deletion)
 }
 
@@ -60,7 +57,7 @@ func (server *Server) deleteAdminGame(writer http.ResponseWriter, request *http.
 //
 // The correction beside delete, for the host whose question is "that shouldn't
 // have counted" — or the reverse — rather than "that shouldn't be here". Engine
-// games only; see persistence/reclassify.go for why a person's cannot be.
+// games only; see persistence/reclassify.go.
 func (server *Server) setAdminGameRanked(writer http.ResponseWriter, request *http.Request) {
 	ranked, ok := decodeRankedRequest(writer, request)
 	if !ok {
@@ -71,10 +68,10 @@ func (server *Server) setAdminGameRanked(writer http.ResponseWriter, request *ht
 		writeReclassifyError(writer, err)
 		return
 	}
-	// The store refitted the mode in the same transaction; this tells the
-	// engines still connected what they are holding now.
+	// The store replayed the ratings in the same transaction; this tells the
+	// accounts still connected what they are holding now.
 	if moved.Changed > 0 {
-		server.republishBotLadder(request.Context(), moved.ModeID)
+		server.refreshCachedRatings(request.Context(), moved.ModeID)
 	}
 	writeJSON(writer, http.StatusOK, moved)
 }
@@ -139,90 +136,10 @@ func (server *Server) deleteAdminBot(writer http.ResponseWriter, request *http.R
 	if bot.UserID != "" {
 		server.disconnectAccount(bot.UserID, "this bot has been deleted")
 	}
-	// Its games went with it, so every ladder it played in has been refit and
-	// the engines still connected are holding ratings from before that.
-	server.republishBotLadder(request.Context(), server.ratedModeIDs()...)
+	// Its games went with it, so every rating has been replayed and the
+	// accounts still connected are holding numbers from before that.
+	server.refreshCachedRatings(request.Context(), server.ratedModeIDs()...)
 	writeJSON(writer, http.StatusOK, deletion)
-}
-
-// getBenchmarkDrift reports every declared rung beside what the record makes of
-// it, for one mode or for all of them.
-//
-// The other half of a declared scale, and the reason declaring one is safe. The
-// fit holds each rung at its declaration and has no way to disagree, so a rung
-// that has drifted away from what it was declared to be would silently bias
-// every rating measured through it; this is where that is visible. See
-// persistence.BenchmarkDrift for what "freed" means and why it is done one rung
-// at a time.
-//
-// Administrator-only, because it is a tool for deciding what the scale should
-// say rather than a statement of what it does say. A reading with two games
-// behind it is noise, and noise published beside a rating reads as a correction
-// somebody forgot to make.
-func (server *Server) getBenchmarkDrift(writer http.ResponseWriter, request *http.Request) {
-	modes := server.ratedModeIDs()
-	if requested := strings.TrimSpace(request.URL.Query().Get("mode")); requested != "" {
-		if !server.registry.Has(game.ModeID(requested)) {
-			writeAPIError(writer, http.StatusBadRequest, "unknown game mode")
-			return
-		}
-		modes = []game.ModeID{game.ModeID(requested)}
-	}
-	byMode := make(map[string][]persistence.BenchmarkReading, len(modes))
-	for _, modeID := range modes {
-		readings, err := server.data.BenchmarkDrift(request.Context(), modeID)
-		if err != nil {
-			log.Printf("benchmark drift for %s: %v", modeID, err)
-			writeAPIError(writer, http.StatusInternalServerError, "could not read the benchmark ladder")
-			return
-		}
-		byMode[string(modeID)] = readings
-	}
-	writeJSON(writer, http.StatusOK, map[string]any{
-		"modes": byMode,
-		// The declared ladder itself, so a caller can render the slots that
-		// nobody holds without a second request.
-		"ladder": persistence.Benchmarks(),
-	})
-}
-
-// setBotReference puts a bot in one of the scale's benchmark slots, or takes it
-// out of one.
-//
-// Administrator-only, and it has no owner-facing counterpart on purpose. A slot
-// is a declared rating, so whoever can fill one can restate every number on the
-// board — an owner able to declare their own engine to be chance itself would be
-// handed the top of the ladder and everybody else the bottom.
-//
-// The slot is named in the body as `kind`, which is what the field has always
-// been called on the wire and what the admin screen sends. It now carries a
-// benchmark slot rather than "anchor" or "rung"; see benchmarks.go.
-//
-// One engine per slot is enforced in the store, in a transaction, rather than by
-// looking first here — two administrators can both pass a check in a handler.
-func (server *Server) setBotReference(writer http.ResponseWriter, request *http.Request) {
-	var input struct {
-		Kind string `json:"kind"`
-	}
-	if err := decodeAPIRequest(writer, request, &input); err != nil {
-		writeAPIError(writer, http.StatusBadRequest, err.Error())
-		return
-	}
-	botID := request.PathValue("botID")
-	if err := server.data.SetBotBenchmarkSlot(request.Context(), botID, input.Kind); err != nil {
-		writeBotError(writer, err)
-		return
-	}
-	// The scale just moved, or the set of bots exempt from the opponent prune
-	// did. Either way every published rating is a different number now.
-	server.forgetYardsticks()
-	for _, modeID := range server.ratedModeIDs() {
-		if err := server.data.RefitBotLadder(request.Context(), modeID); err != nil {
-			log.Printf("refit bot ladder for %s: %v", modeID, err)
-		}
-	}
-	server.republishBotLadder(request.Context(), server.ratedModeIDs()...)
-	writeJSON(writer, http.StatusOK, map[string]string{"botId": botID, "kind": input.Kind})
 }
 
 // purgeAccount is the hard delete, beside the anonymize on the same screen.
@@ -255,9 +172,8 @@ func (server *Server) purgeAccount(writer http.ResponseWriter, request *http.Req
 			server.disconnectAccount(bot.UserID, "this bot has been deleted")
 		}
 	}
-	if len(bots) > 0 {
-		server.republishBotLadder(request.Context(), server.ratedModeIDs()...)
-	}
+	// The purge replayed every rating its games had a hand in.
+	server.refreshCachedRatings(request.Context(), server.ratedModeIDs()...)
 	writeJSON(writer, http.StatusOK, purge)
 }
 

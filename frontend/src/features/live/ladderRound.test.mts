@@ -26,10 +26,6 @@ const pool = (extra: Partial<LadderPool> = {}): LadderPool =>
       { modeId: 'V3', initialTimeMs: 60_000, incrementMs: 1_000, atUnixMs: 7_200_000, entered: 0 },
     ],
     graceMs: 300_000,
-    anchorBotId: 'anchor',
-    yardstickBotIds: ['anchor', 'fish8'],
-    ratingFloor: 1,
-    ratingPointsPerDoubling: 20,
     ...extra,
   }) as LadderPool;
 
@@ -88,15 +84,6 @@ test('a round within ten minutes reads as soon', () => {
   assert.equal(ladderRoundView(pool(), MODES, 0)?.phase, 'waiting');
 });
 
-test('a board with no reference engine says the scale is relative', () => {
-  // Not "unrated" — the board is published either way. What changes is whether
-  // 1 means chance or the weakest engine here.
-  assert.equal(ladderRoundView(pool(), MODES, 0)?.relativeScale, false);
-  assert.equal(
-    ladderRoundView(pool({ anchorBotId: '' }), MODES, 0)?.relativeScale,
-    true,
-  );
-});
 
 test('no pool and an exhausted schedule both draw nothing', () => {
   assert.equal(ladderRoundView(null, MODES, 0), null);

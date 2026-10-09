@@ -40,10 +40,11 @@ export default function GamesPanel({ admin }: GamesPanelProps) {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [confirming, setConfirming] = useState<string | null>(null);
-  // Deleting a game hands its rating back by default, because the usual reason
-  // to delete one is that the result should not stand. The exception — a game
-  // removed for being unwatchable, whose result was fair — is a toggle rather
-  // than a second button, since it applies to whichever row is pressed next.
+  // Deleting a game takes its result off both records by default, because the
+  // usual reason to delete one is that the result should not stand. The
+  // exception — a game removed for being unwatchable, whose result was fair —
+  // is a toggle rather than a second button, since it applies to whichever row
+  // is pressed next. Ratings are recomputed without the game either way.
   const [revertRatings, setRevertRatings] = useState(true);
 
   const refresh = useCallback(
@@ -70,8 +71,8 @@ export default function GamesPanel({ admin }: GamesPanelProps) {
       await deleteGame(admin.token, gameId, revertRatings);
       setNotice(
         revertRatings
-          ? 'Game deleted. Both players have their rating back.'
-          : 'Game deleted. The ratings it moved were left alone.',
+          ? 'Game deleted. Ratings recomputed without it.'
+          : 'Game deleted. Ratings recomputed; win counts kept.',
       );
       await refresh();
     } catch (caught) {
@@ -82,8 +83,8 @@ export default function GamesPanel({ admin }: GamesPanelProps) {
     }
   };
 
-  // No confirmation, unlike delete: the same press puts it back, and the
-  // ladder it moves is refitted from the record rather than adjusted.
+  // No confirmation, unlike delete: the same press puts it back, and every
+  // rating is recomputed from the record rather than adjusted.
   const toggleRanked = async (game: AdminGameRecord) => {
     setBusy(true);
     setError(null);
@@ -92,8 +93,8 @@ export default function GamesPanel({ admin }: GamesPanelProps) {
       await setAdminGameRanked(admin.token, game.gameId, !game.ranked);
       setNotice(
         game.ranked
-          ? 'Game made casual. The bot ladder no longer counts it.'
-          : 'Game made ranked. The bot ladder counts it now.',
+          ? 'Game made casual. Ratings recomputed without it.'
+          : 'Game made ranked. Ratings recomputed with it.',
       );
       await refresh();
     } catch (caught) {
@@ -128,7 +129,7 @@ export default function GamesPanel({ admin }: GamesPanelProps) {
         </View>
         <Checkbox
           checked={revertRatings}
-          label="Give both players their rating back"
+          label="Take the result off both players' records"
           onToggle={() => setRevertRatings((current) => !current)}
         />
 
@@ -150,10 +151,10 @@ export default function GamesPanel({ admin }: GamesPanelProps) {
           </View>
         )}
         <Text style={adminStyles.help}>
-          Deletion removes the game from history, archives, and reviews. Keep the box checked to reverse rating and win-count changes for both players. Rating reversal is exact for their latest game and approximate for older games.
+          Deletion removes the game from history, archives, and reviews, and every rating is recomputed as if it had never been played. Keep the box checked to take it off both players' win counts too.
         </Text>
         <Text style={adminStyles.help}>
-          A game between two engines can also be made ranked or casual. The bot ladder is refitted from every game at once, so the change is exact and can be undone. Games with a person in them cannot be moved, because a person's rating cannot be replayed.
+          A game between two engines can also be made ranked or casual. Ratings are recomputed from every game, so the change is exact and can be undone. Games with a person in them cannot be moved.
         </Text>
       </Panel>
     </>

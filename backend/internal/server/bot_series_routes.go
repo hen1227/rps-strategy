@@ -173,7 +173,7 @@ func (server *Server) setAdminBotSeriesRanked(writer http.ResponseWriter, reques
 		return
 	}
 	if moved.Changed > 0 {
-		server.republishBotLadder(request.Context(), moved.ModeID)
+		server.refreshCachedRatings(request.Context(), moved.ModeID)
 	}
 	writeJSON(writer, http.StatusOK, moved)
 }

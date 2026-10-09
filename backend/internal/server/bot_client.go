@@ -246,10 +246,10 @@ type BotPresence struct {
 	Modes        []game.ModeID       `json:"modes,omitempty"`
 	Elo          int                 `json:"elo"`
 	ModeRatings  map[game.ModeID]int `json:"modeRatings,omitempty"`
-	// ModeRatingStates says which of those numbers are measurements. A mode
-	// missing from it is unrated, which is also what an older server sending
-	// neither map means, so a client reading this cannot mistake silence for
-	// confidence. See persistence.RatingState.
+	// ModeRatingStates says how far each of those numbers can be trusted. A
+	// mode missing from it is unrated, which is also what an older server
+	// sending neither map means, so a client reading this cannot mistake silence
+	// for a rating. See persistence.RatingState.
 	ModeRatingStates map[game.ModeID]persistence.RatingState `json:"modeRatingStates,omitempty"`
 	// Title is the tag this engine wears, and empty for most of them. Read from
 	// the cached account rather than from the connection's profile, which is
@@ -275,10 +275,11 @@ type BotPresence struct {
 	Slots       int  `json:"slots"`
 
 	AllowPublicPlay bool `json:"allowPublicPlay"`
-	// EnterLadder is whether this engine is in the ranked pool, which is the
-	// only place a rating now comes from. Published so the lobby can say which
-	// engines on the board are actually competing and which are here to be
-	// challenged, and so an owner can see at a glance that the switch took.
+	// EnterLadder is whether this engine is in the ranked pool, which is where
+	// almost all of an engine's rated games come from. Published so the lobby
+	// can say which engines on the board are actually competing and which are
+	// here to be challenged, and so an owner can see at a glance that the switch
+	// took.
 	EnterLadder   bool   `json:"enterLadder"`
 	ClientVersion string `json:"clientVersion,omitempty"`
 	// Draining is an engine on its way out: it is playing what it already owes
@@ -1133,35 +1134,20 @@ func (server *Server) challengeBot(
 	}
 
 	server.releaseFromLobby(client)
-	// Casual against a community engine, ranked against one of the server's own.
-	//
-	// The first half is the old rule and still the right one: an engine's author
-	// can tune it to lose, so a rating handed out by somebody's bot is a rating
-	// its owner controls. That has to stay casual however tempting it looks.
-	//
-	// The second half is what puts people and engines on one scale. A yardstick
-	// is frozen, server-run and owned by nobody, so it cannot be tuned to lose
-	// and there is no author to benefit — and it is the fixed point every bot
-	// rating is a distance from. A person who plays one is therefore measured
-	// against the same object the whole engine ladder is measured against, which
-	// makes "about as strong as a 90-rated engine" a fact rather than a
-	// comparison of two unrelated numbers. It costs one exception here and no
-	// human-versus-community-bot ranked play at all.
-	//
-	// Not rated for an account that cannot play ranked, the same as any other
-	// game: rankedAllowed covers the unregistered and the sanctioned.
-	calibration := server.botIsYardstick(record.BotID) && server.rankedAllowed(client)
-	setup := game.GameSetup{ModeID: modeID, TimeControl: control, Casual: !calibration}
+	// Always casual. An engine's author can tune it to lose, so a rating handed
+	// out by somebody's bot is a rating its owner controls, and that has to stay
+	// casual however tempting it looks.
+	setup := game.GameSetup{ModeID: modeID, TimeControl: control, Casual: true}
 	human := QueueEntry{
 		Client:   client,
 		Setup:    setup,
-		Elo:      matchmakingElo(client, modeID),
+		Elo:      seatElo(client, modeID),
 		JoinedAt: time.Now(),
 	}
 	engine := QueueEntry{
 		Client:   seat,
 		Setup:    setup,
-		Elo:      matchmakingElo(seat, modeID),
+		Elo:      seatElo(seat, modeID),
 		JoinedAt: time.Now(),
 	}
 	// startConfiguredMatch seats its first entry Red, so the seat the player

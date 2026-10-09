@@ -411,33 +411,27 @@ sudo -u www-data sqlite3 -readonly \
 Completed games and accounts are stored at `RPS_DATABASE_PATH` (default
 `data/rps-strategy.sqlite`). Every account rates each game mode separately in
 `account_mode_ratings`; a mode's row is created the first time that account
-finishes a game in it and copies the account's shared `elo` as its starting
-point. Accounts begin at 1200 Elo, ranked results between people use a K-factor
-of 32, and the shared value stays put as the seed for modes not played yet. Game
-insertion, lifetime win/loss/draw changes, and both mode-rating updates share one
-idempotent SQLite transaction.
+finishes a game in it. Game insertion, lifetime win/loss/draw changes, and both
+rating updates share one idempotent SQLite transaction.
 
-Bots are rated by a different system, in `internal/persistence/bot_rating.go`. A per-game
-transfer is wrong for engines because their author chooses their opponents, so beating a
-fresh account pays points that a throwaway can mint on demand. Instead the bot ladder is
-derived: the head-to-head record of every pair of bots is read back out of `game_history`,
-fitted with Bradley–Terry, and written over the mode's bot rows. Four things do the work.
+Everybody, people and engines alike, is rated by Glicko-2
+(`internal/persistence/rating.go`), one ranked game at a time. Each row holds a
+strength on the 1500 scale, its deviation and its volatility. The published
+number is the strength less one deviation, so a newcomer starts at 1150 and
+climbs as games narrow the deviation, settling about 45 points under its
+strength; a deviation grows back for every day without a ranked game, so idle
+ratings drift down. A rating is `provisional` while its deviation is above 110,
+and `unrated` until its first ranked game. Games between two engines one person
+registered never move a rating. `accounts.elo` is the account's best rated mode.
 
-A pair counts for at most twenty games however long it is played, so grinding one opponent
-stops paying. A bot needs at least two distinct opponents to be ranked, applied by pruning
-until nothing is left below the bar, so a pile of throwaways collapses and takes whoever
-farmed it down too. Only the largest connected group of bots is published, so a private
-league of one author's engines is rated against nobody. And there is no prior anywhere —
-nothing assumes an unrated bot is probably average, because that assumption is precisely
-what a farm mints. An unknown opponent's strength is a free parameter, so beating it moves
-that parameter rather than the rating of the bot doing the beating.
-
-What is published is the fit shrunk towards DefaultElo by how much of the board's spread
-the record establishes, estimated from the ladder itself. A well-played board keeps almost
-all of its spread; one whose games cannot tell its engines apart collapses towards 1200
-rather than ranking anybody by accident. Because the whole thing is derived, deleting a bot
-game is exact rather than approximate, and `Open` refits every ladder at startup instead of
-migrating one.
+Ratings are a function of the record, so they are never migrated: `Open` replays
+every game in `game_history` in the order they finished and restates whatever
+came out different — the rating rows, every game row's before-and-after, and the
+same numbers inside each archived PGN (see `rating_replay.go`). Deleting a game,
+purging an account, or moving a game between ranked and casual replays the same
+way, which makes each of them exact. The first start under a new rating system
+also rebuilds the bot reign ledger from the record. An hourly republish rewrites
+the published numbers of idle accounts.
 
 Read APIs:
 
@@ -592,13 +586,11 @@ last administrator.
 
 Deleting a game removes it from `game_history`, `game_pgn`, and `game_accuracy`,
 and leaves the tournament match or series game that referenced it in place with
-the link cleared. Unless `revertRatings=false`, both players get the Elo and the
-win counts that game moved handed back — exact for the last game somebody
-played, and an approximation for an older one, since the games since were rated
-against a number that has now changed. Between two bots it is exact whatever has
-happened since: there is no transfer to unwind, so the game goes and the ladder
-is fitted again from what remains. A purge always reverts, so an opponent is
-never left holding rating from a game that no longer exists.
+the link cleared. Every rating is then replayed from the games that remain, so
+both players, and everybody they have played since, read as though the game had
+never happened. Unless `revertRatings=false`, both players' win counts give the
+game back too. A purge always does, so an opponent is never left holding a
+result from a game that no longer exists.
 
 Retiring a bot (`DELETE /api/bots/{botId}`, which an owner may call for their
 own) is the soft version: the bot leaves play and frees its name while its games
@@ -806,9 +798,8 @@ pairing where either side may not play for a rating — an unregistered account,
 or one under a ranked-play sanction — is downgraded to casual for that game
 rather than refused, the same move `challenge.go` makes, so a mixed field can
 produce some rated games and some casual ones and the PGN says which. This
-matters most for engines: the bot ladder is fitted from ranked bot-versus-bot
-games, so a casual tournament was invisible to the ladder its games were best
-placed to inform.
+matters most for engines, whose ratings come only from ranked games, so a casual
+tournament was invisible to the ladder its games were best placed to inform.
 
 A pairing can be more than one game. `gamesPerMatch` (1 by default, 10 at most)
 makes each scheduled match a short series: the games are recorded in
@@ -845,11 +836,11 @@ server-memory state of a match: `readyUserIds`, and `live` with `gameId` while a
 game is running. That is what lets the lobby show a match as watchable and tell
 a player their opponent is waiting.
 
-Ranked matchmaking compares the rating each player holds in the mode being
-queued and starts within ±100 Elo. Its range grows quadratically with wait
-time, gives an older search access to the closest eligible opponent, and
-becomes unrestricted by Elo after two minutes. Mode and time-control selections
-must still match exactly.
+Ranked matchmaking compares the strength behind each player's rating in the
+mode being queued, so a newcomer meets average players, and starts within ±100.
+Its range grows quadratically with wait time, gives an older search access to
+the closest eligible opponent, and becomes unrestricted after two minutes. Mode
+and time-control selections must still match exactly.
 
 See [`docs/game-modes.md`](docs/game-modes.md) for the game mode extension
 contract.

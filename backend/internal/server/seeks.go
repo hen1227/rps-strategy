@@ -9,26 +9,19 @@ import (
 	"time"
 
 	"rps-strategy/backend/internal/game"
-	"rps-strategy/backend/internal/persistence"
 )
 
 const (
 	matchmakingTick = 2 * time.Second
-	// matchmakingInitialRatingRange is how far apart two searches may be at
-	// first, in rating points, widening to matchmakingMaximumRatingRange over
+	// matchmakingInitialRatingRange is how far apart two searches' strengths
+	// may be at first, widening to matchmakingMaximumRatingRange over
 	// matchmakingFullyOpenAfter.
 	//
-	// Twenty, because twenty points is a doubling of the odds on this scale —
-	// so the first thing the queue tries for is a game the favourite wins about
-	// two times in three. It was a hundred when a doubling was a hundred and
-	// twenty points, which meant the opening window was a shade under even
-	// money; a hundred here would be five doublings and the entire board.
-	//
+	// A hundred points, a game the favourite is expected to score about 64% in.
 	// A constant that has to move with the scale and does not announce itself
-	// when it has not, which is the whole reason it is written up rather than
-	// left as a number: a matchmaker whose window is the width of the ladder
+	// when it has not: a matchmaker whose window is the width of the ladder
 	// still pairs people, it just stops meaning anything by it.
-	matchmakingInitialRatingRange = 20
+	matchmakingInitialRatingRange = 100
 	matchmakingMaximumRatingRange = 10000
 	matchmakingFullyOpenAfter     = 2 * time.Minute
 	// awaySeekLifetime is how long a search survives with nobody behind it.
@@ -82,8 +75,13 @@ type Seek struct {
 	TargetUsername string
 	Setup          game.GameSetup
 	ModeName       string
-	Elo            int
-	JoinedAt       time.Time
+	// Elo is the poster's published rating, which the seat carries into the
+	// game (see seatElo). Strength is the estimate behind it, which is what
+	// pairing reads: a newcomer publishes low while their strength is still a
+	// guess, and should meet players of the strength they are assumed to have.
+	Elo      int
+	Strength int
+	JoinedAt time.Time
 	// ExpiresAt is the zero time for a seek that waits indefinitely, which is
 	// what a plain matchmaking search does. A posted game expires so the board
 	// does not fill with offers nobody is still sitting behind.
@@ -225,8 +223,8 @@ func (seek *Seek) Challenge() Challenge {
 	return challenge
 }
 
-// SearchRange is how far from their own rating this seek will currently accept
-// an opponent.
+// SearchRange is how far from their own strength this seek will currently
+// accept an opponent's.
 func (seek *Seek) SearchRange(now time.Time) int {
 	elapsed := now.Sub(seek.JoinedAt)
 	if elapsed <= 0 {
@@ -625,7 +623,7 @@ func (board *seekBoard) pair() {
 					first.Poster.UserID == second.Poster.UserID) {
 				continue
 			}
-			difference := absoluteDifference(first.Elo, second.Elo)
+			difference := absoluteDifference(first.Strength, second.Strength)
 			allowedDifference := max(first.SearchRange(now), second.SearchRange(now))
 			if !first.searchIsFullyOpen(now) && !second.searchIsFullyOpen(now) &&
 				difference > allowedDifference {
@@ -669,13 +667,21 @@ func seatOrder(first, second *Seek) (opener, replier *Seek) {
 	return first, second
 }
 
-// matchmakingElo reads the rating for the mode being sought, so a player's
-// results in one mode never decide who they meet in another.
-func matchmakingElo(client *Client, modeID game.ModeID) int {
-	if client.account.UserID == "" {
-		return persistence.RatingFloor
+// seatElo is the rating a seat carries into its game: the published number in
+// the mode being played, or zero for a player with no ranked game in it, which
+// every board and record reads as no rating at all. Each mode on its own, so a
+// player's results in one mode never decide anything in another.
+func seatElo(client *Client, modeID game.ModeID) int {
+	rating, found := client.account.ModeRatings[modeID]
+	if client.account.UserID == "" || !found || !rating.State.Ranked() {
+		return 0
 	}
-	return client.account.ModeElo(modeID)
+	return rating.Elo
+}
+
+// matchmakingStrength reads the strength pairing compares, for the same mode.
+func matchmakingStrength(client *Client, modeID game.ModeID) int {
+	return client.account.ModeStrength(modeID)
 }
 
 func absoluteDifference(first int, second int) int {

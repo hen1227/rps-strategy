@@ -7,6 +7,7 @@
 // as `store/tournamentSelectors.ts`.
 
 import { gridFromRows } from '@/engine/analysisGame';
+import { RATING_START } from '@/features/ratings/scale';
 import {
   playerName,
   seriesProgressLabel,
@@ -14,7 +15,14 @@ import {
   seriesScoreOf,
 } from '@/store/spectateSelectors';
 import { isOpenChallenge } from '@/types/protocol';
-import type { BotPresence, Challenge, LiveGameSummary, TitleID, Tournament } from '@/types/protocol';
+import type {
+  BotPresence,
+  Challenge,
+  LiveGameSummary,
+  RatingState,
+  TitleID,
+  Tournament,
+} from '@/types/protocol';
 import {
   isBoardRows,
   type Grid,
@@ -117,18 +125,33 @@ export interface EngineRating {
   shortCode: string;
   name: string;
   elo: number;
+  /** How far `elo` can be trusted; an unrated one prints as a dash. */
+  state: RatingState;
 }
 
 /**
  * What an engine is rated in one mode.
  *
- * Every mode rates independently, and a mode nobody has finished a game in
- * inherits the account's shared rating — the same answer `Account.ModeElo`
- * gives on the server. `bot.elo` on its own is only that shared seed, which for
- * an engine a hundred games into a ladder is a number from before all of them.
+ * Every mode rates independently, and a mode the engine has no rating row in
+ * is where everybody starts — the same answer `Account.ModeElo` gives on the
+ * server. `bot.elo` is the engine's headline, its best mode, and is not a
+ * rating in any particular one.
  */
 export const engineElo = (bot: BotPresence, modeId: ModeID): number =>
-  bot.modeRatings?.[modeId] ?? bot.elo;
+  bot.modeRatings?.[modeId] ?? RATING_START;
+
+/**
+ * How far an engine's rating in one mode can be trusted.
+ *
+ * A mode with no number, or one the states leave out, is unrated. A roster with
+ * no states at all is from a server older than the field, which has no way to
+ * say a number is not earned, so its numbers are read as ratings.
+ */
+export const engineRatingState = (bot: BotPresence, modeId: ModeID): RatingState => {
+  if (bot.modeRatings?.[modeId] === undefined) return 'unrated';
+  if (!bot.modeRatingStates) return 'rated';
+  return bot.modeRatingStates[modeId] ?? 'unrated';
+};
 
 /**
  * Every rating an engine carries, in the modes it actually plays.
@@ -146,6 +169,7 @@ export const engineRatings = (bot: BotPresence, modes: ModeDefinition[]): Engine
       shortCode: mode.shortCode,
       name: mode.name,
       elo: engineElo(bot, mode.id),
+      state: engineRatingState(bot, mode.id),
     }));
 
 /**
@@ -355,6 +379,7 @@ const engineSeatsOf = (
               shortCode: mode?.shortCode ?? game.modeName,
               name: mode?.name ?? game.modeName,
               elo: engineElo(bot, game.modeId),
+              state: engineRatingState(bot, game.modeId),
             },
           ]
         : engineRatings(bot, modes),

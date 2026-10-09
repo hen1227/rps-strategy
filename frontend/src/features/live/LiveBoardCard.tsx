@@ -47,8 +47,13 @@ const boardForWidth = (width: number) => clampBoard(width - 2 * CARD_PAD - 2);
 /** The same question for a banner, where the copy has to fit alongside it. */
 const bannerBoardForWidth = (width: number) => clampBoard(width * BANNER_SHARE);
 
-/** A rating, written after the name it belongs to, in the one way this app writes it. */
+/**
+ * A rating, written after the name it belongs to, in the one way this app
+ * writes it. Nothing for a seat with no rating, which the server sends as 0: a
+ * player with no ranked game in the mode has not earned a number.
+ */
 export function PlayerElo({ value }: { value: number }) {
+  if (value <= 0) return null;
   return <Text style={styles.elo}>{value}</Text>;
 }
 

@@ -624,14 +624,14 @@ export interface ReviewSource {
   players: Record<SideColor, RecordedPlayer>;
   /**
    * Which scale this record's ratings are written on, straight off the tag, or
-   * `null` for a record archived before there were two of them.
+   * `null` for a record archived before the tag existed.
    *
    * Read rather than assumed, and worth carrying for the same reason `era` is.
-   * The old scale was chess Elo centred on 1200 and today's starts at 1 — both
-   * produce numbers that look like ratings, nothing else in the file says which
-   * is which, and the two cannot be compared. What this string is *worth* is
-   * `features/ratings/scale`'s to say; a replayed record's job is only to
-   * report what was written down.
+   * The archive holds three scales — chess Elo centred on 1200 with no tag, the
+   * anchored scale where 1 was a random mover, and today's Glicko-2 — all of
+   * them produce numbers that look like ratings, and none can be compared with
+   * another. What this string is *worth* is `features/ratings/scale`'s to say;
+   * a replayed record's job is only to report what was written down.
    */
   ratingSystem: string | null;
   startedAtUnixMs: number | null;

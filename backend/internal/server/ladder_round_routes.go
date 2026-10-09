@@ -58,14 +58,9 @@ type LadderFieldEngine struct {
 	UserID     string `json:"userId"`
 	Name       string `json:"name"`
 	IconSHA256 string `json:"iconSha256,omitempty"`
-	// Author is whoever registered it, and empty for a reference engine the
-	// host runs or an owner whose account has been anonymized.
-	Author string `json:"author,omitempty"`
-	// Reference marks a yardstick: in every round whatever anybody set, because
-	// the scale is measured from it. Flagged rather than filtered out, so the
-	// page can say that in words — an engine that is in the field for a reason
-	// its owner did not choose is the single most confusing row here.
-	Reference   bool                    `json:"reference"`
+	// Author is whoever registered it, and empty for an owner whose account has
+	// been anonymized.
+	Author      string                  `json:"author,omitempty"`
 	Rating      int                     `json:"rating"`
 	RatingState persistence.RatingState `json:"ratingState"`
 	// Online is whether anybody is running this engine at all.
@@ -113,11 +108,10 @@ type LadderRoundsView struct {
 	GraceMs int64 `json:"graceMs"`
 	// RotationHours is how long the published schedule takes to repeat.
 	//
-	// Served rather than restated in the client for the same reason the rating
-	// scale's two constants are: it is derived from two lists that live in the
-	// server, and a page that wrote the number down would go on claiming the
-	// old one after either list changed. That has a shape — a sentence saying
-	// twelve hours above a list that visibly repeats every four.
+	// Served rather than restated in the client because it is derived from two
+	// lists that live in the server, and a page that wrote the number down would
+	// go on claiming the old one after either list changed. That has a shape — a
+	// sentence saying twelve hours above a list that visibly repeats every four.
 	RotationHours int `json:"rotationHours"`
 	GamesPerRound int `json:"gamesPerRound"`
 	RoundsRun     int `json:"roundsRun"`
@@ -135,12 +129,6 @@ type LadderRoundsView struct {
 	// every hour.
 	Field []LadderFieldEngine `json:"field"`
 	Last  *LadderRoundReport  `json:"last,omitempty"`
-	// AnchorBotID is empty when no reference engine is designated, in which case
-	// the board is measured from its own weakest engine rather than from chance.
-	// See LadderRoundView.relativeScale on the client.
-	AnchorBotID             string  `json:"anchorBotId"`
-	RatingFloor             int     `json:"ratingFloor"`
-	RatingPointsPerDoubling float64 `json:"ratingPointsPerDoubling"`
 }
 
 // getLadderRounds publishes the field and the last round's results.
@@ -149,11 +137,6 @@ func (server *Server) getLadderRounds(writer http.ResponseWriter, request *http.
 	state, err := server.data.LadderPool(ctx)
 	if err != nil {
 		writeAPIError(writer, http.StatusInternalServerError, "could not read the ladder pool")
-		return
-	}
-	yardsticks, err := server.data.BotYardsticks(ctx)
-	if err != nil {
-		writeAPIError(writer, http.StatusInternalServerError, "could not read the yardsticks")
 		return
 	}
 
@@ -166,19 +149,16 @@ func (server *Server) getLadderRounds(writer http.ResponseWriter, request *http.
 	nextMode, _ := ladderConditions(next)
 
 	view := LadderRoundsView{
-		IntervalMs:              ladderRoundInterval.Milliseconds(),
-		GraceMs:                 ladderRoundGrace.Milliseconds(),
-		RotationHours:           ladderRotationHours(),
-		GamesPerRound:           2 * ladderMaxRoundsPerBot,
-		RoundsRun:               state.RoundsRun,
-		MinimumField:            ladderMinimumField,
-		LastRoundAtUnixMs:       state.LastRoundAtUnixMs,
-		Schedule:                server.ladderSchedule(ctx, now, ladderScheduleAhead),
-		Field:                   server.ladderField(ctx, nextMode),
-		Last:                    server.lastLadderRound(ctx, state.LastRoundAtUnixMs),
-		AnchorBotID:             yardsticks.AnchorBotID,
-		RatingFloor:             persistence.RatingFloor,
-		RatingPointsPerDoubling: persistence.RatingPointsPerDoubling,
+		IntervalMs:        ladderRoundInterval.Milliseconds(),
+		GraceMs:           ladderRoundGrace.Milliseconds(),
+		RotationHours:     ladderRotationHours(),
+		GamesPerRound:     2 * ladderMaxRoundsPerBot,
+		RoundsRun:         state.RoundsRun,
+		MinimumField:      ladderMinimumField,
+		LastRoundAtUnixMs: state.LastRoundAtUnixMs,
+		Schedule:          server.ladderSchedule(ctx, now, ladderScheduleAhead),
+		Field:             server.ladderField(ctx, nextMode),
+		Last:              server.lastLadderRound(ctx, state.LastRoundAtUnixMs),
 	}
 	writeJSON(writer, http.StatusOK, view)
 }
@@ -210,7 +190,6 @@ func (server *Server) ladderField(
 			Name:       entrant.Name,
 			IconSHA256: entrant.IconSHA256,
 			Author:     entrant.Owner,
-			Reference:  entrant.Reference,
 			Rating:     entrant.Rating,
 			// The mode's own rating, which is what the pairer reads: a rating is
 			// only worth reading against the game it is being earned in, and
@@ -232,10 +211,9 @@ func (server *Server) ladderField(
 	// Engines that are waiting for a game to finish sort with the rest of the
 	// field rather than below it, because they are in the round: the tag on the
 	// row is what says their games start late.
-	// Unrated below measured whatever the numbers say, for the reason the
-	// leaderboard's own ordering gives: both print the floor, and an engine
-	// nobody has placed sorting above a measured one because of that is the
-	// exact thing RatingState exists to stop.
+	// Unrated below rated whatever the numbers say: an engine with no ranked
+	// game holds a newcomer's number, which is a starting point rather than a
+	// rating, and it does not sort above an engine that has earned one.
 	slices.SortFunc(field, func(left, right LadderFieldEngine) int {
 		if left.Ready != right.Ready {
 			if left.Ready {

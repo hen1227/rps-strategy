@@ -208,7 +208,8 @@ func (server *Server) postSeek(
 		TargetUsername: username,
 		Setup:          setup,
 		ModeName:       definition.Name,
-		Elo:            matchmakingElo(client, setup.ModeID),
+		Elo:            seatElo(client, setup.ModeID),
+		Strength:       matchmakingStrength(client, setup.ModeID),
 		JoinedAt:       now,
 		Queued:         queued,
 	}

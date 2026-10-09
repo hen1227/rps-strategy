@@ -115,7 +115,7 @@ INSERT INTO accounts (
     created_at_unix_ms, updated_at_unix_ms
 ) VALUES (?, ?, '', ?, ?, ?, ?)
 ON CONFLICT(user_id) DO NOTHING
-`, userID, username, profileKeyHash, RatingFloor, now, now); err != nil {
+`, userID, username, profileKeyHash, RatingStart, now, now); err != nil {
 		return Account{}, fmt.Errorf("authenticate account: create account: %w", err)
 	}
 

@@ -20,18 +20,14 @@ import (
 // have counted, such as fifty pairs between two engines the host set up for
 // exactly that.
 //
-// Engine games only, and the reason is the difference between the two rating
-// systems (see RecordCompletedGame). An engine's rating is a fit over every
-// ranked engine game on record, so changing which games are on it and fitting
-// again gives exactly the board that would stand had the game been seated the
-// other way from the start. A person's rating is a running state, updated in the
-// order games finished: there is no stored before-and-after for its strength to
-// unwind, and applying a game long after the fact would apply it to a rating
-// that has moved on since. Deleting a game is the one correction a person's
-// rating has, and admin_delete.go says how approximate it is.
+// Changing which games are ranked and replaying the record (see
+// rating_replay.go) gives exactly the board that would stand had the game been
+// seated the other way from the start. That would be as true of a person's game
+// as of an engine's; this is limited to engine games because it is a tool for
+// hosts correcting engine runs, and a person chose ranked or casual themselves.
 //
-// Every copy of the flag moves together, in one transaction with the refit: the
-// history row the ladder is fitted from, and the archive's column and the file
+// Every copy of the flag moves together, in one transaction with the replay:
+// the history row ratings are read from, and the archive's column and the file
 // itself, which is what a review, a download and an export read. The bot series
 // row is the caller's to move, when there is one; see SetBotSeriesRanked.
 
@@ -41,9 +37,9 @@ var (
 		"only a game between two engines can be moved between ranked and casual",
 	)
 	// ErrReclassifySameOwner is ranked asked for a pair the ladder never rates.
-	// Refused rather than done, because the fit drops the pair whatever the flag
-	// says (botHeadToHeadTx), and a game that reads ranked while moving nothing
-	// is the confusion the flag exists to prevent.
+	// Refused rather than done, because the replay skips the pair whatever the
+	// flag says (see sameOwner), and a game that reads ranked while moving
+	// nothing is the confusion the flag exists to prevent.
 	ErrReclassifySameOwner = errors.New(
 		"one person registered both engines, and the ladder does not rate their games",
 	)
@@ -53,7 +49,7 @@ var (
 type Reclassification struct {
 	Ranked bool `json:"ranked"`
 	// Changed is how many games changed their flag. Zero is a real answer —
-	// asking for what the record already says — and nothing is refitted for it.
+	// asking for what the record already says — and nothing is replayed for it.
 	Changed int         `json:"changed"`
 	ModeID  game.ModeID `json:"modeId"`
 }
@@ -111,7 +107,7 @@ SELECT mode_id, red_player_id, blue_player_id, ranked FROM game_history WHERE ga
 			return Reclassification{}, err
 		}
 		result.Changed = 1
-		if err := refitBotLadderTx(ctx, transaction, modeID, time.Now().UnixMilli()); err != nil {
+		if _, err := replayRatingsTx(ctx, transaction, time.Now().UnixMilli()); err != nil {
 			return Reclassification{}, err
 		}
 	}
@@ -202,7 +198,7 @@ ORDER BY g.game_number
 		}
 	}
 	if len(moving) > 0 {
-		if err := refitBotLadderTx(ctx, transaction, modeID, time.Now().UnixMilli()); err != nil {
+		if _, err := replayRatingsTx(ctx, transaction, time.Now().UnixMilli()); err != nil {
 			return Reclassification{}, err
 		}
 	}
@@ -214,8 +210,8 @@ ORDER BY g.game_number
 
 // setGameRankedTx rewrites every copy of one game's flag.
 //
-// A game with no archive row is still moved: the history is what the ladder
-// reads, and a game whose archive write failed is the reverse of the
+// A game with no archive row is still moved: the history is what ratings are
+// read from, and a game whose archive write failed is the reverse of the
 // archive-only case the delete path allows for.
 func setGameRankedTx(
 	ctx context.Context,
@@ -249,8 +245,8 @@ func setGameRankedTx(
 
 // sameBotOwnerTx reports whether one account registered both engines.
 //
-// The rule botHeadToHeadTx applies, asked of one pair: two bots whose owner is
-// unknown are not two bots with the same owner.
+// The rule sameOwner applies to the whole record, asked of one pair: two bots
+// whose owner is unknown are not two bots with the same owner.
 func sameBotOwnerTx(
 	ctx context.Context,
 	transaction *sql.Tx,
@@ -266,4 +262,21 @@ WHERE red.user_id = ? AND blue.user_id = ?
 		return false, fmt.Errorf("reclassify game: read owners: %w", err)
 	}
 	return shared > 0, nil
+}
+
+// bothBotsTx reports whether a game was between two engines, which is what
+// moving one between ranked and casual is limited to.
+func bothBotsTx(
+	ctx context.Context,
+	transaction *sql.Tx,
+	redID string,
+	blueID string,
+) (bool, error) {
+	var bots int
+	if err := transaction.QueryRowContext(ctx, `
+SELECT COUNT(*) FROM accounts WHERE user_id IN (?, ?) AND kind = ?
+`, redID, blueID, AccountKindBot).Scan(&bots); err != nil {
+		return false, fmt.Errorf("bot ladder: read account kinds: %w", err)
+	}
+	return bots == 2, nil
 }

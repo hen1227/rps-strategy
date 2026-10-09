@@ -113,13 +113,9 @@ export default function LadderRows({
                       {recordLine(result)}
                     </Text>
                     {/*
-                      The words, where the dash on the right is only a gap.
-                      A row with a long record and no rating is the confusing
-                      case — it looks like a rating of nothing rather than the
-                      absence of one — so the reason sits under the record it
-                      appears to contradict. Provisional says the softer version
-                      of the same thing: there is a number, and it is still
-                      moving.
+                      Provisional says the number is still climbing towards its
+                      owner's strength, under the record that explains why: a
+                      few games, or a long time away.
                     */}
                     {ratingCaveat(entry.ratingState) ? (
                       <Text numberOfLines={1} style={styles.caveat}>

@@ -450,14 +450,14 @@ export default function AccountsPanel({ admin }: AccountsPanelProps) {
                             game={game}
                             key={game.gameId}
                             onArm={() => setConfirming(`game:${game.gameId}`)}
-                            // Ratings handed back, which is the default
-                            // everywhere: the usual reason to delete a game is
-                            // that its result should not stand. The Games panel
-                            // is where that can be turned off.
+                            // The result comes off both records, which is the
+                            // default everywhere: the usual reason to delete a
+                            // game is that its result should not stand. The
+                            // Games panel is where that can be turned off.
                             onDelete={() =>
                               run(
                                 () => deleteGame(admin.token, game.gameId, true),
-                                'Game deleted. Both players have their rating back.',
+                                'Game deleted. Ratings recomputed without it.',
                               )
                             }
                             onToggleRanked={() =>

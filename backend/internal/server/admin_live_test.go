@@ -198,7 +198,7 @@ func seekForTest(client *Client) *Seek {
 		Poster:   client.profile,
 		Setup:    game.GameSetup{ModeID: game.ModeTotalWar},
 		ModeName: "Total War",
-		Elo:      persistence.RatingFloor,
+		Elo:      persistence.RatingStart,
 		Queued:   true,
 	}
 	seek.bind(client)

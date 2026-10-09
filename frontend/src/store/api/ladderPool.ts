@@ -70,25 +70,6 @@ export interface LadderPool {
    * first entry later than now, the way `ladderRoundView` does.
    */
   schedule: LadderRoundPreview[];
-  /**
-   * The engine the whole scale is measured from, empty when none is designated.
-   *
-   * Empty is a real and visible state rather than an error: until a yardstick
-   * exists the fit publishes nothing and every rating reads at the floor, so a
-   * client that draws rating movement has to be able to tell "nothing moved"
-   * from "there is no board yet".
-   */
-  anchorBotId: string;
-  /**
-   * Every reference engine, the anchor included.
-   *
-   * May contain empty strings — the server builds this by putting the anchor in
-   * front of the rungs, and an undesignated anchor is an empty id rather than an
-   * absent one. Filter before using it as a set.
-   */
-  yardstickBotIds: string[];
-  ratingFloor: number;
-  ratingPointsPerDoubling: number;
 }
 
 export const fetchLadderPool = (): Promise<LadderPool> =>
@@ -107,14 +88,8 @@ export interface LadderFieldEngine {
   userId: string;
   name: string;
   iconSha256?: string;
-  /** Whoever registered it. Absent for a reference engine and for a deleted owner. */
+  /** Whoever registered it. Absent for a deleted owner. */
   author?: string;
-  /**
-   * A yardstick: in every round whatever anybody set, because the scale is
-   * measured from it. Its owner's switch does not apply, so a page has to be
-   * able to say which of the two reasons an engine is in the field.
-   */
-  reference: boolean;
   rating: number;
   ratingState: RatingState;
   /**
@@ -178,9 +153,6 @@ export interface LadderRounds {
   field: LadderFieldEngine[];
   /** Absent before the pool has ever run a round. */
   last?: LadderRoundReport | null;
-  anchorBotId: string;
-  ratingFloor: number;
-  ratingPointsPerDoubling: number;
 }
 
 /**

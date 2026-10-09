@@ -78,10 +78,6 @@ var (
 	// BotIconPixels a side. Always wrapped with the particular reason, because
 	// the owner is the one who has to fix the file.
 	ErrBotIconInvalid = errors.New("bot icon rejected")
-
-	// ErrInvalidBotReference is a designation that names no benchmark slot,
-	// or a slot another engine already holds. See benchmarks.go.
-	ErrInvalidBotReference = errors.New("invalid benchmark slot")
 )
 
 // Bot is one registered engine. It is safe to serialize: the token is stored
@@ -127,13 +123,8 @@ type Bot struct {
 	// rather than one request per bot, and zero on an unclaimed slot, which has
 	// no account to have a record in yet.
 	//
-	// Elo is the strongest of its mode ratings, and deliberately not
-	// `accounts.elo`, which looks like the obvious column and is not: ranked
-	// play moves `account_mode_ratings` and leaves that one as the seed a new
-	// mode starts from, so reading it would report RatingFloor for every engine
-	// for ever. Same answer, and for the same reason, as the combined
-	// leaderboard — see the note in Leaderboard. The counters beside it are
-	// lifetime totals, which do move on every game.
+	// Elo is the engine's headline rating, its best rated mode — see
+	// headlineRatingSQL. The counters beside it are lifetime totals.
 	Elo         int `json:"elo"`
 	Wins        int `json:"wins"`
 	Losses      int `json:"losses"`
@@ -235,17 +226,10 @@ CREATE INDEX IF NOT EXISTS bots_public_idx
 		return fmt.Errorf("migrate bot schema: %w", err)
 	}
 	// CREATE TABLE IF NOT EXISTS does nothing to a table that already exists,
-	// so a database from before the yardsticks needs the column added.
+	// so a database from before a column needs it added.
 	columns, err := tableColumns(ctx, store.db, "bots")
 	if err != nil {
 		return fmt.Errorf("inspect bot schema: %w", err)
-	}
-	if !columns["reference_kind"] {
-		if _, err := store.db.ExecContext(ctx,
-			"ALTER TABLE bots ADD COLUMN reference_kind TEXT NOT NULL DEFAULT ''",
-		); err != nil {
-			return fmt.Errorf("add bot reference column: %w", err)
-		}
 	}
 	// Default 1, so an engine already running is entered when this ships rather
 	// than quietly dropping off a ladder it cannot know it needs to opt back
@@ -298,102 +282,6 @@ CREATE INDEX IF NOT EXISTS bot_engine_versions_history_idx
 	return nil
 }
 
-// The yardsticks: the server's own engines, and the only rows in `bots` that
-// the ladder treats differently from anybody else's submission.
-//
-// A yardstick is a bot whose `reference_kind` names a benchmark slot. What the
-// slots are, what each is worth, and why the scale is declared at several points
-// rather than one are all in benchmarks.go; what is here is how a designation is
-// stored and read back.
-//
-// Two things the ladder does differently for them, both of which follow from the
-// declaration rather than adding to it. Their strengths are held fixed in the
-// fit, so they are the frame everybody else is measured in. And a yardstick
-// opponent is exempt from the opponent-count prune, which is the on-ramp: see
-// botRatingMinimumOpponents. The second is what makes a newcomer's first hour
-// produce a real rating instead of nothing.
-//
-// The other thing they buy is that a yardstick plays everybody, so the ladder is
-// connected by construction and a newcomer is never stranded in a component of
-// its own waiting for somebody to challenge it.
-
-// BotYardsticks names the reference engines rated in this database.
-//
-// Read once per fit rather than passed in from configuration, because which
-// account holds the anchor is a fact about the data the ratings were computed
-// from. A fit and the record it came from have to agree about where zero is, and
-// the way to guarantee that is to read both from the same transaction.
-type BotYardsticks struct {
-	// Anchor is the account holding BenchmarkRandom, whose rating is RatingFloor
-	// by definition. Empty if this database has no anchor, which is a real state
-	// — a fresh install, or a deployment before the yardsticks are seeded — and
-	// one the fit answers by publishing nothing rather than by guessing.
-	Anchor string
-	// Slots is every designated account, by user id, naming the benchmark slot it
-	// holds. The anchor is in here too: it is a rung like the others as far as
-	// the fit is concerned, and differs only in being the one the scale is named
-	// after and the one the fit refuses to run without.
-	Slots map[string]string
-}
-
-// known reports whether an account is one of the server's own engines.
-func (yardsticks BotYardsticks) known(userID string) bool {
-	if userID == "" {
-		return false
-	}
-	_, designated := yardsticks.Slots[userID]
-	return designated
-}
-
-// pinned is the rating each designated account is declared to hold, which is
-// what the fit holds fixed. Empty for a database with no yardsticks.
-func (yardsticks BotYardsticks) pinned() map[string]int {
-	ratings := make(map[string]int, len(yardsticks.Slots))
-	for userID, slot := range yardsticks.Slots {
-		ratings[userID] = benchmarkRating(slot)
-	}
-	return ratings
-}
-
-// botYardsticksTx reads the reference engines.
-//
-// A retired or disabled yardstick still counts. Retirement releases a name and
-// frees a slot against its owner's quota; it does not unsay the games, and the
-// anchor's games are what every other rating is measured through. An anchor that
-// stopped counting the moment somebody clicked the wrong button would take the
-// whole board's scale with it.
-func botYardsticksTx(ctx context.Context, transaction *sql.Tx) (BotYardsticks, error) {
-	rows, err := transaction.QueryContext(ctx, `
-SELECT COALESCE(user_id, ''), reference_kind FROM bots WHERE reference_kind <> ''
-`)
-	if err != nil {
-		return BotYardsticks{}, fmt.Errorf("read yardsticks: %w", err)
-	}
-	defer rows.Close()
-
-	yardsticks := BotYardsticks{Slots: make(map[string]string)}
-	for rows.Next() {
-		var userID, slot string
-		if err := rows.Scan(&userID, &slot); err != nil {
-			return BotYardsticks{}, fmt.Errorf("read yardstick row: %w", err)
-		}
-		// An unclaimed slot has a bot row and no account yet, which is the state
-		// between minting the token and the engine first connecting. Nothing to
-		// pin: the fit is keyed on accounts.
-		if userID == "" {
-			continue
-		}
-		if slot == BenchmarkRandom {
-			yardsticks.Anchor = userID
-		}
-		yardsticks.Slots[userID] = slot
-	}
-	if err := rows.Err(); err != nil {
-		return BotYardsticks{}, fmt.Errorf("read yardsticks: %w", err)
-	}
-	return yardsticks, nil
-}
-
 // botSelect joins the bot to the account that carries its name, so the two can
 // never drift apart.
 const botSelect = `
@@ -405,8 +293,7 @@ SELECT b.bot_id, b.owner_user_id, COALESCE(b.user_id, ''),
        b.claimed_at_unix_ms IS NOT NULL, b.disabled,
        b.retired_at_unix_ms IS NOT NULL,
        b.created_at_unix_ms, b.last_seen_at_unix_ms,
-       COALESCE((SELECT MAX(r.elo) FROM account_mode_ratings r
-                  WHERE r.user_id = b.user_id), a.elo, 0),
+       COALESCE(a.elo, 0),
        COALESCE(a.wins, 0), COALESCE(a.losses, 0),
        COALESCE(a.draws, 0), COALESCE(a.games_played, 0),
        COALESCE(a.title, '')
@@ -473,15 +360,10 @@ SELECT `+registeredSQL("")+`, kind, disabled FROM accounts WHERE user_id = ?
 		return Bot{}, "", ErrNotRegistered
 	}
 
-	// Yardsticks do not count against the quota. It is an anti-spam control
-	// aimed at people, and the server's own reference engines are neither spam
-	// nor a person's — an administrator put them there deliberately, and the
-	// number of rungs the scale needs is a question about measurement rather
-	// than about how many bots one account may run.
 	var existing int
 	if err := transaction.QueryRowContext(ctx, `
 SELECT COUNT(*) FROM bots
-WHERE owner_user_id = ? AND retired_at_unix_ms IS NULL AND reference_kind = ''
+WHERE owner_user_id = ? AND retired_at_unix_ms IS NULL
 `, ownerUserID).Scan(&existing); err != nil {
 		return Bot{}, "", fmt.Errorf("mint bot token: count bots: %w", err)
 	}
@@ -582,7 +464,7 @@ FROM bots WHERE token_hash = ?
 INSERT INTO accounts (user_id, kind, username, username_lower, discord, profile_key_hash,
                       elo, created_at_unix_ms, updated_at_unix_ms)
 VALUES (?, ?, ?, ?, '', ?, ?, ?, ?)
-`, accountID, AccountKindBot, name, UsernameKey(name), sealedHash, RatingFloor, now, now); err != nil {
+`, accountID, AccountKindBot, name, UsernameKey(name), sealedHash, RatingStart, now, now); err != nil {
 			if isUniqueConstraint(err) {
 				return Bot{}, ErrUsernameTaken
 			}
@@ -940,139 +822,4 @@ func boolToInt(value bool) int {
 		return 1
 	}
 	return 0
-}
-
-// SetBotBenchmarkSlot puts a bot in one of the scale's fixed slots, or takes it
-// out of one when slot is empty.
-//
-// Deliberately not part of BotSettings and not reachable from PATCH /api/bots:
-// which engines define the scale is not a preference, and an owner who could set
-// it could rewrite every rating in the game by declaring their own bot to be
-// chance itself.
-//
-// One engine per slot, enforced here and in a transaction rather than by the
-// caller looking first. Two engines sharing a slot is not a state with a sensible
-// reading — the fit would pin two different bots to the same number and the
-// board would be measured against whichever the query returned — and a check in
-// the HTTP handler is a check two administrators can both pass at once.
-//
-// Moving a slot from one engine to another is done by clearing it first. That is
-// one more call than strictly necessary, and it is the point: a slot changing
-// hands restates every rating in the game, so it should not be something that
-// happens as a side effect of designating something else.
-func (store *Store) SetBotBenchmarkSlot(ctx context.Context, botID string, slot string) error {
-	if err := ValidateBenchmarkSlot(slot); err != nil {
-		return err
-	}
-	transaction, err := store.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("set benchmark slot: begin transaction: %w", err)
-	}
-	defer func() { _ = transaction.Rollback() }()
-
-	if slot != "" {
-		var holder string
-		err := transaction.QueryRowContext(ctx, `
-SELECT bot_id FROM bots WHERE reference_kind = ? LIMIT 1
-`, slot).Scan(&holder)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("set benchmark slot: read the current holder: %w", err)
-		}
-		if holder != "" && holder != botID {
-			return fmt.Errorf(
-				"%w: the %s slot is held by %s; clear it first",
-				ErrInvalidBotReference, slot, holder,
-			)
-		}
-	}
-
-	result, err := transaction.ExecContext(ctx, `
-UPDATE bots SET reference_kind = ?, updated_at_unix_ms = ? WHERE bot_id = ?
-`, slot, time.Now().UnixMilli(), botID)
-	if err != nil {
-		return fmt.Errorf("set benchmark slot: %w", err)
-	}
-	if affected, err := result.RowsAffected(); err == nil && affected == 0 {
-		return ErrBotNotFound
-	}
-	if err := transaction.Commit(); err != nil {
-		return fmt.Errorf("set benchmark slot: commit: %w", err)
-	}
-	return nil
-}
-
-// PublicBotYardsticks is the server's reference engines, for a caller outside
-// the rating code: the anchor's bot id and user id, and the rungs beside it.
-//
-// A separate shape from the internal BotYardsticks, which is keyed on user ids
-// because that is what a head-to-head record is keyed on. An administrator's
-// screen and the ladder pool both want the bot id instead, and an anchor that is
-// minted but not yet claimed has one of those and not the other.
-type PublicBotYardsticks struct {
-	AnchorBotID  string   `json:"anchorBotId"`
-	AnchorUserID string   `json:"anchorUserId"`
-	RungBotIDs   []string `json:"rungBotIds"`
-	RungUserIDs  []string `json:"rungUserIds"`
-	// Held is the declared ladder with its occupants filled in, weakest first,
-	// including the slots nobody holds yet.
-	//
-	// The empty rows are the useful half: standing the yardsticks up is a job
-	// with a checklist, and a screen that only listed what exists cannot show
-	// what is missing. It is also what the fit's refusal to publish looks like
-	// from outside — no anchor, no board.
-	Held []HeldBenchmark `json:"held"`
-}
-
-// HeldBenchmark is one declared slot and whoever is in it.
-type HeldBenchmark struct {
-	Benchmark
-	// BotID and UserID are empty for a slot nobody holds. A slot can have the
-	// first and not the second, which is a yardstick minted but not yet
-	// connected — it has a registry row and no account to pin.
-	BotID  string `json:"botId,omitempty"`
-	UserID string `json:"userId,omitempty"`
-}
-
-// BotYardsticks reads the reference engines outside a transaction.
-func (store *Store) BotYardsticks(ctx context.Context) (PublicBotYardsticks, error) {
-	rows, err := store.db.QueryContext(ctx, `
-SELECT bot_id, COALESCE(user_id, ''), reference_kind
-FROM bots WHERE reference_kind <> '' ORDER BY bot_id
-`)
-	if err != nil {
-		return PublicBotYardsticks{}, fmt.Errorf("read yardsticks: %w", err)
-	}
-	defer rows.Close()
-
-	holders := make(map[string]HeldBenchmark)
-	var yardsticks PublicBotYardsticks
-	for rows.Next() {
-		var botID, userID, slot string
-		if err := rows.Scan(&botID, &userID, &slot); err != nil {
-			return PublicBotYardsticks{}, fmt.Errorf("read yardstick row: %w", err)
-		}
-		holders[slot] = HeldBenchmark{BotID: botID, UserID: userID}
-		if slot == BenchmarkRandom {
-			yardsticks.AnchorBotID, yardsticks.AnchorUserID = botID, userID
-			continue
-		}
-		yardsticks.RungBotIDs = append(yardsticks.RungBotIDs, botID)
-		if userID != "" {
-			yardsticks.RungUserIDs = append(yardsticks.RungUserIDs, userID)
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return PublicBotYardsticks{}, fmt.Errorf("read yardsticks: %w", err)
-	}
-
-	// Driven by the catalogue rather than by the rows, so the answer is the
-	// whole ladder in declared order with the gaps visible, and a row holding a
-	// slot this binary no longer declares simply does not appear.
-	yardsticks.Held = make([]HeldBenchmark, 0, len(benchmarkLadder))
-	for _, benchmark := range benchmarkLadder {
-		held := holders[benchmark.Slot]
-		held.Benchmark = benchmark
-		yardsticks.Held = append(yardsticks.Held, held)
-	}
-	return yardsticks, nil
 }

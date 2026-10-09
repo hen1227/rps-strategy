@@ -21,24 +21,13 @@ import type { ModeDefinition } from '@/types/game';
 import { timeControlLabel } from '@/store/setupSelectors';
 import type { BadgeTone } from '@/ui/tones';
 
-/** The field, split into the two reasons an engine is in it. */
+/** The field, as the page draws it. */
 export interface LadderFieldGroups {
   /**
    * Engines their owners entered, and that somebody is running. The part of a
    * round that is news, and the only part anybody can change.
    */
   entered: LadderFieldEngine[];
-  /**
-   * The server's reference engines, which are in every round whatever their
-   * owner set because the whole scale is measured from them.
-   *
-   * Apart from the list above rather than mixed into it, and *not* hidden. On
-   * the rail they were reduced to a count, which was right for a 296-point
-   * column and wrong here: "why is that engine in every round" is one of the
-   * questions this page exists to answer, and it cannot be answered about
-   * engines that are not on it.
-   */
-  references: LadderFieldEngine[];
   /**
    * How many of the whole field the round will use.
    *
@@ -72,8 +61,7 @@ export interface LadderFieldGroups {
 export const ladderFieldGroups = (field: LadderFieldEngine[]): LadderFieldGroups => {
   const here = field.filter((engine) => engine.online);
   return {
-    entered: here.filter((engine) => !engine.reference),
-    references: here.filter((engine) => engine.reference),
+    entered: here,
     // Over the whole field rather than over `here`, which costs nothing —
     // an engine nobody is running is never in the round — and keeps this the
     // answer to "how many will play" rather than to "how many of the rows
@@ -98,7 +86,7 @@ export const ladderFieldGroups = (field: LadderFieldEngine[]): LadderFieldGroups
  * did not match the list it sits above would be the same trap in a new place.
  */
 export const fieldSummary = (groups: LadderFieldGroups): string =>
-  `${groups.inRound} of ${groups.entered.length + groups.references.length} in`;
+  `${groups.inRound} of ${groups.entered.length} in`;
 
 /**
  * The engines whose games start late, in a sentence, or nothing.

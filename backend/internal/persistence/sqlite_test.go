@@ -20,7 +20,7 @@ func TestSQLitePersistsAccountsAndRetainsChosenUsername(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if account.Elo != RatingFloor || account.Username != "Ada" {
+	if account.Elo != RatingStart || account.Username != "Ada" {
 		t.Fatalf("unexpected new account: %#v", account)
 	}
 	if _, err := store.EnsureAccount(context.Background(), "player-1", "Guest"); err != nil {
@@ -39,7 +39,7 @@ func TestSQLitePersistsAccountsAndRetainsChosenUsername(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if persisted.Username != "Ada" || persisted.Elo != RatingFloor {
+	if persisted.Username != "Ada" || persisted.Elo != RatingStart {
 		t.Fatalf("account did not survive reopening: %#v", persisted)
 	}
 }
@@ -71,26 +71,20 @@ func TestCompletedRankedGameUpdatesEloHistoryAndHeadToHeadExactlyOnce(t *testing
 	if !update.Recorded {
 		t.Fatalf("the game was not recorded: %#v", update)
 	}
-	// Both start at the floor, having proved nothing. The winner rises; the
-	// loser does not pay for it, which is the property that separates this from
-	// the transfer it replaced. There is no reservoir of points on a scale
-	// everybody starts at the bottom of, so a rating cannot be taken from
-	// somebody and given to somebody else — the game said one thing about the
-	// winner and a different thing about the loser, and each is applied to its
-	// own side.
-	if update.RedEloBefore != RatingFloor || update.BlueEloBefore != RatingFloor {
-		t.Fatalf("two new accounts did not start at the floor: %#v", update)
+	// Both start where everybody starts. The winner rises a long way and the
+	// loser falls only a little, because both were newcomers: the game narrowed
+	// both deviations, which lifts both published numbers, while it moved their
+	// strengths apart by the same amount.
+	if update.RedEloBefore != RatingStart || update.BlueEloBefore != RatingStart {
+		t.Fatalf("two new accounts did not start at %d: %#v", RatingStart, update)
 	}
-	if update.RedEloAfter <= update.RedEloBefore {
-		t.Fatalf("the winner did not gain: %#v", update)
+	if update.RedEloAfter <= update.RedEloBefore || update.BlueEloAfter >= update.BlueEloBefore {
+		t.Fatalf("the winner should gain and the loser lose: %#v", update)
 	}
 	if gained, lost := update.RedEloAfter-update.RedEloBefore,
-		update.BlueEloBefore-update.BlueEloAfter; gained == lost {
-		t.Fatalf("the winner took exactly what the loser lost, which is a transfer: %#v",
+		update.BlueEloBefore-update.BlueEloAfter; gained <= lost {
+		t.Fatalf("a newcomer's first win should be worth more than a first loss costs: %#v",
 			update)
-	}
-	if update.BlueEloAfter < RatingFloor {
-		t.Fatalf("a rating went below the floor: %#v", update)
 	}
 
 	duplicate, err := store.RecordCompletedGame(
@@ -119,11 +113,15 @@ func TestCompletedRankedGameUpdatesEloHistoryAndHeadToHeadExactlyOnce(t *testing
 		blueAccount.Losses != 1 || blueAccount.GamesPlayed != 1 {
 		t.Fatalf("unexpected Blue account: %#v", blueAccount)
 	}
-	// The shared rating is only the seed a mode starts from, so a rated result
-	// must leave it untouched.
-	if redAccount.Elo != RatingFloor || blueAccount.Elo != RatingFloor {
-		t.Fatalf("ranked play moved the shared seed rating: %d, %d",
-			redAccount.Elo, blueAccount.Elo)
+	// The account's headline rating is its best rated mode, which here is the
+	// only one.
+	if redAccount.Elo != update.RedEloAfter || blueAccount.Elo != update.BlueEloAfter {
+		t.Fatalf("the headline ratings are %d and %d, want %d and %d",
+			redAccount.Elo, blueAccount.Elo, update.RedEloAfter, update.BlueEloAfter)
+	}
+	if rating := redAccount.ModeRatings[game.ModeInfiltration]; rating.RatedGames != 1 ||
+		rating.State != RatingStateProvisional {
+		t.Fatalf("one ranked game should leave a provisional rating: %#v", rating)
 	}
 	if redAccount.ModeRatings[game.ModeInfiltration].Wins != 1 ||
 		blueAccount.ModeRatings[game.ModeInfiltration].Losses != 1 {
@@ -149,7 +147,10 @@ func TestCompletedRankedGameUpdatesEloHistoryAndHeadToHeadExactlyOnce(t *testing
 	}
 }
 
-func TestDrawIsRecordedWithoutChangingEqualRatings(t *testing.T) {
+// A draw between two equal players leaves both strengths where they were and
+// narrows both deviations, so it lifts both published numbers by the same
+// amount: playing is what is rewarded, and nobody beat anybody.
+func TestADrawBetweenEqualsLiftsBothTheSameWay(t *testing.T) {
 	store, err := Open(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -175,8 +176,15 @@ func TestDrawIsRecordedWithoutChangingEqualRatings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if update.RedEloAfter != RatingFloor || update.BlueEloAfter != RatingFloor {
-		t.Fatalf("equal players should not change Elo on a draw: %#v", update)
+	if update.RedEloAfter != update.BlueEloAfter || update.RedEloAfter <= RatingStart {
+		t.Fatalf("a draw between newcomers should lift both equally: %#v", update)
+	}
+	redAccount, err := store.Account(context.Background(), red.UserID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strength := redAccount.ModeRatings[game.ModeInfiltration].Strength; strength != 1500 {
+		t.Fatalf("a draw between equals moved the strength to %d", strength)
 	}
 	record, err := store.HeadToHead(context.Background(), red.UserID, blue.UserID)
 	if err != nil {
@@ -187,17 +195,10 @@ func TestDrawIsRecordedWithoutChangingEqualRatings(t *testing.T) {
 	}
 }
 
-// Modes are rated separately, and a mode you have never played starts from the
-// strength the rest of your play established — held at arm's length, because a
-// strength is not a rating until it has been demonstrated here.
-//
-// This used to seed the new mode from a shared Elo column and copy the number
-// straight across. On this scale that would put a figure in front of somebody
-// that no strength of theirs backs, and their first win in the mode would appear
-// to move them from 130 to 18. What carries over now is the strength; what is
-// published is that strength shrunk by the uncertainty of a mode with no games
-// in it, which reads near the floor and climbs as they play.
-func TestModeRatingsCarryStrengthAcrossModesButNotCertainty(t *testing.T) {
+// Modes are rated separately, and a mode you have never played starts from
+// scratch: Intransitive and Infiltration are different games, and a strength in
+// one says little about the other.
+func TestModesAreRatedIndependently(t *testing.T) {
 	store, err := Open(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -239,22 +240,19 @@ func TestModeRatingsCarryStrengthAcrossModesButNotCertainty(t *testing.T) {
 	for range 6 {
 		infiltration = record(game.ModeInfiltration, game.Blue)
 	}
-	if infiltration.RedEloAfter <= RatingFloor {
-		t.Fatalf("six wins did not lift the winner off the floor: %#v", infiltration)
+	if infiltration.RedEloAfter <= RatingStart {
+		t.Fatalf("six wins did not lift the winner: %#v", infiltration)
 	}
 
-	// Total War has never been played, so it publishes far below what
-	// Infiltration does — but not from nothing, because the strength came with
-	// them.
+	// Total War has never been played, so it starts where everybody does.
 	redAccount, err := store.Account(context.Background(), red.UserID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	established := redAccount.ModeElo(game.ModeInfiltration)
 	totalWar := record(game.ModeTotalWar, game.Red)
-	if totalWar.RedEloBefore >= established {
-		t.Fatalf("an unplayed mode published as much as an established one: %d against %d",
-			totalWar.RedEloBefore, established)
+	if totalWar.RedEloBefore != RatingStart {
+		t.Fatalf("an unplayed mode started at %d, want %d", totalWar.RedEloBefore, RatingStart)
 	}
 
 	// And they rate independently: losing in Total War does not touch

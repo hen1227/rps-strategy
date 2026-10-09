@@ -48,13 +48,13 @@ import (
 //
 // # Random, rather than by information
 //
-// The pairer scores each candidate by how much the fit would learn from it —
+// The pairer scores each candidate by how much the ratings would learn from it —
 // see ladderPairValue — and this picks uniformly instead. That is a real cost
-// and it is worth writing down where somebody will find it: information per
-// game is p(1-p), so a lopsided draw is worth a fraction of an even one, and a
+// and it is worth writing down where somebody will find it: a game teaches most
+// at even odds, so a lopsided draw is worth a fraction of an even one, and a
 // uniform pick on a spread board draws lopsided most of the time. An author
-// pressing this fifty times will move their rating less than fifty rounds
-// would.
+// pressing this fifty times will learn less about their engine than fifty
+// rounds would.
 //
 // It is uniform because that is what was asked for and because it is the thing
 // that is easy to describe on a button: *play somebody*. If ratings still feel
@@ -71,13 +71,15 @@ import (
 // machinery than the risk it guarded against, and nobody could tell from the
 // page which of three ranked buttons did what.
 //
-// What bounds the risk is the fit rather than a question to anybody:
-// botRatingPairCap stops any one matchup counting for more than about twenty
-// games however many are played, a bot needs distinct opponents before it is
-// published at all, and one owner's engines never rate each other. And
-// everything but the names stays the rotation's — one pair, colours swapped, a
-// drawn mode and clock — so a named match cannot also be a chosen clock, and
-// it cannot be stopped after a bad first game (see AbortBotSeries).
+// What bounds the risk is the rating rather than a question to anybody. A win
+// is worth less the more the winner was expected to win, and an opponent that
+// keeps losing stops paying almost at once, because its own rating falls with
+// every loss; a freshly registered one is worth little too, because a result
+// against an unmeasured opponent is discounted. One owner's engines never rate
+// each other. And everything but the names stays the rotation's — one pair,
+// colours swapped, a drawn mode and clock — so a named match cannot also be a
+// chosen clock, and it cannot be stopped after a bad first game (see
+// AbortBotSeries).
 //
 // Both engines have to be entered in the ranked ladder. That switch is the
 // consent: it already lets the hour pair an engine with anyone, and a named
@@ -346,9 +348,9 @@ func (server *Server) pickLadderOpponent(
 	}
 
 	// The asking bot has to be in the field itself. Being absent from this list
-	// is exactly "not entered": LadderEntrants is every consenting engine plus
-	// the yardsticks, read from the database rather than from the connected
-	// roster, so a switch flipped on the website a second ago is already here.
+	// is exactly "not entered": LadderEntrants is every consenting engine, read
+	// from the database rather than from the connected roster, so a switch
+	// flipped on the website a second ago is already here.
 	var asking *persistence.LadderCandidate
 	for index, entrant := range entrants {
 		if entrant.BotID == botID {
@@ -377,10 +379,10 @@ func (server *Server) pickLadderOpponent(
 		if entrant.BotID == botID {
 			continue
 		}
-		// Two engines one person owns produce no rating — the fit drops the
-		// pair whatever the flag on the game says — so seating them would be a
-		// press that visibly played two games and moved nothing. The pairer
-		// skips these for the same reason; see chooseLadderPairings.
+		// Two engines one person owns produce no rating — their games never
+		// move one, whatever the flag on the game says — so seating them would
+		// be a press that visibly played two games and moved nothing. The
+		// pairer skips these for the same reason; see chooseLadderPairings.
 		if asking.OwnerUserID != "" && asking.OwnerUserID == entrant.OwnerUserID {
 			continue
 		}

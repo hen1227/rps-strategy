@@ -404,7 +404,7 @@ INSERT INTO accounts (
     created_at_unix_ms, updated_at_unix_ms
 ) VALUES (?, ?, ?, '', ?, ?, ?, ?)
 ON CONFLICT(user_id) DO NOTHING
-`, userID, AccountKindHuman, username, sealedHash, RatingFloor, now, now); err != nil {
+`, userID, AccountKindHuman, username, sealedHash, RatingStart, now, now); err != nil {
 		return Account{}, fmt.Errorf("claim account: create account: %w", err)
 	}
 

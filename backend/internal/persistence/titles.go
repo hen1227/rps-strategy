@@ -205,25 +205,25 @@ var playerTitleCatalogue = []Title{
 		ID:          TitleGrandmaster,
 		Name:        "Grandmaster",
 		Kind:        TitleKindRating,
-		Requirement: "Reach 2000 in any mode.",
+		Requirement: "Reach 2200 in any mode.",
 	},
 	{
 		ID:          TitleInternationalMaster,
 		Name:        "International Master",
 		Kind:        TitleKindRating,
-		Requirement: "Reach 1800 in any mode.",
+		Requirement: "Reach 2000 in any mode.",
 	},
 	{
 		ID:          TitleMaster,
 		Name:        "Master",
 		Kind:        TitleKindRating,
-		Requirement: "Reach 1600 in any mode.",
+		Requirement: "Reach 1800 in any mode.",
 	},
 	{
 		ID:          TitleCandidateMaster,
 		Name:        "Candidate Master",
 		Kind:        TitleKindRating,
-		Requirement: "Reach 1400 in any mode.",
+		Requirement: "Reach 1600 in any mode.",
 	},
 	{
 		ID:          TitleTournamentChampion,
@@ -390,30 +390,22 @@ type ratingRung struct {
 // makes the ladder a collection rather than a single slot, and what lets a
 // player who prefers the modest tag wear it.
 //
-// Restated for the anchored scale, and the numbers are a judgement rather than
-// a conversion. The old rungs sat 200 points apart on a scale where 120 points
-// was a doubling of the odds, so each was about one and two-thirds doublings
-// above the last; these sit 40 apart on a scale where 20 is a doubling, which is
-// two doublings a rung — a slightly steeper climb, chosen because the bottom of
-// this scale is a real opponent rather than an arbitrary constant and the first
-// rung should mean something specific. Candidate Master is 60: eight games in
-// nine against an engine that plays at random.
-//
-// The old thresholds cannot simply be divided down. 1400 meant "two hundred
-// above average" and average was wherever the field happened to sit; 60 means a
-// fixed thing about how you play, and the two are not the same kind of claim.
+// On the published rating, which a settled player holds about fifty points
+// under their strength (see rating.go). Everybody's strength starts at 1500, so
+// Candidate Master is a settled player about a hundred and fifty points above
+// where everybody starts, and each rung is two hundred more: roughly
+// three-to-one odds over the rung below.
 var ratingLadder = []ratingRung{
-	{id: TitleGrandmaster, minimumElo: 180},
-	{id: TitleInternationalMaster, minimumElo: 140},
-	{id: TitleMaster, minimumElo: 100},
-	{id: TitleCandidateMaster, minimumElo: 60},
+	{id: TitleGrandmaster, minimumElo: 2200},
+	{id: TitleInternationalMaster, minimumElo: 2000},
+	{id: TitleMaster, minimumElo: 1800},
+	{id: TitleCandidateMaster, minimumElo: 1600},
 }
 
-// titleLadderMinimumGames is how much play a mode rating must have behind it
-// before it can earn anything. The same reasoning as the leaderboard's minimum:
-// a rating nobody has tested is a starting value, not an achievement. Lower
-// than the leaderboard's, because a title is permanent and the bar that matters
-// is "this was not a fluke of two games", not "this is a settled rating".
+// titleLadderMinimumGames is how many ranked games a mode rating must have
+// behind it before it can earn anything. A title is permanent, so the bar is
+// "this was not a fluke of two games"; the published rating already discounts
+// a thin record, which is most of the protection.
 const titleLadderMinimumGames = 10
 
 // titleWinStreakLength is Hot Streak: eight in a row, counting every rated game
@@ -712,12 +704,10 @@ UPDATE accounts SET title = ?, updated_at_unix_ms = ? WHERE user_id = ?
 // which is what a caller needs in order to tell somebody they have earned
 // something.
 //
-// Bot accounts are skipped. An engine's rating comes from a fit across every
-// pair's head-to-head record rather than from per-game Elo (see bot_rating.go),
-// so the numbers are not on the same scale as a person's and a bot wearing GM
-// would be claiming something the ladder never measured. The achievements its
-// games produce belong to its owner instead, which is who turns up in chat.
-// An administrator can still grant a bot a title.
+// Bot accounts are skipped. Engines collect from their own catalogue (see
+// TitlePool), and a bot wearing GM would be claiming a person's title. The
+// achievements its games produce belong to its owner instead, which is who
+// turns up in chat. An administrator can still grant a bot a title.
 func (store *Store) EvaluateTitles(ctx context.Context, userID string) ([]TitleAward, error) {
 	userID = strings.TrimSpace(userID)
 	if userID == "" {
@@ -794,7 +784,7 @@ func (store *Store) earnedTitles(ctx context.Context, userID string) ([]TitleID,
 	// specialises.
 	var bestElo sql.NullInt64
 	if err := store.db.QueryRowContext(ctx, `
-SELECT MAX(elo) FROM account_mode_ratings WHERE user_id = ? AND games_played >= ?
+SELECT MAX(elo) FROM account_mode_ratings WHERE user_id = ? AND rated_games >= ?
 `, userID, titleLadderMinimumGames).Scan(&bestElo); err != nil {
 		return nil, fmt.Errorf("evaluate titles: read mode ratings: %w", err)
 	}
@@ -854,8 +844,8 @@ LIMIT 1
 	// against the maximum is not a rank: every engine level at the top earned
 	// this, and on a board where nothing has been placed that is the whole
 	// fleet. And it read raw `elo` without the placement the board sorts on
-	// first, so an engine the fit could not place could out-rank the engine
-	// actually listed in front. modeBoardLeaders answers the question the board
+	// first, so an engine with no rating could out-rank the engine actually
+	// listed in front. modeBoardLeaders answers the question the board
 	// answers, once, for every mode.
 	leaders, err := store.modeBoardLeaders(ctx)
 	if err != nil {

@@ -103,8 +103,8 @@ type BotSeries struct {
 	// ranked here and still casual there.
 	Ranked bool `json:"-"`
 	// Casual is a run that does not move the ladder: one that was not seated
-	// ranked, and one between two engines one person registered, which the fit
-	// drops however its games were flagged (botHeadToHeadTx).
+	// ranked, and one between two engines one person registered, whose games
+	// never move a rating however they were flagged (see sameOwner).
 	//
 	// Derived on every read rather than stored, so the owner half is right about
 	// a run whatever its games were flagged when they were played.

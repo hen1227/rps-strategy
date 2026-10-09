@@ -1,119 +1,73 @@
 /**
- * The rating scale, as the client needs to talk about it.
+ * Ratings, as the client needs to talk about them.
  *
- * Every number here is also a constant in the backend's rating_scale.go, and
- * the server serves them on /api/ladder-pool so a client can check rather than
- * assume. They are duplicated rather than fetched because a leaderboard row
- * cannot wait on a request to know how to label itself, and because the two
- * would have to agree anyway — a scale the client and the server disagree about
- * is worse than either of them.
+ * The system itself is the backend's persistence/rating.go: Glicko-2 on the
+ * familiar 1500 scale, with the number on screen set one deviation under the
+ * strength. Everybody starts at RATING_START and climbs as they play, because
+ * every game narrows the deviation. The server decides how far a number can be
+ * trusted and says so in `ratingState`; this file is the one place that turns
+ * that into something to draw, so the ladder, a profile and the lobby cannot
+ * each invent their own phrasing for it.
  */
 
-import type { RatingState } from '@/types/protocol';
+import type { ModeID } from '@/types/game';
+import type { ModeRating, RatingState } from '@/types/protocol';
 
-/** The lowest rating there is: an opponent that plays a random legal move. */
-export const RATING_FLOOR = 1;
+/** The rating of somebody with no ranked game in a mode. */
+export const RATING_START = 1150;
 
-/** Points per doubling of the odds of winning. */
-export const RATING_POINTS_PER_DOUBLING = 20;
-
-/**
- * One sentence, for anywhere a rating needs explaining.
- *
- * True of a person's rating always, and of an engine's only while the server's
- * reference engines are standing. Without them the bot ladder measures from its
- * own weakest engine instead, so `1` means "the weakest engine on the board" —
- * see BOT_RELATIVE_SCALE_EXPLAINER, which the bot board shows in its place.
- */
-export const RATING_EXPLAINER =
-  `${RATING_FLOOR} means playing no better than chance. ` +
-  `Every ${RATING_POINTS_PER_DOUBLING} points doubles your odds of winning.`;
-
-/**
- * What the bot board means while nothing is designated.
- *
- * The doubling half is unchanged — a gap is a gap however the zero was chosen —
- * and only the floor's meaning moves. Worth saying rather than quietly printing
- * the sentence above, because the two readings of `1` look identical and one of
- * them is a claim the board cannot currently support.
- */
-export const BOT_RELATIVE_SCALE_EXPLAINER =
-  `${RATING_FLOOR} is the weakest engine on this board, and every ` +
-  `${RATING_POINTS_PER_DOUBLING} points doubles the odds of winning. ` +
-  `Engines are compared with each other, so the floor moves as the field does.`;
-
-/**
- * The model's chance that one rating beats another, ignoring colour and draws.
- *
- * Worth having on the client because it turns a pair of numbers into the thing
- * people actually want from them: "you are a 3-to-1 favourite" reads, and "you
- * are 32 points ahead" does not until you already know the scale.
- */
-export function ratingWinChance(rating: number, against: number): number {
-  const gap = (against - rating) / RATING_POINTS_PER_DOUBLING;
-  return 1 / (1 + Math.pow(2, gap));
-}
-
-/** How the odds between two ratings read out loud, e.g. "3 to 1". */
-export function ratingOdds(rating: number, against: number): string {
-  const chance = ratingWinChance(rating, against);
-  const stronger = Math.max(chance, 1 - chance);
-  const ratio = stronger / (1 - stronger);
-  if (ratio < 1.1) return 'even';
-  return `${ratio.toFixed(ratio < 10 ? 1 : 0)} to 1`;
-}
-
-/**
- * The words for a rating that is not one.
- *
- * `1` is a real measurement on this scale — it means playing no better than
- * chance — so it cannot also stand for "we have not measured this". The server
- * decides which of the two a row is and says so in `ratingState`; this is the
- * one place that turns that into something to draw, so the ladder, a profile and
- * the lobby cannot each invent their own phrasing for it.
- */
-export const RATING_UNRATED_LABEL = 'Not enough data to rank';
+/** The words for a rating that is not one yet. */
+export const RATING_UNRATED_LABEL = 'No ranked games yet';
 
 /** The same thing where there is only room for a number. */
 export const RATING_UNRATED_SHORT = '–';
 
-/** Said of a number the shrinkage is still visibly holding back. */
+/** Said of a number that is still climbing towards its owner's strength. */
 export const RATING_PROVISIONAL_LABEL = 'Provisional';
 
 /**
- * The name today's scale goes by in a stored game.
+ * The name today's system goes by in a stored game.
  *
  * The same string the server writes into a record's `RatingSystem` tag — see
  * notation/pgn.go — and the reason the tag exists: the ratings in an archived
- * game were written on whichever scale was current when it was played, and a
- * game from before the rebuild carries chess Elo centred on 1200. Both produce
- * four-, three- and two-figure numbers that look exactly like ratings, so a
- * reader with no tag to go on cannot tell which scale a number is on, and
- * averaging or comparing across the two gives an answer that means nothing.
+ * game were written on whichever scale was current when it was played, and
+ * every scale this site has used produces numbers that look like ratings.
  */
-export const RATING_SYSTEM = 'anchored/1';
+export const RATING_SYSTEM = 'glicko2/1';
+
+/** The scale before this one, where 1 was an engine playing at random. */
+export const ANCHORED_RATING_SYSTEM = 'anchored/1';
 
 /**
  * What to say beneath a rating read out of an archived game.
  *
  * The record's own `ratingSystem` tag goes in, so an old game says so where it
  * is shown rather than passing its number off as one of today's. There is
- * always something to say here, unlike `ratingCaveat` above: a rating in a
- * record is a rating *as of then* even when the scale has not moved, which is
- * the thing a reader of a two-year-old game most needs telling.
+ * always something to say here, unlike `ratingCaveat` below: a rating in a
+ * record is a rating *as of then* even when the scale has not moved. A record
+ * with no tag at all predates both later scales and is chess Elo centred on
+ * 1200.
  */
-export const archivedRatingCaveat = (ratingSystem: string | null): string =>
-  ratingSystem === RATING_SYSTEM
-    ? "Ratings at the time of this game."
-    : 'Ratings as they stood for this game, on the old 1200-centred scale. ' +
-      "They cannot be compared with today's.";
+export const archivedRatingCaveat = (ratingSystem: string | null): string => {
+  if (ratingSystem === RATING_SYSTEM) return 'Ratings at the time of this game.';
+  if (ratingSystem === ANCHORED_RATING_SYSTEM) {
+    return (
+      'Ratings as they stood for this game, on an earlier scale where 1 meant ' +
+      "playing at random. They cannot be compared with today's."
+    );
+  }
+  return (
+    'Ratings as they stood for this game, on the old 1200-centred scale. ' +
+    "They cannot be compared with today's."
+  );
+};
 
 /**
  * Whether a row's number should be shown at all.
  *
  * An absent state is treated as a real rating, deliberately: a server older than
  * the field has no way to say otherwise, and blanking every rating on it would
- * be a worse failure than the ambiguity this whole idea replaces.
+ * be a worse failure than showing a number that has not been earned yet.
  */
 export const ratingIsRankable = (state?: RatingState): boolean => state !== 'unrated';
 
@@ -130,3 +84,30 @@ export const ratingCaveat = (state?: RatingState): string | null => {
   if (state === 'provisional') return `${RATING_PROVISIONAL_LABEL} · still settling`;
   return null;
 };
+
+/** One rating standing for an account: the number, how far to trust it, and its mode. */
+export interface HeadlineRating {
+  elo: number;
+  state: RatingState;
+  modeId: ModeID | null;
+}
+
+/**
+ * The rating that stands for an account as a whole: its best rated mode.
+ *
+ * The same choice the server makes for `account.elo` and the combined board,
+ * read off the modes so the state comes with it. An account with no ranked game
+ * anywhere is unrated, at the number everybody starts on.
+ */
+export function headlineRating(
+  modeRatings: Partial<Record<ModeID, ModeRating>> | undefined,
+): HeadlineRating {
+  let best: HeadlineRating = { elo: RATING_START, state: 'unrated', modeId: null };
+  for (const rating of Object.values(modeRatings ?? {})) {
+    if (!rating || !ratingIsRankable(rating.ratingState)) continue;
+    if (best.state === 'unrated' || rating.elo > best.elo) {
+      best = { elo: rating.elo, state: rating.ratingState ?? 'rated', modeId: rating.modeId };
+    }
+  }
+  return best;
+}

@@ -4,7 +4,6 @@ import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import LadderPodium, { PODIUM_SIZE } from './LadderPodium';
 import LadderRows from './LadderRows';
 import { failureMessage } from '@/errors';
-import { useLadderPool } from '@/features/live/useLadderRound';
 import BotHistoryFeed from '@/features/bots/BotHistoryFeed';
 import { useWideScreen } from '@/hooks/useBoardLayout';
 import { leaderboard, type LeaderboardKind } from '@/store/api/leaderboard';
@@ -30,26 +29,16 @@ import type { LeaderboardEntry } from '@/types/protocol';
 //
 // **Bots and people are not a tab.** They stack, both boards visible at once.
 //
-// The two numbers are on one scale *when the reference engines are standing* — a
-// server-run engine that plays at random, which both a person and a bot can be
-// placed against. With none designated the bot board measures from its own
-// weakest engine instead, so the two floors mean different things and the boards
-// are not comparable; the explainer under the bot board says which case is in
-// force rather than leaving a reader to assume the good one.
-//
-// What is different either way is the competition behind them: a bot's rating
-// comes from hourly rounds the server arranges against other bots, a person's
-// from playing people, and the two populations only meet on the yardsticks.
-// Ranking them in one list would blur that; behind a tab it would read as a
-// question — pick a population — when it is really two answers. Bots go first:
-// the engines play each other constantly, and the games behind their ranking are
-// listed underneath.
-//
-// The arithmetic is still different too, and for the same reason it always was.
-// A person gets a per-game Bayesian update because they want the number to move
-// when the game ends; an engine gets a fit over every pair's head-to-head record
-// because an engine's author picks what it plays. Both publish on the same
-// scale, which is the part that changed.
+// Both boards are the same rating system — Glicko-2, one game at a time, see
+// backend/internal/persistence/rating.go — and what separates them is the
+// competition behind the numbers: a bot's rating comes from games against other
+// bots, mostly the hourly rounds the server arranges, and a person's from playing
+// people. A challenge between the two is casual, so the populations rarely meet
+// — only an open tournament seats one against the other — and their numbers are
+// not a comparison. Ranking them in one list would blur
+// that; behind a tab it would read as a question — pick a population — when it
+// is really two answers. Bots go first: the engines play each other constantly,
+// and the games behind their ranking are listed underneath.
 
 /** Rows fetched per board. The server's own ceiling is 200. */
 const BOARD_LIMIT = 50;
@@ -103,11 +92,6 @@ export default function LeaderboardScreen({
   const linked = ladderModes.find((entry) => entry.id === mode)?.id;
   const activeMode = linked ?? ladderModes[0]?.id;
 
-  // Whether the bot board is measured from chance or from its own weakest
-  // engine. Absent while the schedule is loading, and absent is treated as the
-  // anchored case: adding the caveat for a beat and then removing it would be
-  // worse than a page that never mentions it.
-  const relativeBotScale = useLadderPool()?.anchorBotId === '';
   const [boards, setBoards] = useState<Record<LeaderboardKind, LeaderboardEntry[]>>({
     bot: [],
     human: [],

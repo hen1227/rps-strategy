@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // The public ladder.
@@ -15,9 +16,11 @@ import (
 // filters on its own terms and says why in each case below.
 
 // LeaderboardKindHuman and LeaderboardKindBot are the two ladders. They are
-// separate boards rather than one mixed board because a bot's rating comes from
-// a different set of games: bot-versus-bot series are ranked and bot-versus-human
-// is not, so the two numbers are not measuring the same competition.
+// separate boards rather than one mixed board because the two populations play
+// different games: engines meet each other in ranked series, people meet each
+// other in the queue, and a challenge between the two is casual — only an open
+// tournament seats one against the other — so the numbers are not measuring the
+// same competition even though they are on one scale.
 const (
 	LeaderboardKindHuman = "human"
 	LeaderboardKindBot   = "bot"
@@ -45,12 +48,10 @@ type LeaderboardEntry struct {
 	// on the entry so a page of fifty is one query rather than fifty-one.
 	Title string `json:"title,omitempty"`
 	Elo   int    `json:"elo"`
-	// State says whether Elo is worth reading at all, and Confidence is the share
-	// of the measurement behind it. A row that is RatingStateUnrated has no
-	// meaningful Elo — it is not a bad rating, it is the absence of one — and the
-	// board is ordered accordingly. See RatingState.
+	// State is how far Elo can be trusted: a row whose deviation is still wide
+	// is provisional. Every listed row has at least one ranked game, so none is
+	// unrated. See RatingState.
 	State       RatingState `json:"ratingState"`
-	Confidence  float64     `json:"ratingConfidence"`
 	Wins        int         `json:"wins"`
 	Losses      int         `json:"losses"`
 	Draws       int         `json:"draws"`
@@ -85,39 +86,18 @@ type LeaderboardEntry struct {
 	// it was cached.
 	LeadingSinceUnixMs int64 `json:"leadingSinceUnixMs,omitempty"`
 	// HeldTopSeat says this engine has led its mode at some point, which is
-	// true of the current leader too. Reigns are only recorded from the day the
-	// ledger shipped, so a false here means "not since then" rather than
-	// "never". See bot_reigns.go.
+	// true of the current leader too. The ledger is rebuilt from the whole
+	// record when the rating system changes (see rebuildBotReignsTx), so this
+	// covers every game played. See bot_reigns.go.
 	HeldTopSeat bool `json:"heldTopSeat,omitempty"`
-}
-
-// rankedSQL is RatingState.Ranked as a SQL expression, over one alias of
-// account_mode_ratings.
-//
-// Written once and used three times — the row's own flag, the board's order, and
-// the choice of which mode represents an account on the combined board — because
-// a board that sorted on one definition of "has a rating" and labelled rows with
-// another would disagree with itself in the middle of a page. The Go side of the
-// same rule is RatingStateOf; the thresholds are formatted in rather than
-// duplicated as literals so that moving one moves both.
-func rankedSQL(alias string) string {
-	return fmt.Sprintf(
-		"%[1]s.rating_placed = 1 AND %[1]s.rating_confidence >= %[2]v",
-		alias, RatingConfidenceGuess,
-	)
 }
 
 // boardOrder is the order the ladder is read in, written once because three
 // things have to agree on it: the page, which one of an owner's engines gets
 // listed, and — through modeBoardLeaders — who the record says is top of a
-// mode. Measured first, and only then by the number.
-//
-// Without the first term a board on which nothing has been placed — no
-// yardstick designated, so the fit publishes nothing — ranks every engine at
-// the floor in order of how many games it has played, and calls the busiest one
-// the best. Ordering the unranked last says the true thing instead: these are
-// not in an order, because there is nothing to order them by.
-const boardOrder = `ranked DESC, rating DESC, played DESC, username ASC`
+// mode. The published rating, then the more ranked games, then the name, so a
+// tie is broken the same way everywhere.
+const boardOrder = `rating DESC, rated DESC, username ASC`
 
 // boardLeader is the engine in front of one mode, and who entered it.
 //
@@ -168,20 +148,19 @@ SELECT mode_id, user_id, owner_key FROM (
     FROM (
       SELECT a.user_id, a.username,
              r.mode_id,
-             r.elo AS rating, (%[2]s) AS ranked,
-             r.games_played AS played,
+             r.elo AS rating, r.rated_games AS rated,
              COALESCE((SELECT b.owner_user_id FROM bots b
                         WHERE b.user_id = a.user_id), a.user_id) AS owner_key
       FROM accounts a
       JOIN account_mode_ratings r ON r.user_id = a.user_id
       WHERE a.kind = ? AND a.disabled = 0
     )
-    WHERE rating IS NOT NULL AND played >= ?
+    WHERE rated >= ?
   )
   WHERE owner_place = 1
 )
 WHERE place = 1
-`, boardOrder, rankedSQL("r"))
+`, boardOrder)
 
 	rows, err := store.db.QueryContext(
 		ctx, query, AccountKindBot, leaderboardDefaultMinimumGames,
@@ -213,8 +192,9 @@ type LeaderboardFilter struct {
 	ModeID string
 	// Kind is LeaderboardKindHuman or LeaderboardKindBot; empty means human.
 	Kind string
-	// MinimumGames keeps accounts that have never finished a game off a board
-	// about who wins. Zero takes the default of one.
+	// MinimumGames is how many ranked games in the mode put an account on the
+	// board. Zero takes the default of one: an account with no ranked game has
+	// no rating, only a newcomer's starting point.
 	MinimumGames int
 	Limit        int
 	Offset       int
@@ -249,8 +229,8 @@ func (filter LeaderboardFilter) normalized() LeaderboardFilter {
 //     without this the ladder would mostly be a list of strangers all called
 //     the same thing. Bots never have a password, so the rule cannot apply to
 //     them.
-//   - Accounts below MinimumGames. A rating nobody has tested is a starting
-//     value, not an achievement.
+//   - Accounts below MinimumGames ranked games. A rating with no ranked game
+//     behind it is a starting value, not an achievement.
 //   - Every engine but their owner's best, on the bot board. See "one owner,
 //     one row" below.
 func (store *Store) Leaderboard(
@@ -293,64 +273,55 @@ func (store *Store) Leaderboard(
 	// `*` because the layers in between carry working columns — owner_key, and
 	// the place a row takes within its owner — that stop at the last SELECT.
 	const entryColumns = `user_id, kind, username, discord, title,
-       rating, placed, confidence, ranked, wins, losses, draws, played, mode_id,
+       rating, rated, deviation, volatility, rated_at,
+       wins, losses, draws, played, mode_id,
        icon_sha256, owner_username, engine_name`
 
 	// Two shapes, because there are two questions.
 	//
 	// A mode board is the mode's own rating row, joined inner on purpose: being
-	// on a mode's ladder means having played that mode, not having inherited the
-	// shared seed into it.
+	// on a mode's ladder means having played that mode.
 	//
-	// The combined board cannot use `accounts.elo`, which looks like the obvious
-	// column and is not: ranked play moves `account_mode_ratings` and leaves
-	// `accounts.elo` as the seed a new mode starts from, so ordering by it would
-	// put every player on 1200 for ever. There is no single number for "how good
-	// is this player" in a game with per-mode ratings, so the honest summary is
-	// their strongest mode — reported with the mode it was set in, so the number
-	// says what it means. The counters beside it are lifetime totals, which do
-	// move on every game.
+	// The combined board ranks each account by its strongest rated mode,
+	// reported with the mode it was set in, so the number says what it means.
+	// The counters beside it are lifetime totals, which move on every game.
 	var board string
 	arguments := []any{}
 	if filter.ModeID != "" {
 		board = fmt.Sprintf(`
 SELECT a.user_id, a.kind, a.username, a.discord, a.title,
-       r.elo AS rating, r.rating_placed AS placed,
-       r.rating_confidence AS confidence,
-       (%s) AS ranked,
+       r.elo AS rating, r.rated_games AS rated, r.deviation,
+       r.volatility, r.last_rated_at_unix_ms AS rated_at,
        r.wins, r.losses, r.draws, r.games_played AS played,
        r.mode_id%s
 FROM accounts a
 JOIN account_mode_ratings r ON r.user_id = a.user_id AND r.mode_id = ?
 WHERE a.kind = ? AND a.disabled = 0%s
-`, rankedSQL("r"), botColumns, registered)
+`, botColumns, registered)
 		arguments = append(arguments, filter.ModeID, filter.Kind)
 	} else {
 		board = fmt.Sprintf(`
 SELECT a.user_id, a.kind, a.username, a.discord, a.title,
-       best.elo AS rating, best.rating_placed AS placed,
-       best.rating_confidence AS confidence,
-       (%s) AS ranked,
+       best.elo AS rating, best.rated_games AS rated, best.deviation,
+       best.volatility, best.last_rated_at_unix_ms AS rated_at,
        a.wins, a.losses, a.draws, a.games_played AS played,
        best.mode_id%s
 FROM accounts a
-LEFT JOIN account_mode_ratings best ON best.rowid = (
+JOIN account_mode_ratings best ON best.rowid = (
     SELECT r.rowid FROM account_mode_ratings r
-     WHERE r.user_id = a.user_id
-     ORDER BY (%s) DESC, r.elo DESC, r.mode_id LIMIT 1
+     WHERE r.user_id = a.user_id AND r.rated_games > 0
+     ORDER BY r.elo DESC, r.mode_id LIMIT 1
 )
 WHERE a.kind = ? AND a.disabled = 0%s
-`, rankedSQL("best"), botColumns, rankedSQL("r"), registered)
+`, botColumns, registered)
 		arguments = append(arguments, filter.Kind)
 	}
 
 	// The games floor is the same sentence about either shape, so it is said
-	// once out here. `rating IS NOT NULL` is what the combined board's MAX
-	// returns for an account that has never been rated in any mode; on a mode
-	// board the join has already ruled that out.
+	// once out here.
 	listed := fmt.Sprintf(`
 SELECT * FROM (%s)
-WHERE rating IS NOT NULL AND played >= ?
+WHERE rated >= ?
 `, board)
 	arguments = append(arguments, filter.MinimumGames)
 
@@ -394,19 +365,20 @@ LIMIT ? OFFSET ?
 	}
 	defer rows.Close()
 
+	now := time.Now().UnixMilli()
 	entries := make([]LeaderboardEntry, 0, filter.Limit)
 	for rows.Next() {
 		var entry LeaderboardEntry
-		var placed, ranked bool
+		var rating glickoRating
 		if err := rows.Scan(
 			&entry.UserID, &entry.Kind, &entry.Username, &entry.Discord, &entry.Title,
-			&entry.Elo, &placed, &entry.Confidence, &ranked,
+			&entry.Elo, &rating.games, &rating.deviation, &rating.volatility, &rating.lastGameAt,
 			&entry.Wins, &entry.Losses, &entry.Draws, &entry.GamesPlayed,
 			&entry.ModeID, &entry.IconSHA256, &entry.OwnerUsername, &entry.EngineName,
 		); err != nil {
 			return nil, fmt.Errorf("read leaderboard row: %w", err)
 		}
-		entry.State = RatingStateOf(placed, entry.Confidence)
+		entry.State = rating.state(now)
 		entries = append(entries, entry)
 	}
 	if err := rows.Err(); err != nil {

@@ -5,6 +5,7 @@ import {
   engineCanJoinSeries,
   engineElo,
   engineIsAvailable,
+  engineRatingState,
   engineStatus,
   liveGameGrid,
   liveHeadline,
@@ -15,6 +16,7 @@ import {
 } from './liveSelectors.ts';
 import type { BotPresence, Challenge, LiveGameSummary } from '../../types/protocol.ts';
 import type { ModeDefinition } from '../../types/game.ts';
+import { RATING_START } from '../ratings/scale.ts';
 
 const MODES = [
   { id: 'V5', shortCode: 'V5', name: 'Total War', playable: true },
@@ -456,19 +458,26 @@ test('an idle engine carries a rating in every mode it plays, not one number', (
   );
 });
 
-test('an engine only rated in one mode is seeded in the other, not left blank', () => {
+test('an engine only rated in one mode is unrated in the other', () => {
   const snapshot = liveSnapshot({
     ...emptySource(),
-    engineBots: [engineBot('b1', 'Pebble', { modes: ['V5', 'V3'], elo: 1500, modeRatings: { V5: 1834 } })],
+    engineBots: [
+      engineBot('b1', 'Pebble', {
+        modes: ['V5', 'V3'],
+        elo: 1834,
+        modeRatings: { V5: 1834 },
+        modeRatingStates: { V5: 'rated' },
+      }),
+    ],
   });
 
-  // The server seeds a mode's first rated game from the shared rating, so this
-  // is the number it would actually queue at rather than a gap in the row.
+  // Modes rate independently, so the other mode starts where everybody does,
+  // and says so rather than borrowing the engine's headline.
   assert.deepEqual(
-    snapshot.engines[0]?.ratings.map((rating) => [rating.shortCode, rating.elo]),
+    snapshot.engines[0]?.ratings.map((rating) => [rating.shortCode, rating.elo, rating.state]),
     [
-      ['V5', 1834],
-      ['V3', 1500],
+      ['V5', 1834, 'rated'],
+      ['V3', RATING_START, 'unrated'],
     ],
   );
 });
@@ -511,11 +520,21 @@ test('a playing engine is rated in the mode of the board it is at', () => {
   );
 });
 
-test('engineElo answers with the shared seed only where a mode has no rating', () => {
-  const bot = engineBot('b1', 'Pebble', { elo: 1500, modeRatings: { V5: 1834 } });
+test('a mode with no rating reads as the start, and as unrated', () => {
+  const bot = engineBot('b1', 'Pebble', {
+    elo: 1834,
+    modeRatings: { V5: 1834, V6: 1200 },
+    modeRatingStates: { V5: 'provisional' },
+  });
 
   assert.equal(engineElo(bot, 'V5'), 1834);
-  assert.equal(engineElo(bot, 'V3'), 1500);
+  assert.equal(engineRatingState(bot, 'V5'), 'provisional');
+  assert.equal(engineElo(bot, 'V3'), RATING_START);
+  assert.equal(engineRatingState(bot, 'V3'), 'unrated');
+  // A number the states leave out is not one the server vouched for.
+  assert.equal(engineRatingState(bot, 'V6'), 'unrated');
+  // And a roster from a server too old to send states is read as rated.
+  assert.equal(engineRatingState(engineBot('b2', 'Old', { modeRatings: { V5: 1600 } }), 'V5'), 'rated');
 });
 
 test('an idle engine open to play is the only one that can take a game', () => {

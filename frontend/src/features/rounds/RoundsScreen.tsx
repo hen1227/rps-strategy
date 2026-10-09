@@ -17,7 +17,7 @@ import BotIcon from '@/features/bots/BotIcon';
 import BotSeriesCard from '@/features/bots/BotSeriesCard';
 import { relativeTime } from '@/features/bots/relativeTime';
 import { ladderConditionsLine, ladderRoundView } from '@/features/live/ladderRound';
-import { BOT_RELATIVE_SCALE_EXPLAINER, ratingLabel } from '@/features/ratings/scale';
+import { ratingLabel } from '@/features/ratings/scale';
 import { useNow } from '@/hooks/useNow';
 import { useOpenGame } from '@/hooks/useOpenGame';
 import { links } from '@/navigation/links';
@@ -201,9 +201,6 @@ export default function RoundsScreen() {
             <Stat label="Games each" value={String(view?.gamesPerRound ?? 2)} />
           </View>
           {shortField ? <Text style={styles.warning}>{shortField}</Text> : null}
-          {/*{round.relativeScale ? (*/}
-          {/*  // <Text style={styles.plan}>{BOT_RELATIVE_SCALE_EXPLAINER}</Text>*/}
-          {/*) : null}*/}
         </Panel>
       ) : null}
 
@@ -246,30 +243,6 @@ export default function RoundsScreen() {
               ))}
             </View>
           )}
-
-          {groups.references.length > 0 ? (
-            <View style={styles.subsection}>
-              <Text style={styles.subheading}>REFERENCE ENGINES</Text>
-              {/*
-                Listed rather than counted, which the rail could not afford to
-                do. "Why is that thing in every round" is one of the questions
-                this page exists to answer, and it cannot be answered about
-                engines that are not on it.
-              */}
-              <Text style={styles.help}>
-                Server-run engines anchor the rating scale and play new entrants first.
-              </Text>
-              <View style={styles.list}>
-                {groups.references.map((engine, index) => (
-                  <FieldRow
-                    divided={index > 0}
-                    engine={engine}
-                    key={engine.botId}
-                  />
-                ))}
-              </View>
-            </View>
-          ) : null}
 
           {/*
             The engines nobody is running, accounted for without being drawn.
@@ -390,13 +363,7 @@ function FieldRow({
           uri={botIconUrl(engine.botId, engine.iconSha256)}
         />
       }
-      meta={
-        engine.reference
-          ? 'Reference engine · in every round'
-          : engine.author
-            ? `by ${engine.author}`
-            : 'entered'
-      }
+      meta={engine.author ? `by ${engine.author}` : 'entered'}
       title={
         <PlayerLink
           handle={engine.name}
@@ -447,8 +414,6 @@ const styles = themedSheet(() => ({
   waiting: { ...type.meta, color: colors.textMuted, marginTop: space.small },
   list: { marginTop: space.small },
   feed: { gap: space.small, marginTop: space.medium },
-  subsection: { marginTop: space.large },
-  subheading: { ...type.eyebrow, color: colors.textFaint },
   rowName: { ...type.rowTitle, color: colors.text, flexShrink: 1 },
   rowTrailing: { flexDirection: 'row', alignItems: 'center', gap: space.snug },
   // Tabular figures so a column of ratings lines up, and faint: the badge

@@ -594,9 +594,9 @@ export interface Reclassification {
 /**
  * Move a finished run, and every game it filed, to ranked or to casual.
  *
- * The server refits the bot ladder in the same step, so the ratings shown next
- * are the ones the record now supports. Refused while any of the run is still
- * being played.
+ * The server recomputes every rating in the same step, so the ratings shown
+ * next are the ones the record now supports. Refused while any of the run is
+ * still being played.
  */
 export const setAdminBotSeriesRanked = (adminToken: string, seriesId: string, ranked: boolean) =>
   request<Reclassification>(`/api/admin/bot-series/${encodeURIComponent(seriesId)}/ranked`, {
@@ -964,8 +964,7 @@ export interface GameDeletion {
 export interface AdminGameRecord extends GameRecord {
   /**
    * Both seats were engines, which is the only kind of game that can be moved
-   * between ranked and casual: a bot rating is refitted from the whole record,
-   * while a person's is a running total that cannot be replayed.
+   * between ranked and casual.
    */
   engineGame?: boolean;
 }
@@ -988,9 +987,9 @@ export const setAdminGameRanked = (adminToken: string, gameId: string, ranked: b
 /**
  * Delete one game from the history and the archive.
  *
- * `revertRatings` defaults to true on the server as well: the usual reason to
- * delete a game is that its result should not stand, so both players get the
- * Elo and the win count back unless the caller says otherwise.
+ * Every rating is recomputed without the game. `revertRatings` decides whether
+ * the win counts give it back too, and defaults to true on the server as well:
+ * the usual reason to delete a game is that its result should not stand.
  */
 export const deleteGame = (adminToken: string, gameId: string, revertRatings = true) =>
   request<GameDeletion>(

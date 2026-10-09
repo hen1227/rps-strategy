@@ -106,7 +106,7 @@ func (server *Server) startAcceptedChallenge(posted *Seek, taker *Client) {
 		Poster:   taker.profile,
 		Setup:    posted.Setup,
 		ModeName: posted.ModeName,
-		Elo:      matchmakingElo(taker, posted.Setup.ModeID),
+		Elo:      seatElo(taker, posted.Setup.ModeID),
 		JoinedAt: time.Now(),
 	}
 	takerSeek.bind(taker)

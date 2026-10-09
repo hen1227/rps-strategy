@@ -174,3 +174,9 @@ hearing about it.
 - Every game carries before-and-after ratings, including unranked ones, where
   the two are simply equal. `ranked` is the column to filter on, not the
   ratings.
+- Ratings are on the scale the record's `RatingSystem` tag names, inside the
+  `pgn` column. The site rebuilds every rating from the record when its rating
+  system changes, but a published day is never rewritten, so days published
+  under different systems carry different scales and cannot be compared:
+  `glicko2/1` is Glicko-2 on the 1500 scale, `anchored/1` the scale before it,
+  and no tag means chess Elo centred on 1200.

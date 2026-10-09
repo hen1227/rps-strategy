@@ -74,18 +74,17 @@ func ownerAlreadyRegistered(t *testing.T, server *Server, owner string) bool {
 	return err == nil
 }
 
-func poolSeats(t *testing.T, server *Server, modeID game.ModeID) []ladderSeat {
+func poolSeats(t *testing.T, server *Server, modeID game.ModeID) []persistence.LadderCandidate {
 	t.Helper()
 	entrants, err := server.data.LadderEntrants(t.Context(), modeID)
 	if err != nil {
 		t.Fatalf("read entrants: %v", err)
 	}
-	seats := make([]ladderSeat, 0, len(entrants))
+	seats := make([]persistence.LadderCandidate, 0, len(entrants))
 	for _, entrant := range entrants {
-		if !server.ladderBotIsAvailable(entrant.BotID, modeID) {
-			continue
+		if server.ladderBotIsAvailable(entrant.BotID, modeID) {
+			seats = append(seats, entrant)
 		}
-		seats = append(seats, ladderSeat{LadderCandidate: entrant, variance: 1})
 	}
 	return seats
 }
@@ -143,33 +142,9 @@ func TestTheRoundLeavesOutEnginesThatHaveNotEntered(t *testing.T) {
 	}
 }
 
-// A yardstick is in the pool whatever anybody's settings say. Consent is a
-// question for a person lending their machine, and these run on the server's.
-func TestAYardstickIsAlwaysInThePool(t *testing.T) {
-	server := ladderTestServer(t)
-	anchor := poolBot(t, server, "Anchor", "owner-anchor")
-	markLadderAnchor(t, server, anchor)
-	if _, err := server.data.UpdateBotSettings(
-		t.Context(), anchor.BotID, false, false, false, "",
-	); err != nil {
-		t.Fatalf("opt out: %v", err)
-	}
-
-	entrants, err := server.data.LadderEntrants(t.Context(), game.ModeTotalWar)
-	if err != nil {
-		t.Fatalf("read entrants: %v", err)
-	}
-	for _, entrant := range entrants {
-		if entrant.BotID == anchor.BotID {
-			return
-		}
-	}
-	t.Fatalf("the anchor opted itself out of the pool: %#v", entrants)
-}
-
-// Two engines one person registered are never paired. The fit drops the pair
-// whatever the game says, so seating them would spend both engines' round on a
-// result the ladder never hears about.
+// Two engines one person registered are never paired. Their games never move a
+// rating whatever the game says, so seating them would spend both engines'
+// round on a result the ladder never hears about.
 func TestTheRoundNeverPairsOneOwnersEngines(t *testing.T) {
 	server := ladderTestServer(t)
 	poolBot(t, server, "Mine-1", "one-owner")
@@ -189,63 +164,67 @@ func TestTheRoundNeverPairsOneOwnersEngines(t *testing.T) {
 	}
 }
 
-func seatFor(seats []ladderSeat, botID string) ladderSeat {
+func seatFor(seats []persistence.LadderCandidate, botID string) persistence.LadderCandidate {
 	for _, seat := range seats {
 		if seat.BotID == botID {
 			return seat
 		}
 	}
-	return ladderSeat{}
+	return persistence.LadderCandidate{}
 }
 
-// Closer in rating beats further away, because p(1-p) peaks at even odds. This
-// is the "less random" the community asked for, and it is not a rule bolted on
-// top — it is the information one game carries, which is the same term the
-// rating's error bars are built from.
+// candidate is an engine in the pool with a strength and a deviation.
+func candidate(id string, strength float64, deviation float64) persistence.LadderCandidate {
+	return persistence.LadderCandidate{
+		BotID: id, UserID: "u-" + id, OwnerUserID: "o-" + id,
+		Strength: strength, Deviation: deviation,
+	}
+}
+
+// Closer in strength beats further away, because a game teaches most at even
+// odds. This is the "less random" the community asked for, and it is not a rule
+// bolted on top — it is how far the game is expected to narrow both ratings.
 func TestTheRoundPrefersAnOpponentOfSimilarStrength(t *testing.T) {
-	near := ladderSeat{
-		LadderCandidate: persistence.LadderCandidate{
-			BotID: "near", UserID: "u-near", OwnerUserID: "o-near", Rating: 102,
-		},
-		variance: 1,
-	}
-	far := ladderSeat{
-		LadderCandidate: persistence.LadderCandidate{
-			BotID: "far", UserID: "u-far", OwnerUserID: "o-far", Rating: 20,
-		},
-		variance: 1,
-	}
-	subject := ladderSeat{
-		LadderCandidate: persistence.LadderCandidate{
-			BotID: "subject", UserID: "u-subject", OwnerUserID: "o-subject", Rating: 100,
-		},
-		variance: 1,
-	}
+	subject := candidate("subject", 1600, 60)
+	near := candidate("near", 1610, 60)
+	far := candidate("far", 1100, 60)
 	if ladderPairValue(subject, near, nil) <= ladderPairValue(subject, far, nil) {
 		t.Fatal("a mismatch was scored at least as high as an even matchup")
 	}
 	// But not to the exclusion of everything else: a distant pairing is still
 	// worth something, because a board that only ever played its neighbours
-	// would separate into bands with nothing joining them, and every rating here
-	// is a distance from the anchor along a chain of matchups.
+	// would separate into bands with nothing joining them.
 	if ladderPairValue(subject, far, nil) <= 0 {
 		t.Fatal("a mismatch was scored at zero, so the ladder could never connect")
 	}
 }
 
-// A matchup played to the cap has nothing left to teach, so an unplayed opponent
-// wins even when it is further away in rating. This is what spreads a round out
-// instead of letting two engines lock into each other every hour.
-func TestTheRoundPrefersAnOpponentItHasNotSeen(t *testing.T) {
-	seat := func(id string, rating int) ladderSeat {
-		return ladderSeat{
-			LadderCandidate: persistence.LadderCandidate{
-				BotID: id, UserID: "u-" + id, OwnerUserID: "o-" + id, Rating: rating,
-			},
-			variance: 1,
-		}
+// The engines the board is least sure of are seated first: a newcomer is worth
+// pairing with an established engine before two established engines are worth
+// pairing with each other.
+func TestTheRoundSeatsTheEngineItKnowsLeastAbout(t *testing.T) {
+	server := ladderTestServer(t)
+	seats := []persistence.LadderCandidate{
+		candidate("settled-a", 1500, 50),
+		candidate("settled-b", 1520, 50),
+		candidate("newcomer", 1500, 350),
 	}
-	subject, played, fresh := seat("subject", 100), seat("played", 100), seat("fresh", 130)
+	pairings := server.chooseLadderPairings(seats, nil)
+	if len(pairings) != 1 {
+		t.Fatalf("three engines should make one pairing, got %d", len(pairings))
+	}
+	if pairings[0].first != "newcomer" && pairings[0].second != "newcomer" {
+		t.Fatalf("the newcomer sat out: %+v", pairings[0])
+	}
+}
+
+// A matchup played out lately is worth less than one that has not, so an
+// unplayed opponent wins even when it is further away in strength. This is what
+// spreads a round out instead of letting two engines lock into each other every
+// hour.
+func TestTheRoundPrefersAnOpponentItHasNotSeen(t *testing.T) {
+	subject, played, fresh := candidate("subject", 1600, 60), candidate("played", 1600, 60),
+		candidate("fresh", 1700, 60)
 	weights := map[[2]string]float64{
 		pairKeyOf(subject.UserID, played.UserID): persistence.LadderPairCap,
 	}
@@ -260,28 +239,6 @@ func pairKeyOf(one string, other string) [2]string {
 		one, other = other, one
 	}
 	return [2]string{one, other}
-}
-
-// A new engine's first ranked opponent is a yardstick, which is the on-ramp and
-// the anti-farm guarantee in one move: the games that put a newcomer on the
-// scale are against an engine nobody owns and nobody could have tuned to lose.
-func TestANewEnginesFirstOpponentIsAYardstick(t *testing.T) {
-	server := ladderTestServer(t)
-	anchor := poolBot(t, server, "Anchor", "owner-anchor")
-	markLadderAnchor(t, server, anchor)
-	newcomer := poolBot(t, server, "Newcomer", "owner-newcomer")
-
-	seats := poolSeats(t, server, game.ModeTotalWar)
-	pairings := server.chooseLadderPairings(seats, nil)
-	if len(pairings) != 1 {
-		t.Fatalf("expected one pairing, got %v", poolNames(server, pairings))
-	}
-	paired := pairings[0].first == newcomer.BotID && pairings[0].second == anchor.BotID ||
-		pairings[0].first == anchor.BotID && pairings[0].second == newcomer.BotID
-	if !paired {
-		t.Fatalf("a newcomer was not paired with the anchor: %v",
-			poolNames(server, pairings))
-	}
 }
 
 // One pairing per engine per round. The budget is the whole answer to "will this
@@ -499,7 +456,7 @@ func awaitEverySeriesFinished(t *testing.T, server *Server) {
 }
 
 // The round, end to end: the pool chooses the pairing, seats it, the engines
-// play it, and the refit turns it into a rating.
+// play it, and the games rate them.
 //
 // The one test that runs the whole mechanism rather than a piece of it. Every
 // step above is arguable in isolation — a pairing rule proves nothing if the
@@ -510,7 +467,6 @@ func awaitEverySeriesFinished(t *testing.T, server *Server) {
 func TestARoundSeatsItselfPlaysAndProducesARating(t *testing.T) {
 	server, alpha, _ := seriesTestBots(t)
 	anchor := addRivalSeriesBot(t, server, "Anchor")
-	markLadderAnchor(t, server, anchor)
 	rival := addRivalSeriesBot(t, server, "Rival")
 
 	// Nobody asks for anything. The clock comes round and the server does the
@@ -555,27 +511,24 @@ func TestARoundSeatsItselfPlaysAndProducesARating(t *testing.T) {
 		t.Fatalf("the pairing did not swap colours: %#v", colours)
 	}
 
-	if err := server.data.RefitBotLadder(t.Context(), modeID); err != nil {
-		t.Fatalf("refit: %v", err)
-	}
-	ratings, err := server.data.BotModeRatings(t.Context(), modeID)
+	ratings, err := server.data.ModeRatings(t.Context(), modeID)
 	if err != nil {
 		t.Fatalf("read ladder: %v", err)
 	}
-	if ratings[anchor.UserID] != persistence.RatingFloor {
-		t.Fatalf("the anchor is not at the floor: %d", ratings[anchor.UserID])
-	}
-	// Somebody played somebody, so at least one engine is now placed against the
-	// anchor. Which one depends on how the stub engines happened to play, so the
+	// Somebody played the anchor, and every ranked game rates both seats. Who
+	// came out ahead depends on how the stub engines happened to play, so the
 	// assertion is that the board exists rather than what order it is in.
+	if rating := ratings[anchor.UserID]; rating.RatedGames == 0 || !rating.State.Ranked() {
+		t.Fatalf("the anchor came out of the round unrated: %#v", rating)
+	}
 	placed := 0
 	for _, bot := range []persistence.Bot{alpha, rival} {
-		if _, rated := ratings[bot.UserID]; rated {
+		if ratings[bot.UserID].RatedGames > 0 {
 			placed++
 		}
 	}
 	if placed == 0 {
-		t.Fatalf("nobody came out of the round rated: %#v", ratings)
+		t.Fatalf("nobody but the anchor came out of the round rated: %#v", ratings)
 	}
 }
 
@@ -626,8 +579,7 @@ func heldPairings(server *Server) []ladderHeld {
 // did not see it" but "nothing started while the game was on".
 func TestTheRoundNeverInterruptsAGameInProgress(t *testing.T) {
 	server := ladderTestServer(t)
-	anchor := poolBot(t, server, "Anchor", "owner-anchor")
-	markLadderAnchor(t, server, anchor)
+	poolBot(t, server, "Anchor", "owner-anchor")
 	busy := poolBot(t, server, "Busy", "owner-busy")
 
 	putBotInAGame(t, server, busy.BotID)
@@ -667,8 +619,7 @@ func TestTheRoundNeverInterruptsAGameInProgress(t *testing.T) {
 // They are not skipped — they are late.
 func TestAHeldPairingStartsWhenTheEngineComesFree(t *testing.T) {
 	server := ladderTestServer(t)
-	anchor := poolBot(t, server, "Anchor", "owner-anchor")
-	markLadderAnchor(t, server, anchor)
+	poolBot(t, server, "Anchor", "owner-anchor")
 	busy := poolBot(t, server, "Busy", "owner-busy")
 	// Long enough that the run does not finish inside the test and start
 	// deleting itself from under the assertions below.
@@ -703,8 +654,7 @@ func TestAHeldPairingStartsWhenTheEngineComesFree(t *testing.T) {
 // which is two rounds at once and twice the budget entering the pool costs.
 func TestAnEngineStillPlayingItsRoundIsNotPairedAgain(t *testing.T) {
 	server := ladderTestServer(t)
-	anchor := poolBot(t, server, "Anchor", "owner-anchor")
-	markLadderAnchor(t, server, anchor)
+	poolBot(t, server, "Anchor", "owner-anchor")
 	entrant := poolBot(t, server, "Entrant", "owner-entrant")
 	server.seriesDelay = time.Hour
 
@@ -739,8 +689,7 @@ func TestAnEngineStillPlayingItsRoundIsNotPairedAgain(t *testing.T) {
 // reservation — so the round waits for the run to finish rather than cutting in.
 func TestTheRoundLeavesAnEngineHeldByASeriesAlone(t *testing.T) {
 	server := ladderTestServer(t)
-	anchor := poolBot(t, server, "Anchor", "owner-anchor")
-	markLadderAnchor(t, server, anchor)
+	poolBot(t, server, "Anchor", "owner-anchor")
 	held := poolBot(t, server, "Held", "owner-held")
 
 	server.mu.Lock()

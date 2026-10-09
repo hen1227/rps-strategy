@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { Text, View, type LayoutChangeEvent } from 'react-native';
 
 import ModePreview from '@/features/game/ModePreview';
+import { ratingIsRankable } from '@/features/ratings/scale';
 import { engineUnavailableMessage } from '@/engine/rpsfish/client';
 import { useLobbyGate } from '@/hooks/useQueueCall';
 import { links } from '@/navigation/links';
@@ -40,9 +41,15 @@ const usePlayingCount = (mode: ModeDefinition): number =>
 const useSearchingHere = (mode: ModeDefinition): boolean =>
   useGameStore((state) => state.queue.isSearching && state.queue.modeId === mode.id);
 
-/** The rating this mode's queue would use, or null for somebody with no account. */
+/**
+ * This mode's rating, or null when there is none to show: nobody signed in, or
+ * no ranked game in the mode yet.
+ */
 const useModeRating = (mode: ModeDefinition): number | null =>
-  useGameStore((state) => state.account?.modeRatings?.[mode.id]?.elo ?? state.account?.elo ?? null);
+  useGameStore((state) => {
+    const rating = state.account?.modeRatings?.[mode.id];
+    return rating && ratingIsRankable(rating.ratingState) ? rating.elo : null;
+  });
 
 interface PlayModeButtonProps {
   mode: ModeDefinition;

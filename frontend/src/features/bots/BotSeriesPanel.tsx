@@ -6,7 +6,8 @@ import BotIcon from './BotIcon';
 import { StakesChip } from './OccasionTag';
 import { notEntered } from './rankedMatch';
 import { MIN_MINUTES, type BotSeriesForm } from './useBotSeriesForm';
-import { engineElo } from '@/features/live/liveSelectors';
+import { engineElo, engineRatingState } from '@/features/live/liveSelectors';
+import { ratingLabel } from '@/features/ratings/scale';
 import { links } from '@/navigation/links';
 import { botIconUrl } from '@/store/api/bots';
 import { useGameStore } from '@/store/gameStore';
@@ -115,7 +116,9 @@ function PitSlot({
         <Text numberOfLines={1} style={[styles.slotAuthor, align]}>
           {bot.engineAuthor ? `by ${bot.engineAuthor}` : bot.engineName || 'engine'}
         </Text>
-        <Text style={[styles.slotRating, align]}>{engineElo(bot, mode.id)}</Text>
+        <Text style={[styles.slotRating, align]}>
+          {ratingLabel(engineElo(bot, mode.id), engineRatingState(bot, mode.id))}
+        </Text>
       </View>
     </>
   ) : (
@@ -482,7 +485,7 @@ export default function BotSeriesPanel({
             ) : null;
           }
           // A host may move a finished run to the other side of ranked and
-          // casual, games and all; the ladder is refitted as it happens.
+          // casual, games and all; the ratings are recomputed as it happens.
           return asHost ? (
             <GhostButton
               accessibilityLabel={`${run.casual ? 'Make ranked' : 'Make casual'}: ${

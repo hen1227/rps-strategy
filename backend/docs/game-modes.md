@@ -222,4 +222,4 @@ That file is sufficient for the mode to appear in `GET /api/modes`, the WebSocke
 and movement directly, as demonstrated by the test-only teleport mode in
 `internal/game/mode_test.go`.
 
-Ratings are per mode, so a new mode arrives with its own rating pool and needs no rating code of its own. The first ranked game an account finishes in the mode creates its rating row from that account's shared starting rating, and ranked matchmaking then compares only ratings earned in that mode.
+Ratings are per mode, so a new mode arrives with its own rating pool and needs no rating code of its own. Every account starts the mode as a newcomer, and ranked matchmaking then compares only ratings earned in that mode.

@@ -14,8 +14,7 @@ import {
   SectionHeading,
 } from '@/ui/primitives';
 import {
-  RATING_EXPLAINER,
-  RATING_FLOOR,
+  RATING_START,
   RATING_UNRATED_LABEL,
   ratingIsRankable,
   ratingLabel,
@@ -50,9 +49,9 @@ const MAXIMUM_DISCORD_LENGTH = 64;
 const visibleName = (account: Account | null | undefined) =>
   account?.username && account.username.toLowerCase() !== 'guest' ? account.username : '';
 
-// Every mode rates separately. A mode the player has not finished yet reports
-// the account's shared rating, which is what the server will seed it with —
-// and is unrated, so it prints as a dash, the way the leaderboard prints it.
+// Every mode rates separately. A mode the player has not played yet starts at
+// RATING_START and is unrated, so it prints as a dash, the way the leaderboard
+// prints it.
 /** One mode's rating, as the table shows it. */
 interface ModeRatingRow {
   id: ModeID;
@@ -70,7 +69,6 @@ const modeRatingRows = (
   account: Account | null | undefined,
   modes: ModeDefinition[],
 ): ModeRatingRow[] => {
-  const seedElo = account?.elo ?? RATING_FLOOR;
   const ratings = account?.modeRatings ?? {};
   return modes
     .filter((mode) => mode.playable !== false || ratings[mode.id])
@@ -80,7 +78,7 @@ const modeRatingRows = (
         id: mode.id,
         name: mode.name,
         shortCode: mode.shortCode,
-        elo: rating?.elo ?? seedElo,
+        elo: rating?.elo ?? RATING_START,
         // No row at all is a mode never played, whatever the server's age; a
         // row without a state is an older server, which ratingIsRankable reads
         // as a real rating.
@@ -241,8 +239,8 @@ export default function AccountScreen() {
     (best, rating) => (best && best.gamesPlayed >= rating.gamesPlayed ? best : rating),
     null,
   );
-  // It is the number a player reads as their rating, so a seed nobody has been
-  // measured against prints as a dash rather than as the floor it equals.
+  // It is the number a player reads as their rating, so a mode with no ranked
+  // game prints as a dash rather than as the number everybody starts on.
   const featuredState: RatingState | undefined = featuredRating
     ? featuredRating.ratingState
     : 'unrated';
@@ -303,7 +301,7 @@ export default function AccountScreen() {
                     }
                     style={styles.eloValue}
                   >
-                    {ratingLabel(featuredRating?.elo ?? account?.elo ?? RATING_FLOOR, featuredState)}
+                    {ratingLabel(featuredRating?.elo ?? RATING_START, featuredState)}
                   </Text>
                 </View>
               </Panel>
@@ -422,7 +420,7 @@ export default function AccountScreen() {
                         <Text style={styles.ratingRecord}>
                           {rating.gamesPlayed > 0
                             ? `${rating.wins}W · ${rating.draws}D · ${rating.losses}L`
-                            : 'No ranked games yet'}
+                            : RATING_UNRATED_LABEL}
                         </Text>
                       </View>
                       <Text

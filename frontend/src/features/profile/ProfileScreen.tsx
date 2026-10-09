@@ -7,7 +7,7 @@ import ProfileTournaments from './ProfileTournaments';
 import { failureMessage } from '@/errors';
 import { relativeTime } from '@/features/bots/relativeTime';
 import GameHistoryPanel from '@/features/game/GameHistoryPanel';
-import { ratingCaveat, ratingIsRankable, ratingLabel } from '@/features/ratings/scale';
+import { RATING_START, ratingCaveat, ratingIsRankable, ratingLabel } from '@/features/ratings/scale';
 import { links, shareURL } from '@/navigation/links';
 import { up } from '@/navigation/upFrom';
 import { playerProfile, type PlayerProfilePage } from '@/store/api/players';
@@ -173,14 +173,12 @@ export default function ProfileScreen({ handle, settled }: ProfileScreenProps) {
   const record = `${profile.wins}W ${profile.losses}L ${profile.draws}D`;
   // The modes they have actually played, strongest first. A mode somebody has
   // never touched is not a row: it would read as a rating rather than as an
-  // absence, which is the same mistake `accounts.elo` invites — and a worse one
-  // than it used to be, because the number an unplayed mode shows is now the
-  // floor, and the floor means "plays no better than chance".
+  // absence, the number everybody starts on dressed as a result.
   const rated = Object.entries(profile.modeRatings ?? {})
     .filter(([, rating]) => Boolean(rating) && (rating?.gamesPlayed ?? 0) > 0)
-    // Measured first, and only then by the number — the board's own order. A
-    // mode nobody could be placed in does not head the list because the
-    // placeholder it shows happens to read high.
+    // Rated first, and only then by the number — the board's own order. A mode
+    // with only casual games does not head the list because the starting
+    // number it shows happens to read higher.
     .sort(([, first], [, second]) => {
       const firstRanked = ratingIsRankable(first?.ratingState);
       if (firstRanked !== ratingIsRankable(second?.ratingState)) return firstRanked ? -1 : 1;
@@ -290,7 +288,7 @@ export default function ProfileScreen({ handle, settled }: ProfileScreenProps) {
                   {modes.find((mode) => mode.id === modeId)?.name ?? modeId}
                 </Text>
                 <Text style={styles.modeElo}>
-                  {ratingLabel(rating?.elo ?? 0, rating?.ratingState)}
+                  {ratingLabel(rating?.elo ?? RATING_START, rating?.ratingState)}
                 </Text>
                 <Text style={styles.modeRecord}>
                   {rating?.wins ?? 0}W {rating?.losses ?? 0}L {rating?.draws ?? 0}D
