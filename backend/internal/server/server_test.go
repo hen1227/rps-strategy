@@ -1080,18 +1080,23 @@ func TestAgreedTimeExtensionAddsThreeMinutesForBothPlayers(t *testing.T) {
 	_ = readClientMessage(t, redClient)
 	_ = readClientMessage(t, blueClient)
 
-	server.handleMessage(blueClient, ClientMessage{Type: "accept_time"})
-	awaitMessageOfType(t, blueClient, "action_rejected")
+	server.handleMessage(redClient, ClientMessage{Type: "accept_time"})
+	awaitMessageOfType(t, redClient, "action_rejected")
 
-	// Red is to move, so Blue is asking while its own clock is stopped.
-	server.handleMessage(blueClient, ClientMessage{Type: "offer_time"})
+	// Blue is to move, so Red is asking while its own clock is stopped.
+	server.handleMessage(redClient, ClientMessage{Type: "offer_time"})
 	offered := awaitMessageOfType(t, redClient, "game_state")
 	awaitMessageOfType(t, blueClient, "game_state")
-	if offered.GameState.TimeOfferedBy != game.Blue {
-		t.Fatalf("expected Blue's off-turn time request to be broadcast, got %#v", offered)
+	if offered.GameState.TimeOfferedBy != game.Red {
+		t.Fatalf("expected Red's off-turn time request to be broadcast, got %#v", offered)
+	}
+	// The exact check on Red's time below holds only because Red's clock never
+	// runs. Blue's does, and loses whatever milliseconds the test takes.
+	if offered.GameState.Clock.ActiveColor != game.Blue {
+		t.Fatalf("expected Red to be asking off the clock, got %#v", offered.GameState.Clock)
 	}
 
-	server.handleMessage(redClient, ClientMessage{Type: "accept_time"})
+	server.handleMessage(blueClient, ClientMessage{Type: "accept_time"})
 	extended := awaitMessageOfType(t, redClient, "game_state")
 	awaitMessageOfType(t, blueClient, "game_state")
 	if extended.GameState.Status != game.InProgress ||
@@ -1099,12 +1104,12 @@ func TestAgreedTimeExtensionAddsThreeMinutesForBothPlayers(t *testing.T) {
 		t.Fatalf("expected the game to continue with the offer consumed, got %#v", extended)
 	}
 	clock := extended.GameState.Clock
-	if clock.BlueRemainingMs != timeControl.InitialTimeMs+game.TimeExtensionMs {
-		t.Fatalf("expected Blue to gain three minutes, got %dms", clock.BlueRemainingMs)
+	if clock.RedRemainingMs != timeControl.InitialTimeMs+game.TimeExtensionMs {
+		t.Fatalf("expected Red to gain three minutes, got %dms", clock.RedRemainingMs)
 	}
-	if clock.RedRemainingMs <= timeControl.InitialTimeMs ||
-		clock.RedRemainingMs > timeControl.InitialTimeMs+game.TimeExtensionMs {
-		t.Fatalf("expected Red to gain roughly three minutes, got %dms", clock.RedRemainingMs)
+	if clock.BlueRemainingMs <= timeControl.InitialTimeMs ||
+		clock.BlueRemainingMs > timeControl.InitialTimeMs+game.TimeExtensionMs {
+		t.Fatalf("expected Blue to gain roughly three minutes, got %dms", clock.BlueRemainingMs)
 	}
 }
 

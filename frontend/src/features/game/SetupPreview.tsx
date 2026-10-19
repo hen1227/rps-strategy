@@ -90,6 +90,8 @@ export interface SetupPreviewProps {
    * sizes appear next to a row that already says it.
    */
   caption?: string;
+  /** The viewer can only play casual games. See `describeSetup`. */
+  casualOnly?: boolean;
 }
 
 export default function SetupPreview({
@@ -99,8 +101,9 @@ export default function SetupPreview({
   size = 'standard',
   stretch,
   caption,
+  casualOnly,
 }: SetupPreviewProps) {
-  const bullets = describeSetup(setup, mode, defaultTimeControl);
+  const bullets = describeSetup(setup, mode, defaultTimeControl, { casualOnly });
   const compact = size === 'compact';
   const feature = size === 'feature';
   const banner = size === 'banner';

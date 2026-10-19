@@ -32,6 +32,8 @@ import type {
   QueueMiss,
   QueueState,
 } from './types';
+import { track } from '@/analytics/track';
+import { timeControlLabel } from '@/analytics/events';
 import { inferMoveBetweenGrids } from '@/engine/moveDiff';
 import {
   samePosition,
@@ -1029,6 +1031,16 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
           challengeNotice: null,
           error: null,
         });
+        // The server's confirmation rather than the press, so a refused post
+        // is not counted. Sent only for a fresh post; a search is a queue_join.
+        if (message.challenge && !message.challenge.queued) {
+          track('challenge_post', {
+            mode: message.challenge.setup.modeId,
+            ranked: message.challenge.setup.casual ? 'casual' : 'ranked',
+            time_control: timeControlLabel(message.challenge.setup.timeControl),
+            kind: message.challenge.targetUsername ? 'direct' : 'open',
+          });
+        }
         break;
       case 'challenge_removed':
         set((state) => ({
@@ -1371,6 +1383,7 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
       queueMiss: null,
       error: null,
     });
+    track('queue_join', { mode: modeId });
   },
 
   leaveQueue: () => {

@@ -1,5 +1,6 @@
 import { StyleSheet, View } from 'react-native';
 
+import ConsentPrompt, { useConsentPromptOwed } from '@/analytics/ConsentPrompt';
 import QueueCallout from '@/features/queue/QueueCallout';
 import TournamentCallout from '@/features/tournaments/TournamentCallout';
 import { useBottomInset } from '@/features/shell/bottomInset';
@@ -21,6 +22,10 @@ import { space, themedSheet } from '@/theme';
 // is no longer a third contender: a match no longer produces a card at all,
 // because pairing opens the board and the board takes the whole screen.
 //
+// **The consent prompt waits behind both.** A device in Europe is asked once
+// whether it may send usage stats, and until it answers nothing is sent, so
+// there is no cost to asking after the match or the search is dealt with.
+//
 // It also, finally, reads `bottomInset`. The shell has measured the phone's tab
 // bar and summary bar into that store since it was written, and the tournament
 // call-out hard-coded a padding of 14 instead — so on a phone the floating card
@@ -30,18 +35,26 @@ import { space, themedSheet } from '@/theme';
 export default function CalloutLayer() {
   const queueCall = useQueueCall();
   const tournamentCall = useTournamentCall();
+  const consentOwed = useConsentPromptOwed();
   const bottomInset = useBottomInset((state) => state.bottomInset);
 
   const showQueue = queueCall && !tournamentCall;
+  const showConsent = consentOwed && !queueCall && !tournamentCall;
 
-  if (!showQueue && !tournamentCall) return null;
+  if (!showQueue && !tournamentCall && !showConsent) return null;
 
   return (
     <View
       pointerEvents="box-none"
       style={[styles.layer, { paddingBottom: bottomInset + space.medium }]}
     >
-      {showQueue ? <QueueCallout call={queueCall} /> : <TournamentCallout call={tournamentCall!} />}
+      {tournamentCall ? (
+        <TournamentCallout call={tournamentCall} />
+      ) : showQueue ? (
+        <QueueCallout call={queueCall} />
+      ) : (
+        <ConsentPrompt />
+      )}
     </View>
   );
 }
@@ -72,7 +85,8 @@ export const useCalloutReserve = (): number => {
   // renders.
   const queueCall = useQueueCall();
   const tournamentCall = useTournamentCall();
-  return queueCall || tournamentCall ? CALLOUT_RESERVE : 0;
+  const consentOwed = useConsentPromptOwed();
+  return queueCall || tournamentCall || consentOwed ? CALLOUT_RESERVE : 0;
 };
 
 const styles = themedSheet(() => ({

@@ -252,17 +252,24 @@ export function VariantModeCard({ mode, onHowToPlay }: ModeCardProps) {
         </Text>
         <View style={styles.actions}>
           <PlayModeButton emphasis="secondary" mode={mode} />
-          <TextButton
-            accessibilityLabel={`Open the ${mode.name} analysis board`}
-            disabled={Boolean(analysis.locked)}
-            label={analysis.locked ? 'Analysis locked' : 'Analyze'}
-            onPress={analysis.open}
-          />
-          <TextButton
-            accessibilityLabel={`How to play ${mode.name}`}
-            label="How to play"
-            onPress={() => onHowToPlay(mode)}
-          />
+          {/*
+            The two words wrap as a pair. Loose in the row, a long PLAY CASUAL
+            or a larger text size left "How to play" alone on a line of its own
+            under "Analyze", which read as a third, stray control.
+          */}
+          <View style={styles.asides}>
+            <TextButton
+              accessibilityLabel={`Open the ${mode.name} analysis board`}
+              disabled={Boolean(analysis.locked)}
+              label={analysis.locked ? 'Analysis locked' : 'Analyze'}
+              onPress={analysis.open}
+            />
+            <TextButton
+              accessibilityLabel={`How to play ${mode.name}`}
+              label="How to play"
+              onPress={() => onHowToPlay(mode)}
+            />
+          </View>
         </View>
       </View>
     </View>
@@ -314,6 +321,7 @@ const styles = themedSheet(() => ({
     columnGap: space.medium,
     rowGap: space.small,
   },
+  asides: { flexDirection: 'row', alignItems: 'center', columnGap: space.medium },
   // Wide enough to read as the page's main action beside a grey button, which
   // at the label's own width it did not.
   playWide: { minWidth: 180 },

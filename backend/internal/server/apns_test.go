@@ -324,9 +324,10 @@ func TestALostDeviceDropsTheAwaySeek(t *testing.T) {
 	withAPNs(t, server, endpoint)
 	seedAccount(t, server, "ada")
 	if _, err := server.data.SavePushSubscription(context.Background(), persistence.PushSubscription{
-		Endpoint:  testDeviceToken,
-		UserID:    "ada",
-		Transport: persistence.TransportAPNs,
+		Endpoint:        testDeviceToken,
+		UserID:          "ada",
+		Transport:       persistence.TransportAPNs,
+		CreatedAtUnixMs: settledAt(),
 	}); err != nil {
 		t.Fatal(err)
 	}

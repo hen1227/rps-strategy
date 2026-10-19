@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 
 import { appVersion, platformName } from './clientInfo';
+import { useCommunityRules } from '@/features/policy/CommunityRules';
 import { getFeedback, type NewFeedbackItem } from '@/store/api/feedback';
 import { colors, radius, space, themedSheet, type } from '@/theme';
 import { Banner, GhostButton, LabeledInput, OptionChips, Panel, PrimaryButton, SectionHeading } from '@/ui/primitives';
@@ -58,6 +59,7 @@ export default function FeedbackComposer({
   const [linkUrl, setLinkUrl] = useState('');
   const [sending, setSending] = useState(false);
   const [matches, setMatches] = useState<FeedbackItem[]>([]);
+  const { requireAgreement, rulesDialog } = useCommunityRules();
 
   const maxTitle = policy?.maxTitle ?? 120;
   const maxBody = policy?.maxBody ?? 4000;
@@ -99,7 +101,7 @@ export default function FeedbackComposer({
     trimmedTitle.length > 0 &&
     (!needsBody || body.trim().length > 0);
 
-  const send = async () => {
+  const post = async () => {
     setSending(true);
     const created = await onSubmit({
       kind,
@@ -118,6 +120,7 @@ export default function FeedbackComposer({
       onOpenItem(created.itemId);
     }
   };
+  const send = () => requireAgreement(() => void post());
 
   return (
     <Panel tone="accent">
@@ -240,6 +243,7 @@ export default function FeedbackComposer({
             : ''}
         </Text>
       </View>
+      {rulesDialog}
     </Panel>
   );
 }

@@ -1,0 +1,42 @@
+// Copyright (C) 2026 Henhen1227, LLC
+// SPDX-License-Identifier: LGPL-3.0-or-later
+
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'com.henhen1227.rpsfish'
+version = '1.0.0'
+
+// The ABIs this build of the app is for, so a build for one device does not
+// ask for engine libraries it will not ship. Read the way expo-sqlite reads it.
+def reactNativeArchitectures() {
+  def value = project.getProperties().get("reactNativeArchitectures")
+  return value ? value.split(",") : ["armeabi-v7a", "x86", "x86_64", "arm64-v8a"]
+}
+
+android {
+  namespace "expo.modules.rpsfish"
+  defaultConfig {
+    versionCode 1
+    versionName '1.0.0'
+    externalNativeBuild {
+      cmake {
+        abiFilters(*reactNativeArchitectures())
+        // 16 KB pages, which Play requires of new apps. React Native's NDK is
+        // older than the release that made this the default.
+        arguments "-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON"
+      }
+    }
+  }
+  externalNativeBuild {
+    cmake {
+      path "CMakeLists.txt"
+    }
+  }
+}
+
+dependencies {
+  implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
+}

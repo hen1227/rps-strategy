@@ -3,6 +3,7 @@ import { View } from 'react-native';
 
 import { Banner } from '@/ui/primitives';
 import { useAppleOffered } from '@/hooks/useSignInProviders';
+import type { SignInOutcome } from '@/store/accountSession';
 import { useGameStore } from '@/store/gameStore';
 import { activeScheme, radius, themedSheet } from '@/theme';
 
@@ -23,7 +24,14 @@ import { activeScheme, radius, themedSheet } from '@/theme';
 
 type AppleModule = typeof import('expo-apple-authentication');
 
-export default function AppleSignInButton() {
+interface AppleSignInButtonProps {
+  /** How the press ended, for a screen that moves on when it does. */
+  onOutcome?: (outcome: SignInOutcome) => void;
+  /** Start it another way: the naming step carries its own identity along. */
+  start?: () => Promise<SignInOutcome>;
+}
+
+export default function AppleSignInButton({ onOutcome, start }: AppleSignInButtonProps) {
   const available = useGameStore((state) => state.appleSignInAvailable);
   const signInWithApple = useGameStore((state) => state.signInWithApple);
   const offered = useAppleOffered();
@@ -55,9 +63,10 @@ export default function AppleSignInButton() {
     if (busy) return;
     setBusy(true);
     setError(null);
-    const outcome = await signInWithApple();
+    const outcome = await (start ?? signInWithApple)();
     setBusy(false);
     if (outcome.kind === 'failed') setError(outcome.message);
+    onOutcome?.(outcome);
   };
 
   return (

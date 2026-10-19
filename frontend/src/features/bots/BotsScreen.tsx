@@ -242,10 +242,10 @@ export default function BotsScreen() {
                 }
             />
             {engineBots.length === 0 ? (
-                <EmptyState
-                    detail="Connect your own engine with the bot client."
-                    title="No engines are connected"
-                />
+                // Title only: the "Run your own engine" row under it is the way
+                // to connect one, and a line saying so as well was the same
+                // sentence twice.
+                <EmptyState title="No engines are connected"/>
             ) : (
                 <>
                     {playableModes.length > 1 ? (
@@ -359,10 +359,10 @@ export default function BotsScreen() {
         <Panel>
             <SectionHeading
                 eyebrow="PRACTICE"
-                title="Play a (RPSFish) bot"
+                title="Play a bot"
                 trailing={
                     <Badge
-                        label={`${botPlayerCount} PLAYING BOTS`}
+                        label={`${botPlayerCount} PLAYING`}
                         tone={botPlayerCount > 0 ? 'live' : 'neutral'}
                     />
                 }

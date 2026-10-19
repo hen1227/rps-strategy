@@ -12,6 +12,7 @@ import { useEffect, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
 import { PLAYER_NAME_PLY_LIMIT, type OpeningLine, type OpeningNaming } from '@/engine/openingBook';
+import { useCommunityRules } from '@/features/policy/CommunityRules';
 import { colors, radius, space, themedSheet } from '@/theme';
 import { Badge, GhostButton, Panel, PrimaryButton } from '@/ui/primitives';
 
@@ -65,14 +66,17 @@ export default function NamePanel({
   // than a game. Past it, the honest answer is that the position has no name.
   const tooLong = line.length > PLAYER_NAME_PLY_LIMIT;
   const canName = !curator.active && !published && !tooLong;
-  const submit = () => {
-    if (!trimmed) return;
+  const { requireAgreement, rulesDialog } = useCommunityRules();
+  const post = () => {
     if (curator.active) {
       curator.publish(line, trimmed);
       return;
     }
     const send = canName ? onName : onSuggest;
     send(trimmed).then((sent) => sent && setDraft(''));
+  };
+  const submit = () => {
+    if (trimmed) requireAgreement(post);
   };
 
   return (
@@ -175,6 +179,7 @@ export default function NamePanel({
           />
         )}
       </View>
+      {rulesDialog}
     </Panel>
   );
 }

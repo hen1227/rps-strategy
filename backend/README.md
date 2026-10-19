@@ -69,9 +69,9 @@ in the public web build.
 
 Notifications are the one channel that reaches a player who has closed the tab,
 and therefore the only reason a matchmaking seek is allowed to outlive its
-socket. They come in two kinds — Web Push for a browser, APNs for the iOS app —
-and each is configured, and can be missing, on its own. `HasPushSubscription`
-counts both, so "can this person be called back" stays one question with one
+socket. They come in three kinds — Web Push for a browser, APNs for the iOS app,
+FCM for the Android app — and each is configured, and can be missing, on its
+own. `HasPushSubscription` counts all three, so "can this person be called back" stays one question with one
 answer whichever devices they happen to own — but only the kinds this server
 holds keys for, because a row outlives the key that reached it.
 
@@ -167,6 +167,32 @@ permission gone. Until then the phone still counts as reachable.
 Rotating or revoking the Apple key does not invalidate stored tokens — they are
 addresses, not credentials — so a new key with the same team and bundle id keeps
 working without anybody re-registering.
+
+#### FCM, for the Android app
+
+The same promise once more, with a Google service account and an FCM
+registration token. One variable:
+
+```sh
+RPS_FCM_CREDENTIALS_PATH=/etc/rps/rps-firebase.json
+```
+
+The file is a service account key from the Firebase console → Project settings →
+Service accounts → **Generate new private key**, for the same Firebase project
+whose `google-services.json` the app is built with (`android.googleServicesFile`
+in `frontend/app.json`). The server mints an hour's access token from it and
+posts to FCM's HTTP v1 API; there is no Firebase SDK here and no Expo push
+service in the way.
+
+An Android phone registers on `POST /api/push/devices` with
+`"platform": "android"` beside its token; an iPhone sends no platform, as it
+always has. Messages are notification messages on the `match-alerts` channel the
+app creates, tagged `rps-match` so a second summons replaces the first and the
+app can find its own when it comes to the front. `UNREGISTERED`, and a token
+Google calls invalid, prune the phone. `SENDER_ID_MISMATCH` — the app and this
+server holding different projects — is logged and kept, like Apple's
+`DeviceTokenNotForTopic`, because pruning on it would wipe every Android device
+over a deployment mistake.
 
 ## Orange Pi production deployment
 

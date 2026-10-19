@@ -130,9 +130,24 @@ point of Felt is that it is quieter.
 ## Playback
 
 `frontend/src/hooks/useGameSounds.tsx` owns which event fires when, and carries
-the two platform problems worth knowing about: browsers grant permission to make
+the three platform problems worth knowing about: browsers grant permission to make
 a sound per `<audio>` element and only inside a gesture, which is why a pack
-change primes every clip immediately rather than waiting; and both mobile
+change primes every clip immediately rather than waiting; both mobile
 platforms assume an app making a sound wants the stage to itself, which is why
-the audio session is set to mix rather than interrupt. Both are commented where
-they live.
+the audio session is set to mix rather than interrupt; and iOS does not keep a
+rewind and a play in the order they were sent. A clip that has played sits at its
+end, and on iOS a play sent straight after its rewind always started it there and
+was heard as nothing, so every sound played every other time it was asked for. So
+on iOS each clip is rewound the moment it finishes, and a replay that still finds
+it unrewound waits for the rewind before it plays. All three are commented where
+they live. `replayClip` is the one way a clip is started; the Appearance sampler
+uses it too.
+
+Which capture clip plays is decided in `frontend/src/hooks/gameSoundForTransition.ts`.
+`captureBetweenGrids` in `frontend/src/engine/captureMatchup.ts` says which piece
+fell, the same reading the board's capture effect makes, and `captureSoundFor` in
+`frontend/src/appearance/gameSound.ts` names the clip from it, as a lesson does.
+So the clip and the picture always name the same throw. Before that, the hook
+handed `captureSoundFor` the taker's piece, read off the square that emptied, and
+every capture played the clip of the matchup after it in the cycle: rock taking
+scissors sounded like paper taking rock.

@@ -39,9 +39,9 @@ export default function AppearancePreview({ size = 190 }: { size?: number }) {
   return (
     <Panel style={styles.panel}>
       <SectionHeading
-        eyebrow="Preview"
+        eyebrow="PREVIEW"
         title="How it looks"
-        trailing={<Badge label="Live" tone="live" />}
+        trailing={<Badge label="LIVE" tone="live" />}
       />
       <View style={styles.body}>
         <MiniBoard capture grid={grid} modeId="V6" move={PREVIEW_MOVE} mover="Blue" size={size} />
@@ -65,10 +65,6 @@ export default function AppearancePreview({ size = 190 }: { size?: number }) {
             <Badge label="Champion" tone="gold" />
           </View>
 
-          <Text style={styles.copy}>
-            Preview your theme and board colours.
-          </Text>
-
           <View style={styles.buttons}>
             <PrimaryButton label="Play" onPress={() => {}} />
             <GhostButton label="Resign" onPress={() => {}} />
@@ -81,7 +77,15 @@ export default function AppearancePreview({ size = 190 }: { size?: number }) {
 
 const styles = themedSheet(() => ({
   panel: { gap: space.medium },
-  body: { flexDirection: 'row', flexWrap: 'wrap', gap: space.large, alignItems: 'flex-start' },
+  // Centred, for the phone: there the sample wraps under the board, and a
+  // board alone at the left of its line left the rest of the line empty.
+  body: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    gap: space.large,
+    alignItems: 'flex-start',
+  },
   sample: { flex: 1, minWidth: 190, gap: space.small },
   nameRow: { flexDirection: 'row', alignItems: 'center', gap: space.snug },
   name: { ...type.rowTitle, color: colors.text, flex: 1 },
@@ -100,6 +104,5 @@ const styles = themedSheet(() => ({
   },
   clockIdleText: { ...type.rowTitle, color: clock.idleText },
   badges: { flexDirection: 'row', gap: space.snug },
-  copy: { ...type.body, color: colors.textMuted },
   buttons: { flexDirection: 'row', gap: space.small, flexWrap: 'wrap' },
 }));

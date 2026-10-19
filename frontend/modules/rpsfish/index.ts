@@ -1,8 +1,8 @@
 // The RPSFish native module, as TypeScript.
 //
-// One declaration per function `ios/RPSFishEngineModule.swift` defines, so a
-// signature that drifts from the Swift is a compile error here rather than a
-// wrong number on screen. The ABI version is checked at load for the same
+// One declaration per function `ios/RPSFishEngineModule.swift` and
+// `android/…/RPSFishEngineModule.kt` define, so a signature that drifts from
+// the native code is a compile error here rather than a wrong number on screen. The ABI version is checked at load for the same
 // reason — see `src/engine/rpsfish/nativeSession.ts`.
 
 import { requireOptionalNativeModule } from 'expo';
@@ -32,7 +32,7 @@ export interface NativeAnalysis {
 export interface RPSFishNativeModule {
   /** The ABI the installed library implements. */
   abiVersion: number;
-  /** The ABI the Swift module was written against. */
+  /** The ABI the native module was written against. */
   requiredAbiVersion: number;
   rulesVersion: number;
 

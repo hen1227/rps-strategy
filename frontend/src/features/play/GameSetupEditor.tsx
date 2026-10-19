@@ -131,7 +131,8 @@ export default function GameSetupEditor({
               { value: false, label: 'RATED' },
               { value: true, label: 'CASUAL' },
             ]}
-            value={Boolean(setup.casual)}
+            // Signed out, every game is casual, so that is the chip lit.
+            value={Boolean(rankedLocked || setup.casual)}
           />
         </View>
       </View>

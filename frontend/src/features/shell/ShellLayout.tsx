@@ -11,6 +11,7 @@ import { useBottomInset } from './bottomInset';
 import ServerBanner from './ServerBanner';
 import LiveRail from '@/features/live/LiveRail';
 import { useWideScreen } from '@/hooks/useBoardLayout';
+import { useKeyboardRoom } from '@/hooks/useKeyboardRoom';
 import { colors, themedSheet } from '@/theme';
 import { Banner } from '@/ui/primitives';
 import { useGameStore } from '@/store/gameStore';
@@ -31,6 +32,9 @@ import { useGameStore } from '@/store/gameStore';
 
 export default function ShellLayout() {
   const isWide = useWideScreen();
+  // On Android the root is already standing clear of the keyboard and the
+  // navigation bar under it, so the tab bar lets go of its inset meanwhile.
+  const keyboardUp = useKeyboardRoom() > 0;
   const pathname = usePathname();
   const tournamentBoard = pathname === '/tournaments';
   const setBottomInset = useBottomInset((state) => state.setBottomInset);
@@ -128,7 +132,11 @@ export default function ShellLayout() {
             used to sit above it, opening the whole rail in a sheet — see
             `LiveNowPanel` for where that went and why.
           */
-          <SafeAreaView edges={['bottom']} onLayout={measureChrome} style={styles.tabHolder}>
+          <SafeAreaView
+            edges={keyboardUp ? [] : ['bottom']}
+            onLayout={measureChrome}
+            style={styles.tabHolder}
+          >
             <BottomTabBar />
           </SafeAreaView>
         )}

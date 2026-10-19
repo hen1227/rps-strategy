@@ -145,5 +145,8 @@ func run() error {
 	if archived := gameServer.ArchiveLiveGames(shutdownContext); archived > 0 {
 		log.Printf("archived %d unfinished game(s) during shutdown", archived)
 	}
+	// Last, with what is left of the budget: the final game of a drain is
+	// what ends it, and its analytics event is still queued.
+	gameServer.FlushAnalytics(shutdownContext)
 	return nil
 }

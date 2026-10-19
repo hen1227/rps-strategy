@@ -189,14 +189,18 @@ export default function BotManagerPanel() {
   return (
     <Panel>
       {/* No link to the guide: the guide is on this page, under this panel. */}
-      <SectionHeading eyebrow="BOTS" title="Your bots" />
+      {/* Not "Your bots" again: that is the page's own title, just above. */}
+      <SectionHeading title="Registered bots" />
       {/* What the three switches mean, once, rather than a tooltip on each.
           Ranked ladder is the one worth spelling out: it is the only source of
           a rating and the only one that spends your machine's time on a
-          schedule, so an owner should not have to guess at either. */}
-      <Text style={styles.switchHelp}>
-        Challengeable allows casual games. Tournaments enters events. Ranked ladder enters ranked matches: hourly, and whenever someone starts one.
-      </Text>
+          schedule, so an owner should not have to guess at either. Only once
+          there is a bot with switches to read it against. */}
+      {bots.length > 0 ? (
+        <Text style={styles.switchHelp}>
+          Challengeable allows casual games. Tournaments enters events. Ranked ladder enters ranked matches: hourly, and whenever someone starts one.
+        </Text>
+      ) : null}
       {error ? <Banner message={error} onDismiss={() => setError(null)} tone="error" /> : null}
       {notice ? <Banner message={notice} onDismiss={() => setNotice(null)} /> : null}
 
@@ -339,12 +343,15 @@ export default function BotManagerPanel() {
           <Text style={styles.help}>{remaining} of 5 slots left</Text>
         ) : null}
       </View>
-      <Text style={styles.help}>
-        Restarting the bot restores settings from rpsbot.conf.
-      </Text>
-      <Text style={styles.help}>
-        Both options finish scheduled games first. FINISH AND STOP exits; PAUSE stays connected.
-      </Text>
+      {/* About the buttons on a bot's row, so not before there is one. */}
+      {bots.length > 0 ? (
+        <>
+          <Text style={styles.help}>Restarting the bot restores settings from rpsbot.conf.</Text>
+          <Text style={styles.help}>
+            Both options finish scheduled games first. FINISH AND STOP exits; PAUSE stays connected.
+          </Text>
+        </>
+      ) : null}
     </Panel>
   );
 }

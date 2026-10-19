@@ -184,10 +184,16 @@ function PieceChip({ color, piece }: { color: SideColor; piece: PlayablePiece })
 export interface HowToPlayModalProps {
   mode: ModeDefinition | null | undefined;
   onClose: () => void;
+  /**
+   * Open the lessons for this mode, when it has them. Given, trying it on a
+   * board becomes the card's main button and GOT IT the quiet one beside it:
+   * four moves teach the rules better than reading them does.
+   */
+  onTry?: () => void;
   visible: boolean;
 }
 
-export default function HowToPlayModal({ mode, onClose, visible }: HowToPlayModalProps) {
+export default function HowToPlayModal({ mode, onClose, onTry, visible }: HowToPlayModalProps) {
   if (!mode) return null;
 
   const win = WIN_CONDITIONS[mode.id] ?? fallbackWinCondition(mode);
@@ -197,14 +203,30 @@ export default function HowToPlayModal({ mode, onClose, visible }: HowToPlayModa
       closeLabel="Close how to play"
       eyebrow="HOW TO PLAY"
       footer={
-        <Pressable
-          accessibilityLabel="Close how to play"
-          accessibilityRole="button"
-          onPress={onClose}
-          style={({ pressed }) => [styles.doneButton, pressed && styles.pressed]}
-        >
-          <Text style={styles.doneText}>GOT IT</Text>
-        </Pressable>
+        <>
+          <Pressable
+            accessibilityLabel="Close how to play"
+            accessibilityRole="button"
+            onPress={onClose}
+            style={({ pressed }) => [
+              styles.doneButton,
+              onTry && styles.doneButtonQuiet,
+              pressed && styles.pressed,
+            ]}
+          >
+            <Text style={[styles.doneText, onTry && styles.doneTextQuiet]}>GOT IT</Text>
+          </Pressable>
+          {onTry ? (
+            <Pressable
+              accessibilityLabel={`Try ${mode.name} in four moves`}
+              accessibilityRole="button"
+              onPress={onTry}
+              style={({ pressed }) => [styles.doneButton, pressed && styles.pressed]}
+            >
+              <Text style={styles.doneText}>TRY IT ▶</Text>
+            </Pressable>
+          ) : null}
+        </>
       }
       maxWidth={420}
       onClose={onClose}
@@ -373,6 +395,12 @@ const styles = themedSheet(() => ({
     backgroundColor: colors.accent,
   },
   doneText: { color: colors.textStrong, fontSize: 10, fontWeight: '900', letterSpacing: 0.9 },
+  doneButtonQuiet: {
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
+    backgroundColor: colors.surfaceRaised,
+  },
+  doneTextQuiet: { color: colors.textSoft },
 
   pressed: { opacity: 0.7 },
 }));

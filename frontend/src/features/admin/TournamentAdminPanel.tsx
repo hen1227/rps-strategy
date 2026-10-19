@@ -93,7 +93,7 @@ const summarise = (tournament: Tournament): string => {
     parts.push(
       tournament.status === 'in_progress'
         ? `round ${played} of ${tournament.rounds}`
-        : `${tournament.rounds} rounds`,
+        : `${tournament.rounds} round${tournament.rounds === 1 ? '' : 's'}`,
     );
   }
   return parts.join(' · ');

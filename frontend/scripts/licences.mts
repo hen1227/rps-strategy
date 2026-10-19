@@ -1,5 +1,5 @@
 // The licences page's data: every third-party package that ships in the website
-// or the iOS app, with its licence text. Writes src/features/credits/licenceData.json.
+// or either app, with its licence text. Writes src/features/credits/licenceData.json.
 //
 // usage:
 //   npm run licences
@@ -12,11 +12,14 @@
 //
 // - JavaScript comes from the source maps of a real `expo export` of each
 //   platform. A package is listed if the bundle holds code from it.
-// - Native code (iOS) comes from Expo's autolinking, which is what decides what
-//   CocoaPods links, minus modules that only link into debug builds.
+// - Native code comes from Expo's autolinking, which is what decides what
+//   CocoaPods and Gradle link, minus modules that only link into debug builds.
 // - React Native's prebuilt C++ dependencies and Hermes come from
 //   scripts/licences-native.json, because nothing installed describes them.
 //   The note at its top says where its texts came from.
+// - The Android app's Maven libraries come from scripts/licences-android.json,
+//   which scripts/licencesAndroid.mts measures from Gradle. It needs an Android
+//   prebuild, so it is run apart from this, when an Android dependency moves.
 //
 // The exports go to a temporary directory, never to dist/, which is the build
 // that gets deployed.
@@ -32,6 +35,18 @@ import type { LicenceEntry, LicencesData, Platform } from '../src/features/credi
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const repository = path.resolve(root, '..');
 const output = path.join(root, 'src/features/credits/licenceData.json');
+
+// The BSD 3-Clause License after its copyright line, as SPDX gives it, for the
+// Android libraries whose POMs name the licence and ship no text.
+const BSD_3_CLAUSE = `Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
+
+3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived from this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.`;
 
 const run = (command: string, args: string[]) =>
   execFileSync(command, args, {
@@ -83,18 +98,27 @@ function packageRoot(dir: string): string {
   return current;
 }
 
-/** Every package whose native code autolinking puts in a release iOS build. */
-function linkedPackages(): Set<string> {
+/** Every package whose native code autolinking puts in a release build of one app. */
+function linkedPackages(platform: 'android' | 'ios'): Set<string> {
   const dirs = new Set<string>();
   const expoModules = JSON.parse(
-    run('npx', ['expo-modules-autolinking', 'resolve', '--platform', 'apple', '--json']),
-  ) as { modules: { debugOnly?: boolean; pods?: { podspecDir: string }[] }[] };
+    run('npx', [
+      'expo-modules-autolinking', 'resolve', '--platform', platform === 'ios' ? 'apple' : 'android', '--json',
+    ]),
+  ) as {
+    modules: {
+      debugOnly?: boolean;
+      pods?: { podspecDir: string }[];
+      projects?: { sourceDir: string }[];
+    }[];
+  };
   for (const module of expoModules.modules) {
     if (module.debugOnly) continue;
     for (const pod of module.pods ?? []) dirs.add(packageRoot(pod.podspecDir));
+    for (const project of module.projects ?? []) dirs.add(packageRoot(project.sourceDir));
   }
   const community = JSON.parse(
-    run('npx', ['expo-modules-autolinking', 'react-native-config', '--platform', 'ios', '--json']),
+    run('npx', ['expo-modules-autolinking', 'react-native-config', '--platform', platform, '--json']),
   ) as { dependencies: Record<string, { root: string }> };
   for (const dependency of Object.values(community.dependencies)) dirs.add(dependency.root);
   // React Native itself, which autolinking takes as given rather than listing.
@@ -165,10 +189,12 @@ function main() {
   try {
     for (const dir of bundledPackages('web', scratch)) add(dir, 'web');
     for (const dir of bundledPackages('ios', scratch)) add(dir, 'ios');
+    for (const dir of bundledPackages('android', scratch)) add(dir, 'android');
   } finally {
     fs.rmSync(scratch, { recursive: true, force: true });
   }
-  for (const dir of linkedPackages()) add(dir, 'ios');
+  for (const dir of linkedPackages('ios')) add(dir, 'ios');
+  for (const dir of linkedPackages('android')) add(dir, 'android');
 
   const texts: string[] = [];
   const textIndex = (text: string) => {
@@ -244,6 +270,68 @@ function main() {
     });
   }
 
+  // The Android app's Maven libraries. Their POMs name a licence and nothing
+  // else, so the texts are built here: Apache's is the one Folly carries above,
+  // copied from upstream, and MIT and BSD take the holder the POM names, said
+  // to be exactly that on the page.
+  const android = readJSON(path.join(root, 'scripts/licences-android.json')) as {
+    reactNative: string;
+    groups: {
+      name: string;
+      licence: string;
+      declared: string | null;
+      url: string | null;
+      holder: string | null;
+      artifacts: string[];
+    }[];
+  };
+  const apache = native.packages.find((entry) => entry.licence === 'Apache-2.0')?.text.trim();
+  if (!apache?.startsWith('Apache License')) throw new Error('No Apache-2.0 text in scripts/licences-native.json.');
+  const textFor = (group: (typeof android.groups)[number]): { text: string; note: string | null } => {
+    const holder = group.holder ? `Copyright (c) ${group.holder}` : null;
+    switch (group.licence) {
+      case 'Apache-2.0':
+        return { text: apache, note: null };
+      case 'MIT':
+        if (!holder) break;
+        return {
+          text: `MIT License\n\n${holder}\n\n${mitPermission}`,
+          note: 'Its POM declares the MIT License. This is that licence, with the holder the POM names.',
+        };
+      case 'BSD':
+      case 'BSD-3-Clause':
+        if (!holder) break;
+        return {
+          text: `${holder}\nAll rights reserved.\n\n${BSD_3_CLAUSE}`,
+          note: group.licence === 'BSD'
+            ? 'Its POM says only "BSD License". This is the three-clause BSD licence, with the holder the POM names.'
+            : 'Its POM declares the BSD 3-Clause License. This is that licence, with the holder the POM names.',
+        };
+      case 'Android SDK License':
+        return {
+          text: 'Used under the Android Software Development Kit License Agreement:\nhttps://developer.android.com/studio/terms',
+          note: "Google's own library, distributed under Google's terms rather than an open-source licence.",
+        };
+    }
+    throw new Error(`No licence text for ${group.name} (${group.licence}). Add one to scripts/licences.mts.`);
+  };
+  for (const group of android.groups) {
+    const { text, note } = textFor(group);
+    const libraries = group.artifacts.length <= 6
+      ? group.artifacts.join(', ')
+      : `${group.artifacts.length} libraries`;
+    packages.push({
+      name: group.name,
+      version: null,
+      licence: group.licence,
+      platforms: ['android'],
+      url: group.url,
+      from: null,
+      texts: [textIndex(text)],
+      note: [`Android: ${libraries}.`, note].filter(Boolean).join(' '),
+    });
+  }
+
   // The engine is this project's own, but it is a separate work under its own
   // licence, and the LGPL asks to travel with a copy of itself and of the GPL
   // it builds on.
@@ -251,7 +339,7 @@ function main() {
     name: 'RPSFish',
     version: null,
     licence: 'LGPL-3.0-or-later',
-    platforms: ['ios', 'web'],
+    platforms: ['android', 'ios', 'web'],
     url: 'https://github.com/hen1227/rpsfish',
     from: null,
     texts: [
@@ -269,7 +357,7 @@ function main() {
     name: 'Octicons',
     version: null,
     licence: 'MIT',
-    platforms: ['ios', 'web'],
+    platforms: ['android', 'ios', 'web'],
     url: 'https://github.com/primer/octicons',
     from: null,
     texts: [textIndex(`MIT License\n\nCopyright (c) 2026 GitHub Inc.\n\n${mitPermission}`)],
@@ -281,6 +369,12 @@ function main() {
   const listed = new Set(packages.map((entry) => entry.name));
   const direct = Object.keys(readJSON(path.join(root, 'package.json')).dependencies ?? {});
   const reactNative = readJSON(path.join(root, 'node_modules/react-native/package.json')).version as string;
+  if (reactNative !== android.reactNative) {
+    console.warn(
+      `React Native is ${reactNative}, but scripts/licences-android.json was measured with ${android.reactNative}. ` +
+        'Run `npm run licences:android` against a fresh prebuild.',
+    );
+  }
   if (reactNative !== native.reactNative) {
     console.warn(
       `React Native is ${reactNative}, but scripts/licences-native.json was written for ${native.reactNative}. ` +
@@ -301,7 +395,7 @@ function main() {
   const missing = packages.filter((entry) => entry.texts.length === 0).map((entry) => entry.name);
   console.log(
     `Wrote ${path.relative(root, output)}: ${count('web')} on the web, ${count('ios')} on iOS, ` +
-      `${texts.length} distinct texts.`,
+      `${count('android')} on Android, ${texts.length} distinct texts.`,
   );
   if (missing.length > 0) console.log(`No licence file ships with: ${missing.join(', ')}.`);
   console.log(`Direct dependencies that ship in neither build: ${data.notShipped.join(', ') || 'none'}.`);

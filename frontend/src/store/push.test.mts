@@ -104,8 +104,8 @@ test('the alerts offer is made once, and not when it would be a lie', () => {
 });
 
 // A phone asks the same question and gets an answer from different facts. The
-// two arms of `pushCapabilityFrom` share nothing but their three outcomes,
-// which is the point: one state machine, two transports.
+// arms of `pushCapabilityFrom` share nothing but their three outcomes, which is
+// the point: one state machine, three transports.
 test('a real iPhone is ready, and a simulator is not', () => {
   assert.equal(
     pushCapabilityFrom({
@@ -136,6 +136,23 @@ test('a real iPhone is ready, and a simulator is not', () => {
   );
 });
 
+// An emulator with Play services is handed a real token that really delivers,
+// so the only thing that rules an Android build out is having no Firebase.
+test('an Android build is ready only with its Firebase config', () => {
+  assert.equal(
+    pushCapabilityFrom({ transport: 'fcm', hasNotificationsModule: true, hasFirebaseConfig: true }),
+    'ready',
+  );
+  assert.equal(
+    pushCapabilityFrom({ transport: 'fcm', hasNotificationsModule: true, hasFirebaseConfig: false }),
+    'unsupported',
+  );
+  assert.equal(
+    pushCapabilityFrom({ transport: 'fcm', hasNotificationsModule: false, hasFirebaseConfig: true }),
+    'unsupported',
+  );
+});
+
 test('each device is told about its own transport, not the other one', () => {
   const webOnly = { webPush: true, apns: false };
   const appleOnly = { webPush: false, apns: true };
@@ -150,12 +167,17 @@ test('each device is told about its own transport, not the other one', () => {
   assert.equal(pushEnabledFor('web-push', undefined, true), true);
   assert.equal(pushEnabledFor('web-push', undefined, false), false);
   assert.equal(pushEnabledFor('apns', undefined, true), false);
-  // Android would be FCM, which this server does not send.
-  assert.equal(pushEnabledFor(null, { webPush: true, apns: true }, true), false);
+  // Android is told about FCM, and only FCM. A server from before Android says
+  // nothing about it, and cannot reach one.
+  const androidOnly = { webPush: false, apns: false, fcm: true };
+  assert.equal(pushEnabledFor('fcm', androidOnly, true), true);
+  assert.equal(pushEnabledFor('apns', androidOnly, true), false);
+  assert.equal(pushEnabledFor('fcm', appleOnly, true), false);
+  assert.equal(pushEnabledFor('fcm', undefined, true), false);
+  assert.equal(pushEnabledFor(null, { webPush: true, apns: true, fcm: true }, true), false);
 });
 
-// Node is neither a browser nor a phone, and the same is true of Android as far
-// as this server is concerned.
+// Node is neither a browser nor a phone.
 test('a platform with no way in has no transport', () => {
   assert.equal(activePushTransport(), null);
 });

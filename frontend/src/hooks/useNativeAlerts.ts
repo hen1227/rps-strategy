@@ -30,18 +30,19 @@ import { activePushTransport } from '@/store/push';
  */
 export const useNativeAlerts = (): void => {
   useEffect(() => {
-    if (activePushTransport() !== 'apns') return;
+    const transport = activePushTransport();
+    if (transport !== 'apns' && transport !== 'fcm') return;
 
     let cancelled = false;
-    void import('@/store/pushApns').then((apns) => {
+    void import('@/store/pushNative').then((native) => {
       if (cancelled) return;
-      apns.presentQuietlyInForeground();
-      if (AppState.currentState === 'active') void apns.dismissDeliveredSummons();
+      native.presentQuietlyInForeground();
+      if (AppState.currentState === 'active') void native.dismissDeliveredSummons();
     });
 
     const subscription = AppState.addEventListener('change', (state) => {
       if (state !== 'active') return;
-      void import('@/store/pushApns').then((apns) => apns.dismissDeliveredSummons());
+      void import('@/store/pushNative').then((native) => native.dismissDeliveredSummons());
     });
     return () => {
       cancelled = true;

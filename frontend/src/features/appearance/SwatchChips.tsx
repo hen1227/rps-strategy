@@ -1,5 +1,5 @@
-import type { ReactNode } from 'react';
-import { Pressable, Text, View } from 'react-native';
+import { useState, type ReactNode } from 'react';
+import { Pressable, Text, View, type LayoutChangeEvent } from 'react-native';
 
 import { colors, radius, space, themedSheet, type } from '@/theme';
 
@@ -21,6 +21,31 @@ export interface Swatch<Value extends string> {
   preview: ReactNode;
 }
 
+/** The narrowest a chip may be and still fit its name and two lines of blurb. */
+const CHIP_MIN = 116;
+
+/**
+ * How wide each chip is in a row of this width: the fewest rows the options
+ * fit in, then as few columns as still fill those rows, sharing the width out
+ * evenly.
+ *
+ * A fixed 116 left a third of a phone's panel empty to the right of two chips,
+ * and a fifth of an iPad's beside five — a row of choices that stops short of
+ * the panel it is in reads as unfinished. Balanced rather than packed: five
+ * themes that fit four to a row are three and two, not four and a stray, and
+ * the wider chips keep their blurbs whole. Zero until measured, which is the
+ * fixed width, so the first frame is never wider than the page.
+ */
+const chipWidthFor = (rowWidth: number, count: number): number => {
+  if (rowWidth <= 0 || count === 0) return CHIP_MIN;
+  const fit = Math.max(
+    1,
+    Math.min(count, Math.floor((rowWidth + space.small) / (CHIP_MIN + space.small))),
+  );
+  const columns = Math.ceil(count / Math.ceil(count / fit));
+  return Math.floor((rowWidth - space.small * (columns - 1)) / columns);
+};
+
 export interface SwatchChipsProps<Value extends string> {
   options: readonly Swatch<Value>[];
   value: Value;
@@ -35,8 +60,20 @@ export default function SwatchChips<Value extends string>({
   onChange,
   label,
 }: SwatchChipsProps<Value>) {
+  const [rowWidth, setRowWidth] = useState(0);
+  const measure = (event: LayoutChangeEvent) => {
+    const measured = Math.round(event.nativeEvent.layout.width);
+    setRowWidth((current) => (current === measured ? current : measured));
+  };
+  const width = chipWidthFor(rowWidth, options.length);
+
   return (
-    <View accessibilityRole="radiogroup" accessibilityLabel={label} style={styles.row}>
+    <View
+      accessibilityRole="radiogroup"
+      accessibilityLabel={label}
+      onLayout={measure}
+      style={styles.row}
+    >
       {options.map((option) => {
         const selected = option.value === value;
         return (
@@ -48,6 +85,7 @@ export default function SwatchChips<Value extends string>({
             onPress={() => onChange(option.value)}
             style={({ pressed }) => [
               styles.chip,
+              { width },
               selected && styles.chipSelected,
               pressed && styles.pressed,
             ]}
@@ -71,7 +109,6 @@ export default function SwatchChips<Value extends string>({
 const styles = themedSheet(() => ({
   row: { flexDirection: 'row', flexWrap: 'wrap', gap: space.small },
   chip: {
-    width: 116,
     padding: space.small,
     gap: space.tight,
     borderRadius: radius.large,

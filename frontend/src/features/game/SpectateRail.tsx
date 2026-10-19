@@ -142,25 +142,32 @@ function RailFrame({ children, inline = false }: { children: ReactNode; inline?:
   }, [entrance]);
 
   return (
-    <NativeAnimated.View
-      style={[
-        styles.rail,
-        inline && styles.railInline,
-        {
-          opacity: entrance,
-          transform: [
-            {
-              translateY: entrance.interpolate({
-                inputRange: [0, 1],
-                outputRange: [-10, 0],
-              }),
-            },
-          ],
-        },
-      ]}
-    >
-      {children}
-    </NativeAnimated.View>
+    // Where the bar sits, on a plain view of its own: moving the bar into the
+    // top bar or out of it restyles this one, and never the faded view inside.
+    // On iOS, restyling that view part-way through its fade put it back to
+    // where the fade starts, and a bar moving out of a top bar too narrow for
+    // its table — which it does within a moment of arriving — was left
+    // invisible.
+    <View style={inline ? styles.railInline : styles.railPlaced}>
+      <NativeAnimated.View
+        style={[
+          styles.rail,
+          {
+            opacity: entrance,
+            transform: [
+              {
+                translateY: entrance.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [-10, 0],
+                }),
+              },
+            ],
+          },
+        ]}
+      >
+        {children}
+      </NativeAnimated.View>
+    </View>
   );
 }
 
@@ -434,7 +441,6 @@ const styles = themedSheet(() => ({
   // the other says what has happened.
   seriesFrame: { gap: space.snug },
   rail: {
-    marginBottom: 6,
     paddingHorizontal: 10,
     paddingVertical: 7,
     borderRadius: radius.large,
@@ -442,12 +448,14 @@ const styles = themedSheet(() => ({
     borderColor: colors.borderSoft,
     backgroundColor: colors.surfaceSunken,
   },
+  // A bar of its own, under the top bar.
+  railPlaced: { marginBottom: 6 },
   // One item of the top bar rather than a bar of its own: no margin under it,
   // and the thing in the row that gives way, so a run too long for the room
   // scrolls its games rather than pushing the time control off the end. That
   // scrolling is what `onHiddenWidth` reports, and what sends the bar back
   // underneath.
-  railInline: { marginBottom: 0, flexShrink: 1, minWidth: 0 },
+  railInline: { flexShrink: 1, minWidth: 0 },
   railRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   railColumn: { gap: 8 },
   // A fixed width so the meter reads as a meter rather than stretching into a
@@ -457,8 +465,17 @@ const styles = themedSheet(() => ({
   // Reads as a scoreboard: the run on the left, the score up against the
   // button that moves you along it. The score shrinks rather than pushing the
   // button off the bar, so a long run scrolls its games inside this instead.
+  //
+  // Sized from the table in it, then grown or squeezed. Inside the top bar the
+  // rail is only as wide as its contents, and on iOS a slot that starts from
+  // nothing (`flex: 1`) counts for nothing in that width: the rail came out as
+  // wide as its copy and its button, the table had no room at all, and it was
+  // drawn under NEXT GAME — never squeezed, so it never said it was hidden and
+  // the bar never moved down out of the way. The web counts the table either
+  // way, which is why it only showed on an iPad.
   railSlot: {
-    flex: 1,
+    flexGrow: 1,
+    flexBasis: 'auto',
     flexDirection: 'row',
     justifyContent: 'flex-end',
     flexShrink: 1,

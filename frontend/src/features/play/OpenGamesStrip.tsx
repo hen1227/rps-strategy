@@ -6,6 +6,7 @@ import { openGameCards, type OpenGameCard } from './openGames';
 import ModePreview from '@/features/game/ModePreview';
 import { useLobbyGate } from '@/hooks/useQueueCall';
 import { links } from '@/navigation/links';
+import { useHere } from '@/navigation/useHere';
 import { useGameStore } from '@/store/gameStore';
 import { setupSummary } from '@/store/setupSelectors';
 import { titledName } from '@/store/spectateSelectors';
@@ -58,8 +59,7 @@ export default function OpenGamesStrip() {
           <View style={styles.empty}>
             <Text style={styles.emptyTitle}>Nobody is waiting right now</Text>
             <Text numberOfLines={3} style={styles.emptyDetail}>
-              A game somebody posts, or a challenge sent to you, shows up here. Press Play to be
-              the one waiting.
+              Posted games and challenges to you show up here.
             </Text>
           </View>
         ) : (
@@ -120,7 +120,9 @@ function ChallengeCard({ card }: { card: ChallengeCardModel }) {
       : card.kind === 'incoming'
         ? 'only you can take it'
         : !challenge.present
-          ? 'away, we will call them'
+          ? challenge.callable
+            ? 'away, we will call them'
+            : 'away'
           : challenge.queued
             ? 'searching now'
             : 'waiting';
@@ -231,12 +233,13 @@ function CardActions({
  */
 function SignInToPlay() {
   const router = useRouter();
+  const here = useHere();
   return (
     <PrimaryButton
       accessibilityLabel="Sign in to play ranked games"
       compact
       label="SIGN IN"
-      onPress={() => router.push(links.account())}
+      onPress={() => router.push(links.signIn(here))}
       tone="quiet"
     />
   );

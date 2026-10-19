@@ -8,8 +8,10 @@ import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
 import { AppState, Platform, View } from 'react-native';
 
+import { useAnalytics } from '@/analytics/useAnalytics';
 import { GameSoundEffects } from '@/hooks/useGameSounds';
 import CalloutLayer from '@/features/shell/CalloutLayer';
+import { useKeyboardRoom } from '@/hooks/useKeyboardRoom';
 import { useNativeAlerts } from '@/hooks/useNativeAlerts';
 import { useQueuePresence } from '@/hooks/useQueuePresence';
 import { ACCOUNT_CALLBACK_PATH } from '@/store/discordAuth.types';
@@ -93,6 +95,7 @@ function SessionBridge() {
   useQueuePresence();
   useNativeAlerts();
   useAccountAppearanceSync();
+  useAnalytics();
 
   useEffect(() => {
     connect();
@@ -225,6 +228,7 @@ export default function RootLayout() {
   // than hydrated into. A constant on a phone, which pre-renders nothing. See
   // `appearance/bootstrap.web.ts`.
   const treeKey = useAppearanceBootstrap();
+  const keyboardRoom = useKeyboardRoom();
   return (
     <ThemeProvider value={navigationTheme()}>
       <GameSoundEffects />
@@ -237,7 +241,7 @@ export default function RootLayout() {
         sound player must survive the rebuild above, and a second `connect()`
         on a socket already open would be a wasted round trip at launch.
       */}
-      <View key={treeKey} style={{ flex: 1 }}>
+      <View key={treeKey} style={{ flex: 1, paddingBottom: keyboardRoom }}>
         {/*
           No `Stack.Screen` children: every option here applies to every page,
           and page titles live in the route files, which is where the page is.

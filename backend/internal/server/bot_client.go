@@ -525,7 +525,18 @@ func (server *Server) registerBot(client *Client) {
 		}
 	}
 	server.bots[bot.botID] = insertBotConnection(kept, client)
+	// An arrival is the bot's first socket after it was really gone: away for
+	// longer than the grace a game gives it, or not seen since this process
+	// started. rpsbot.py is back within a second of a dropped connection, and
+	// counting each of those would make a flaky network look like traffic.
+	offlineAt, wasOffline := server.botsOfflineAt[bot.botID]
+	arrived := len(existing) == 0 &&
+		(!wasOffline || time.Since(offlineAt) >= botReconnectGracePeriod)
+	delete(server.botsOfflineAt, bot.botID)
 	server.mu.Unlock()
+	if arrived {
+		server.analytics.serverEvent("bot_connected", botConnectedEvent(bot.record, bot.clientVersion))
+	}
 
 	for _, other := range displaced {
 		other.Send(ServerMessage{
@@ -571,13 +582,21 @@ func (server *Server) unregisterBot(client *Client) {
 	// game on the board gives it to come back. See seriesEngineAway.
 	server.mu.Lock()
 	remaining := make([]*Client, 0, len(server.bots[client.bot.botID]))
+	registered := false
 	for _, other := range server.bots[client.bot.botID] {
 		if other != client {
 			remaining = append(remaining, other)
+		} else {
+			registered = true
 		}
 	}
 	if len(remaining) == 0 {
 		delete(server.bots, client.bot.botID)
+		// Only a socket that was online takes the bot offline. One refused
+		// before it registered never had it.
+		if registered {
+			server.botsOfflineAt[client.bot.botID] = time.Now()
+		}
 	} else {
 		server.bots[client.bot.botID] = remaining
 	}

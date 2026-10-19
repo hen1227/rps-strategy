@@ -58,7 +58,7 @@ New: the opening explorer, built from every game people have actually played. Mo
 board,tactics,turn based,multiplayer,online,elo,ranked,duel,engine,analysis,openings,1v1,abstract
 ```
 
-**Description** — 2,141/4,000
+**Description** — 2,114/4,000
 
 ```
 Rock, paper, scissors is a coin flip. Give each side an army of them on a 9x9 board and it becomes a game you can be good at.
@@ -85,7 +85,7 @@ STUDY
 - Review any finished game: every move graded, an evaluation chart across the whole game, and an accuracy percentage for each player.
 - An opening explorer built from the games people actually played, keyed to the board in front of you, with the most popular continuations drawn as arrows.
 
-Free, and free of the usual: no ads, no analytics, no trackers, nothing to buy.
+Free, and free of the usual: no ads, nothing to buy.
 
 The games themselves were invented by WebGoatGuy, who has an implementation and a community of his own — both linked from the Credits page inside the app. This is a fan build.
 ```
@@ -111,7 +111,7 @@ First release. Three game modes, ranked online play with a rating per mode, six 
 | Content Rights | Contains third-party content — see [Before you submit](#before-you-submit) |
 | Made for Kids | No |
 | Uses IDFA | No |
-| Third-party analytics | None |
+| Third-party analytics | Google Analytics (Measurement Protocol, relayed by our server; no SDK in the app) |
 
 ### Export compliance
 
@@ -140,9 +140,15 @@ noted.
 | User Content → Other User Content | In-game chat, and opening names players publish | Chat is held in server memory for the length of the game and never written to the database. It is still collected, so it is still declared |
 | Other Data | Finished game records, per-mode ratings, win/loss/draw totals, tournament entries | Product Interaction under Usage Data is the other defensible home for this. Pick one and use the same choice on Play |
 | Diagnostics → Other Diagnostic Data | IP addresses in ordinary web-server logs | **Not** linked to the user — they are not part of a game record. Purpose: App Functionality |
+| Usage Data → Product Interaction | Screens opened and actions taken (sign-in, queue, games started and finished with mode and result, challenges, feedback, copied links), sent to Google Analytics | **Not** linked to the user and **not** used for tracking. Purpose: **Analytics**. Optional: on by default outside Europe, asked first in the EU/EEA/UK/CH, and switchable under Your account → Usage stats |
+| Identifiers → Device ID | A random analytics ID the app makes for itself (not the IDFA or IDFV), deleted when stats are turned off | **Not** linked to the user, **not** tracking. Purpose: **Analytics** |
 
 Not collected: contact info, location, health, financial, contacts, browsing
-history, search history. Legacy accounts predating Discord sign-in hold a
+history, search history. Location stays "not collected": the app sends the
+phone's *region setting* as a country, never a location, and Google never sees
+the phone's IP address because events go through our server. Analytics events
+carry no username, account ID or game ID, which is what makes "not linked"
+true — keep it that way (see `docs/analytics.md`). Legacy accounts predating Discord sign-in hold a
 salted PBKDF2 password hash; no player's new account can have one and the hash
 is deleted the moment Discord or Apple is linked. The two store review
 accounts have one too, and they are ours rather than any user's. If you want
@@ -232,7 +238,7 @@ RPS Strategy
 Rock-paper-scissors on a 9x9 board: ranked online play, bots, real analysis.
 ```
 
-**Full description** — 2,141/4,000
+**Full description** — 2,114/4,000
 
 Use the same text as the Apple **Description** above. Play renders a small
 amount of formatting, so the `-` bullets and the capitalised section headings
@@ -292,7 +298,8 @@ On the Account screen (the You tab), tap "Sign in with a password", the small li
 ### Data safety form
 
 **Does your app collect or share any required user data?** Yes, collects. **No
-data is shared with third parties.** All data is **encrypted in transit** (TLS
+data is shared with third parties** — Google Analytics receives events as our
+service provider, which the form does not count as sharing. All data is **encrypted in transit** (TLS
 and WSS). Users **can request that data be deleted** — and can delete it
 themselves, in the app or at `https://rps.henhen1227.com/account`, which is the
 URL this form wants.
@@ -302,11 +309,14 @@ URL this form wants.
 | Personal info → User IDs | Yes | Required | App functionality, Account management |
 | Messages → Other in-app messages | Yes | Optional | App functionality |
 | App activity → Other actions (game results, ratings, tournament entries) | Yes | Required | App functionality |
-| Device or other IDs | Yes | Optional | App functionality (match alerts only; iOS only today) |
+| Device or other IDs | Yes | Optional | App functionality (match alerts); Analytics (a random analytics ID) |
+| App activity → App interactions | Yes | Optional | Analytics |
+| App info and performance → Other app performance data | Yes | Optional | Analytics (device model, OS and app version, language, screen size) |
 
 Nothing under Location, Financial info, Health, Photos, Files, Contacts,
-Calendar, Web browsing, or App info and performance — there is no crash or
-analytics SDK in the app. Keep the "app activity" choice consistent with
+Calendar, or Web browsing. There is no crash or analytics SDK in the app:
+analytics events go to our server, which forwards them to Google Analytics.
+The analytics rows are **optional** because the player can turn them off. Keep the "app activity" choice consistent with
 whichever category you picked for game records on Apple's label.
 
 ### Content rating questionnaire (IARC)
@@ -467,27 +477,29 @@ for anything the queue cannot handle.
 
 ## Before you submit
 
-Two things will not pass as they stand, and both are Play Console facts rather
-than policy. The two that used to head this list — account deletion and the
-guideline 1.2 affordances — are done; they are described under [What is
+Two things will not pass as they stand. The two that used to head this list —
+account deletion and the guideline 1.2 affordances — are done; they are described under [What is
 already in](#what-is-already-in) so the questionnaire answers below can be
 filled in from it.
 
-**1. Android is not configured at all.** There is no `android/` directory and
-`app.json` has no `android.package`, so there is nothing to upload. Note that an
-Android application ID may not contain a hyphen, so it cannot match the iOS
-bundle ID:
+**1. Android needs two things the repository cannot hold.** The app is
+configured (`com.henhen1227.rpsstrategy`; an application ID may not contain a
+hyphen, so it cannot match the iOS bundle ID), and RPSFish runs on it. But:
 
-```
-"android": { "package": "com.henhen1227.rpsstrategy", "versionCode": 1 }
-```
+- **The engine is a build artifact.** Run `npm run build:rpsfish:android` in
+  `frontend/` before an EAS build, as `build:rpsfish:ios` is for iOS. The
+  libraries are gitignored and travel to EAS by the root `.easignore`.
+- **Match alerts need the Firebase project's two halves.** The app's is
+  `frontend/google-services.json` (project `rps-strategy-8136a`). It is
+  gitignored, because this repository is public, and `frontend/app.config.js`
+  names it only when it is there, so it has to be on the machine an EAS build is
+  started from. The server's is a service account key from the same project, as
+  `RPS_FCM_CREDENTIALS_PATH` (see `backend/README.md`). Until both are in place,
+  Android players are told alerts are unavailable rather than offered them.
 
-Also, `activePushTransport()` returns `null` on Android because FCM was never
-built — so either wire up FCM or make sure the match-alerts panel does not offer
-something that cannot work. And check Play's current target API level
-requirement in the console before you build; it moves every August.
+`targetSdk` is 36 under Expo 57, which meets Play's current requirement.
 
-**2. A new personal Play developer account has to run a closed test with 20
+**2. A new personal Play developer account has to run a closed test with 12
 testers for 14 days** before it can apply for production access. Start that
 clock early; it is the longest lead time on this whole list, and it is not
 something a code change can shorten.

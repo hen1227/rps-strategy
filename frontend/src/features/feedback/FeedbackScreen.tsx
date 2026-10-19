@@ -92,7 +92,9 @@ export default function FeedbackScreen({ item, compose, gameId }: FeedbackScreen
 
   const statusOptions = useMemo(
     () => [
-      { value: 'any' as const, label: 'Everything' },
+      // "Any", not "Everything": the tab strip above already has an Everything,
+      // and two controls with one name on one screen read as the same control.
+      { value: 'any' as const, label: 'Any' },
       ...(policy?.statuses ?? []).map((entry) => ({
         value: entry.id,
         // The tab decides the wording: on the Bugs tab `accepted` reads "Known
@@ -257,7 +259,7 @@ export default function FeedbackScreen({ item, compose, gameId }: FeedbackScreen
             detail={
               search.trim()
                 ? 'Nothing here matches that. Try fewer words, or post it.'
-                : 'Nothing has been posted under this filter yet.'
+                : 'No posts under this filter yet.'
             }
             title="Nothing to show"
           />

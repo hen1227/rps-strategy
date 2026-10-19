@@ -4,6 +4,7 @@ import { ActivityIndicator, Pressable, Text, View } from 'react-native';
 import AppleMark from '@/ui/AppleMark';
 import { Banner } from '@/ui/primitives';
 import { useAppleOffered } from '@/hooks/useSignInProviders';
+import type { SignInOutcome } from '@/store/accountSession';
 import { useGameStore } from '@/store/gameStore';
 import { activeScheme, radius, themedSheet } from '@/theme';
 
@@ -24,7 +25,14 @@ import { activeScheme, radius, themedSheet } from '@/theme';
 const APPLE_WHITE = '#ffffff';
 const APPLE_BLACK = '#000000';
 
-export default function AppleSignInButton() {
+interface AppleSignInButtonProps {
+  /** How the press ended, for a screen that moves on when it does. */
+  onOutcome?: (outcome: SignInOutcome) => void;
+  /** Start it another way: the naming step carries its own identity along. */
+  start?: () => Promise<SignInOutcome>;
+}
+
+export default function AppleSignInButton({ onOutcome, start }: AppleSignInButtonProps) {
   const signInWithApple = useGameStore((state) => state.signInWithApple);
   const offered = useAppleOffered();
   const [busy, setBusy] = useState(false);
@@ -36,11 +44,12 @@ export default function AppleSignInButton() {
   const press = async () => {
     setBusy(true);
     setError(null);
-    const outcome = await signInWithApple();
+    const outcome = await (start ?? signInWithApple)();
     // 'pending' is the redirect already under way, so the button stays busy:
     // this page is going away.
     if (outcome.kind !== 'pending') setBusy(false);
     if (outcome.kind === 'failed') setError(outcome.message);
+    onOutcome?.(outcome);
   };
 
   const dark = activeScheme() !== 'light';

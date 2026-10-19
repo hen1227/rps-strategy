@@ -75,7 +75,7 @@ export default function DeleteAccountPanel({ account, onDeleted }: DeleteAccount
       <Text style={styles.copy}>
         {hasPlayed
           ? 'Your account details are permanently removed. Finished games stay with your name removed.'
-          : 'You have no finished games. Your account will be permanently deleted.'}
+          : 'Your account is permanently removed.'}
       </Text>
 
       <View style={styles.action}>

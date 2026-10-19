@@ -36,6 +36,8 @@ import type {
 export interface PushTransportSupport {
   webPush: boolean;
   apns: boolean;
+  /** Absent from a server that predates Android. */
+  fcm?: boolean;
 }
 
 /**
@@ -67,6 +69,15 @@ export interface Challenge {
    * Always sent, never omitted: `false` is the value carrying the information.
    */
   present: boolean;
+  /**
+   * Whether a notification can reach the author of a row that is not
+   * `present`. Away is not the same thing: a phone put in a pocket and a tab
+   * left idle are both still connected, and neither says whether that person
+   * turned alerts on. False on every present row, and absent from a server
+   * older than it, which is read as false: a call nobody confirmed is not one
+   * to promise.
+   */
+  callable?: boolean;
   createdAtUnixMs: number;
   /** Zero or absent for a row that does not expire. */
   expiresAtUnixMs?: number;

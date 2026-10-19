@@ -381,8 +381,8 @@ POST   /api/push/test            Bearer <session-token | local-profile-key>
 The push routes are what let a queue outlive a tab. They take either credential,
 because the player most in need of being called back is a Guest who has never
 registered. `/subscriptions` is a browser's Web Push endpoint and its two
-encryption keys; `/devices` is an iOS device token, which is the whole of what a
-native app has to give. They are separate routes because they share nothing on
+encryption keys; `/devices` is an iOS device token or an Android registration
+token, which is the whole of what a native app has to give. They are separate routes because they share nothing on
 the wire, and one store because "can this person be called back" has to be one
 question with one answer however many devices somebody owns.
 
@@ -393,7 +393,8 @@ applies to it and hides the whole offer rather than showing a button that cannot
 work — with no keys of either kind set, matchmaking behaves exactly as it did
 before any of this existed. Generate a VAPID pair with `go run
 ./cmd/vapidkeys`; APNs wants an Apple `.p8` key, named by `RPS_APNS_KEY_PATH`,
-`RPS_APNS_KEY_ID` and `RPS_APNS_TEAM_ID`.
+`RPS_APNS_KEY_ID` and `RPS_APNS_TEAM_ID`; FCM wants a Firebase service account
+key, named by `RPS_FCM_CREDENTIALS_PATH`.
 
 `POST /api/push/test` sends one notification to the account that asked for it
 and answers with three counts, over devices of either kind: `delivered`, which a

@@ -477,6 +477,10 @@ WHERE user_id = ?
 		// still listing a Tournament Champion award, is the person this is
 		// supposed to have removed — recognisable to anyone who was there.
 		`DELETE FROM account_titles WHERE user_id = ?`,
+		// The hard delete above cascades these. A push token is a device
+		// identifier, and one left registered would also keep a waiting seek
+		// on the board for an account that has gone.
+		`DELETE FROM push_subscriptions WHERE user_id = ?`,
 		`UPDATE game_history SET red_username = '` + anonymousName + `' WHERE red_player_id = ?`,
 		`UPDATE game_history SET blue_username = '` + anonymousName + `' WHERE blue_player_id = ?`,
 		`UPDATE game_pgn SET red_username = '` + anonymousName + `' WHERE red_player_id = ?`,

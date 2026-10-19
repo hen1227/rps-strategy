@@ -72,8 +72,10 @@ export interface SignInReply {
   needsUsername?: boolean;
   suggestedUsername?: string;
   discordHandle?: string;
-  /** Who vouched, on a `needsUsername` reply. Absent from a server that
-   *  predates Apple, which only ever meant Discord. */
+  /** Who vouched: on a `needsUsername` reply for the naming step, and on a
+   *  finished sign-in for analytics. Absent from a server that predates Apple,
+   *  which only ever meant Discord, and from a finished sign-in on a server
+   *  that predates analytics. */
   provider?: SignInProvider;
   /**
    * The ticket the naming step finishes, on a `needsUsername` reply. Apple's
@@ -124,6 +126,22 @@ export const completeSignup = (
     method: 'POST',
     body: { ticket, username, password, reservationToken },
     what: password ? 'Signing in to your account' : 'Claiming your username',
+  });
+
+/**
+ * Attach a ticket's identity to the signed-in account.
+ *
+ * The naming step's other way out. A new Apple ID whose owner already plays
+ * under Discord keeps its ticket while they sign in with Discord, and the
+ * ticket is handed over here with the new session. The reply is the account,
+ * now holding both; the session is the one already held.
+ */
+export const linkSignInTicket = (token: string, ticket: string) =>
+  request<SignInReply>('/api/auth/link', {
+    method: 'POST',
+    token,
+    body: { ticket },
+    what: 'Linking your sign-in',
   });
 
 /**

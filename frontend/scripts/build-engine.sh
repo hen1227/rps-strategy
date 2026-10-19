@@ -10,7 +10,7 @@
 # of the engine's target/ directory into this app. Nothing in the engine
 # repository has to know this repository exists.
 #
-# Usage: build-engine.sh [web|ios]      (default: web)
+# Usage: build-engine.sh [web|ios|android]      (default: web)
 #
 # Set RPSFISH_DIR to build against a checkout somewhere else:
 #   RPSFISH_DIR=~/src/rpsfish npm run build:rpsfish
@@ -81,8 +81,17 @@ case "$RPSFISH_WHAT" in
     cp -R "$FRAMEWORK" "$APP_DIR/modules/rpsfish/ios/RPSFish.xcframework"
     echo "RPSFish XCFramework copied to $APP_DIR/modules/rpsfish/ios/"
     ;;
+  android)
+    "$ENGINE_DIR/scripts/build_android.sh"
+    LIBS="$ENGINE_DIR/target/android"
+    [ -f "$LIBS/include/RPSFish.h" ] || { echo "Engine build produced no $LIBS" >&2; exit 1; }
+    rm -rf "$APP_DIR/modules/rpsfish/android/libs"
+    mkdir -p "$APP_DIR/modules/rpsfish/android"
+    cp -R "$LIBS" "$APP_DIR/modules/rpsfish/android/libs"
+    echo "RPSFish Android libraries copied to $APP_DIR/modules/rpsfish/android/libs/"
+    ;;
   *)
-    echo "Usage: $0 [web|ios]" >&2
+    echo "Usage: $0 [web|ios|android]" >&2
     exit 1
     ;;
 esac

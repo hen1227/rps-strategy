@@ -6,11 +6,10 @@ import { resultForPlayer } from './resultLabels';
 import { failureMessage } from '@/errors';
 import { relativeTime } from '@/features/bots/relativeTime';
 import { useWideScreen } from '@/hooks/useBoardLayout';
-import { gameReviewURL, links } from '@/navigation/links';
+import { links } from '@/navigation/links';
 import { getGameHistory } from '@/store/api/accounts';
 import { colors, radius, space, themedSheet, type } from '@/theme';
 import type { GameRecord } from '@/types/protocol';
-import CopyLinkButton from '@/ui/CopyLinkButton';
 import ListRow from '@/ui/ListRow';
 import { Banner, EmptyState, GhostButton, GhostLink, Panel, SectionHeading } from '@/ui/primitives';
 
@@ -40,8 +39,8 @@ export default function GameHistoryPanel({
   eyebrow = 'HISTORY',
   title = 'Recent games',
 }: GameHistoryPanelProps) {
-  // On a phone the two buttons go under the row rather than beside it: at 390
-  // points a title and a meta line squeezed past them truncate to "Henry beat
+  // On a phone the button goes under the row rather than beside it: at 390
+  // points a title and a meta line squeezed past it truncate to "Henry beat
   // Kestrel …", which loses the only thing the row is for.
   const wide = useWideScreen();
   const [games, setGames] = useState<GameRecord[]>([]);
@@ -107,20 +106,13 @@ export default function GameHistoryPanel({
           ) : undefined
         }
       />
-      <Text style={styles.help}>
-        Replay your finished games or share a link.
-      </Text>
-
       {error ? <Banner message={error} onDismiss={() => setError(null)} tone="error" /> : null}
 
       {games.length === 0 ? (
         loading ? (
           <Text style={styles.help}>Loading games…</Text>
         ) : (
-          <EmptyState
-            detail="Your finished online games will appear here."
-            title="No games yet"
-          />
+          <EmptyState detail="Finished online games appear here." title="No games yet" />
         )
       ) : (
         <View style={styles.list}>
@@ -141,7 +133,13 @@ export default function GameHistoryPanel({
 
 const OUTCOME_LETTER = { win: 'W', loss: 'L', draw: 'D', unknown: '·' } as const;
 
-/** One game: how it went for this player, what it was, and the two ways in. */
+/**
+ * One game: how it went for this player, what it was, and the way in.
+ *
+ * One quiet link, not a copy button beside it. A list of games is a feed, and a
+ * pair of buttons on every row read as a wall of buttons; the review it opens
+ * has its own COPY GAME LINK for the one game somebody wants to send.
+ */
 function GameHistoryRow({
   divided,
   game,
@@ -159,10 +157,6 @@ function GameHistoryRow({
 
   const actions = (
     <View style={[styles.actions, !wide && styles.actionsStacked]}>
-      <CopyLinkButton
-        accessibilityLabel={`Copy a link to the game against ${opponent}`}
-        url={gameReviewURL(game.gameId)}
-      />
       <GhostLink
         accessibilityLabel={`Review the game against ${opponent}`}
         compact
@@ -186,7 +180,7 @@ function GameHistoryRow({
           </Text>
         </View>
       }
-      meta={`${game.modeName} · ${game.ranked ? 'ranked' : 'casual'} · ${game.moveNumber} moves · ${relativeTime(game.finishedAtUnixMs)}`}
+      meta={`${game.modeName} · ${game.ranked ? 'ranked' : 'casual'} · ${game.moveNumber} ${game.moveNumber === 1 ? 'move' : 'moves'} · ${relativeTime(game.finishedAtUnixMs)}`}
       title={<ResultLine record={game} />}
       trailing={wide ? actions : undefined}
     />

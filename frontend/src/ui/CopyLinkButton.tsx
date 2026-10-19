@@ -1,6 +1,9 @@
 import * as Clipboard from 'expo-clipboard';
 import { useState } from 'react';
 
+import { contentTypeOf } from '@/analytics/pagePath';
+import { track } from '@/analytics/track';
+
 import { GhostButton } from './primitives';
 
 // Hand somebody the address of the thing in this row.
@@ -45,6 +48,7 @@ export default function CopyLinkButton({
         try {
           await Clipboard.setStringAsync(url);
           setState('copied');
+          track('share', { content_type: contentTypeOf(url), method: 'copy' });
         } catch {
           setState('error');
         }

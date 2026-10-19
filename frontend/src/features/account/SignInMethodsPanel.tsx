@@ -19,15 +19,19 @@ import { colors, radius, themedSheet } from '@/theme';
 //
 // Nothing here for a store review account, which the server refuses every link,
 // or for a password account still waiting to link, whose prompt at the top of
-// the screen already is this. And nothing when there is nothing to add and only
-// one way in to list — a panel that only repeats the profile above it.
+// the screen already is this. And on the Account screen, nothing when there is
+// nothing to add and only one way in to list — a panel that only repeats the
+// profile above it. The sign-in screen's last step passes `always`, because
+// there the list is the answer to "what did that just do".
 
 interface SignInMethodsPanelProps {
   /** The owner's own answer from the server; null until it has come. */
   methods: SignInMethods | null;
+  /** Show the list even when it has one line and nothing to add. */
+  always?: boolean;
 }
 
-export default function SignInMethodsPanel({ methods }: SignInMethodsPanelProps) {
+export default function SignInMethodsPanel({ methods, always = false }: SignInMethodsPanelProps) {
   const discordAvailable = useGameStore((state) => state.discordSignInAvailable);
   const appleOffered = useAppleOffered();
 
@@ -38,12 +42,12 @@ export default function SignInMethodsPanel({ methods }: SignInMethodsPanelProps)
     { id: 'apple', name: 'Apple', linked: linked.has('apple'), offered: appleOffered !== false },
   ].filter((row) => row.linked || row.offered);
   const addable = rows.some((row) => !row.linked);
-  if (!addable && rows.length < 2) return null;
+  if (!always && !addable && rows.length < 2) return null;
 
   return (
     <Panel>
       <SectionHeading eyebrow="SIGN-IN" title="Ways to sign in" />
-      <Text style={styles.helper}>Link both to sign in with either.</Text>
+      {addable ? <Text style={styles.helper}>Link both to sign in with either.</Text> : null}
       <View style={styles.rows}>
         {rows.map((row) =>
           row.linked ? (

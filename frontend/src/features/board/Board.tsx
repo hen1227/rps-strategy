@@ -22,12 +22,25 @@ import {
 import Svg, { Path } from 'react-native-svg';
 
 import { arrowPath } from './arrowShape';
+import CaptureEffectLayer, {
+  along,
+  useCaptureEffectClock,
+  type CaptureEffectState,
+} from './CaptureEffectLayer';
+import {
+  CHOREOGRAPHY,
+  decideCaptureEffect,
+  effectOutlivesStep,
+  impactAfter,
+} from './captureEffect';
 import PieceIcon from './PieceIcon';
 import { usePieceDrag } from './pieceDrag';
 import TileMark from './TileMark';
 import { overlayCellAt, type BoardOverlay } from './overlay';
 import { tintForTile } from './tint';
 import MoveQualityBadge from '@/features/analysis/MoveQualityBadge';
+import { MAX_BOARD } from '@/hooks/useBoardLayout';
+import { useReducedMotion } from '@/hooks/useReducedMotion';
 import {
   animatedReplayPieceTracks,
   buildReplayPieceTracks,
@@ -141,12 +154,35 @@ type MouseLikeEvent = MouseSource & { nativeEvent?: MouseSource };
 const webDragStyle = (cursor: 'grab' | 'grabbing') =>
   ({ cursor, touchAction: 'none' } as unknown as ViewStyle);
 const BOARD_BORDER_WIDTH = 3;
+// The capture effect resizes a taker as it lands and must hand it back at its
+// own size inside this; see `ATTACKER_SETTLED_BY_MS`.
 const MOVE_ANIMATION_DURATION = 230;
 // A catch-up finishes before even the fastest watched bot can make its next
 // move (250ms), so reaching the live edge never makes the board fall behind.
 const FAST_REPLAY_MAX_DURATION = 220;
 const FAST_REPLAY_MIN_DURATION = 72;
 const FAST_REPLAY_MOVE_DURATION = 12;
+// How long a dropped piece waits where it was let go for the move to come
+// back. A local board answers within a frame; this is the server's round
+// trip, with room for a slow phone connection, and is only ever reached when
+// the move is refused or lost.
+const DROP_HOLD_TIMEOUT = 1500;
+
+/** Milliseconds on a clock that only goes forwards, for timing steps against each other. */
+const nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+
+/** How far a piece was dragged from the middle of its square, in pixels. */
+interface DropOffset {
+  x: number;
+  y: number;
+}
+
+/** A piece let go on a legal square, waiting for the board to play it. */
+interface HeldDrop {
+  from: Position;
+  to: Position;
+  offset: DropOffset;
+}
 
 // The board is drawn the way a chessboard is: file a on the left, rank 1 at the
 // bottom. Rank 1 is Blue's home boundary, so an unturned board is already
@@ -175,9 +211,20 @@ const fileCenter = (x: number, isFlipped: boolean, columns: number) =>
 const rankCenter = (y: number, isFlipped: boolean, rows: number) =>
   displayRank(y, isFlipped, rows) + 0.5;
 
-const pieceSizeForBoard = (boardSize: number) => Math.max(20, Math.min(46, boardSize / 12));
+/**
+ * How much larger than its design size a board is drawn: 1 for every board up
+ * to `MAX_BOARD`, which is all of them but an analysis board given a tall
+ * window. The pieces and badges below stop growing at what a `MAX_BOARD` board
+ * draws, so past it they are scaled with the board — the same board larger,
+ * rather than the same pieces swimming in bigger squares.
+ */
+const grownBy = (boardSize: number) => Math.max(1, boardSize / MAX_BOARD);
+const pieceSizeForBoard = (boardSize: number) =>
+  Math.max(20, Math.min(46, boardSize / 12)) * grownBy(boardSize);
 const moveBadgeSizeForBoard = (boardSize: number, shape: BoardShape) =>
-  Math.round(Math.max(13, Math.min(22, squareSizeFor(boardSize, shape) * 0.36)));
+  Math.round(
+    Math.max(13, Math.min(22, squareSizeFor(boardSize, shape) * 0.36)) * grownBy(boardSize),
+  );
 
 const positionFromDrag = (
   from: Position,
@@ -237,6 +284,35 @@ const positionFromClientPoint = (
   };
 };
 
+/**
+ * A move drawn by the piece that makes it, rather than by a copy laid over the
+ * board for the length of the animation.
+ *
+ * The copy was a new image view every move, and the piece it stood in for left
+ * the board in the same frame. A new image view on a phone paints nothing until
+ * its picture is handed back to it, which can be a frame after it first goes on
+ * screen — so now and then a piece blinked out for a frame as it set off. A
+ * capture's effect drew over the gap; a quiet move showed it. The piece's own
+ * view already has its picture, so it carries itself.
+ *
+ * Built once per move and handed down unchanged until the move ends: the
+ * transform it describes is driven natively, and a native-driven view that is
+ * restyled mid-animation can be left at the animation's start on iOS.
+ */
+interface CarriedMove {
+  progress: NativeAnimated.Value;
+  /** How far the move carries the piece, in pixels, from where it stands. */
+  dx: number;
+  dy: number;
+  /** The taker's size as it lands on a capture, from the capture effect's clock. */
+  landing?: NativeAnimated.AnimatedInterpolation<number>;
+}
+
+/** A carried piece takes no touches, so it is handed these and never re-rendered by new ones. */
+const ignoreDragActive = () => {};
+const ignoreDragStart = () => {};
+const refuseDrop = () => false;
+
 interface DraggablePieceProps {
   boardSize: number;
   shape: BoardShape;
@@ -247,12 +323,17 @@ interface DraggablePieceProps {
   displayX: number;
   displayY: number;
   isFlipped: boolean;
+  /** Left where it was dropped, waiting for the board to play the move. */
+  isHeld: boolean;
   isHidden: boolean;
   isSelected: boolean;
   onDragActiveChange: (active: boolean) => void;
-  onDragEnd: (from: Position, to: Position) => void;
+  /** Returns whether the board is holding the piece where it was let go. */
+  onDragEnd: (from: Position, to: Position, offset: DropOffset) => boolean;
   onDragStart: (position: Position) => void;
   tile: Tile;
+  /** The move this piece is making, while it makes it. */
+  travel?: CarriedMove;
 }
 
 const DraggablePiece = memo(function DraggablePiece({
@@ -265,14 +346,43 @@ const DraggablePiece = memo(function DraggablePiece({
   displayX,
   displayY,
   isFlipped,
+  isHeld,
   isHidden,
   isSelected,
   onDragActiveChange,
   onDragEnd,
   onDragStart,
   tile,
+  travel,
 }: DraggablePieceProps) {
   const translation = useRef(new NativeAnimated.ValueXY()).current;
+  // Memoised on the move, so a re-render while it plays hands the same nodes
+  // back rather than restyling the view under the native driver.
+  const travelStyle = useMemo(
+    () =>
+      travel
+        ? {
+            transform: [
+              {
+                translateX: travel.progress.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [0, travel.dx],
+                  extrapolate: 'clamp',
+                }),
+              },
+              {
+                translateY: travel.progress.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [0, travel.dy],
+                  extrapolate: 'clamp',
+                }),
+              },
+              ...(travel.landing ? [{ scale: travel.landing }] : []),
+            ],
+          }
+        : null,
+    [travel],
+  );
   const [isDragging, setIsDragging] = useState(false);
   const pieceSize = pieceSizeForBoard(boardSize);
 
@@ -285,6 +395,14 @@ const DraggablePiece = memo(function DraggablePiece({
       useNativeDriver: false,
     }).start();
   }, [translation]);
+
+  // A held piece that is still here when the board lets go of it was never
+  // moved — the move was refused, or never arrived — so it goes home.
+  const wasHeld = useRef(isHeld);
+  useEffect(() => {
+    if (wasHeld.current && !isHeld) resetPosition();
+    wasHeld.current = isHeld;
+  }, [isHeld, resetPosition]);
 
   // A PanResponder accumulates `gesture.dx`/`dy` on the instance it granted
   // with, so rebuilding one mid-drag restarts the offset at zero and snaps the
@@ -343,8 +461,11 @@ const DraggablePiece = memo(function DraggablePiece({
           );
           setIsDragging(false);
           latest.current.onDragActiveChange(false);
-          latest.current.onDragEnd(position, to);
-          resetPosition();
+          const held = latest.current.onDragEnd(position, to, {
+            x: gesture.dx,
+            y: gesture.dy,
+          });
+          if (!held) resetPosition();
         },
         onPanResponderTerminate: () => {
           setIsDragging(false);
@@ -368,40 +489,50 @@ const DraggablePiece = memo(function DraggablePiece({
         },
         isHidden && styles.hiddenPieceLayout,
         isSelected && styles.selectedPieceLayout,
-        isDragging && styles.draggingPieceLayout,
+        (isDragging || isHeld) && styles.draggingPieceLayout,
+        travel && styles.travellingPieceLayout,
       ]}
     >
-      <NativeAnimated.View
-        {...panResponder.panHandlers}
-        style={[
-          styles.piece,
-          dragEnabled ? styles.pieceGrip : styles.pieceInert,
-          dragEnabled && styles.draggablePiece,
-          isDragging && styles.draggingPiece,
-          {
-            transform: [
-              ...translation.getTranslateTransform(),
-              { scale: isDragging ? 1.14 : isSelected ? 1.08 : 1 },
-            ],
-          },
-        ]}
-      >
+      {/*
+        Rendered whether or not the piece is moving, so that starting a move
+        never changes the tree around the image — see `CarriedMove`.
+      */}
+      <NativeAnimated.View style={[styles.pieceTravel, travelStyle]}>
         {/*
-          `liftable` says the shadow is coming before it does. Without it the
-          artwork is thrown away and drawn again on the touch and again on the
-          release — see the prop on `PieceIcon` — which on a phone is a piece
-          that blinks twice every time it is tapped. The same tree swap the
-          `pieceGrip` note below is about, costing a picture rather than a
-          gesture.
+          One size, always. Selecting and dragging used to scale the piece, but
+          the scale was a React prop on a view whose drag offset is written
+          straight to it: every finger movement wrote the offset back without the
+          scale and every re-render put it back, so a dragged piece pulsed between
+          two sizes as it went. The tile's frame says a piece is selected and the
+          shadow says it is lifted.
         */}
-        <PieceIcon
-          color={tile.occupantOwner}
-          dropShadow={isDragging}
-          liftable
-          piece={tile.occupant}
-          look={look}
-          size={pieceSize}
-        />
+        <NativeAnimated.View
+          {...panResponder.panHandlers}
+          style={[
+            styles.piece,
+            dragEnabled ? styles.pieceGrip : styles.pieceInert,
+            dragEnabled && styles.draggablePiece,
+            isDragging && styles.draggingPiece,
+            { transform: translation.getTranslateTransform() },
+          ]}
+        >
+          {/*
+            `liftable` says the shadow is coming before it does. Without it the
+            artwork is thrown away and drawn again on the touch and again on the
+            release — see the prop on `PieceIcon` — which on a phone is a piece
+            that blinks twice every time it is tapped. The same tree swap the
+            `pieceGrip` note below is about, costing a picture rather than a
+            gesture.
+          */}
+          <PieceIcon
+            color={tile.occupantOwner}
+            dropShadow={isDragging}
+            liftable
+            piece={tile.occupant}
+            look={look}
+            size={pieceSize}
+          />
+        </NativeAnimated.View>
       </NativeAnimated.View>
     </View>
   );
@@ -448,7 +579,11 @@ interface ReplayPieceProps {
   shape: BoardShape;
   pieceLooks?: Record<string, PieceLook>;
   isFlipped: boolean;
+  /** The taker's size as it lands on a capture, from the capture effect's clock. */
+  landing?: NativeAnimated.AnimatedInterpolation<number>;
   progress: NativeAnimated.Value;
+  /** Where a dragged piece was let go, which is where it sets off from. */
+  startOffset?: DropOffset;
   steps: number;
   track: PieceTrack;
 }
@@ -458,7 +593,9 @@ const ReplayPiece = memo(function ReplayPiece({
   shape,
   pieceLooks,
   isFlipped,
+  landing,
   progress,
+  startOffset,
   steps,
   track,
 }: ReplayPieceProps) {
@@ -481,11 +618,11 @@ const ReplayPiece = memo(function ReplayPiece({
   };
   const translate = (axis: 'x' | 'y') => {
     if (inputRange.length < 2) return 0;
-    return progress.interpolate({
-      inputRange,
-      outputRange: positions.map((position) => offsetFor(position, axis)),
-      extrapolate: 'clamp',
-    });
+    const outputRange = positions.map((position) => offsetFor(position, axis));
+    // Set off from the finger rather than the square: starting a dropped piece
+    // from its square teleports it home before it moves.
+    if (startOffset) outputRange[0] = startOffset[axis];
+    return progress.interpolate({ inputRange, outputRange, extrapolate: 'clamp' });
   };
 
   if (!first) return null;
@@ -502,9 +639,13 @@ const ReplayPiece = memo(function ReplayPiece({
           opacity: replayPieceOpacity(progress, track, steps),
           top: `${displayRank(first.y, isFlipped, shape.rows) * rowPercent(shape)}%`,
           width: `${columnPercent(shape)}%`,
+          // The scale is there from the first frame or not at all: a piece
+          // whose transform changes shape while the native driver is moving it
+          // can be left behind at the animation's start.
           transform: [
             { translateX: translate('x') },
             { translateY: translate('y') },
+            ...(landing ? [{ scale: landing }] : []),
           ],
         },
       ]}
@@ -521,8 +662,23 @@ const ReplayPiece = memo(function ReplayPiece({
 
 /** One animation from one board to another, and how long it should take. */
 interface ReplayTransitionState extends ReplayTracks {
+  /**
+   * A capture this move is drawn as: the effect, and which of the tracks are
+   * its taker and the piece that fell. The fallen piece is the effect's to
+   * draw, so the transition leaves it out.
+   */
+  capture?: { effect: CaptureEffectState; attackerTrackId: string; victimTrackId: string };
+  /** The piece that was dragged into this move, and where it was let go. */
+  drop?: { trackId: string; offset: DropOffset };
   duration: number;
   key: string;
+  /**
+   * The move's clock, made with the transition rather than by the layer that
+   * plays it, because the pieces that carry themselves run on it too.
+   */
+  progress: NativeAnimated.Value;
+  /** Tracks drawn by the piece's own view instead of this layer. See `CarriedMove`. */
+  carriedTrackIds: readonly string[];
 }
 
 interface ReplayTransitionProps {
@@ -542,7 +698,7 @@ const ReplayTransition = memo(function ReplayTransition({
   onComplete,
   transition,
 }: ReplayTransitionProps) {
-  const progress = useRef(new NativeAnimated.Value(0)).current;
+  const { progress } = transition;
 
   useEffect(() => {
     progress.setValue(0);
@@ -558,18 +714,28 @@ const ReplayTransition = memo(function ReplayTransition({
     return () => animation.stop();
   }, [onComplete, progress, transition]);
 
-  return transition.tracks.map((track) => (
-    <ReplayPiece
-      boardSize={boardSize}
-      shape={shape}
-      pieceLooks={pieceLooks}
-      isFlipped={isFlipped}
-      key={track.id}
-      progress={progress}
-      steps={transition.steps}
-      track={track}
-    />
-  ));
+  const { capture } = transition;
+  const landing = useMemo(() => {
+    const frames = capture ? CHOREOGRAPHY[capture.effect.matchup].attackerScale : null;
+    return capture && frames ? along(capture.effect, frames) : undefined;
+  }, [capture]);
+
+  return transition.tracks.map((track) =>
+    track.id === capture?.victimTrackId || transition.carriedTrackIds.includes(track.id) ? null : (
+      <ReplayPiece
+        boardSize={boardSize}
+        shape={shape}
+        pieceLooks={pieceLooks}
+        isFlipped={isFlipped}
+        key={track.id}
+        landing={track.id === capture?.attackerTrackId ? landing : undefined}
+        progress={progress}
+        startOffset={transition.drop?.trackId === track.id ? transition.drop.offset : undefined}
+        steps={transition.steps}
+        track={track}
+      />
+    ),
+  );
 });
 
 /**
@@ -794,11 +960,44 @@ export default function Board({
     [grid, isFlipped],
   );
 
+  // A drop on a square the board knows is legal is held where it was let go
+  // until the move comes back, and then sets off from there — rather than
+  // springing home and starting again from its square. Read during render, so
+  // a ref: a move the parent plays in the same event has to find it in the
+  // render that receives the new grid, whichever update React gets to first.
+  // The state copy is only what tells the piece it is being held.
+  const heldDropRef = useRef<HeldDrop | null>(null);
+  const [heldDrop, setHeldDrop] = useState<HeldDrop | null>(null);
+  const holdDrop = useCallback((drop: HeldDrop | null) => {
+    heldDropRef.current = drop;
+    setHeldDrop(drop);
+  }, []);
+
+  // A move goes out to a server and may never come back: refused, or the
+  // socket gone. The piece cannot wait for it forever.
+  useEffect(() => {
+    if (!heldDrop) return undefined;
+    const timer = setTimeout(() => holdDrop(null), DROP_HOLD_TIMEOUT);
+    return () => clearTimeout(timer);
+  }, [heldDrop, holdDrop]);
+
+  // Read by the drag callbacks, which outlive the render they were made in.
+  const selection = useRef({ selectedTile, validMoves });
+  selection.current = { selectedTile, validMoves };
+  // The press below can clear the moves a piece was already showing — a second
+  // press on a selected piece deselects it — so they are kept for the drop.
+  const movesAtGrab = useRef<{ from: Position; moves: Position[] } | null>(null);
+
   const handleDragStart = useCallback(
     (position: Position) => {
+      holdDrop(null);
+      const { selectedTile: selected, validMoves: moves } = selection.current;
+      movesAtGrab.current = samePosition(selected, position)
+        ? { from: position, moves }
+        : null;
       onTilePress(position);
     },
-    [onTilePress],
+    [holdDrop, onTilePress],
   );
 
   // The pages that put a board inside a ScrollView read this and stop
@@ -818,11 +1017,25 @@ export default function Board({
     [],
   );
 
+  // A square the board cannot vouch for springs home at once, as it always
+  // has: holding it would leave a refused move hanging for the whole timeout.
+  // Online the legal moves arrive a round trip after the grab, so only a flick
+  // faster than that is ever unvouched for.
   const handleDragEnd = useCallback(
-    (from: Position, to: Position) => {
-      if (!samePosition(from, to)) onPieceDrop(from, to);
+    (from: Position, to: Position, offset: DropOffset) => {
+      if (samePosition(from, to)) return false;
+      const { selectedTile: selected, validMoves: moves } = selection.current;
+      const grabbed = movesAtGrab.current;
+      const known = [
+        ...(grabbed && samePosition(grabbed.from, from) ? grabbed.moves : []),
+        ...(samePosition(selected, from) ? moves : []),
+      ];
+      const legal = known.some((move) => samePosition(move, to));
+      if (legal) holdDrop({ from, to, offset });
+      onPieceDrop(from, to);
+      return legal;
     },
-    [onPieceDrop],
+    [holdDrop, onPieceDrop],
   );
 
   // Web only: the annotation layer needs the board's screen rectangle to turn
@@ -845,6 +1058,17 @@ export default function Board({
   const previousReplayIndex = useRef(replayIndex);
   const [replayTransition, setReplayTransition] = useState<ReplayTransitionState | null>(null);
 
+  // What the capture effect needs to tell a move being played from a step
+  // through the record: how long ago the board last moved, and where the end of
+  // its line was then. Both are written only when the position changes — a live
+  // board hears that the line grew a render before it is moved along it, and
+  // reading the end as of the last render would lose exactly that.
+  const reducedMotion = useReducedMotion();
+  const lineEnd = Array.isArray(replayPositions) ? replayPositions.length - 1 : null;
+  const lineEndAtLastChange = useRef(lineEnd);
+  const lastChangeAt = useRef(Number.NEGATIVE_INFINITY);
+  const [captureEffect, setCaptureEffect] = useState<CaptureEffectState | null>(null);
+
   // Work out the requested transition during the render that receives the new
   // grid. Waiting until an effect to do this lets the destination position
   // flash first: on rewind that looks like B teleports back, then the previous
@@ -863,6 +1087,15 @@ export default function Board({
   const positionChanged =
     beforeSignature !== positionSignature || replayIndexChanged;
   let requestedReplayTransition: ReplayTransitionState | null = null;
+  let requestedCaptureEffect: CaptureEffectState | null = null;
+  const changedAt = positionChanged ? nowMs() : lastChangeAt.current;
+  // An effect still playing when the board moves on is either left to finish
+  // or dropped, never waited for. See `effectOutlivesStep`.
+  const captureEffectOutlives = Boolean(
+    positionChanged &&
+      captureEffect &&
+      effectOutlivesStep(captureEffect.capture.to, { step: replayStep, before, after: grid }),
+  );
 
   if (positionChanged) {
     let grids: Grid[] = [before, grid];
@@ -899,12 +1132,95 @@ export default function Board({
     if (replay) {
       const firstGrid = grids[0];
       const finalGrid = grids[grids.length - 1];
+      const tracks =
+        firstGrid && finalGrid
+          ? animatedReplayPieceTracks(replay, firstGrid, finalGrid)
+          : replay.tracks;
+      // Whatever moves a held piece, it is on screen where it was let go.
+      const held = heldDropRef.current;
+      const dropped = held
+        ? tracks.find(
+            (track) => track.startStep === 0 && samePosition(track.positions[0], held.from),
+          )
+        : undefined;
+      const key = `${beforeIndex ?? 'board'}:${replayIndex ?? 'board'}:${beforeSignature}:${positionSignature}`;
+
+      // A capture made by this one move is drawn as the throw that won it,
+      // when `decideCaptureEffect` says this is a move worth drawing that way.
+      let capture: ReplayTransitionState['capture'];
+      if (replay.steps === 1) {
+        const decision = decideCaptureEffect({
+          before,
+          after: grid,
+          step: replayStep,
+          lineEnd,
+          lineEndBefore: lineEndAtLastChange.current,
+          sinceLastChange: changedAt - lastChangeAt.current,
+          reducedMotion,
+          looks: pieceLooks,
+        });
+        if (decision.play) {
+          const { from, to } = decision.capture;
+          const attacker = tracks.find(
+            ({ positions }) => samePosition(positions[0], from) && samePosition(positions[1], to),
+          );
+          const victim = tracks.find(
+            (track) =>
+              track !== attacker && track.endStep === 1 && samePosition(track.positions[0], to),
+          );
+          if (attacker && victim) {
+            // How far the taker sets off from its victim, in squares: a whole
+            // step, or what is left of one when it was dragged most of the way.
+            const square = squareSizeFor(boardSize, shape);
+            const offset = held && dropped === attacker ? held.offset : { x: 0, y: 0 };
+            const column = ({ x }: Position) => displayFile(x, isFlipped, shape.columns);
+            const row = ({ y }: Position) => displayRank(y, isFlipped, shape.rows);
+            const across = (column(to) - column(from)) * square - offset.x;
+            const down = (row(to) - row(from)) * square - offset.y;
+            requestedCaptureEffect = {
+              capture: decision.capture,
+              clock: new NativeAnimated.Value(0),
+              impactMs: impactAfter(Math.hypot(across, down) / square, MOVE_ANIMATION_DURATION),
+              key,
+              matchup: decision.matchup,
+            };
+            capture = {
+              attackerTrackId: attacker.id,
+              effect: requestedCaptureEffect,
+              victimTrackId: victim.id,
+            };
+          }
+        }
+      }
+
+      // One piece stepping off a square nothing else will stand on draws its
+      // own move — see `CarriedMove`. A square something else is restored to
+      // (a capture being stepped back through) keeps the copy, because the
+      // restored piece is given the square's place in the board's list.
+      const carriedTrackIds =
+        replay.steps === 1
+          ? tracks
+              .filter((track) => {
+                const [from, to] = track.positions;
+                return Boolean(
+                  track.startStep === 0 &&
+                    track.endStep === 1 &&
+                    from &&
+                    to &&
+                    !samePosition(from, to) &&
+                    grid[from.y]?.[from.x]?.occupant === 'Empty',
+                );
+              })
+              .map((track) => track.id)
+          : [];
+
       requestedReplayTransition = {
         ...replay,
-        tracks:
-          firstGrid && finalGrid
-            ? animatedReplayPieceTracks(replay, firstGrid, finalGrid)
-            : replay.tracks,
+        capture,
+        carriedTrackIds,
+        drop: held && dropped ? { trackId: dropped.id, offset: held.offset } : undefined,
+        progress: new NativeAnimated.Value(0),
+        tracks,
         duration:
           replay.steps === 1
             ? MOVE_ANIMATION_DURATION
@@ -912,19 +1228,31 @@ export default function Board({
                 FAST_REPLAY_MAX_DURATION,
                 Math.max(FAST_REPLAY_MIN_DURATION, replay.steps * FAST_REPLAY_MOVE_DURATION),
               ),
-        key: `${beforeIndex ?? 'board'}:${replayIndex ?? 'board'}:${beforeSignature}:${positionSignature}`,
+        key,
       };
     }
   }
+  const visibleCaptureEffect = positionChanged
+    ? (requestedCaptureEffect ?? (captureEffectOutlives ? captureEffect : null))
+    : captureEffect;
 
   useLayoutEffect(() => {
     previousGrid.current = grid;
     previousReplayIndex.current = replayIndex;
-    if (positionChanged) setReplayTransition(requestedReplayTransition);
-    // `requestedReplayTransition` is deliberately captured from the render
-    // caused by these props. Adding it as a dependency would run this effect a
-    // second time after the refs advance and immediately clear the animation.
-  }, [grid, positionSignature, replayIndex, replayPositions]);
+    if (positionChanged) {
+      setReplayTransition(requestedReplayTransition);
+      setCaptureEffect(visibleCaptureEffect);
+      lastChangeAt.current = changedAt;
+      lineEndAtLastChange.current = lineEnd;
+      // Played or not, a held drop is settled by the next position: the move
+      // carried it away, or the piece is still on its square and goes home.
+      holdDrop(null);
+    }
+    // `requestedReplayTransition` and the capture effect are deliberately
+    // captured from the render caused by these props. Adding them as
+    // dependencies would run this effect a second time after the refs advance
+    // and immediately clear the animation.
+  }, [grid, holdDrop, positionSignature, replayIndex, replayPositions]);
 
   const visibleReplayTransition = requestedReplayTransition ?? replayTransition;
   const displayedLastMove = visibleReplayTransition ? null : lastMove;
@@ -938,9 +1266,89 @@ export default function Board({
     return hidden;
   }, [visibleReplayTransition]);
 
+  // Built once per move from values that hold still while it plays, so every
+  // render during it hands each carried piece the very same props. See
+  // `CarriedMove` for why that matters.
+  const { columns, rows } = shape;
+  const carriedPieces = useMemo(() => {
+    const transition = visibleReplayTransition;
+    if (!transition?.carriedTrackIds.length) return [];
+    const carriedShape = { columns, rows };
+    const square = squareSizeFor(boardSize, carriedShape);
+    const { capture, drop, progress } = transition;
+    const frames = capture ? CHOREOGRAPHY[capture.effect.matchup].attackerScale : null;
+    const landing = capture && frames ? along(capture.effect, frames) : undefined;
+    return transition.tracks.flatMap((track) => {
+      const [from, to] = track.positions;
+      if (!from || !to || !transition.carriedTrackIds.includes(track.id)) return [];
+      // A dragged piece sets off from where it was let go: its drag offset is
+      // still on it, so the move covers only what is left.
+      const offset = drop?.trackId === track.id ? drop.offset : { x: 0, y: 0 };
+      const tile: Tile = {
+        x: from.x,
+        y: from.y,
+        occupant: track.piece ?? 'Empty',
+        occupantOwner: track.color ?? 'Neutral',
+        ownerColor: 'Neutral',
+      };
+      return [
+        {
+          from,
+          held: drop?.trackId === track.id,
+          shape: carriedShape,
+          tile,
+          travel: {
+            progress,
+            dx:
+              (displayFile(to.x, isFlipped, columns) - displayFile(from.x, isFlipped, columns)) *
+                square -
+              offset.x,
+            dy:
+              (displayRank(to.y, isFlipped, rows) - displayRank(from.y, isFlipped, rows)) * square -
+              offset.y,
+            landing: capture?.attackerTrackId === track.id ? landing : undefined,
+          } satisfies CarriedMove,
+        },
+      ];
+    });
+  }, [boardSize, columns, isFlipped, rows, visibleReplayTransition]);
+  const carriedFrom = useMemo(
+    () => new Map(carriedPieces.map((carried) => [`${carried.from.x}:${carried.from.y}`, carried])),
+    [carriedPieces],
+  );
+
   const handleReplayTransitionComplete = useCallback((key: string) => {
     setReplayTransition((current) => (current?.key === key ? null : current));
   }, []);
+
+  const handleCaptureEffectComplete = useCallback((key: string) => {
+    setCaptureEffect((current) => (current?.key === key ? null : current));
+  }, []);
+  useCaptureEffectClock(visibleCaptureEffect, handleCaptureEffectComplete);
+
+  // Where the effect is drawn, in pixels and as plain numbers, so its layers
+  // can be memoised on them and are never restyled while they play.
+  const squareSize = squareSizeFor(boardSize, shape);
+  const captureGeometry = useMemo(() => {
+    if (!visibleCaptureEffect) return null;
+    const { from, to } = visibleCaptureEffect.capture;
+    const column = displayFile(to.x, isFlipped, shape.columns);
+    const row = displayRank(to.y, isFlipped, shape.rows);
+    const across = column - displayFile(from.x, isFlipped, shape.columns);
+    const down = row - displayRank(from.y, isFlipped, shape.rows);
+    const length = Math.hypot(across, down) || 1;
+    return {
+      headingX: across / length,
+      headingY: down / length,
+      left: column * squareSize,
+      pieceSize: pieceSizeForBoard(boardSize),
+      squareSize,
+      top: row * squareSize,
+    };
+  }, [boardSize, isFlipped, shape.columns, shape.rows, squareSize, visibleCaptureEffect]);
+  const captureVictimLook = visibleCaptureEffect
+    ? pieceLooks?.[visibleCaptureEffect.capture.victim.piece]
+    : undefined;
 
   const clearAnnotations = useCallback(() => {
     arrowOrigin.current = null;
@@ -1316,9 +1724,61 @@ export default function Board({
           </View>
         )}
 
+        {/*
+          Beneath the pieces: what is left of the piece that fell. Placed
+          before them at their own height, so the taker — moving, then settled
+          — is always drawn over its victim.
+        */}
+        {visibleCaptureEffect && captureGeometry ? (
+          <CaptureEffectLayer
+            effect={visibleCaptureEffect}
+            key={`${visibleCaptureEffect.key}:beneath`}
+            layer="beneath"
+            victimLook={captureVictimLook}
+            {...captureGeometry}
+          />
+        ) : null}
+
+        {/*
+          A carried piece is drawn in the slot of the square it is leaving,
+          under the key its view had as that square's piece a moment ago. Same
+          key and same place in the list, so React hands it the very same view
+          — picture already painted — rather than mounting a new one or moving
+          the old one. See `CarriedMove`.
+        */}
         {displayedGrid.flatMap((row, displayY) =>
           row.map((tile, displayX) => {
-            if (tile.occupant === 'Empty') return null;
+            if (tile.occupant === 'Empty') {
+              const carried = carriedFrom.get(`${tile.x}:${tile.y}`);
+              if (!carried) return null;
+              // Every prop here holds still for the length of the move, so the
+              // memo keeps the piece from re-rendering while it travels.
+              return (
+                <DraggablePiece
+                  boardSize={boardSize}
+                  shape={carried.shape}
+                  look={pieceLooks?.[carried.tile.occupant]}
+                  boardX={tile.x}
+                  boardY={tile.y}
+                  displayX={displayX}
+                  displayY={displayY}
+                  dragEnabled={false}
+                  isFlipped={isFlipped}
+                  // A dragged piece stays held until its move is over, which
+                  // is what keeps it from springing back to the square it is
+                  // leaving.
+                  isHeld={carried.held}
+                  isHidden={false}
+                  isSelected={false}
+                  key={`${tile.x}-${tile.y}`}
+                  onDragActiveChange={ignoreDragActive}
+                  onDragEnd={refuseDrop}
+                  onDragStart={ignoreDragStart}
+                  tile={carried.tile}
+                  travel={carried.travel}
+                />
+              );
+            }
             const position = { x: tile.x, y: tile.y };
             const isHidden = hiddenSettledPieceKeys.has(`${tile.x}:${tile.y}`);
             const dragEnabled =
@@ -1335,6 +1795,7 @@ export default function Board({
                 displayY={displayY}
                 dragEnabled={dragEnabled}
                 isFlipped={isFlipped}
+                isHeld={samePosition(heldDrop?.from, position)}
                 isHidden={isHidden}
                 isSelected={!isHidden && samePosition(selectedTile, position)}
                 key={`${tile.x}-${tile.y}`}
@@ -1358,6 +1819,16 @@ export default function Board({
             transition={visibleReplayTransition}
           />
         )}
+
+        {visibleCaptureEffect && captureGeometry ? (
+          <CaptureEffectLayer
+            effect={visibleCaptureEffect}
+            key={`${visibleCaptureEffect.key}:above`}
+            layer="above"
+            victimLook={captureVictimLook}
+            {...captureGeometry}
+          />
+        ) : null}
 
         {displayedLastMove?.to && lastMoveGrade ? (
           <View
@@ -1536,6 +2007,10 @@ const styles = themedSheet(() => ({
   hiddenPieceLayout: { opacity: 0 },
   draggingPieceLayout: { zIndex: 100, elevation: 24 },
   movingPieceLayout: { zIndex: 6 },
+  // Where the overlay's copy used to travel, so a piece carrying itself is
+  // stacked exactly as that copy was: over the arrows, under a capture's top
+  // layer, and — dragged there or not — no longer lifted.
+  travellingPieceLayout: { zIndex: 6, elevation: 0 },
   moveQualityBadgeLayout: {
     position: 'absolute',
     zIndex: 7,
@@ -1544,6 +2019,14 @@ const styles = themedSheet(() => ({
     paddingRight: 1,
   },
   piece: { alignItems: 'center', justifyContent: 'center' },
+  // Between the square's frame and the piece's grip. It hugs the piece, so
+  // nothing about where the piece sits changes, and it lets touches through to
+  // the grip the same way `pieceLayout` does.
+  pieceTravel: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    pointerEvents: IS_WEB ? 'none' : 'box-none',
+  },
   // The piece takes the touch; the artwork inside it never does.
   //
   // `PieceIcon` used to draw a different tree once `dropShadow` turned on, so

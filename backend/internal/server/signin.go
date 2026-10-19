@@ -85,8 +85,10 @@ type signInReply struct {
 	NeedsUsername     bool   `json:"needsUsername,omitempty"`
 	SuggestedUsername string `json:"suggestedUsername,omitempty"`
 	DiscordHandle     string `json:"discordHandle,omitempty"`
-	// Provider is who vouched, so the naming step can say so. Only on a
-	// NeedsUsername reply; a build that predates it reads Discord.
+	// Provider is who vouched: on a NeedsUsername reply so the naming step can
+	// say so, and on a finished sign-in for the app's analytics, since a
+	// returning web sign-in reaches the app as a bare ticket. A build that
+	// predates it reads Discord.
 	Provider string `json:"provider,omitempty"`
 	// Ticket is the ticket the naming step finishes, on a NeedsUsername reply.
 	// The web app already has it, from its own address bar; Apple's phone
@@ -289,7 +291,7 @@ func (server *Server) redeemSignInTicket(
 			log.Printf("sign-in: could not keep the %s token: %v", identity.Provider, err)
 		}
 		existing = server.absorbGuestHistory(request, existing, pending.linkUserID)
-		server.finishSignIn(writer, request, existing)
+		server.finishSignIn(writer, request, existing, identity.Provider)
 		return
 	case errors.Is(err, persistence.ErrAccountNotFound):
 		// First time with this identity.
@@ -314,7 +316,7 @@ func (server *Server) redeemSignInTicket(
 				return
 			}
 			server.signInTickets.take(key)
-			server.finishSignIn(writer, request, linked)
+			server.finishSignIn(writer, request, linked, identity.Provider)
 			return
 		}
 	}
@@ -347,6 +349,61 @@ func (server *Server) redeemSignInTicket(
 	// perhaps typing an old password, can take longer.
 	server.signInTickets.putFor(key, pending, signInNamingLifetime)
 	writeJSON(writer, http.StatusOK, reply)
+}
+
+// linkSignInTicket attaches a ticket's identity to the signed-in account.
+//
+// It is for the player who pressed the provider they don't usually use. Their
+// Apple ID is new here, so the naming step opens, but they already play under
+// Discord. Without this, the way out was to back out of the step, sign in with
+// Discord, find the Account screen and press Apple again. With it, the app keeps
+// the Apple ticket, signs in with Discord, and then hands the ticket back here
+// with the new session, so one press on the naming step does the whole thing.
+//
+// Two proofs, the same two a link from a session has always needed: the
+// session says which account, and the ticket says the identity has just been
+// vouched for by its provider. The ticket is a secret only the app that
+// started this sign-in holds, and it is spent here, so it cannot be reused.
+func (server *Server) linkSignInTicket(writer http.ResponseWriter, request *http.Request) {
+	account, ok := server.requireSession(writer, request)
+	if !ok {
+		return
+	}
+	var input signInTicketRequest
+	if err := decodeAPIRequest(writer, request, &input); err != nil {
+		writeAPIError(writer, http.StatusBadRequest, err.Error())
+		return
+	}
+	key := hashSecret(input.Ticket)
+	pending, ok := server.signInTickets.peek(key)
+	if !ok {
+		writeAPIError(writer, http.StatusUnauthorized, "that sign-in has expired; try again")
+		return
+	}
+	identity := pending.identity
+
+	// An identity that already opens some other account says so the way a link
+	// from a session does, with the way out, rather than as a bare conflict.
+	holder, err := server.data.AccountForIdentity(
+		request.Context(), identity.Provider, identity.Subject,
+	)
+	switch {
+	case err == nil && holder.UserID != account.UserID:
+		writeAPIError(writer, http.StatusConflict, linkedElsewhereGuidance(identity.Provider))
+		return
+	case err != nil && !errors.Is(err, persistence.ErrAccountNotFound):
+		writePersistenceError(writer, err)
+		return
+	}
+
+	linked, err := server.data.LinkIdentity(request.Context(), account.UserID, identity)
+	if err != nil {
+		writeAuthError(writer, err)
+		return
+	}
+	server.signInTickets.take(key)
+	linked = server.titledAccount(request.Context(), linked)
+	writeJSON(writer, http.StatusOK, signInReply{Account: &linked, Provider: identity.Provider})
 }
 
 // linkedElsewhereGuidance is the refusal a session link gets when the identity
@@ -404,7 +461,7 @@ func (server *Server) completeSignIn(writer http.ResponseWriter, request *http.R
 			return
 		}
 		server.signInTickets.take(key)
-		server.finishSignIn(writer, request, account)
+		server.finishSignIn(writer, request, account, pending.identity.Provider)
 		return
 	}
 
@@ -431,7 +488,7 @@ func (server *Server) completeSignIn(writer http.ResponseWriter, request *http.R
 		return
 	}
 	server.signInTickets.take(key)
-	server.finishSignIn(writer, request, account)
+	server.finishSignIn(writer, request, account, pending.identity.Provider)
 }
 
 // offerPasswordLink answers a name collision with the question worth asking
@@ -506,6 +563,7 @@ func (server *Server) finishSignIn(
 	writer http.ResponseWriter,
 	request *http.Request,
 	account persistence.Account,
+	provider string,
 ) {
 	token, err := server.data.CreateSession(request.Context(), account.UserID)
 	if err != nil {
@@ -517,7 +575,7 @@ func (server *Server) finishSignIn(
 	// connection: this reply is what the account page renders from, and a tag
 	// that appears on the following reload reads as something that went wrong.
 	account = server.titledAccount(request.Context(), account)
-	writeJSON(writer, http.StatusOK, signInReply{Account: &account, Token: token})
+	writeJSON(writer, http.StatusOK, signInReply{Account: &account, Token: token, Provider: provider})
 }
 
 // redirectWithSignInError sends a browser back from a provider's callback with

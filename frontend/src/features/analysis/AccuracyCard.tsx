@@ -53,7 +53,8 @@ export default function AccuracyCard({
               {report ? (
                 <Text style={styles.detail}>
                   {report.grades.best + report.grades.great + report.grades.excellent} strong ·{' '}
-                  {report.grades.mistake + report.grades.blunder} bad · {report.moveCount} moves
+                  {report.grades.mistake + report.grades.blunder} bad · {report.moveCount}{' '}
+                  {report.moveCount === 1 ? 'move' : 'moves'}
                 </Text>
               ) : (
                 <Text style={styles.detail}>{pendingDetail}</Text>

@@ -5,13 +5,18 @@
 # archive, which means every exclusion the upload needs has to be restated
 # here — including the ones that keep secrets out.
 #
-# The one thing this file exists to *add* is
-# frontend/modules/rpsfish/ios/RPSFish.xcframework, which .gitignore excludes
-# because it is a build artifact of the engine's own repository. The EAS
-# builder cannot produce it — the engine is Rust, in a separate repository —
-# so the framework has to travel with the upload. It is included here by
-# simply having no rule; `npm run build:rpsfish:ios` refreshes it, and a stale
-# framework is a stale engine with no sign that anything is wrong.
+# The one thing this file exists to *add* is the engine:
+# frontend/modules/rpsfish/ios/RPSFish.xcframework and
+# frontend/modules/rpsfish/android/libs, which .gitignore excludes because they
+# are build artifacts of the engine's own repository. The EAS builder cannot
+# produce them — the engine is Rust, in a separate repository — so they have to
+# travel with the upload. They are included here by simply having no rule;
+# `npm run build:rpsfish:ios` and `build:rpsfish:android` refresh them, and a
+# stale library is a stale engine with no sign that anything is wrong.
+#
+# frontend/google-services.json, Firebase's config for Android match alerts,
+# travels the same way: gitignored because the repository is public, and
+# included here by having no rule. Without it the Android build has no alerts.
 #
 # Two things about EAS's matcher, both found by inspecting the archive rather
 # than from the docs. A directory needs both its bare name and a `dir/**`
@@ -45,6 +50,7 @@ tools/**
 *.jks
 *.pem
 *.mobileprovision
+*firebase-adminsdk*.json
 frontend/.env.development
 frontend/.env*.local
 
@@ -62,6 +68,10 @@ frontend/ios
 frontend/ios/**
 frontend/android
 frontend/android/**
+frontend/modules/rpsfish/android/build
+frontend/modules/rpsfish/android/build/**
+frontend/modules/rpsfish/android/.cxx
+frontend/modules/rpsfish/android/.cxx/**
 
 # Local build output and caches.
 frontend/.expo

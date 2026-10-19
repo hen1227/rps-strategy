@@ -1,4 +1,5 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useIsFocused } from 'expo-router';
+import { useCallback, useMemo, useState, type ReactNode } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -25,7 +26,11 @@ import {
   type GradedMove,
   type ReviewMove,
 } from '@/engine/gameReview';
-import { engineSupportsMode, engineUnavailableMessage } from '@/engine/rpsfish/client';
+import {
+  engineSupportsMode,
+  engineUnavailableMessage,
+  isEngineAvailable,
+} from '@/engine/rpsfish/client';
 import { interactiveLimits, type AnalysisEffort } from '@/engine/analysisBudget';
 import type { RefinePass } from '@/engine/gameAnalysis';
 import type { Analysis } from '@/engine/rpsfish/protocol';
@@ -48,6 +53,7 @@ import { up } from '@/navigation/upFrom';
 import { useSettledSearchParams } from '@/navigation/useSettledSearchParams';
 import BackLink from '@/ui/BackLink';
 import { arrows } from '@/ui/arrows';
+import { GhostButton } from '@/ui/primitives';
 import { toggleEngineAnalysis, useEngineAnalysis } from '@/store/enginePreference';
 import { useGameStore } from '@/store/gameStore';
 import { useReviewHandoff } from '@/store/reviewHandoff';
@@ -59,6 +65,14 @@ import type {
   SideColor,
   StartingPosition,
 } from '@/types/game';
+
+/** How wide the page is, at the least, on a wide screen. */
+const SCREEN_WIDTH = 1200;
+/**
+ * The room beside the board on a wide screen: the panel's 350, the gap before
+ * it, the eval bar and its gap, and the page's padding.
+ */
+const SIDE_PANEL = 430;
 
 /**
  * A move played on this board.
@@ -88,18 +102,83 @@ const confidenceLabel = (confidence: number) => {
 
 // A move can give up nothing without being the move the engine named, so
 // "best was X" is only said when playing X would actually have been better.
+// The depth is not repeated here: the move-quality card's header says what the
+// grades were measured at, once, for all of them.
 const lastMoveVerdict = (entry: ReviewMove<BoardPlay>) => {
-  if (entry.pending) return 'RPSFish is grading this move…';
+  if (entry.pending) return 'Grading…';
   const best = entry.bestMove ? moveLabel(entry.bestMove) : 'not available';
-  if (entry.grade.key === 'great') {
-    return `At depth ${entry.depth} every other move the engine could see was a mistake.`;
-  }
-  if (entry.isTopMove) return `The engine's own choice at depth ${entry.depth}.`;
+  if (entry.grade.key === 'great') return 'The only good move.';
+  if (entry.isTopMove) return "The engine's choice.";
   if (entry.lossPercent < 0.05) return `As strong as ${best}.`;
-  return `Best was ${best} at depth ${entry.depth} · ${formatLoss(
-    entry.lossPercent,
-  )} of expected score lost`;
+  return `Best was ${best} · ${formatLoss(entry.lossPercent)} lost`;
 };
+
+/**
+ * How deep the engine has looked, in the coach card's corner.
+ *
+ * All there is to say about a search in progress. The arrows, the bar and the
+ * lines already change as each depth lands, so the sentence that used to
+ * promise they would was a second copy of what the board was showing — and,
+ * being a sentence, it changed length as the depth went up and moved the
+ * page under it. `+` and the spinner mean a deeper answer is on its way.
+ */
+function SearchDepth({ analysis, status }: { analysis: Analysis | null; status: SearchStatus }) {
+  const thinking = status === 'thinking';
+  if (!thinking && !analysis) return null;
+  return (
+    <View
+      accessibilityLabel={
+        thinking
+          ? `Searching${analysis ? `, depth ${analysis.depth} so far` : ''}`
+          : `Searched to depth ${analysis?.depth}`
+      }
+      style={styles.depthChip}
+    >
+      {thinking ? (
+        <ActivityIndicator color={colors.textMuted} size="small" style={styles.depthSpinner} />
+      ) : null}
+      {analysis ? (
+        <Text style={styles.depthText}>
+          DEPTH {analysis.depth}
+          {thinking ? '+' : ''}
+        </Text>
+      ) : null}
+    </View>
+  );
+}
+
+/** QUICK and REACH: a setting that is on or off, drawn the way `EngineSwitch` is. */
+function SwitchChip({
+  checked,
+  hint,
+  label,
+  name,
+  onToggle,
+}: {
+  checked: boolean;
+  hint: string;
+  label: string;
+  /** What a screen reader calls it, which the chip's one word does not say. */
+  name: string;
+  onToggle: () => void;
+}) {
+  return (
+    <Pressable
+      accessibilityHint={hint}
+      accessibilityLabel={name}
+      accessibilityRole="switch"
+      accessibilityState={{ checked }}
+      onPress={onToggle}
+      style={({ pressed }) => [
+        styles.switchChip,
+        checked && styles.switchChipActive,
+        pressed && styles.buttonPressed,
+      ]}
+    >
+      <Text style={[styles.switchChipText, checked && styles.switchChipTextActive]}>{label}</Text>
+    </Pressable>
+  );
+}
 
 interface AnalysisPanelProps {
   analysis: Analysis | null;
@@ -148,6 +227,8 @@ interface AnalysisPanelProps {
   playBotOffered: boolean;
   /** Absent in a mode with no goal row for the reach tool to measure against. */
   onToggleReach?: () => void;
+  /** The reach tool's own controls, drawn under the switch that shows them. */
+  reachPanel?: ReactNode;
   reachShowing?: boolean;
 }
 
@@ -170,136 +251,74 @@ function AnalysisPanel({
   onToggleQuick,
   onToggleReach,
   quick,
+  reachPanel,
   reachShowing = false,
   refining,
 }: AnalysisPanelProps) {
   const lastMove = gradedMoves[gradedMoves.length - 1];
   const activeColor = game.currentTurn;
+  const bestLine = analysis?.lines[0];
 
   return (
     <View style={styles.panelStack}>
+      {/*
+        The coach is the position and the three switches that decide what is
+        drawn on it. Everything that takes the board somewhere else — another
+        position, another app, a game — is in the tool grid further down, so
+        this card no longer wraps five differently-sized buttons around its
+        switches.
+      */}
       <View style={styles.coachCard}>
-        <View style={styles.cardHeader}>
-          <View>
-            <Text style={styles.cardEyebrow}>{engineOn ? 'RPSFISH COACH' : 'ANALYSIS BOARD'}</Text>
-            <Text style={styles.cardTitle}>
-              {game.status === 'Finished'
-                ? game.winner === 'Neutral'
-                  ? 'Analysis complete · draw'
-                  : `${game.winner} wins`
-                : `${activeColor} to move`}
-            </Text>
+        <View style={styles.coachHeader}>
+          <Text style={styles.cardEyebrow}>{engineOn ? 'RPSFISH COACH' : 'ANALYSIS BOARD'}</Text>
+          {engineOn ? <SearchDepth analysis={analysis} status={engineState} /> : null}
+        </View>
+        {/*
+          The switches share the title's line, on the right where the card was
+          empty. They wrap under it rather than crushing it when the text is
+          large.
+        */}
+        <View style={styles.coachTitleRow}>
+          <Text style={styles.cardTitle}>
+            {game.status === 'Finished'
+              ? game.winner === 'Neutral'
+                ? 'Draw'
+                : `${game.winner} wins`
+              : `${activeColor} to move`}
+          </Text>
+          <View style={styles.switchRow}>
+            <EngineSwitch enabled={engineOn} offDetail="YOUR BOARD" onToggle={onToggleEngine} />
+            {/* How hard to think, asked only once there is something thinking. */}
+            {engineOn ? (
+              <SwitchChip
+                checked={quick}
+                hint="Quick search uses a shallow depth. Turn it off for deeper analysis."
+                label="QUICK"
+                name="Quick analysis"
+                onToggle={onToggleQuick}
+              />
+            ) : null}
+            {onToggleReach ? (
+              <SwitchChip
+                checked={reachShowing}
+                hint="Show travel distances and safe routes to the goal."
+                label="REACH"
+                name={reachShowing ? 'Hide the reach maps' : 'Show the reach maps'}
+                onToggle={onToggleReach}
+              />
+            ) : null}
           </View>
-          {engineOn && engineState === 'thinking' && (
-            <ActivityIndicator color={colors.accent} size="small" />
-          )}
         </View>
-        <Text style={styles.cardBody}>
-          {!engineOn
-            ? game.status === 'Finished'
-              ? "Undo to try another line, or reset the board."
-              : "Play both sides or set up a position. Turn on the engine for analysis."
-            : engineState === 'thinking'
-              ? analysis
-                ? `Searching beyond depth ${analysis.depth}. Scores and arrows update as results arrive.`
-                : quick
-                  ? 'Calculating the three strongest continuations…'
-                  : "Analyzing three lines…"
-              : game.status === 'Finished'
-                ? 'Review the move grades below or reset the board for another line.'
-                : 'The arrows match the ranked engine lines below. You control both sides.'}
-        </Text>
-        <View style={styles.analysisModeRow}>
-          <Text style={styles.analysisModeLabel}>ANALYSIS</Text>
-          <EngineSwitch enabled={engineOn} offDetail="YOUR BOARD" onToggle={onToggleEngine} />
-          {/* How hard to think, asked only once there is something thinking. */}
-          {engineOn ? (
-            <Pressable
-              accessibilityHint="Quick search uses a shallow depth. Turn it off for deeper analysis."
-              accessibilityLabel="Quick analysis"
-              accessibilityRole="switch"
-              accessibilityState={{ checked: quick }}
-              onPress={onToggleQuick}
-              style={({ pressed }) => [
-                styles.analysisModeButton,
-                quick && styles.analysisModeButtonActive,
-                pressed && styles.buttonPressed,
-              ]}
-            >
-              <Text
-                style={[
-                  styles.analysisModeButtonText,
-                  quick && styles.analysisModeButtonTextActive,
-                ]}
-              >
-                QUICK
-              </Text>
-            </Pressable>
-          ) : null}
+        {/*
+          Nothing to press when nothing has named a best move, and nothing to
+          name once the game is over. One line, so a move arriving or a depth
+          landing never changes the card's height.
+        */}
+        {engineOn && game.status === 'InProgress' ? (
           <Pressable
-            accessibilityLabel="Set up a custom analysis position"
-            accessibilityRole="button"
-            onPress={onSetPosition}
-            style={({ pressed }) => [
-              styles.setPositionButton,
-              pressed && styles.buttonPressed,
-            ]}
-          >
-            <Text style={styles.setPositionButtonText}>SET POSITION</Text>
-          </Pressable>
-          {/*
-            The other direction through the same door: SET POSITION draws a
-            board, this hands the one already drawn to anybody — or back to the
-            PGN box on this screen, which reads what it writes.
-          */}
-          <BoardExportButton board={exportBoard} />
-          {playBotOffered && (
-            <Pressable
-              accessibilityHint={`You take ${activeColor}, the side to move.`}
-              accessibilityLabel="Play this position out against a bot"
-              accessibilityRole="button"
-              onPress={() => onPlayOut('bot')}
-              style={({ pressed }) => [styles.setPositionButton, pressed && styles.buttonPressed]}
-            >
-              <Text style={styles.setPositionButtonText}>PLAY A BOT</Text>
-            </Pressable>
-          )}
-          <Pressable
-            accessibilityHint="Play together on this device."
-            accessibilityLabel="Play this position out with somebody next to you"
-            accessibilityRole="button"
-            onPress={() => onPlayOut('friend')}
-            style={({ pressed }) => [styles.setPositionButton, pressed && styles.buttonPressed]}
-          >
-            <Text style={styles.setPositionButtonText}>SHARED BOARD</Text>
-          </Pressable>
-          {onToggleReach && (
-            <Pressable
-              accessibilityHint="Show travel distances and safe routes to the goal."
-              accessibilityLabel={reachShowing ? 'Hide the reach maps' : 'Show the reach maps'}
-              accessibilityRole="switch"
-              accessibilityState={{ checked: reachShowing }}
-              onPress={onToggleReach}
-              style={({ pressed }) => [
-                styles.analysisModeButton,
-                reachShowing && styles.analysisModeButtonActive,
-                pressed && styles.buttonPressed,
-              ]}
-            >
-              <Text
-                style={[
-                  styles.analysisModeButtonText,
-                  reachShowing && styles.analysisModeButtonTextActive,
-                ]}
-              >
-                REACH
-              </Text>
-            </Pressable>
-          )}
-        </View>
-        {/* Nothing to press when nothing has named a best move. */}
-        {engineOn ? (
-          <Pressable
+            accessibilityLabel={
+              bestLine ? `Make best move, ${moveLabel(bestLine)}` : 'Make best move'
+            }
             accessibilityRole="button"
             accessibilityState={{ disabled: !canMakeBestMove }}
             disabled={!canMakeBestMove}
@@ -310,23 +329,30 @@ function AnalysisPanel({
               pressed && canMakeBestMove && styles.buttonPressed,
             ]}
           >
-            <View style={styles.bestMoveButtonCopy}>
-              <Text style={styles.bestMoveButtonText}>Make Best Move</Text>
-              <Text style={styles.bestMoveButtonDetail}>
-                {analysis?.lines[0]
-                  ? `${moveLabel(analysis.lines[0])} · depth ${analysis.depth}`
-                  : engineState === 'thinking'
-                    ? 'Waiting for RPSFish…'
-                    : 'No move available'}
-              </Text>
-            </View>
+            <Text style={styles.bestMoveButtonText}>Make Best Move</Text>
+            <Text numberOfLines={1} style={styles.bestMoveButtonDetail}>
+              {bestLine ? moveLabel(bestLine) : engineState === 'thinking' ? '…' : ''}
+            </Text>
             <Text style={styles.bestMoveButtonArrow}>→</Text>
           </Pressable>
         ) : null}
       </View>
 
-      {game.mode.features?.includes('territory') && <TerritoryMeter grid={game.grid} />}
-      <QuietMoveMeter game={game} />
+      {reachPanel}
+
+      {engineOn ? (
+        <EngineLinesCard
+          analysis={analysis}
+          emptyMessage={
+            engineState === 'error' ? 'Engine analysis unavailable.' : 'No legal continuation.'
+          }
+          meta={analysis ? `${confidenceLabel(analysis.confidence)} CONFIDENCE` : null}
+          // Held open at its full height while the next position is searched,
+          // so everything under it stays where it was when a move is played.
+          pendingRows={engineState === 'thinking' ? 3 : 0}
+          turn={activeColor}
+        />
+      ) : null}
 
       {lastMove && (
         <View style={styles.lastMoveCard}>
@@ -353,54 +379,82 @@ function AnalysisPanel({
         </View>
       )}
 
-      {engineOn ? (
-        <EngineLinesCard
-          analysis={analysis}
-          emptyMessage={
-            engineState === 'error' ? 'Engine analysis unavailable.' : 'No legal continuation.'
-          }
-          meta={
-            analysis
-              ? `DEPTH ${analysis.depth}/${analysis.selectiveDepth} · ${analysis.nodes.toLocaleString()} NODES · ${confidenceLabel(analysis.confidence)} CONFIDENCE`
-              : null
-          }
-          turn={activeColor}
-        />
-      ) : null}
+      {game.mode.features?.includes('territory') && <TerritoryMeter grid={game.grid} />}
+      <QuietMoveMeter game={game} />
+
+      {/*
+        What can be done with the board, in one grid: the two that draw it
+        somewhere else, then the two that play it out. Equal cells, so the
+        rows line up whichever of them a mode offers.
+      */}
+      <View style={styles.toolGrid}>
+        <View style={styles.toolRow}>
+          <View style={styles.toolCell}>
+            <GhostButton
+              accessibilityLabel="Set up a custom analysis position"
+              compact
+              label="SET POSITION"
+              onPress={onSetPosition}
+            />
+          </View>
+          {/*
+            The other direction through the same door: SET POSITION draws a
+            board, this hands the one already drawn to anybody — or back to the
+            PGN box on this screen, which reads what it writes.
+          */}
+          <View style={styles.toolCell}>
+            <BoardExportButton board={exportBoard} />
+          </View>
+        </View>
+        <View style={styles.toolRow}>
+          {playBotOffered && (
+            <View style={styles.toolCell}>
+              <GhostButton
+                accessibilityLabel={`Play this position against a bot, as ${activeColor}`}
+                compact
+                label="PLAY A BOT"
+                onPress={() => onPlayOut('bot')}
+              />
+            </View>
+          )}
+          {/* The lobby's name for a game two people share one device for. */}
+          <View style={styles.toolCell}>
+            <GhostButton
+              accessibilityLabel="Play this position with somebody on this device"
+              compact
+              label="PASS AND PLAY"
+              onPress={() => onPlayOut('friend')}
+            />
+          </View>
+        </View>
+      </View>
 
       {/*
         The line walked out on this board, graded or not. With the engine off it
         is a plain list of what has been played — still the thing you steer by
         when you have taken a position apart four moves deep and want to see how
-        you got there — and it says so rather than promising a report.
+        you got there. Absent until there is a move to list: a card whose only
+        content is a promise of content is the half-empty panel again.
       */}
-      <View style={styles.historyCard}>
-        <View style={styles.cardHeader}>
-          <Text style={styles.cardEyebrow}>{engineOn ? 'MOVE QUALITY' : 'MOVES'}</Text>
-          {/*
-            What the grades below currently mean. Worth saying out loud because
-            they move: a grade written at depth 6 can become a different grade
-            at depth 12, and a reviewer who saw one change should be able to see
-            why rather than doubt what they read the first time.
-          */}
-          {engineOn && gradedMoves.length > 0 ? (
-            <Text style={styles.historyMeta}>
-              {refining
-                ? `REGRADING AT DEPTH ${refining.limits.maxDepth} · ${refining.done}/${refining.total}`
-                : deeperToCome
-                  ? `DEPTH ${gradeDepth} · DEEPENING SOON`
-                  : `DEPTH ${gradeDepth}`}
-            </Text>
-          ) : null}
-        </View>
-        {gradeError ? <Text style={styles.historyEmpty}>{gradeError}</Text> : null}
-        {gradedMoves.length === 0 ? (
-          <Text style={styles.historyEmpty}>
-            {engineOn
-              ? 'Your move-by-move report will appear here.'
-              : "Your moves will appear here."}
-          </Text>
-        ) : (
+      {gradedMoves.length > 0 || gradeError ? (
+        <View style={styles.historyCard}>
+          <View style={styles.cardHeader}>
+            <Text style={styles.cardEyebrow}>{engineOn ? 'MOVE QUALITY' : 'MOVES'}</Text>
+            {/*
+              What the grades below currently mean. Worth saying because they
+              move: a grade written at depth 6 can become a different grade at
+              depth 12, and a reviewer who saw one change should be able to see
+              why rather than doubt what they read the first time.
+            */}
+            {engineOn && gradedMoves.length > 0 ? (
+              <Text style={styles.historyMeta}>
+                {refining
+                  ? `DEPTH ${refining.limits.maxDepth} · ${refining.done}/${refining.total}`
+                  : `DEPTH ${gradeDepth}${deeperToCome ? '+' : ''}`}
+              </Text>
+            ) : null}
+          </View>
+          {gradeError ? <Text style={styles.historyEmpty}>{gradeError}</Text> : null}
           <View style={styles.historyList}>
             {[...gradedMoves].reverse().map((entry) => (
               <View key={entry.index} style={styles.historyRow}>
@@ -408,15 +462,15 @@ function AnalysisPanel({
                 <View style={[styles.historyColor, entry.player === 'Red' ? styles.redDot : styles.blueDot]} />
                 <Text style={styles.historyMove}>{moveLabel(entry)}</Text>
                 {!engineOn ? null : entry.pending ? (
-                  <Text style={styles.historyQuality}>Analyzing</Text>
+                  <ActivityIndicator color={colors.textMuted} size="small" />
                 ) : (
                   <MoveQualityBadge compact grade={entry.grade} />
                 )}
               </View>
             ))}
           </View>
-        )}
-      </View>
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -495,6 +549,10 @@ function AnalysisBoard({ mode }: { mode: ModeDefinition }) {
   // underneath: a board you play both sides of, with the position setup, the
   // reach maps and the meters, and no opinions on it.
   const engineOn = useEngineAnalysis();
+  // False while a game started from this board is laid over it — see
+  // `navigation/stack`. The board stays mounted underneath so its line is
+  // there to come back to, but it has nothing to say while it is covered.
+  const focused = useIsFocused();
   const [effort, setEffort] = useState<AnalysisEffort>('full');
   const [history, setHistory] = useState<BoardMove[]>([]);
   const [pastGames, setPastGames] = useState<AnalysisGame[]>([]);
@@ -520,11 +578,16 @@ function AnalysisBoard({ mode }: { mode: ModeDefinition }) {
   //
   // The same hook the review's off-record branches use, so the two boards
   // cannot disagree about how a position is searched.
+  //
+  // Paused while the board is covered. A bot thinks on the same lane as this
+  // search, so an analysis board left searching underneath a game would make
+  // the bot wait for it. The grades below are left running: they are on the
+  // other lane, and switching them off throws every grade away.
   const positionAnalysis = usePositionAnalysis({
     position: game,
     history: pastGames,
     limits: interactiveLimits({ effort }),
-    enabled: engineOn,
+    enabled: engineOn && focused,
   });
   const analysis = positionAnalysis.analysis;
   const engineState = positionAnalysis.status;
@@ -555,9 +618,16 @@ function AnalysisBoard({ mode }: { mode: ModeDefinition }) {
   const lastGradedMove: GradedMove<BoardPlay> | null =
     lastPlay && !lastPlay.pending ? lastPlay : null;
 
+  // The height of the row the board shares with its panel on a wide screen,
+  // measured. The board grows into it — nothing sits under it here — and the
+  // panel is bounded by it, so the move list scrolls down to the bottom of the
+  // screen rather than stopping at the board's edge over an empty band.
+  const [wideRowHeight, setWideRowHeight] = useState<number | null>(null);
   const { boardSize, isWide } = useBoardLayout({
-    sidePanel: 430,
+    sidePanel: SIDE_PANEL,
     narrowHeightShare: 0.55,
+    fill: true,
+    maxHeight: wideRowHeight ?? undefined,
   });
   // A search in flight is never a reason to hold a move back. The engine is
   // answering a question about the board; the board is not waiting on the
@@ -623,6 +693,8 @@ function AnalysisBoard({ mode }: { mode: ModeDefinition }) {
   const canRedo = redoMoves.length > 0;
 
   useReplayKeyboard({
+    // The game laid over this board has arrow keys of its own.
+    enabled: focused,
     onFirst: undoMove,
     onLast: redoMove,
     onNext: redoMove,
@@ -691,60 +763,69 @@ function AnalysisBoard({ mode }: { mode: ModeDefinition }) {
   );
 
   const panel = (
-    <>
-      <AnalysisPanel
-        analysis={analysis}
-        canMakeBestMove={game.status === 'InProgress' && Boolean(analysis?.lines[0])}
-        deeperToCome={gradeAnalysis.deeperToCome}
-        engineOn={engineOn}
-        engineState={engineState}
-        exportBoard={{
-          grid: game.grid,
+    <AnalysisPanel
+      analysis={analysis}
+      canMakeBestMove={game.status === 'InProgress' && Boolean(analysis?.lines[0])}
+      deeperToCome={gradeAnalysis.deeperToCome}
+      engineOn={engineOn}
+      engineState={engineState}
+      exportBoard={{
+        grid: game.grid,
+        currentTurn: game.currentTurn,
+        mode,
+        era: game.era,
+        lastMove: history[history.length - 1]?.move ?? null,
+        detail: {
+          heading: 'ANALYSIS',
+          caption:
+            game.status === 'Finished'
+              ? game.winner === 'Neutral'
+                ? 'Drawn'
+                : `${game.winner} wins`
+              : `${game.currentTurn} to move · move ${game.moveNumber + 1}`,
+        },
+      }}
+      game={game}
+      gradeDepth={gradeAnalysis.depth}
+      gradeError={gradeAnalysis.error}
+      gradedMoves={gradedMoves}
+      onMakeBestMove={makeBestMove}
+      onPlayOut={playOut}
+      // The bot is RPSFish, so a build without it would play random moves.
+      playBotOffered={isEngineAvailable() && engineSupportsMode(mode.id)}
+      onSetPosition={() => {
+        // The board as it stands, whose move it is included — opening the
+        // editor part-way down a line should not silently hand the move back.
+        setPositionModalInitial({
           currentTurn: game.currentTurn,
-          mode,
           era: game.era,
-          lastMove: history[history.length - 1]?.move ?? null,
-          detail: {
-            heading: 'ANALYSIS',
-            caption:
-              game.status === 'Finished'
-                ? game.winner === 'Neutral'
-                  ? 'Drawn'
-                  : `${game.winner} wins`
-                : `${game.currentTurn} to move · move ${game.moveNumber + 1}`,
-          },
-        }}
-        game={game}
-        gradeDepth={gradeAnalysis.depth}
-        gradeError={gradeAnalysis.error}
-        gradedMoves={gradedMoves}
-        onMakeBestMove={makeBestMove}
-        onPlayOut={playOut}
-        playBotOffered={engineSupportsMode(mode.id)}
-        onSetPosition={() => {
-          // The board as it stands, whose move it is included — opening the
-          // editor part-way down a line should not silently hand the move back.
-          setPositionModalInitial({
-            currentTurn: game.currentTurn,
-            era: game.era,
-            grid: game.grid,
-          });
-          setPositionModalOpen(true);
-        }}
-        onToggleEngine={toggleEngineAnalysis}
-        onToggleQuick={() => setEffort((current) => (current === 'quick' ? 'full' : 'quick'))}
-        onToggleReach={reachTool.available ? reachTool.toggle : undefined}
-        quick={effort === 'quick'}
-        reachShowing={reachTool.active}
-        refining={gradeAnalysis.refining}
-      />
-      <ReachPanel tool={reachTool} />
-    </>
+          grid: game.grid,
+        });
+        setPositionModalOpen(true);
+      }}
+      onToggleEngine={toggleEngineAnalysis}
+      onToggleQuick={() => setEffort((current) => (current === 'quick' ? 'full' : 'quick'))}
+      onToggleReach={reachTool.available ? reachTool.toggle : undefined}
+      quick={effort === 'quick'}
+      reachPanel={<ReachPanel tool={reachTool} />}
+      reachShowing={reachTool.active}
+      refining={gradeAnalysis.refining}
+    />
   );
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'right', 'bottom', 'left']}>
-      <View style={styles.screen}>
+      {/*
+        As wide as the board and its panel need, and never narrower than the
+        page has always been: a board grown into a tall window takes the room
+        it needs from the margins, not from the panel.
+      */}
+      <View
+        style={[
+          styles.screen,
+          isWide && { maxWidth: Math.max(SCREEN_WIDTH, boardSize + SIDE_PANEL) },
+        ]}
+      >
         <View style={styles.topBar}>
           <BackLink href={up.analysis.href} label={up.analysis.label} />
           <View style={styles.titleCopy}>
@@ -764,55 +845,70 @@ function AnalysisBoard({ mode }: { mode: ModeDefinition }) {
             >
               <Text style={styles.resetText}>LOAD PGN</Text>
             </Pressable>
-            <Pressable
-              accessibilityHint="You can also press the left arrow key."
-              accessibilityLabel="Undo move"
-              accessibilityRole="button"
-              accessibilityState={{ disabled: !canUndo }}
-              disabled={!canUndo}
-              onPress={undoMove}
-              style={({ pressed }) => [
-                styles.historyButton,
-                !canUndo && styles.headerButtonDisabled,
-                pressed && canUndo && styles.buttonPressed,
-              ]}
-            >
-              <Text style={styles.historyButtonArrow}>{arrows.back}</Text>
-              <Text style={styles.historyButtonText}>Undo</Text>
-            </Pressable>
-            <Pressable
-              accessibilityHint="You can also press the right arrow key."
-              accessibilityLabel="Redo move"
-              accessibilityRole="button"
-              accessibilityState={{ disabled: !canRedo }}
-              disabled={!canRedo}
-              onPress={redoMove}
-              style={({ pressed }) => [
-                styles.historyButton,
-                !canRedo && styles.headerButtonDisabled,
-                pressed && canRedo && styles.buttonPressed,
-              ]}
-            >
-              <Text style={styles.historyButtonText}>Redo</Text>
-              <Text style={styles.historyButtonArrow}>{arrows.forward}</Text>
-            </Pressable>
-            <Pressable
-              accessibilityRole="button"
-              onPress={reset}
-              style={({ pressed }) => [styles.resetButton, pressed && styles.buttonPressed]}
-            >
-              <Text style={styles.resetText}>Reset</Text>
-            </Pressable>
+            {/*
+              A step through the line is the thing pressed most on this page,
+              so on a phone it moves under the board, in the thumb's reach and
+              out of a header it used to wrap onto a second row.
+            */}
+            {isWide ? (
+              <>
+                <Pressable
+                  accessibilityHint="You can also press the left arrow key."
+                  accessibilityLabel="Undo move"
+                  accessibilityRole="button"
+                  accessibilityState={{ disabled: !canUndo }}
+                  disabled={!canUndo}
+                  onPress={undoMove}
+                  style={({ pressed }) => [
+                    styles.historyButton,
+                    !canUndo && styles.headerButtonDisabled,
+                    pressed && canUndo && styles.buttonPressed,
+                  ]}
+                >
+                  <Text style={styles.historyButtonArrow}>{arrows.back}</Text>
+                  <Text style={styles.historyButtonText}>Undo</Text>
+                </Pressable>
+                <Pressable
+                  accessibilityHint="You can also press the right arrow key."
+                  accessibilityLabel="Redo move"
+                  accessibilityRole="button"
+                  accessibilityState={{ disabled: !canRedo }}
+                  disabled={!canRedo}
+                  onPress={redoMove}
+                  style={({ pressed }) => [
+                    styles.historyButton,
+                    !canRedo && styles.headerButtonDisabled,
+                    pressed && canRedo && styles.buttonPressed,
+                  ]}
+                >
+                  <Text style={styles.historyButtonText}>Redo</Text>
+                  <Text style={styles.historyButtonArrow}>{arrows.forward}</Text>
+                </Pressable>
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={reset}
+                  style={({ pressed }) => [styles.resetButton, pressed && styles.buttonPressed]}
+                >
+                  <Text style={styles.resetText}>Reset</Text>
+                </Pressable>
+              </>
+            ) : null}
           </View>
         </View>
 
         {isWide ? (
-          <View style={styles.wideLayout}>
+          <View
+            onLayout={(event) => {
+              const next = Math.floor(event.nativeEvent.layout.height);
+              setWideRowHeight((current) => (current === next ? current : next));
+            }}
+            style={styles.wideLayout}
+          >
             <View style={styles.boardColumn}>{board}</View>
             <ScrollView
               contentContainerStyle={styles.widePanelContent}
               showsVerticalScrollIndicator={false}
-              style={[styles.widePanel, { maxHeight: boardSize }]}
+              style={[styles.widePanel, { maxHeight: wideRowHeight ?? boardSize }]}
             >
               {panel}
             </ScrollView>
@@ -826,6 +922,36 @@ function AnalysisBoard({ mode }: { mode: ModeDefinition }) {
             showsVerticalScrollIndicator={false}
           >
             {board}
+            <View style={styles.phoneHistory}>
+              <View style={styles.toolCell}>
+                <GhostButton
+                  accessibilityLabel="Undo move"
+                  compact
+                  disabled={!canUndo}
+                  label={`${arrows.back} UNDO`}
+                  onPress={undoMove}
+                />
+              </View>
+              <View style={styles.toolCell}>
+                <GhostButton
+                  accessibilityLabel="Redo move"
+                  compact
+                  disabled={!canRedo}
+                  label={`REDO ${arrows.forward}`}
+                  onPress={redoMove}
+                />
+              </View>
+              <View style={styles.toolCell}>
+                <GhostButton
+                  accessibilityLabel="Reset to the starting position"
+                  compact
+                  // Nothing has been played, so there is nothing to put back.
+                  disabled={!canUndo && !canRedo}
+                  label="RESET"
+                  onPress={reset}
+                />
+              </View>
+            </View>
             {panel}
           </ScrollView>
         )}
@@ -891,15 +1017,16 @@ const styles = themedSheet(() => ({
   screen: {
     flex: 1,
     width: '100%',
-    maxWidth: 1200,
+    maxWidth: SCREEN_WIDTH,
     alignSelf: 'center',
     paddingHorizontal: 12,
     paddingBottom: 10,
   },
-  // Wraps. Four buttons, a title and the way out do not fit across a phone,
-  // and the row used to resolve that by squeezing the title to nothing — the
-  // mode name was invisible at 390 long before the back button was added
-  // beside it. On a second line they all keep their size.
+  // Wraps. Four buttons, a title and the way out do not fit across a narrow
+  // window, and the row used to resolve that by squeezing the title to nothing
+  // — the mode name was invisible at 390 long before the back button was added
+  // beside it. On a second line they all keep their size. A phone has only
+  // LOAD PGN up here, so it is one row there unless the text is very large.
   topBar: {
     minHeight: 64,
     flexDirection: 'row',
@@ -977,58 +1104,94 @@ const styles = themedSheet(() => ({
     backgroundColor: colors.accentSurface,
   },
   cardHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  // The depth sits in the corner, level with the eyebrow, so it reads as a
+  // status mark rather than as part of the title. Held to the chip's height
+  // whether or not there is a chip, so turning the engine on moves nothing.
+  coachHeader: {
+    minHeight: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  coachTitleRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    columnGap: 10,
+    rowGap: 8,
+    marginTop: 2,
+  },
   cardEyebrow: { color: colors.textFaint, fontSize: 8, fontWeight: '900', letterSpacing: 1.2 },
   cardTitle: { color: colors.textStrong, fontSize: 17, fontWeight: '900', marginTop: 5 },
   cardBody: { color: colors.accentSoft, fontSize: 10, lineHeight: 15, marginTop: 8 },
+  // A fixed height, so the spinner coming and going never moves the card.
+  depthChip: {
+    height: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    flexShrink: 0,
+  },
+  depthSpinner: { transform: [{ scale: 0.7 }], width: 16, height: 16 },
+  depthText: {
+    color: colors.textMuted,
+    fontSize: 8,
+    fontWeight: '900',
+    letterSpacing: 0.6,
+    fontVariant: ['tabular-nums'],
+  },
   historyMeta: { color: colors.textFaint, fontSize: 7, fontWeight: '900', letterSpacing: 0.6 },
-  // Wraps, because on a phone the switch and its five buttons are wider than
-  // the column: without it the row ran 29 points off the right-hand edge.
-  analysisModeRow: {
+  switchRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     alignItems: 'center',
     gap: 6,
-    marginTop: 11,
+    marginLeft: 'auto',
   },
-  analysisModeLabel: { color: colors.textFaint, fontSize: 7, fontWeight: '900', letterSpacing: 1 },
-  analysisModeButton: {
-    minHeight: 28,
+  // The same chip as `EngineSwitch`, which sits first in the row.
+  switchChip: {
+    minHeight: 30,
     justifyContent: 'center',
     paddingHorizontal: 9,
     borderRadius: radius.small,
     borderWidth: 1,
     borderColor: colors.borderStrong,
-    backgroundColor: colors.surfaceRaised,
+    backgroundColor: colors.surface,
   },
   // On is neutral, like every other selected state: the accent is for pressing.
-  analysisModeButtonActive: { borderColor: colors.borderLight, backgroundColor: colors.surfaceMuted },
-  analysisModeButtonText: { color: colors.textMuted, fontSize: 7, fontWeight: '900' },
-  analysisModeButtonTextActive: { color: colors.textStrong },
-  setPositionButton: {
-    minHeight: 28,
-    justifyContent: 'center',
-    marginLeft: 'auto',
-    paddingHorizontal: 9,
-    borderRadius: radius.small,
-    borderWidth: 1,
-    borderColor: colors.borderStrong,
-  },
-  setPositionButtonText: { color: colors.textSoft, fontSize: 7, fontWeight: '900' },
+  switchChipActive: { borderColor: colors.borderLight, backgroundColor: colors.surfaceMuted },
+  switchChipText: { color: colors.textMuted, fontSize: 7, fontWeight: '900' },
+  switchChipTextActive: { color: colors.textStrong },
   bestMoveButton: {
-    minHeight: 47,
+    minHeight: 44,
     flexDirection: 'row',
     alignItems: 'center',
+    gap: 10,
     marginTop: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+    paddingHorizontal: 14,
     borderRadius: radius.medium,
     backgroundColor: colors.accent,
   },
   bestMoveButtonDisabled: { opacity: 0.4 },
-  bestMoveButtonCopy: { flex: 1 },
   bestMoveButtonText: { color: colors.textStrong, fontSize: 11, fontWeight: '900' },
-  bestMoveButtonDetail: { color: colors.accentSurface, fontSize: 8, fontWeight: '800', marginTop: 2 },
-  bestMoveButtonArrow: { color: colors.textStrong, fontSize: 20, fontWeight: '900' },
+  bestMoveButtonDetail: {
+    flex: 1,
+    minWidth: 0,
+    textAlign: 'right',
+    color: colors.textStrong,
+    fontSize: 11,
+    fontWeight: '800',
+    fontVariant: ['tabular-nums'],
+  },
+  bestMoveButtonArrow: { color: colors.textStrong, fontSize: 18, fontWeight: '900' },
+  // Rows of equal cells. A cell is a column, so the button in it stretches to
+  // the cell's width without a width of its own.
+  toolGrid: { gap: 8 },
+  toolRow: { flexDirection: 'row', gap: 8 },
+  toolCell: { flex: 1, minWidth: 0 },
+  phoneHistory: { width: '100%', flexDirection: 'row', gap: 8 },
   lastMoveCard: {
     padding: 13,
     borderRadius: 11,
@@ -1054,7 +1217,6 @@ const styles = themedSheet(() => ({
   redDot: { backgroundColor: players.Red.strong },
   blueDot: { backgroundColor: players.Blue.strong },
   historyMove: { flex: 1, color: colors.textSoft, fontSize: 10, fontWeight: '800' },
-  historyQuality: { color: colors.textMuted, fontSize: 9, fontWeight: '900' },
   errorBanner: { position: 'absolute', right: 12, bottom: 12, left: 12, padding: 11, borderRadius: radius.medium, backgroundColor: colors.dangerSurface },
   errorText: { color: colors.dangerText, fontSize: 10, fontWeight: '700', textAlign: 'center' },
 }));

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { gameReviewURL, links, pageOf, playerHandle, seriesURL, shareURL } from './links.ts';
+import { gameReviewURL, links, pageOf, pathOf, playerHandle, seriesURL, shareURL } from './links.ts';
 import { SITE_URL } from '@/store/serverConfig';
 
 test('a game review link is the review route, whole, with the id escaped', () => {
@@ -78,6 +78,7 @@ test('every address names a page, whichever form the builder answers in', () => 
     links.watch('g1'),
     links.analysis(),
     links.analysis('V5'),
+    links.learn(),
     links.review(),
     links.review('g1'),
     links.botBattle(),
@@ -122,4 +123,17 @@ test('a page is the same page whatever it is opened on', () => {
   assert.equal(pageOf(links.analysis()), pageOf(links.analysis('V5')));
   assert.notEqual(pageOf(links.play()), pageOf(links.watch('a')));
   assert.notEqual(pageOf(links.lobby()), pageOf(links.leaderboard()));
+});
+
+// A sign-in comes back to the page whose button started it, so that page
+// travels with it as a path, parameters and all.
+test('signing in carries the page to come back to', () => {
+  assert.equal(links.signIn(), '/account/sign-in');
+  const href = links.signIn(links.tournaments('t 1'));
+  assert.deepEqual(href, {
+    pathname: '/account/sign-in',
+    params: { next: '/tournaments?tournament=t%201' },
+  });
+  assert.equal(pathOf(href), '/account/sign-in?next=%2Ftournaments%3Ftournament%3Dt%25201');
+  assert.equal(shareURL(links.lobby()), `${SITE_URL}/`);
 });

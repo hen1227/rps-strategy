@@ -40,6 +40,11 @@ yarn-error.*
 # local env files
 .env*.local
 
+# Firebase's config for the Android app. Not a secret, but this repository is
+# public and the file names the project's API key, so it stays on the machines
+# that build the store app. EAS gets it in the upload; see app.config.js.
+google-services.json
+
 # typescript
 *.tsbuildinfo
 
@@ -52,3 +57,9 @@ public/rpsfish/rpsfish-worker.js
 
 # built by npm run build:rpsfish:ios
 modules/rpsfish/ios/RPSFish.xcframework/
+
+# built by npm run build:rpsfish:android, and Gradle's output beside it
+modules/rpsfish/android/libs/
+modules/rpsfish/android/build/
+modules/rpsfish/android/.cxx/
+modules/rpsfish/android/.gradle/

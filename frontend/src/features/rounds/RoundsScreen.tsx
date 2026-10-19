@@ -143,7 +143,10 @@ export default function RoundsScreen() {
         title="Hourly rounds"
         trailing={
           view && view.roundsRun > 0 ? (
-            <Badge label={`${view.roundsRun} ROUNDS RUN`} tone="neutral" />
+            <Badge
+              label={`${view.roundsRun} ${view.roundsRun === 1 ? 'ROUND' : 'ROUNDS'} RUN`}
+              tone="neutral"
+            />
           ) : undefined
         }
       />
@@ -209,16 +212,22 @@ export default function RoundsScreen() {
           <SectionHeading
             eyebrow="NEXT ROUND"
             title="The field"
+            // No "0 OF 0 IN" over an empty field: the empty state says it.
             trailing={
-              <Badge
-                label={fieldSummary(groups).toUpperCase()}
-                tone={groups.inRound > 0 ? 'accent' : 'neutral'}
-              />
+              groups.entered.length > 0 ? (
+                <Badge
+                  label={fieldSummary(groups).toUpperCase()}
+                  tone={groups.inRound > 0 ? 'accent' : 'neutral'}
+                />
+              ) : undefined
             }
           />
-          <Text style={styles.help}>
-            Busy engines join when a slot opens. Each badge shows whether an engine can play.
-          </Text>
+          {/* About the badges on the rows, so only once there are rows. */}
+          {groups.entered.length > 0 ? (
+            <Text style={styles.help}>
+              Busy engines join when a slot opens. Each badge shows whether an engine can play.
+            </Text>
+          ) : null}
           {waitingNote(groups) ? (
             <Text style={styles.waiting}>{waitingNote(groups)}</Text>
           ) : null}
@@ -408,9 +417,11 @@ const styles = themedSheet(() => ({
   loading: { paddingVertical: space.xlarge, alignItems: 'center' },
   help: { ...type.body, color: colors.textMuted, marginTop: space.small },
   plan: { ...type.meta, color: colors.textFaint, marginTop: space.small },
-  warning: { ...type.label, color: colors.accentSoft, marginTop: space.small },
+  // Status, so not the accent: green is for the button worth pressing, and a
+  // shortfall drawn in it read as good news.
+  warning: { ...type.label, color: colors.textSoft, marginTop: space.small },
   // Not `warning`: this is good news about engines somebody is looking for, and
-  // in the accent used for a shortfall it would read as one.
+  // in the weight used for a shortfall it would read as one.
   waiting: { ...type.meta, color: colors.textMuted, marginTop: space.small },
   list: { marginTop: space.small },
   feed: { gap: space.small, marginTop: space.medium },

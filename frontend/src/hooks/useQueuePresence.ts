@@ -28,27 +28,52 @@ const MIN_REPORT_INTERVAL_MS = 2_000;
 export const useQueuePresence = (): void => {
   const reportPresence = useGameStore((state) => state.reportPresence);
   const connect = useGameStore((state) => state.connect);
+  const connected = useGameStore((state) => state.connectionStatus === 'connected');
+  const isSearching = useGameStore((state) => state.queue.isSearching);
   const lastActivityAt = useRef(0);
   const lastReported = useRef<boolean | null>(null);
   const lastReportAt = useRef(0);
   const pendingReport = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Forget what was last said and say it again. Set by the effect below. */
+  const reassert = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     lastActivityAt.current = Date.now();
+    const native = Platform.OS !== 'web';
+    let appState = AppState.currentState;
+
+    // The answer as of now. Asked when a report actually goes out rather than
+    // when it was wanted, so a report that had to wait sends what is true when
+    // it leaves. Capturing the value instead is how a phone put away straight
+    // after the alerts prompt told the server, two seconds later and from the
+    // background, that somebody was looking at it.
+    const presentNow = () => {
+      if (native) return appState === 'active';
+      if (typeof document === 'undefined') return true;
+      return (
+        document.visibilityState === 'visible' &&
+        Date.now() - lastActivityAt.current < ACTIVITY_WINDOW_MS
+      );
+    };
 
     // Reported only when the answer *changes*, and never more than once every
-    // couple of seconds. A quiet session therefore produces a handful of
-    // messages in total, and an idle browsing one produces none at all —
-    // reportPresence itself returns early when nothing is waiting on us.
-    const report = (present: boolean) => {
+    // couple of seconds in a browser. A quiet session therefore produces a
+    // handful of messages in total, and an idle browsing one produces none at
+    // all — reportPresence itself returns early when nothing is waiting on us.
+    //
+    // A phone is not held to the floor. Its app states change at the speed of a
+    // hand, not a mouse, and the one that matters most — leaving — is followed
+    // within seconds by the OS freezing every timer this could have waited on.
+    const report = () => {
+      const present = presentNow();
       if (lastReported.current === present) return;
       const now = Date.now();
       const since = now - lastReportAt.current;
-      if (since < MIN_REPORT_INTERVAL_MS) {
+      if (!native && since < MIN_REPORT_INTERVAL_MS) {
         if (pendingReport.current) return;
         pendingReport.current = setTimeout(() => {
           pendingReport.current = null;
-          report(present);
+          report();
         }, MIN_REPORT_INTERVAL_MS - since);
         return;
       }
@@ -56,28 +81,31 @@ export const useQueuePresence = (): void => {
       lastReportAt.current = now;
       reportPresence(present);
     };
+    reassert.current = () => {
+      lastReported.current = null;
+      report();
+    };
 
-    if (Platform.OS !== 'web') {
+    if (native) {
       // A foregrounded native app has no other tab for its owner to be looking
       // at, so "visible" and "present" are the same fact and the idle rule
       // would only ever be wrong.
       const subscription = AppState.addEventListener('change', (state) => {
-        const active = state === 'active';
-        if (active) connect();
-        report(active);
+        appState = state;
+        if (state === 'active') connect();
+        report();
       });
-      report(AppState.currentState === 'active');
-      return () => subscription.remove();
+      report();
+      return () => {
+        subscription.remove();
+        reassert.current = null;
+      };
     }
 
     if (typeof document === 'undefined' || typeof window === 'undefined') return;
 
     const noteActivity = () => {
       lastActivityAt.current = Date.now();
-    };
-    const evaluate = () => {
-      const visible = document.visibilityState === 'visible';
-      report(visible && Date.now() - lastActivityAt.current < ACTIVITY_WINDOW_MS);
     };
     const onVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
@@ -87,7 +115,7 @@ export const useQueuePresence = (): void => {
         noteActivity();
         connect();
       }
-      evaluate();
+      report();
     };
 
     // Written to a ref rather than to state: pointermove is a firehose, and a
@@ -98,8 +126,8 @@ export const useQueuePresence = (): void => {
       window.addEventListener(event, noteActivity, { passive: true });
     }
     document.addEventListener('visibilitychange', onVisibilityChange);
-    const interval = setInterval(evaluate, EVALUATE_EVERY_MS);
-    evaluate();
+    const interval = setInterval(report, EVALUATE_EVERY_MS);
+    report();
 
     return () => {
       for (const event of events) window.removeEventListener(event, noteActivity);
@@ -107,6 +135,17 @@ export const useQueuePresence = (): void => {
       clearInterval(interval);
       if (pendingReport.current) clearTimeout(pendingReport.current);
       pendingReport.current = null;
+      reassert.current = null;
     };
   }, [connect, reportPresence]);
+
+  // The server reads a socket it has just handed a seek to as somebody at the
+  // screen: a reconnection, or a search just started. Whatever this device said
+  // before is gone on that side, so it is said again. Without this, a phone
+  // whose socket was replaced while it sat in a pocket was seated on the spot
+  // and never sent the notification, because as far as the server knew it was
+  // being looked at.
+  useEffect(() => {
+    if (connected && isSearching) reassert.current?.();
+  }, [connected, isSearching]);
 };

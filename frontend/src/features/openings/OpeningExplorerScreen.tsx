@@ -358,7 +358,7 @@ export default function OpeningExplorerScreen() {
   const hasTwins = Boolean(stats?.moves?.some((move) => (move.twins?.length ?? 0) > 0));
 
   const boardPanel = game ? (
-    <View style={styles.boardColumn}>
+    <View style={[styles.boardColumn, !isWide && [styles.boardColumnStacked, { width: boardSize }]]}>
       <Board
         analysisArrows={arrows}
         boardSize={boardSize}
@@ -581,7 +581,7 @@ export default function OpeningExplorerScreen() {
                 <Text style={styles.note}>
                   The thickest arrow shows the most popular move.
                   {hasTwins
-                    ? "Dashed arrows show mirrored versions of the same move."
+                    ? " Dashed arrows show mirrored versions of the same move."
                     : ''}
                 </Text>
               ) : null}
@@ -599,11 +599,20 @@ const styles = themedSheet(() => ({
   // clear of the chrome, but it now scrolls the whole way to both edges.
   page: { gap: space.medium, paddingBottom: space.xlarge, paddingTop: space.large },
   header: { gap: 4 },
-  brand: { color: colors.accentBright, fontSize: 12, fontWeight: '900', letterSpacing: 1.6 },
+  // Neutral like every other page's title. The accent is for the button worth
+  // pressing, and a green heading read as one.
+  brand: { color: colors.textStrong, fontSize: 12, fontWeight: '900', letterSpacing: 1.6 },
   headerSubtitle: { color: colors.textMuted, fontSize: 13, lineHeight: 19 },
   layout: { flexDirection: 'column', gap: space.medium },
   layoutWide: { alignItems: 'flex-start', flexDirection: 'row' },
   boardColumn: { flexGrow: 0, flexShrink: 0, gap: space.small },
+  // Centred over the panels when they stack under it. A full-size board is
+  // narrower than an iPad held upright, and pinned to the left it left a
+  // strip of empty page beside it, with the move buttons centred under the
+  // page rather than under the board they step through. The board's own width
+  // goes with it: centring alone kept the column at the page's width on iOS,
+  // where the move buttons' full-width row is measured against the page.
+  boardColumnStacked: { alignSelf: 'center' },
   panelColumn: {
     flexGrow: 1,
     flexShrink: 1,

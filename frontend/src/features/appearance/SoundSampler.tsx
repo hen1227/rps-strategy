@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 
 import { soundPackById } from '@/appearance/soundPacks';
 import { useAppearanceStore } from '@/appearance/store';
+import { replayClip } from '@/hooks/useGameSounds';
 
 // Plays a pack's move clip when it is chosen, so picking one answers with the
 // thing it changes rather than with a word.
@@ -21,13 +22,10 @@ function Sampler({ token }: { token: number }) {
   useEffect(() => {
     if (token === lastPlayed.current) return;
     lastPlayed.current = token;
-    try {
-      player.seekTo(0);
-      player.play();
-    } catch {
-      // A platform that refuses playback must not take the settings page with
-      // it. Choosing the pack has already worked; this was only the echo.
-    }
+    // The game's own way of starting a clip, which also keeps a refused sound
+    // from taking the settings page with it: choosing the pack has already
+    // worked, and this is only the echo.
+    replayClip(player);
   }, [player, token]);
 
   return null;

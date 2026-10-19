@@ -1,5 +1,5 @@
 import { useRouter } from 'expo-router';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Text, TextInput, View, type LayoutChangeEvent } from 'react-native';
 
 import GameSettingsModal from './GameSettingsModal';
@@ -9,6 +9,8 @@ import OpenGamesStrip from './OpenGamesStrip';
 import LiveNowPanel from '@/features/live/LiveNowPanel';
 import MatchAlertsPanel from '@/features/queue/MatchAlertsPanel';
 import HowToPlayModal from '@/features/game/HowToPlayModal';
+import { openLessonsFrom, takeFirstGameOffer } from '@/features/learn/firstGame';
+import { LESSON_MODE_ID } from '@/features/learn/lessons';
 import SetupPreview, { SETUP_CARD_WIDTH } from '@/features/game/SetupPreview';
 import PGNImportModal from '@/features/pgn/PGNImportModal';
 import PositionSetupModal from '@/features/pgn/PositionSetupModal';
@@ -18,7 +20,9 @@ import { reviewSourceFromPGN } from '@/engine/gameReview';
 import { useCalloutReserve } from '@/features/shell/CalloutLayer';
 import { useWideScreen } from '@/hooks/useBoardLayout';
 import { useLobbyGate } from '@/hooks/useQueueCall';
+import { useSettled } from '@/hooks/useSettled';
 import { links } from '@/navigation/links';
+import { useGoTo } from '@/navigation/stack';
 import { useGameStore } from '@/store/gameStore';
 import { featuredModeOf, playableModesOf, variantModesOf } from '@/store/modeSelectors';
 import { updatePausedReason } from '@/store/queueSelectors';
@@ -96,6 +100,17 @@ export default function PlayOnlineScreen() {
   const [positionOpen, setPositionOpen] = useState(false);
   const [pgnOpen, setPgnOpen] = useState(false);
 
+  const go = useGoTo();
+  // A device that has never been here sees the lessons first, once — see
+  // `features/learn/firstGame` for who counts as new. It waits for the settled
+  // render because a pre-rendered page's first one does not know yet that it
+  // is a section of the shell, and the lessons have to be laid over the lobby
+  // for their "‹ Lobby" to find it underneath.
+  const settled = useSettled();
+  useEffect(() => {
+    if (settled && takeFirstGameOffer()) go(links.learn());
+  }, [go, settled]);
+
   // A retired mode keeps its analysis board but accepts no new matches.
   const playableModes = useMemo(() => playableModesOf(modes), [modes]);
   const featuredMode = useMemo(() => featuredModeOf(modes), [modes]);
@@ -139,11 +154,22 @@ export default function PlayOnlineScreen() {
     Boolean(setup) && !namedOpponent && isStandardSetup(setup!, setupMode, defaultTimeControl);
   // Who ends up with this game: the one thing about it the preview card cannot
   // read off the setup, and the difference between posting a game and queueing.
+  // Nothing for a plain search: the card's own STANDARD badge already says it.
   const setupAudience = namedOpponent
     ? `Only ${namedOpponent} can take it.`
     : setupIsPlainSearch
-      ? 'Standard settings.'
+      ? undefined
       : 'Anyone in the lobby can take it.';
+
+  // What the button does, where its label leaves something unsaid. A plain
+  // search says it all in FIND A GAME, so it gets no line of its own.
+  const actionHint = gate.paused
+    ? updatePausedReason(serverUpdate?.note)
+    : namedOpponent
+      ? 'It waits ten minutes for them to answer.'
+      : setupIsPlainSearch
+        ? null
+        : 'Open for ten minutes. Matching players pair immediately.';
 
   const resetDraft = () => setDraft(null);
 
@@ -156,6 +182,7 @@ export default function PlayOnlineScreen() {
   const setupCard = setup ? (
     <SetupPreview
       caption={setupAudience}
+      casualOnly={gate.needsAccount}
       defaultTimeControl={defaultTimeControl}
       mode={setupMode}
       setup={setup}
@@ -247,16 +274,26 @@ export default function PlayOnlineScreen() {
             the top of a form that is shorter than it is.
           */}
           <View
+            // A fresh pair of columns each time the layout switches. The first
+            // layout is always the stacked one — the width is not known until
+            // it has been measured — and iOS's layout engine keeps the form's
+            // stacked height as its starting width when the row arrives: `flex`
+            // there starts from a cached basis rather than from zero, and does
+            // not shrink. So the form came out 170 points too wide, and the
+            // preview beside it ran off the side of an iPad. The web lays out
+            // afresh every time and never showed it. The same fix, for the same
+            // reason, as `TournamentOverview`'s.
+            key={challengeWide ? 'columns' : 'stacked'}
             onLayout={measureChallenge}
             style={[styles.challengeBody, challengeWide && styles.challengeBodyWide]}
           >
             <View style={[styles.challengeForm, challengeWide && styles.challengeFormWide]}>
-              <View>
-                <SectionHeading title="Create a challenge" />
-                <Text style={styles.help}>
-                  Enter a username to challenge someone. Leave blank for an open game.
-                </Text>
-              </View>
+              {/*
+                No line of help under the heading: the field's label and its
+                placeholder already say that a name is optional and that leaving
+                it empty opens the game to anyone.
+              */}
+              <SectionHeading title="Create a challenge" />
 
               {challengeWide ? null : setupCard}
 
@@ -333,15 +370,7 @@ export default function PlayOnlineScreen() {
                     caption has already said that, and saying it twice under two
                     different headings is how a panel stops being read at all.
                   */}
-                  <Text style={styles.actionHint}>
-                    {gate.paused
-                      ? updatePausedReason(serverUpdate?.note)
-                      : namedOpponent
-                        ? 'It waits ten minutes for them to answer.'
-                        : setupIsPlainSearch
-                          ? 'Find an opponent.'
-                          : "Open for ten minutes. Matching players pair immediately."}
-                  </Text>
+                  {actionHint ? <Text style={styles.actionHint}>{actionHint}</Text> : null}
                   {gate.needsAccount ? (
                     <Text style={styles.actionHint}>
                       Casual while you are signed out. Sign in to play for a rating.
@@ -359,6 +388,15 @@ export default function PlayOnlineScreen() {
       <HowToPlayModal
         mode={howToPlayMode}
         onClose={() => setHowToPlayMode(null)}
+        onTry={
+          howToPlayMode?.id === LESSON_MODE_ID
+            ? () => {
+                setHowToPlayMode(null);
+                openLessonsFrom('how_to_play');
+                go(links.learn());
+              }
+            : undefined
+        }
         visible={Boolean(howToPlayMode)}
       />
       {setup ? (

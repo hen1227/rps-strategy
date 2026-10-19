@@ -83,6 +83,8 @@ const EVAL_BAR_COLUMN = EVAL_BAR_WIDTH + space.small;
 
 /** Two columns fit here; below it the hero and the cards stack. */
 const WIDE_ENOUGH = 720;
+/** The empty book's picture of the starting position. */
+const EMPTY_BOARD = 180;
 
 /**
  * What to call a line on its own card.
@@ -378,6 +380,11 @@ export default function OpeningBookScreen() {
   const turn = sideOf(node?.turn ?? game?.currentTurn, line.length);
 
   const isWide = pageWidth >= WIDE_ENOUGH;
+  // The empty book's board and its words side by side only where the words
+  // keep a readable column: 34pt of panel padding and border, the board, a gap,
+  // and the copy's 240. Narrower than that, a phone put a 22-point title in a
+  // column a third of the screen wide, one word to a line.
+  const emptyStacked = pageWidth - 34 < EMPTY_BOARD + space.large + 240;
   // What is left for the board once the eval bar beside it is paid for.
   const heroFit = Math.max(0, heroWidth - EVAL_BAR_COLUMN);
   const heroBoard = Math.round(
@@ -554,18 +561,26 @@ export default function OpeningBookScreen() {
           </View>
         ) : !book ? (
           <Panel style={styles.emptyBook} tone="accent">
-            <View style={styles.emptyRow}>
+            {/*
+              Chosen, not wrapped, and keyed by the choice: the board arrives
+              after the first measurement, and on iOS a row that gains a child
+              that way kept the copy's old width rather than wrapping it.
+            */}
+            <View
+              key={emptyStacked ? 'stacked' : 'row'}
+              style={[styles.emptyRow, emptyStacked && styles.emptyRowStacked]}
+            >
               {game && pageWidth > 0 && (
-                <MiniBoard grid={game.grid} modeId={modeId} size={Math.min(180, pageWidth)} />
+                <MiniBoard
+                  grid={game.grid}
+                  modeId={modeId}
+                  size={Math.min(EMPTY_BOARD, pageWidth)}
+                />
               )}
-              <View style={styles.emptyCopyColumn}>
+              <View style={[styles.emptyCopyColumn, emptyStacked && styles.emptyCopyStacked]}>
                 <Text style={ui.eyebrow}>BOOK IN PREPARATION</Text>
-                <Text style={styles.emptyTitle}>
-                  No {tab?.name ?? modeId} scan has been imported yet.
-                </Text>
-                <Text style={styles.emptyCopy}>
-                  No opening analysis has been published for this mode yet.
-                </Text>
+                {/* One line: the eyebrow already says the book is coming. */}
+                <Text style={styles.emptyTitle}>No {tab?.name ?? modeId} book yet</Text>
               </View>
             </View>
           </Panel>
@@ -814,7 +829,9 @@ export default function OpeningBookScreen() {
 const styles = themedSheet(() => ({
   header: { flexDirection: 'row', alignItems: 'center', gap: 14 },
   headerCopy: { flexGrow: 1, flexShrink: 1, minWidth: 0 },
-  brand: { color: colors.accentBright, fontSize: 15, fontWeight: '900', letterSpacing: 1.2 },
+  // Neutral like every other page's title. The accent is for the button worth
+  // pressing, and a green heading read as one.
+  brand: { color: colors.textStrong, fontSize: 15, fontWeight: '900', letterSpacing: 1.2 },
   headerSubtitle: { color: colors.textMuted, fontSize: 11, marginTop: 2 },
   curatorSwitch: {
     paddingHorizontal: 11,
@@ -831,10 +848,12 @@ const styles = themedSheet(() => ({
   loadingState: { alignItems: 'center', justifyContent: 'center', gap: 10, paddingVertical: 70 },
   loadingText: { color: colors.textMuted, fontSize: 12 },
   emptyBook: { paddingVertical: 26 },
-  emptyRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: space.large },
+  emptyRow: { flexDirection: 'row', alignItems: 'center', gap: space.large },
+  emptyRowStacked: { flexDirection: 'column' },
   emptyCopyColumn: { flexGrow: 1, flexShrink: 1, flexBasis: 240, minWidth: 0 },
+  // In a column a basis is a height, so it goes: the copy is as tall as it is.
+  emptyCopyStacked: { flexGrow: 0, flexBasis: 'auto', alignSelf: 'stretch' },
   emptyTitle: { color: colors.textStrong, fontSize: 22, fontWeight: '900', marginTop: 7 },
-  emptyCopy: { color: colors.textMuted, fontSize: 12, lineHeight: 19, marginTop: 8, maxWidth: 680 },
 
   hero: { padding: 20 },
   heroLayout: { gap: space.large },

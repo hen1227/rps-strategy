@@ -1,7 +1,7 @@
-// RPSFish on iOS: the engine in the app's own process.
+// RPSFish on a phone: the engine in the app's own process.
 //
-// The browser runs RPSFish in a worker and talks to it by message. iOS has no
-// worker, so this file stands in for one: it drives the same
+// The browser runs RPSFish in a worker and talks to it by message. A phone has
+// no worker, so this file stands in for one: it drives the same
 // `createSessionHost` over a backend that calls the native module, and
 // presents the result behind the same handful of members `client.ts` uses on a
 // `Worker`. That is what lets one lane implementation serve both platforms.

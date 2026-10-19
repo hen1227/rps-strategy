@@ -95,7 +95,16 @@ func (server *Server) releaseSeeksOnDisconnect(client *Client, reason string) {
 // them.
 func (server *Server) dropUnreachableSeeks(userID string) {
 	seek := server.seeks.ForOwner(userID)
-	if seek == nil || seek.Client() != nil {
+	if seek == nil {
+		return
+	}
+	// Still connected, so the seek stays, but a row that said this person could
+	// be called no longer can. The board is published again so it stops saying
+	// so; their socket closing will decide the rest.
+	if seek.Client() != nil {
+		if !seek.Present() && seek.IsOpen() {
+			server.broadcastOpenChallenges()
+		}
 		return
 	}
 	if claimed := server.seeks.Claim(seek.ID); claimed != nil {

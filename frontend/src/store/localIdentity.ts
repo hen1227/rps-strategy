@@ -48,6 +48,9 @@ export const createProfileKey = (): string => {
 // from the first.
 let cachedUserId: string | null = null;
 let cachedProfileKey: string | null = null;
+// Whether the account id had to be made this launch rather than read back,
+// which is what "this device has never been here" means from in here.
+let mintedThisLaunch = false;
 
 export const getOrCreateUserId = (): string => {
   if (cachedUserId) return cachedUserId;
@@ -63,6 +66,7 @@ export const getOrCreateUserId = (): string => {
   }
 
   cachedUserId = createUUID();
+  mintedThisLaunch = true;
   try {
     storage?.setItem(USER_ID_KEY, cachedUserId);
   } catch {
@@ -70,6 +74,20 @@ export const getOrCreateUserId = (): string => {
     // device database can fail to open.
   }
   return cachedUserId;
+};
+
+/**
+ * Whether this is the first launch this device has had here.
+ *
+ * True when the account id was made rather than found. Signing out does not
+ * make a device new: `replaceDeviceIdentity` hands it a fresh guest, but the
+ * person holding it has plainly been here before. A device with no storage at
+ * all mints an id every launch and so answers true every launch, which is why
+ * a caller that acts on this once must also be able to remember having done so.
+ */
+export const isNewDevice = (): boolean => {
+  getOrCreateUserId();
+  return mintedThisLaunch;
 };
 
 export const getOrCreateProfileKey = (): string => {

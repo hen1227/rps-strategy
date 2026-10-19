@@ -160,11 +160,17 @@ const seatLabel = (color: SideColor): string =>
  * Deliberately not the mode. The board beside these bullets says which mode it
  * is more clearly than a word would, and repeating it here would push the
  * unusual things — the reason this list exists — further down.
+ *
+ * `casualOnly` is for a player who cannot play rated at all: signed out, every
+ * game is casual whatever the setup says, so the stakes are drawn as casual and
+ * as the normal case rather than as a change. Left as "Rated" the preview said
+ * the opposite of the line under the button.
  */
 export const describeSetup = (
   setup: GameSetup,
   mode: ModeDefinition | null | undefined,
   defaultTimeControl?: TimeControl | null,
+  options: { casualOnly?: boolean } = {},
 ): SetupBullet[] => {
   const bullets: SetupBullet[] = [
     {
@@ -176,9 +182,11 @@ export const describeSetup = (
         defaultTimeControlOf(defaultTimeControl),
       ),
     },
-    setup.casual
-      ? { key: 'casual', icon: '☆', label: 'Casual', custom: true }
-      : { key: 'rated', icon: '★', label: 'Rated', custom: false },
+    options.casualOnly
+      ? { key: 'casual', icon: '☆', label: 'Casual', custom: false }
+      : setup.casual
+        ? { key: 'casual', icon: '☆', label: 'Casual', custom: true }
+        : { key: 'rated', icon: '★', label: 'Rated', custom: false },
   ];
   if (hasCustomPosition(setup, mode)) {
     bullets.push({ key: 'position', icon: '▦', label: 'Custom position', custom: true });

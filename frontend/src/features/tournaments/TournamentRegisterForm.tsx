@@ -1,3 +1,4 @@
+import { track } from '@/analytics/track';
 import { failureMessage } from '@/errors';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
@@ -7,6 +8,7 @@ import DiscordSignInButton from '@/features/account/DiscordSignInButton';
 import { isReservedIn, useIdentityPolicy } from '@/hooks/useIdentityPolicy';
 import { useMyBots } from '@/hooks/useMyBots';
 import { links } from '@/navigation/links';
+import { useHere } from '@/navigation/useHere';
 import { isSignedIn } from '@/store/accountSession';
 import { setBotSwitch, type OwnedBot } from '@/store/api/bots';
 import { signupForTournament } from '@/store/api/tournaments';
@@ -110,6 +112,7 @@ export default function TournamentRegisterForm({
   tournament,
 }: TournamentRegisterFormProps) {
   const router = useRouter();
+  const here = useHere();
   // Which handles are held for the organisers is the server's rule to state.
   const policy = useIdentityPolicy();
   const accountId = useGameStore((state) => state.accountId);
@@ -162,6 +165,7 @@ export default function TournamentRegisterForm({
         reservationToken: reservationToken.trim(),
       });
       applyTournamentUpdate(registered);
+      track('tournament_signup');
       setReservationToken('');
       onRegistered?.(registered);
     } catch (requestError) {
@@ -195,8 +199,11 @@ export default function TournamentRegisterForm({
     ) : null;
 
   // 1. There is no name to enter under, and nothing to enter, until there is an
-  //    account.
-  if (!signedIn || !ign) {
+  //    account. Signing in comes back to this form.
+  if (!signedIn) {
+    return bareGate('Sign in to enter.', 'SIGN IN', links.signIn(here));
+  }
+  if (!ign) {
     return bareGate(
       'Set up your account to enter. Your username and Discord handle are required.',
       'GO TO YOUR ACCOUNT',

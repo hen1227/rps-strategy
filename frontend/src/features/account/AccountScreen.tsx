@@ -1,6 +1,6 @@
 import { useRouter } from 'expo-router';
 import { failureMessage } from '@/errors';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import ScreenShell from '@/ui/ScreenShell';
@@ -24,16 +24,18 @@ import DeleteAccountPanel from '@/features/account/DeleteAccountPanel';
 import BlockedPlayersPanel from '@/features/moderation/BlockedPlayersPanel';
 import LinkSignInPrompt from '@/features/account/LinkSignInPrompt';
 import SignInMethodsPanel from '@/features/account/SignInMethodsPanel';
-import UsernameSetupPanel from '@/features/account/UsernameSetupPanel';
+import { useSignInMethods } from '@/features/account/useSignInMethods';
 import TitlesPanel from '@/features/account/TitlesPanel';
+import UsageStatsPanel from '@/features/account/UsageStatsPanel';
 import GameHistoryPanel from '@/features/game/GameHistoryPanel';
 import MatchAlertsPanel from '@/features/queue/MatchAlertsPanel';
 import { getAccount, updateAccount } from '@/store/api/accounts';
-import { getSignInMethods, type SignInMethods } from '@/store/api/bots';
-import { isSignedIn } from '@/store/accountSession';
+import { isSignedIn, receiptWorthShowing, type SignInOutcome } from '@/store/accountSession';
 import { useGameStore } from '@/store/gameStore';
 import { isReservedIn, useIdentityPolicy } from '@/hooks/useIdentityPolicy';
+import { useSettled } from '@/hooks/useSettled';
 import { links } from '@/navigation/links';
+import { useGoTo } from '@/navigation/stack';
 import type { ModeDefinition, ModeID } from '@/types/game';
 import type { Account, RatingState } from '@/types/protocol';
 import TitleTag from '@/ui/TitleTag';
@@ -42,6 +44,10 @@ import { colors, contentWidth, radius, themedSheet } from '@/theme';
 // The account screen, which is now first and foremost where you get an
 // account. Everyone plays under a name the server gave them until they claim
 // one, so the sign-up panel stands where the name field used to.
+//
+// Only its first step, though. A press that turns out to be somebody new goes
+// on to the sign-in screen, which asks whether they already play here before
+// anything is made; see `SignInScreen`.
 
 const MINIMUM_DISCORD_LENGTH = 2;
 const MAXIMUM_DISCORD_LENGTH = 64;
@@ -100,6 +106,11 @@ export default function AccountScreen() {
   const modes = useGameStore((state) => state.modes);
   const applyAccountUpdate = useGameStore((state) => state.applyAccountUpdate);
   const signOut = useGameStore((state) => state.signOut);
+  const pendingSignup = useGameStore((state) => state.pendingSignup);
+  const clearSignInReceipt = useGameStore((state) => state.clearSignInReceipt);
+  const goTo = useGoTo();
+  // The stored sign-in flow is something the pre-rendered page cannot know.
+  const settled = useSettled();
 
   const [account, setAccount] = useState(storedAccount);
   // Null until something is typed, so the fields follow the account until the
@@ -143,40 +154,33 @@ export default function AccountScreen() {
   // types one.
   const discordVerified = Boolean(account?.discordVerified);
 
-  // What this account signs in with, which only the server can answer, and
-  // only to its owner. It decides two things: whether to ask a password
-  // account to link Discord or Apple — a store review account is on a password
-  // too, and the prompt has to stay off it, since the link it offers is one the
-  // server refuses — and what the sign-in methods panel lists. Null, and
-  // neither, until the server has said.
-  const [awaitingLink, setAwaitingLink] = useState<boolean | null>(null);
-  const [signInMethods, setSignInMethods] = useState<SignInMethods | null>(null);
-  const accountUserId = account?.userId;
+  // Whether to ask a password account to link Discord or Apple, and what the
+  // sign-in methods panel lists. See `useSignInMethods`.
+  const { awaitingLink, methods: signInMethods } = useSignInMethods();
+
+  // A new identity goes on to the sign-in screen's "first time here?" step, and
+  // so does anything worth confirming. A returning player is already home.
+  // Not once this screen has gone: on Android the callback page answers the
+  // same sign-in, and has already moved on.
+  const mounted = useRef(true);
   useEffect(() => {
-    if (!signedIn || !sessionToken) {
-      setAwaitingLink(null);
-      setSignInMethods(null);
-      return;
-    }
-    let cancelled = false;
-    getSignInMethods(sessionToken)
-      .then((reply) => {
-        if (cancelled) return;
-        setAwaitingLink(reply.awaitingLink);
-        setSignInMethods(reply);
-      })
-      .catch((caught) => {
-        if (cancelled) return;
-        // A server older than the route answers 404, and keeps the rule it was
-        // built with: every unverified account is asked. Any other failure asks
-        // nobody, rather than nag on a blip.
-        setAwaitingLink((caught as { status?: number } | null)?.status === 404);
-        setSignInMethods(null);
-      });
+    // Set again on mount, not only initialised: development mounts twice.
+    mounted.current = true;
     return () => {
-      cancelled = true;
+      mounted.current = false;
     };
-  }, [signedIn, sessionToken, accountUserId]);
+  }, []);
+  const onSignInOutcome = (outcome: SignInOutcome) => {
+    if (!mounted.current) return;
+    if (
+      outcome.kind === 'unnamed' ||
+      (outcome.kind === 'named' && receiptWorthShowing(outcome.receipt))
+    ) {
+      goTo(links.signIn());
+    } else if (outcome.kind === 'named') {
+      clearSignInReceipt();
+    }
+  };
 
   const username = edits?.username ?? account?.username ?? '';
   const discord = edits?.discord ?? account?.discord ?? '';
@@ -253,14 +257,13 @@ export default function AccountScreen() {
           <View style={styles.hero}>
             <Text style={styles.eyebrow}>PLAYER PROFILE</Text>
             <Text style={styles.title}>Your account</Text>
-            <Text style={styles.subtitle}>
-              {account?.registered
-                ? "Your opponents see these details."
-                : "Sign in to keep your games and rating."}
-            </Text>
+            {/* Signed in, the identity panel says who sees what; a line here
+                saying it as well was the same sentence twice. */}
+            {account?.registered ? null : (
+              <Text style={styles.subtitle}>Sign in to keep your games and rating.</Text>
+            )}
           </View>
 
-          <UsernameSetupPanel />
           {signedIn && account && !discordVerified && awaitingLink ? <LinkSignInPrompt /> : null}
 
           {loading ? (
@@ -293,7 +296,9 @@ export default function AccountScreen() {
                 </View>
                 <View style={styles.eloBadge}>
                   <Text style={styles.eloLabel}>
-                    {featuredRating?.gamesPlayed ? `${featuredRating.shortCode} RATING` : 'RATING'}
+                    {/* The mode by name, as every other page calls it; "V3" is the
+                        server's word for it. */}
+                    {featuredRating?.gamesPlayed ? featuredRating.name.toUpperCase() : 'RATING'}
                   </Text>
                   <Text
                     accessibilityLabel={
@@ -305,6 +310,14 @@ export default function AccountScreen() {
                   </Text>
                 </View>
               </Panel>
+
+              {/*
+                Straight under the profile, above the form for editing it: how
+                this account is reached matters more than its spelling, and the
+                button for the missing provider is the one that stops a second
+                account being made on the next device.
+              */}
+              {signedIn ? <SignInMethodsPanel methods={signInMethods} /> : null}
 
               {signedIn ? (
                 <Panel>
@@ -385,15 +398,22 @@ export default function AccountScreen() {
                     />
                   </View>
                 </Panel>
+              ) : settled && pendingSignup ? (
+                // Left part way through: the ticket is still good for a few
+                // minutes, so the step is offered back rather than thrown away.
+                <Panel tone="accent">
+                  <SectionHeading eyebrow="ACCOUNT" title="Finish signing in" />
+                  <Text style={styles.helper}>
+                    {pendingSignup.provider === 'apple' ? 'Apple' : 'Discord'} is verified. Choose a
+                    name, or link it to your account.
+                  </Text>
+                  <View style={styles.saveAction}>
+                    <PrimaryButton fullWidth label="CONTINUE" onPress={() => goTo(links.signIn())} />
+                  </View>
+                </Panel>
               ) : (
-                <AccountSignInPanel />
+                <AccountSignInPanel onOutcome={onSignInOutcome} />
               )}
-
-              {/*
-                Beside the identity it belongs to: the ways this account signs
-                in, and the button for whichever of Discord and Apple it lacks.
-              */}
-              {signedIn ? <SignInMethodsPanel methods={signInMethods} /> : null}
 
               {/*
                 Under the identity form, because a title is part of the name
@@ -409,6 +429,7 @@ export default function AccountScreen() {
                 cannot answer that by rendering nothing.
               */}
               <MatchAlertsPanel variant="settings" />
+              <UsageStatsPanel />
 
               <Panel>
                 <SectionHeading eyebrow="RANKED" title="Mode ratings" />
@@ -521,7 +542,8 @@ export default function AccountScreen() {
 const styles = themedSheet(() => ({
 
   hero: { paddingTop: 24, paddingBottom: 22 },
-  eyebrow: { color: colors.accent, fontSize: 10, fontWeight: '900', letterSpacing: 2.1 },
+  // Neutral, as an eyebrow is everywhere else: green is for the button to press.
+  eyebrow: { color: colors.textFaint, fontSize: 10, fontWeight: '900', letterSpacing: 2.1 },
   title: {
     color: colors.textStrong,
     fontSize: 34,

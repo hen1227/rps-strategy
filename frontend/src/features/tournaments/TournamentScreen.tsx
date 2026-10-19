@@ -263,7 +263,7 @@ export default function TournamentScreen() {
         {section === 'overview' && (
           <GhostButton
             compact
-            label="ALL MATCHES →"
+            label="ALL MATCHES ›"
             onPress={() => setSection('matches')}
           />
         )}
@@ -577,9 +577,11 @@ export default function TournamentScreen() {
             <Panel style={[styles.eventPanel, !wide && styles.mobilePanel]}>
               <View style={styles.eventHeading}>
                 <View style={styles.eventCopy}>
+                  {/* All capitals, the format as well as the mode: an eyebrow is
+                      one case, and "INFILTRATION · Round robin" was two. */}
                   <Text style={styles.eyebrow}>
                     {selected.modeName.toUpperCase()} ·{' '}
-                    {FORMAT_LABELS[selected.format] ?? 'Tournament'}
+                    {(FORMAT_LABELS[selected.format] ?? 'Tournament').toUpperCase()}
                   </Text>
                   <Text
                     accessibilityRole="header"
@@ -593,7 +595,9 @@ export default function TournamentScreen() {
                   <Text style={styles.eventMeta}>
                     {selected.gamesPerMatch || 1} game
                     {selected.gamesPerMatch > 1 ? 's' : ''} per match
-                    {selected.rounds > 0 ? ` · ${selected.rounds} rounds` : ''}
+                    {selected.rounds > 0
+                      ? ` · ${selected.rounds} round${selected.rounds === 1 ? '' : 's'}`
+                      : ''}
                     {selected.startsAtUnixMs &&
                     selected.status === 'registration'
                       ? ` · Starts ${new Date(selected.startsAtUnixMs).toLocaleString()}`
@@ -872,9 +876,6 @@ export default function TournamentScreen() {
               title="Past events"
               trailing={<Badge label={`${past.length}`} />}
             />
-            <Text style={styles.historyHelp}>
-              Past events with standings and results.
-            </Text>
             <View style={styles.historyList}>
               {past.map((tournament) => {
                 const champion = championOf(tournament);
@@ -984,8 +985,9 @@ const styles = themedSheet(() => ({
     gap: 10,
   },
   heroCopy: { flexShrink: 1, minWidth: 0 },
+  // Neutral, like every other eyebrow: green is for the button worth pressing.
   eyebrow: {
-    color: colors.accent,
+    color: colors.textFaint,
     fontSize: 10,
     fontWeight: '900',
     letterSpacing: 2.1,
@@ -1062,12 +1064,6 @@ const styles = themedSheet(() => ({
 
   detailStack: { gap: 16 },
 
-  historyHelp: {
-    color: colors.textMuted,
-    fontSize: 11,
-    lineHeight: 17,
-    marginTop: 8,
-  },
   historyList: { marginTop: 8 },
   historyRow: {
     minHeight: 54,
@@ -1266,7 +1262,8 @@ const styles = themedSheet(() => ({
     borderBottomWidth: 3,
     borderBottomColor: 'transparent',
   },
-  tabSelected: { borderBottomColor: colors.accent },
+  // White, not the accent: a selected tab is not an action.
+  tabSelected: { borderBottomColor: colors.textStrong },
   mobileTab: {
     flex: 1,
     minWidth: 0,
@@ -1275,7 +1272,7 @@ const styles = themedSheet(() => ({
   },
   mobileTabText: { fontSize: 12 },
   tabText: { color: colors.textMuted, fontSize: 14, fontWeight: '800' },
-  tabTextSelected: { color: colors.accentBright },
+  tabTextSelected: { color: colors.textStrong },
   schedulePanel: { padding: 20 },
   sectionTitle: {
     color: colors.textStrong,

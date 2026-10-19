@@ -149,6 +149,10 @@ type Server struct {
 	// One entry per bot, holding one connection per concurrent game its owner
 	// allowed it. See registerBot.
 	bots map[string][]*Client
+	// botsOfflineAt is when each bot's last socket closed, so that an engine
+	// back within the reconnect grace is a blip rather than a second arrival
+	// for analytics. Guarded by mu, like bots.
+	botsOfflineAt map[string]time.Time
 	// authLimiter throttles the routes that verify a password. Nothing else in
 	// the backend is rate limited, because nothing else takes a guessable
 	// secret and half a second of CPU to check one.
@@ -163,6 +167,10 @@ type Server struct {
 	// push is the only way this server reaches somebody who is not connected,
 	// and therefore the only reason a seek may outlive its socket.
 	push *pushSender
+	// analytics forwards the apps' events and the server's own to Google
+	// Analytics, when this deployment has a stream to send them to. See
+	// google_analytics.go.
+	analytics *gaSender
 
 	// Signing in, and the short-lived maps it needs: a Discord flow out at its
 	// consent screen; an Apple sign-in out at the phone's sheet (keyed by its
@@ -307,11 +315,13 @@ func NewWithRegistryAndStore(
 
 		botSessions:        make(map[*Client]botSession),
 		bots:               make(map[string][]*Client),
+		botsOfflineAt:      make(map[string]time.Time),
 		authLimiter:        newRateLimiter(authAttemptBurst, authAttemptWindow),
 		seriesLimiter:      newRateLimiter(seriesAttemptBurst, seriesAttemptWindow),
 		openingNameLimiter: newRateLimiter(openingNameBurst, openingNameWindow),
 		botSeriesRuns:      newBotSeriesRunner(),
 		push:               newPushSender(data),
+		analytics:          newGASender(),
 		discord:            newDiscordAuth(),
 		discordFlows:       newTTLStore[discordFlow](discordFlowLifetime, signInMaximumPending),
 		apple:              newAppleAuth(),
@@ -359,6 +369,9 @@ func (server *Server) Run(ctx context.Context) {
 	// Its own goroutine, not the lobby ticker: a compile replays every archived
 	// game in the mode. See opening_stats.go.
 	go server.runOpeningStats(ctx)
+	// Its own goroutine, so no event ever waits on Google. See
+	// google_analytics.go.
+	go server.analytics.run(ctx)
 	lobbyTicker := time.NewTicker(matchmakingTick)
 	clockTicker := time.NewTicker(100 * time.Millisecond)
 	defer lobbyTicker.Stop()
@@ -409,6 +422,7 @@ func (server *Server) Run(ctx context.Context) {
 			server.authLimiter.sweep()
 			server.seriesLimiter.sweep()
 			server.openingNameLimiter.sweep()
+			server.analytics.limiter.sweep()
 			server.pruneRestrictions(now)
 			server.discordFlows.sweep()
 			server.appleNonces.sweep()
@@ -535,6 +549,9 @@ func (server *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/push/devices", server.registerPushDevice)
 	mux.HandleFunc("DELETE /api/push/devices", server.unregisterPushDevice)
 	mux.HandleFunc("POST /api/push/test", server.sendTestPush)
+	// The apps' analytics, forwarded to Google with a secret no app can keep.
+	// See google_analytics.go.
+	mux.HandleFunc("POST /api/analytics", server.relayAnalytics)
 	// No register route: an account is created by signing in with Discord or
 	// Apple. The exchange and the naming step are shared by both, under
 	// /api/auth; Discord's own names for them stay, because every build of the
@@ -544,6 +561,9 @@ func (server *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/auth/providers", server.signInProviders)
 	mux.HandleFunc("POST /api/auth/exchange", server.exchangeSignInTicket)
 	mux.HandleFunc("POST /api/auth/complete", server.completeSignIn)
+	// A ticket from one provider, attached to the account the other one just
+	// signed into. See linkSignInTicket.
+	mux.HandleFunc("POST /api/auth/link", server.linkSignInTicket)
 	mux.HandleFunc("POST /api/auth/discord/start", server.startDiscordAuth)
 	mux.HandleFunc("GET /api/auth/discord/callback", server.discordCallback)
 	mux.HandleFunc("POST /api/auth/discord/exchange", server.exchangeSignInTicket)
@@ -2603,6 +2623,7 @@ func (server *Server) finishSession(session *GameSession, state game.GameState) 
 		// the ratings it produced, but never gated on it: every finished game
 		// is written down.
 		server.archiveGame(session, finishedAt, ratingUpdate, err == nil)
+		server.analytics.serverEvent("game_finished", gameFinishedEvent(session, state, finishedAt))
 		server.mu.Lock()
 		server.completedGames[session.gameID] = CompletedGame{
 			state:     state,

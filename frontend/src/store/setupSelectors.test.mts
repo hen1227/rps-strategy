@@ -91,6 +91,21 @@ test('the bullets lead with the two facts every game has', () => {
   );
 });
 
+test('signed out, the stakes read casual, and as the normal case', () => {
+  // Every game a signed-out player starts is casual, so a preview that said
+  // "Rated" contradicted the line under its own button.
+  const bullets = describeSetup(standardSetup(TOTAL_WAR, DEFAULT_CLOCK), TOTAL_WAR, DEFAULT_CLOCK, {
+    casualOnly: true,
+  });
+  assert.deepEqual(
+    bullets.map((bullet) => [bullet.key, bullet.label, bullet.custom]),
+    [
+      ['clock', '5+3', false],
+      ['casual', 'Casual', false],
+    ],
+  );
+});
+
 test('the bullets list every departure, and mark them as departures', () => {
   const setup: GameSetup = {
     ...standardSetup(TOTAL_WAR, DEFAULT_CLOCK),

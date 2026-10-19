@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
 import { Banner, PrimaryButton } from '@/ui/primitives';
+import type { SignInOutcome } from '@/store/accountSession';
 import { useGameStore } from '@/store/gameStore';
 import { colors, themedSheet } from '@/theme';
 
@@ -16,10 +17,16 @@ import { colors, themedSheet } from '@/theme';
 interface DiscordSignInButtonProps {
   /** "Create an account" reads wrong on the panel offered to a legacy account. */
   label?: string;
+  /** How the press ended, for a screen that moves on when it does. */
+  onOutcome?: (outcome: SignInOutcome) => void;
+  /** Start it another way: the naming step carries its own identity along. */
+  start?: () => Promise<SignInOutcome>;
 }
 
 export default function DiscordSignInButton({
   label = 'CONTINUE WITH DISCORD',
+  onOutcome,
+  start,
 }: DiscordSignInButtonProps) {
   const available = useGameStore((state) => state.discordSignInAvailable);
   const signInWithDiscord = useGameStore((state) => state.signInWithDiscord);
@@ -39,11 +46,12 @@ export default function DiscordSignInButton({
   const press = async () => {
     setBusy(true);
     setError(null);
-    const outcome = await signInWithDiscord();
+    const outcome = await (start ?? signInWithDiscord)();
     // 'pending' is the web redirect already under way, so leaving the button
     // spinning is right: this page is going away.
     if (outcome.kind !== 'pending') setBusy(false);
     if (outcome.kind === 'failed') setError(outcome.message);
+    onOutcome?.(outcome);
   };
 
   // Discord's own colour and the full width of whatever it is dropped into.

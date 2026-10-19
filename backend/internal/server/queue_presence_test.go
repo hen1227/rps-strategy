@@ -235,6 +235,33 @@ func TestTheBoardLabelsAnAwaySearcher(t *testing.T) {
 	}
 }
 
+// Away is not the same as callable. A phone just put in a pocket and a tab left
+// idle are both still connected, so neither is withdrawn, and neither says
+// anything about whether that person can be notified. The board has to ask.
+func TestTheBoardOnlyPromisesACallItCanMake(t *testing.T) {
+	for _, reachable := range []bool{false, true} {
+		server := queueTestServer(reachable)
+		alice := challengeTestClient("alice", "Alice")
+		server.hub.Register(alice)
+		queueUp(t, server, alice, game.ModeTotalWar)
+
+		board := server.openChallenges(time.Now())
+		if len(board) != 1 || !board[0].Present || board[0].Callable {
+			t.Fatalf("a searcher at the screen needs no calling: %#v", board)
+		}
+
+		server.handleMessage(alice, ClientMessage{Type: "queue_presence", Present: false})
+
+		board = server.openChallenges(time.Now())
+		if len(board) != 1 || board[0].Present {
+			t.Fatalf("an idle searcher should be on the board and not present: %#v", board)
+		}
+		if board[0].Callable != reachable {
+			t.Fatalf("reachable=%v: the board said callable=%v", reachable, board[0].Callable)
+		}
+	}
+}
+
 // An away seek does not wait for ever.
 func TestAnAwaySeekExpires(t *testing.T) {
 	server := queueTestServer(true)

@@ -2,6 +2,7 @@ import { View } from 'react-native';
 
 import AppleSignInButton from './AppleSignInButton';
 import DiscordSignInButton from './DiscordSignInButton';
+import type { SignInOutcome } from '@/store/accountSession';
 import { themedSheet } from '@/theme';
 
 // The ways in, one above the other, each the full width of the panel: Discord,
@@ -12,13 +13,15 @@ import { themedSheet } from '@/theme';
 interface SignInButtonsProps {
   /** For the prompts that link rather than sign in. */
   discordLabel?: string;
+  /** How a press ended, for a screen that moves on when it does. */
+  onOutcome?: (outcome: SignInOutcome) => void;
 }
 
-export default function SignInButtons({ discordLabel }: SignInButtonsProps) {
+export default function SignInButtons({ discordLabel, onOutcome }: SignInButtonsProps) {
   return (
     <View style={styles.stack}>
-      <DiscordSignInButton label={discordLabel} />
-      <AppleSignInButton />
+      <DiscordSignInButton label={discordLabel} onOutcome={onOutcome} />
+      <AppleSignInButton onOutcome={onOutcome} />
     </View>
   );
 }

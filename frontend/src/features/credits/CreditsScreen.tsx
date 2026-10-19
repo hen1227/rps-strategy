@@ -24,7 +24,6 @@ import { Panel, SectionHeading } from '@/ui/primitives';
 
 /** One thing to open, somewhere that is not this site. */
 interface OutwardLink {
-  eyebrow: string;
   title: string;
   detail: string;
   url: string;
@@ -34,16 +33,14 @@ interface OutwardLink {
 
 const videos: OutwardLink[] = [
   {
-    eyebrow: 'THE ORIGINAL',
     title: "The original game designs",
     detail:
-      "WebGoatGuy introduces Infiltration (v3) and Total War (v5).",
+      "WebGoatGuy introduces Infiltration (V3) and Total War (V5).",
     url: webGoatGuy.originalVideoURL,
     mark: '▶',
   },
   {
-    eyebrow: 'THE SEQUEL',
-    title: "Introducing Intransitive (v6)",
+    title: "Introducing Intransitive (V6)",
     detail:
       "WebGoatGuy introduces Intransitive, the official tournament mode.",
     url: webGoatGuy.intransitiveVideoURL,
@@ -53,7 +50,6 @@ const videos: OutwardLink[] = [
 
 const elsewhere: OutwardLink[] = [
   {
-    eyebrow: 'THE OFFICIAL SITE',
     title: 'Play the games where they came from',
     detail:
       "The official game and tournament site by WebGoatGuy.",
@@ -61,7 +57,6 @@ const elsewhere: OutwardLink[] = [
     mark: '◆',
   },
   {
-    eyebrow: 'THE COMMUNITY',
     title: 'The Intransitive Discord',
     detail:
       "Join the community for game discussion and tournaments.",
@@ -76,12 +71,20 @@ const elsewhere: OutwardLink[] = [
 // licences ask for their notice to travel with the app, so both need a place a
 // player can find, and a credits page is where people look for them.
 const source: OutwardLink = {
-  eyebrow: 'THE SOURCE',
   title: 'RPS Strategy is open source',
   detail:
     'The code behind this site and the app, under the AGPL-3.0. The bot kit and its protocol documents are MIT, so a bot built from them is yours to license.',
   url: SOURCE_URL,
   mark: '◆',
+};
+
+/**
+ * Where a link goes, as a reader checks it: the site, not the whole address.
+ * "youtube.com" says what pressing it does; the video's id after it said nothing.
+ */
+const siteOf = (url: string): string => {
+  const match = /^[a-z]+:\/\/(?:www\.)?([^/?#]+)/i.exec(url);
+  return match ? match[1]! : url;
 };
 
 /** A card that opens something outside the app. */
@@ -96,16 +99,15 @@ function OutwardCard({ link }: { link: OutwardLink }) {
     >
       <Text style={styles.cardMark}>{link.mark}</Text>
       <View style={styles.cardCopy}>
-        <Text style={styles.cardEyebrow}>{link.eyebrow}</Text>
         <Text style={styles.cardTitle}>{link.title}</Text>
         <Text style={styles.cardDetail}>{link.detail}</Text>
         {/*
-          The address written out under the description. A link that hides where
-          it goes is one people are right not to press, and this page is nothing
-          but links off the site.
+          Where it goes, written out under the description. A link that hides
+          where it goes is one people are right not to press, and this page is
+          nothing but links off the site.
         */}
         <Text numberOfLines={1} style={styles.cardURL}>
-          {link.url}
+          {siteOf(link.url)}
         </Text>
       </View>
       <Text style={styles.cardChevron}>↗</Text>
@@ -114,7 +116,7 @@ function OutwardCard({ link }: { link: OutwardLink }) {
 }
 
 /** A card that opens a page of this site, drawn like the ones that leave it. */
-function InwardCard({ eyebrow, title, detail, href }: { eyebrow: string; title: string; detail: string; href: Href }) {
+function InwardCard({ title, detail, href }: { title: string; detail: string; href: Href }) {
   const stack = useStackProps(href);
   return (
     <Link asChild href={href} {...stack}>
@@ -126,7 +128,6 @@ function InwardCard({ eyebrow, title, detail, href }: { eyebrow: string; title: 
       <Pressable accessibilityLabel={title} accessibilityRole="link" style={styles.card}>
         <Text style={styles.cardMark}>◆</Text>
         <View style={styles.cardCopy}>
-          <Text style={styles.cardEyebrow}>{eyebrow}</Text>
           <Text style={styles.cardTitle}>{title}</Text>
           <Text style={styles.cardDetail}>{detail}</Text>
         </View>
@@ -151,7 +152,7 @@ export default function CreditsScreen() {
         <Text style={styles.heroEyebrow}>CREDIT WHERE IT IS DUE</Text>
         <Text style={styles.heroTitle}>WebGoatGuy made this game</Text>
         <Text style={styles.heroSubtitle}>
-          WebGoatGuy created every game mode here. Watch the original videos below.
+          WebGoatGuy created every game mode here.
         </Text>
       </View>
 
@@ -174,7 +175,6 @@ export default function CreditsScreen() {
         <OutwardCard link={source} />
         <InwardCard
           detail="The open-source packages this site and the app are built on, and the licence of each."
-          eyebrow="THE LICENCES"
           href={links.licences()}
           title="Open-source licences"
         />
@@ -218,11 +218,12 @@ const styles = themedSheet(() => ({
     borderColor: colors.border,
     backgroundColor: colors.surface,
   },
-  cardMark: { color: colors.accentBright, fontSize: 12, lineHeight: 20 },
+  // Neutral: the marks say what kind of link a card is, and green is for the
+  // one button on a page worth pressing.
+  cardMark: { color: colors.textFaint, fontSize: 12, lineHeight: 20 },
   // `minWidth: 0` so a long description wraps instead of pushing the chevron
   // off the end of the card. See the note in MobileTopBar.
   cardCopy: { flex: 1, minWidth: 0, gap: space.hair },
-  cardEyebrow: { ...type.eyebrow, color: colors.textFaint },
   cardTitle: { ...type.rowTitle, color: colors.textStrong, fontSize: 13 },
   cardDetail: { ...type.body, color: colors.textMuted, marginTop: space.hair },
   cardURL: { ...type.meta, color: colors.textFaint, marginTop: space.tight },

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import { track } from '@/analytics/track';
 import { failureMessage } from '@/errors';
 import {
   answerFeedback,
@@ -205,6 +206,7 @@ export const useFeedbackBoard = (query: BoardQuery, openItemId: string): Feedbac
       if (!sessionToken) return null;
       try {
         const created = await postFeedback(sessionToken, draft);
+        track('feedback_post', { kind: draft.kind });
         if (live.current) {
           setError(null);
           reload();

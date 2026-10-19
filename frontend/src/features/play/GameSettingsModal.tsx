@@ -75,7 +75,6 @@ export default function GameSettingsModal({
       // taller for the sake of making the thing beside it smaller.
       maxWidth={820}
       onClose={onClose}
-      subtitle="Choose your game settings."
       title="Game settings"
       visible={visible}
     >
@@ -99,6 +98,7 @@ export default function GameSettingsModal({
           <View style={[styles.editor, styles.editorWide]}>{editor}</View>
           <SetupPreview
             caption="What the other player sees before deciding to take it."
+            casualOnly={rankedLocked}
             defaultTimeControl={defaultTimeControl}
             mode={mode}
             setup={setup}
@@ -117,6 +117,7 @@ export default function GameSettingsModal({
           */}
           <View style={styles.banner}>
             <SetupPreview
+              casualOnly={rankedLocked}
               defaultTimeControl={defaultTimeControl}
               mode={mode}
               setup={setup}

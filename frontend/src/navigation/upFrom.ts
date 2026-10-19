@@ -29,10 +29,11 @@
 // about its own builders: a caller naming `up.review` is a caller the compiler
 // can find when this moves, and a string typed at the call site is not.
 
-import { usePathname } from 'expo-router';
+import { useNavigation, usePathname, useRoute } from 'expo-router';
 import type { Href } from 'expo-router';
 
-import { links } from './links';
+import { links, pageOf } from './links';
+import type { ModeID } from '@/types/game';
 import { listedInNav } from '@/features/shell/sections';
 import { useNavContext } from '@/features/shell/useNavContext';
 
@@ -58,6 +59,8 @@ export const up = {
    */
   watch: LOBBY,
   analysis: LOBBY,
+  /** The lessons, opened over the lobby by itself or from How to play there. */
+  learn: LOBBY,
   /**
    * A stored game.
    *
@@ -103,4 +106,28 @@ export const useUpTarget = (target: UpTarget): UpTarget | null => {
   const pathname = usePathname();
   const nav = useNavContext();
   return listedInNav(pathname, nav) ? null : target;
+};
+
+/**
+ * Your own board's way out: the analysis board, when the game was laid over one.
+ *
+ * The one page whose parent depends on how it was reached. PLAY A BOT and PASS
+ * AND PLAY hand the analysis board's position to a game, and `navigation/stack`
+ * lays that game over the board rather than in its place, so the line being
+ * studied is still there to go back to. Before that, "‹ Lobby" was the only way
+ * out of such a game, and the position was gone.
+ *
+ * Read off the stack rather than remembered with the game, so the answer is
+ * only ever "Analysis" when there really is an analysis board to pop back to.
+ * A refresh, or any game started from the lobby, has none, and gets the lobby.
+ */
+export const useBoardUpTarget = (): UpTarget => {
+  const navigation = useNavigation();
+  const route = useRoute();
+  const routes = navigation.getState()?.routes ?? [];
+  const index = routes.findIndex((candidate) => candidate.key === route.key);
+  const below = index > 0 ? routes[index - 1] : null;
+  if (below?.name !== pageOf(links.analysis()).slice(1)) return up.play;
+  const mode = (below.params as { mode?: ModeID } | undefined)?.mode;
+  return { label: 'Analysis', href: links.analysis(mode) };
 };

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { canStartSeries, sameBotOwner } from './pitSelection';
 import { rankedBlocker, rankedLine, rankedPress, type RankedPress } from './rankedMatch';
+import { track } from '@/analytics/track';
 import { failureMessage } from '@/errors';
 import { useAdminToken, type AdminToken } from '@/hooks/useAdminToken';
 import { useRequestIdentity } from '@/hooks/useRequestIdentity';
@@ -239,6 +240,7 @@ export const useBotSeriesForm = ({
         press.kind === 'random'
           ? await startRankedMatch(sessionToken, press.engine.botId)
           : await startRankedMatch(sessionToken, press.first.botId, press.second.botId);
+      track('bot_match_start', { mode: series.modeId, where: 'server', ranked: 'ranked' });
       refresh();
       // Press, then go and watch it — the rounds page's PLAY NOW does the
       // same, and the run's own page is where its two games are drawn.
@@ -273,6 +275,11 @@ export const useBotSeriesForm = ({
       };
       if (asHost) await startAdminBotSeries(admin.token, options);
       else await startBotSeries(identity, options);
+      track('bot_match_start', {
+        mode: mode.id,
+        where: 'server',
+        ranked: options.ranked ? 'ranked' : 'casual',
+      });
       refresh();
     } catch (caught) {
       setError(failureMessage(caught, 'The series could not be started.'));

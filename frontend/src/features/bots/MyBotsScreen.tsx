@@ -94,7 +94,7 @@ export default function MyBotsScreen() {
           <View style={styles.actions}>
             <PrimaryButton
               label="SIGN IN"
-              onPress={() => router.push(links.account())}
+              onPress={() => router.push(links.signIn(links.myBots()))}
             />
           </View>
         </Panel>

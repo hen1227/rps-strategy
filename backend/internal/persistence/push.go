@@ -28,6 +28,10 @@ const (
 	// channel is authenticated by this server's Apple key rather than by
 	// per-device material, so P256dh and Auth are empty on these rows.
 	TransportAPNs PushTransport = "apns"
+	// TransportFCM is an Android app's Firebase Cloud Messaging registration
+	// token. Like an APNs token it carries no keys: the channel is
+	// authenticated by this server's Google service account.
+	TransportFCM PushTransport = "fcm"
 )
 
 // PushSubscription is one browser's standing permission to be interrupted.
@@ -46,8 +50,9 @@ const (
 //
 // An iOS device token lives in that same column, for the same reason: it is the
 // device's own name for itself, APNs hands back the same one until the app is
-// reinstalled, and the upsert keeps one row per phone. Transport is what says
-// which of the two an address is.
+// reinstalled, and the upsert keeps one row per phone. An Android phone's FCM
+// registration token lives there too. Transport is what says which kind an
+// address is.
 type PushSubscription struct {
 	Endpoint         string        `json:"endpoint"`
 	UserID           string        `json:"userId"`
@@ -135,6 +140,12 @@ func (store *Store) SavePushSubscription(
 		// APNs rows carry no key material, so any that arrived is dropped here
 		// rather than stored where a later reader would take it for a Web Push
 		// subscription with an unusable endpoint.
+		subscription.P256dh = ""
+		subscription.Auth = ""
+	case TransportFCM:
+		if err := validateRegistrationToken(subscription.Endpoint); err != nil {
+			return PushSubscription{}, err
+		}
 		subscription.P256dh = ""
 		subscription.Auth = ""
 	default:
@@ -258,6 +269,38 @@ func validateDeviceToken(token string) error {
 	}
 	if _, err := hex.DecodeString(token); err != nil {
 		return fmt.Errorf("%w: device token must be hexadecimal", ErrInvalidPushSubscription)
+	}
+	return nil
+}
+
+// validateRegistrationToken checks the shape of an FCM registration token.
+//
+// Google documents no format, and the tokens have changed shape before, so
+// this is a bound on length and alphabet rather than a pattern: what every
+// token so far has been made of, which is enough to keep an endpoint, a key
+// or anything with a space in it out of the column.
+func validateRegistrationToken(token string) error {
+	if token == "" {
+		return fmt.Errorf("%w: registration token is required", ErrInvalidPushSubscription)
+	}
+	if len(token) < 32 || len(token) > 4096 {
+		return fmt.Errorf(
+			"%w: registration token must be 32 to 4096 characters",
+			ErrInvalidPushSubscription,
+		)
+	}
+	for _, character := range token {
+		switch {
+		case character >= 'a' && character <= 'z',
+			character >= 'A' && character <= 'Z',
+			character >= '0' && character <= '9',
+			character == ':', character == '_', character == '-':
+		default:
+			return fmt.Errorf(
+				"%w: registration token has a character no token has",
+				ErrInvalidPushSubscription,
+			)
+		}
 	}
 	return nil
 }

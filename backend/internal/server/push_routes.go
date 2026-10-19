@@ -40,10 +40,12 @@ type pushUnsubscribeRequest struct {
 }
 
 // pushDeviceRequest is what a native app registers. A token is the whole of it:
-// APNs authenticates the channel with this server's Apple key, so there is no
-// per-device key material to carry.
+// APNs and FCM authenticate the channel with this server's own key, so there is
+// no per-device key material to carry. The platform says which of the two the
+// token is for; an iPhone app from before Android sends none, and means APNs.
 type pushDeviceRequest struct {
-	Token string `json:"token"`
+	Token    string `json:"token"`
+	Platform string `json:"platform"`
 }
 
 // getPushKey hands out the public half of the VAPID pair, and says plainly when
@@ -112,22 +114,15 @@ func (server *Server) subscribeToPush(writer http.ResponseWriter, request *http.
 	})
 }
 
-// registerPushDevice records an iOS device as reachable.
+// registerPushDevice records a phone as reachable: an iPhone through APNs, or an
+// Android phone through FCM.
 //
-// The APNs counterpart of subscribeToPush, and deliberately its twin: same
+// The native counterpart of subscribeToPush, and deliberately its twin: same
 // identity rule, same upsert, same store, same 200-means-reachable contract.
 // What it does not have is a key to validate — the token is checked for shape
 // in the store, and the first real proof it works is the test notification the
 // account screen offers, exactly as on the web.
 func (server *Server) registerPushDevice(writer http.ResponseWriter, request *http.Request) {
-	if !server.push.apns.enabled {
-		writeAPIError(
-			writer,
-			http.StatusServiceUnavailable,
-			"iOS notifications are not configured on this server",
-		)
-		return
-	}
 	account, ok := server.requireAnyIdentity(writer, request)
 	if !ok {
 		return
@@ -137,10 +132,34 @@ func (server *Server) registerPushDevice(writer http.ResponseWriter, request *ht
 		writeAPIError(writer, http.StatusBadRequest, err.Error())
 		return
 	}
+	var transport persistence.PushTransport
+	switch strings.TrimSpace(input.Platform) {
+	case "", "ios":
+		transport = persistence.TransportAPNs
+	case "android":
+		transport = persistence.TransportFCM
+	default:
+		writeAPIError(writer, http.StatusBadRequest, "platform must be ios or android")
+		return
+	}
+	// A deployment with no key for this kind of phone says so, rather than
+	// storing a token it will never send to.
+	if !server.push.canSend(transport) {
+		name := "iOS"
+		if transport == persistence.TransportFCM {
+			name = "Android"
+		}
+		writeAPIError(
+			writer,
+			http.StatusServiceUnavailable,
+			name+" notifications are not configured on this server",
+		)
+		return
+	}
 	saved, err := server.data.SavePushSubscription(request.Context(), persistence.PushSubscription{
 		Endpoint:  input.Token,
 		UserID:    account.UserID,
-		Transport: persistence.TransportAPNs,
+		Transport: transport,
 	})
 	if err != nil {
 		if errors.Is(err, persistence.ErrInvalidPushSubscription) {
@@ -265,6 +284,9 @@ func (server *Server) sendTestPush(writer http.ResponseWriter, request *http.Req
 		"delivered": report.Delivered,
 		"removed":   report.Removed,
 		"failed":    report.Failed,
+		// Counted in failed as well, so a client from before it still reads
+		// "nothing was sent" rather than "nothing is registered".
+		"settling": report.Settling,
 	})
 }
 

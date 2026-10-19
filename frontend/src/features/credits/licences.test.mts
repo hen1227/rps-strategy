@@ -58,7 +58,7 @@ test('every package carries a licence text, and every text belongs to a package'
 });
 
 test('each build lists the engine, and the web never lists native-only code', () => {
-  for (const platform of ['web', 'ios'] as const) {
+  for (const platform of ['web', 'ios', 'android'] as const) {
     ok(entriesFor(data, platform).some((entry) => entry.name === 'RPSFish'), `RPSFish is missing from ${platform}.`);
   }
   const web = new Set(entriesFor(data, 'web').map((entry) => entry.name));
@@ -73,4 +73,15 @@ test('licence counts are most common first, and add up to the list', () => {
     counts.map(({ count }) => count),
     [...counts.map(({ count }) => count)].sort((a, b) => b - a),
   );
+});
+
+// The page keys a row by these three, so two rows sharing them would collapse
+// into one that opens and closes together.
+test('no two rows share a name, version and licence', () => {
+  const seen = new Set<string>();
+  for (const entry of data.packages) {
+    const key = `${entry.name}@${entry.version ?? ''}@${entry.licence}`;
+    ok(!seen.has(key), `${key} is listed twice.`);
+    seen.add(key);
+  }
 });

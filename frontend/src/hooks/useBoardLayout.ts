@@ -42,8 +42,24 @@ export const useWideLayout = () => {
   return width >= WIDE_LAYOUT_WIDTH && width > height;
 };
 
-/** No board is drawn larger than this, however much room there is. */
-const MAX_BOARD = 620;
+/**
+ * No board is drawn larger than this, however much room there is — unless its
+ * screen asks to `fill` the room it has.
+ *
+ * Also the size every board is designed at: past it, `Board` scales its pieces
+ * and badges up with the board instead of leaving them this size in bigger
+ * squares.
+ */
+export const MAX_BOARD = 620;
+
+/**
+ * The most a board grows to when its screen asks to `fill`.
+ *
+ * The pieces are drawn from 192-pixel pictures. At this size a nine-wide board
+ * shows them at about 140 pixels on a 2x screen, still sharp; much past it they
+ * would be scaled up and go soft.
+ */
+const LARGEST_BOARD = 960;
 
 /** Room the board must leave for the chrome around it. */
 export interface BoardLayoutOptions {
@@ -117,6 +133,16 @@ export interface BoardLayoutOptions {
    * has no move list to sit beside.
    */
   minimum?: number;
+  /**
+   * Grow past `MAX_BOARD` into the room there is, up to `LARGEST_BOARD`.
+   *
+   * For a screen with nothing under its board, which is the analysis board.
+   * Held at `MAX_BOARD`, it stopped two thirds of the way down a tall window —
+   * an iPad, a big monitor — with its side panel cut off at the same line and
+   * the rest of the screen empty. A screen that sets this has to let its
+   * content grow wide enough for the board and the panel beside it.
+   */
+  fill?: boolean;
 }
 
 export interface BoardLayout {
@@ -144,6 +170,7 @@ export const useBoardLayout = ({
   narrowFit = 'viewport',
   narrowMargin = 58,
   minimum = 230,
+  fill = false,
 }: BoardLayoutOptions = {}): BoardLayout => {
   const { height, width } = useSettledDimensions();
   const isWide = width >= WIDE_LAYOUT_WIDTH && width > height;
@@ -152,7 +179,7 @@ export const useBoardLayout = ({
     Math.max(
       minimum,
       Math.min(
-        MAX_BOARD,
+        fill ? LARGEST_BOARD : MAX_BOARD,
         isWide ? width - sidePanel : width - narrowMargin,
         isWide
           ? maxHeight ?? height - chrome - below

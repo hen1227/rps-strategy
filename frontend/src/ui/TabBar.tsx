@@ -63,18 +63,26 @@ export default function TabBar<Value extends string | number>({
               pressed && styles.pressed,
             ]}
           >
-            {option.eyebrow ? (
-              <Text style={[styles.eyebrow, selected && styles.eyebrowSelected]}>
-                {option.eyebrow}
-              </Text>
-            ) : null}
-            <Text style={[styles.label, selected && styles.labelSelected]}>{option.label}</Text>
             {/*
-              The underline that marks the tab, drawn inside it rather than as a
-              rule under the row: a wrapped row has more than one line, and a
-              single rule beneath it would sit under the wrong one.
+              One block for the words and their underline, so the underline is
+              as wide as the words. A stretched tab centres what is in it, and a
+              loose underline centred that way had no width at all: the tabs
+              that fill a row showed no sign of which one was selected.
             */}
-            <View style={[styles.marker, selected && styles.markerSelected]} />
+            <View style={fill && styles.faceFill}>
+              {option.eyebrow ? (
+                <Text style={[styles.eyebrow, selected && styles.eyebrowSelected]}>
+                  {option.eyebrow}
+                </Text>
+              ) : null}
+              <Text style={[styles.label, selected && styles.labelSelected]}>{option.label}</Text>
+              {/*
+                The underline that marks the tab, drawn inside it rather than as a
+                rule under the row: a wrapped row has more than one line, and a
+                single rule beneath it would sit under the wrong one.
+              */}
+              <View style={[styles.marker, selected && styles.markerSelected]} />
+            </View>
           </Pressable>
         );
       })}
@@ -97,6 +105,7 @@ const styles = themedSheet(() => ({
     minWidth: 0,
   },
   tabFill: { flexGrow: 1, flexBasis: 0, alignItems: 'center' },
+  faceFill: { alignItems: 'center' },
   // Selection is neutral, as everywhere: the accent is for pressing.
   tabSelected: { borderColor: colors.borderLight, backgroundColor: colors.surfaceRaised },
   pressed: { opacity: 0.7 },
@@ -107,6 +116,7 @@ const styles = themedSheet(() => ({
   labelSelected: { color: colors.textStrong },
 
   marker: {
+    alignSelf: 'stretch',
     height: 2,
     borderRadius: 1,
     marginTop: space.snug,

@@ -205,6 +205,13 @@ func (fake *fakeApple) mintLocked(t *testing.T, overrides map[string]any) string
 func appleTestServer(t *testing.T) (*Server, *persistence.Store, *fakeApple) {
 	t.Helper()
 	server, data, _ := discordTestServer(t)
+	return server, data, withFakeApple(t, server)
+}
+
+// withFakeApple points a server's Apple sign-in at a new fake, beside whatever
+// it already has for Discord.
+func withFakeApple(t *testing.T, server *Server) *fakeApple {
+	t.Helper()
 	clientKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -227,7 +234,7 @@ func appleTestServer(t *testing.T) (*Server, *persistence.Store, *fakeApple) {
 		keysURL:      fake.server.URL + "/auth/keys",
 		client:       fake.server.Client(),
 	}
-	return server, data, fake
+	return fake
 }
 
 func routeRequest(

@@ -356,7 +356,9 @@ export default function LiveRail() {
                     {seat.mine
                       ? 'Yours'
                       : !seat.challenge.present
-                        ? 'Away · we will call them'
+                        ? seat.challenge.callable
+                          ? 'Away · we will call them'
+                          : 'Away'
                         : seat.challenge.queued
                           ? 'Searching'
                           : 'Open game'}

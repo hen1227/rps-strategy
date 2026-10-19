@@ -47,6 +47,13 @@ export const links = {
     modeId ? { pathname: '/analysis', params: { mode: modeId } } : '/analysis',
 
   /**
+   * The first game: a few positions that teach the main game, one move each,
+   * then a real game against the gentlest bot. Opened by itself once on a new
+   * device, and from How to play after that.
+   */
+  learn: (): Href => '/learn',
+
+  /**
    * Post-game review of a stored game.
    *
    * A game with no server record — a bot game, or a pasted record — is handed
@@ -169,6 +176,17 @@ export const links = {
   player: (handle: string): Href => ({ pathname: '/player', params: { user: handle } }),
 
   account: (): Href => '/account',
+
+  /**
+   * Signing in, or making an account: one page, because from the player's side
+   * they start with the same button.
+   *
+   * `back` is the page that sent them, which is where they go when it is done:
+   * the lobby's ranked button, a tournament's entry form. Without one, it is
+   * the account page. Under `/account` so the Account tab stays lit.
+   */
+  signIn: (back?: Href): Href =>
+    back ? { pathname: '/account/sign-in', params: { next: pathOf(back) } } : '/account/sign-in',
 
   /**
    * Where Discord sends the browser back to.
@@ -301,8 +319,17 @@ export const links = {
  * public archive routes, so a link handed to an opponent, a coach or a stranger
  * shows them what you were looking at.
  */
-export const shareURL = (href: Href): string => {
-  if (typeof href === 'string') return `${SITE_URL}${href}`;
+export const shareURL = (href: Href): string => `${SITE_URL}${pathOf(href)}`;
+
+/**
+ * An address as the path it is typed as, parameters and all.
+ *
+ * `shareURL` puts the site in front of it. On its own it is what a sign-in
+ * carries as the page to come back to, which has to be a string: it travels in
+ * a query parameter, and through device storage across a web redirect.
+ */
+export const pathOf = (href: Href): string => {
+  if (typeof href === 'string') return href;
   // Every builder above answers either a path or `{ pathname, params }`, which
   // is narrower than `Href` allows and is what makes this cast safe.
   const { pathname, params } = href as {
@@ -316,7 +343,7 @@ export const shareURL = (href: Href): string => {
     .filter(([, value]) => value !== undefined && value !== '')
     .map(([key, value]) => `${key}=${encodeURIComponent(String(value))}`)
     .join('&');
-  return query ? `${SITE_URL}${pathname}?${query}` : `${SITE_URL}${pathname}`;
+  return query ? `${pathname}?${query}` : pathname;
 };
 
 /**

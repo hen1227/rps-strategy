@@ -6,15 +6,12 @@ import type { GameSound } from '@/appearance/gameSound';
 import { soundPackById } from '@/appearance/soundPacks';
 import { useAppearanceStore } from '@/appearance/store';
 import { useGameStore } from '@/store/gameStore';
+import { useSoundCue } from '@/store/soundCue';
 import type { ActiveGame } from '@/store/types';
-import type { Piece, PlayerColor } from '@/types/game';
 
-// A capture is named for the piece that made it, not the piece that fell,
-// because `canCapture` is a strict cycle — rock takes scissors, scissors takes
-// paper, paper takes rock, in every mode — so the piece removed from the board
-// names its taker exactly. The lookup below is still keyed by the victim,
-// which is what the grid comparison can actually see.
-//
+import { getGameSoundForTransition } from './gameSoundForTransition';
+import { replayFromStart } from './replayFromStart';
+
 // The clips themselves live in `@/appearance/soundPacks`, one set per pack, and
 // which pack is playing is read from the appearance store below. Both move
 // sounds are the same clip in the pack that ships; keeping them apart as
@@ -22,80 +19,10 @@ import type { Piece, PlayerColor } from '@/types/game';
 // one-line change, instead of rebuilding the branch that tells them apart.
 export type { GameSound } from '@/appearance/gameSound';
 
-const CAPTURE_SOUND_BY_PIECE: Partial<Record<Piece, GameSound>> = {
-  Paper: 'scissorsTakesPaper',
-  Rock: 'paperTakesRock',
-  Scissors: 'rockTakesScissors',
-};
-
-const occupiedTileCount = (gameState: ActiveGame) =>
-  gameState.grid.reduce(
-    (count, row) =>
-      count + row.filter((tile) => tile.occupant && tile.occupant !== 'Empty').length,
-    0,
-  );
-
-const captureSoundForTransition = (
-  previous: ActiveGame,
-  next: ActiveGame,
-): GameSound | null => {
-  if (occupiedTileCount(next) >= occupiedTileCount(previous)) return null;
-
-  for (let y = 0; y < previous.grid.length; y += 1) {
-    const row = previous.grid[y] ?? [];
-    for (let x = 0; x < row.length; x += 1) {
-      const before = row[x];
-      const after = next.grid[y]?.[x];
-      if (
-        before &&
-        after?.occupant === 'Empty' &&
-        before.occupantOwner === previous.currentTurn
-      ) {
-        return CAPTURE_SOUND_BY_PIECE[before.occupant] ?? null;
-      }
-    }
-  }
-
-  return null;
-};
-
-export const getGameSoundForTransition = (
-  previous: ActiveGame | null | undefined,
-  next: ActiveGame | null | undefined,
-  playerColor: PlayerColor | null,
-): GameSound | null => {
-  if (!next) return null;
-
-  // A game we have not seen before is either one that is just beginning or one
-  // being rejoined, and those want different things said. An untouched board is
-  // the only reliable way to tell them apart from here.
-  if (!previous || previous.gameId !== next.gameId) {
-    return next.moveNumber === 0 ? 'start' : 'notify';
-  }
-
-  if (next.moveNumber <= previous.moveNumber) {
-    const didTimeOut = previous.status === 'InProgress' && next.status === 'Finished';
-    return didTimeOut ? 'end' : null;
-  }
-
-  // Every ending sounds the same now. Reaching the goal used to be told apart
-  // from the other endings, which is worth restoring if a second ending clip
-  // ever exists: the test was `endReason === 'infiltration' || 'corner'`.
-  if (next.status === 'Finished') return 'end';
-
-  const captureSound = captureSoundForTransition(previous, next);
-  if (captureSound) return captureSound;
-
-  // Every move at a shared board was made by the hand on this device, so there
-  // is no opponent's move to tell apart. Without this the whole game would play
-  // in the opponent's voice, `playerColor` being nobody's there.
-  if (next.local) return 'moveSelf';
-  return previous.currentTurn === playerColor ? 'moveSelf' : 'moveOpponent';
-};
-
 type AudioPlayer = ReturnType<typeof useAudioPlayer>;
 
 const IS_WEB = Platform.OS === 'web';
+const IS_IOS = Platform.OS === 'ios';
 
 /**
  * The `<audio>` element a web player speaks through, where there is one.
@@ -116,7 +43,13 @@ const mediaElementOf = (player: AudioPlayer): HTMLAudioElement | null => {
   return media instanceof HTMLAudioElement ? media : null;
 };
 
-const replay = (player: AudioPlayer) => {
+/**
+ * Play a clip from its start, whatever it was doing.
+ *
+ * Exported for the Appearance sampler, so every sound in the app is started
+ * the same way.
+ */
+export const replayClip = (player: AudioPlayer) => {
   const media = mediaElementOf(player);
   try {
     if (media) {
@@ -127,13 +60,46 @@ const replay = (player: AudioPlayer) => {
       void media.play().catch(() => {});
       return;
     }
-    if (player.currentTime > 0 || player.playing) {
-      Promise.resolve(player.seekTo(0)).catch(() => {});
-    }
-    player.play();
+    replayFromStart(player, IS_IOS);
   } catch {
     // Audio should never interrupt gameplay if a platform rejects playback.
   }
+};
+
+/**
+ * Rewind every clip on iOS the moment it finishes, so the next sound starts at
+ * once.
+ *
+ * A clip that has played is left at its end, and has to be rewound before it
+ * can be heard again. Android runs a rewind and a play on its main thread in
+ * the order they were sent, so the two can go together. iOS runs the rewind on
+ * a queue of expo-audio's own and the play here, straight away, and the play
+ * won every time: it started the clip at its end, where it stopped again, and
+ * the rewind landed after and left the clip at its start. Every sound was
+ * heard every other time it was asked for, one move in two.
+ *
+ * Waiting for the rewind is right but late. A move is the busiest moment the
+ * JS thread has, and the wait measured about 100 ms there against 2 ms idle in
+ * a development build, which is late enough to hear. Rewinding when a clip ends,
+ * while nothing else is happening, has it at its start before the next move,
+ * so `replayClip` only waits when a clip is asked for again while it is still
+ * playing or has only just stopped.
+ *
+ * Android is left out: it does not pause a clip that reaches its end, so
+ * rewinding one there would play it again.
+ */
+const useRewoundWhenFinished = (players: Record<GameSound, AudioPlayer>) => {
+  useEffect(() => {
+    if (!IS_IOS) return undefined;
+    const subscriptions = Object.values(players).map((player) =>
+      player.addListener('playbackStatusUpdate', (status) => {
+        if (status.didJustFinish) Promise.resolve(player.seekTo(0)).catch(() => {});
+      }),
+    );
+    return () => {
+      for (const subscription of subscriptions) subscription.remove();
+    };
+  }, [players]);
 };
 
 // The events WebKit counts as the player acting, and so as permission to make
@@ -302,6 +268,7 @@ const useGameSounds = () => {
 
   useMixedWithBackgroundAudio();
   usePrimedForBrowser(players, packId);
+  useRewoundWhenFinished(players);
 
   useEffect(() => {
     const sound = getGameSoundForTransition(
@@ -311,7 +278,7 @@ const useGameSounds = () => {
     );
     previousGameState.current = gameState;
 
-    if (sound) replay(players[sound]);
+    if (sound) replayClip(players[sound]);
   }, [gameState, playerColor, players]);
 
   // A refused move changes no game state at all, so it cannot be heard by
@@ -319,8 +286,22 @@ const useGameSounds = () => {
   // instead, and the count going up is the event.
   useEffect(() => {
     if (rejectedMoveCount === 0) return;
-    replay(players.illegal);
+    replayClip(players.illegal);
   }, [rejectedMoveCount, players]);
+
+  // A board the store does not hold asks for its sounds by name. Keyed on the
+  // cue alone, through a ref for the players, so changing the pack rebuilds
+  // the players without playing the last cue again; and a cue already standing
+  // when this mounts is somebody else's moment, long gone.
+  const cue = useSoundCue((state) => state.cue);
+  const playersRef = useRef(players);
+  playersRef.current = players;
+  const heardCue = useRef(cue?.serial ?? 0);
+  useEffect(() => {
+    if (!cue || cue.serial === heardCue.current) return;
+    heardCue.current = cue.serial;
+    replayClip(playersRef.current[cue.sound]);
+  }, [cue]);
 };
 
 const GameSoundPlayers = () => {

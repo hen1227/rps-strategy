@@ -51,16 +51,17 @@ const BOARD_LIMIT = 50;
  */
 const COLLAPSED_ROWS = 10;
 
-const SECTIONS: { kind: LeaderboardKind; title: string; help: string }[] = [
+// A line of help only where the title leaves something out: "best bots" does
+// not say it is one engine per owner. "Best players" says all there is.
+const SECTIONS: { kind: LeaderboardKind; title: string; help?: string }[] = [
   {
     kind: 'bot',
     title: 'Best bots',
-    help: "Each owner’s best engine. Select one to view its record.",
+    help: "Each owner’s best engine.",
   },
   {
     kind: 'human',
     title: 'Best players',
-    help: "Player rankings for this mode.",
   },
 ];
 
@@ -178,7 +179,9 @@ export default function LeaderboardScreen({
         return (
           <Panel key={section.kind}>
             <SectionHeading
-              eyebrow={`${modeName.toUpperCase()} · THE LADDER`}
+              // The mode alone. "The ladder" is the heading of the panel above,
+              // and it said so again on every card under it.
+              eyebrow={modeName.toUpperCase()}
               title={section.title}
               trailing={
                 entries.length > COLLAPSED_ROWS ? (
@@ -192,7 +195,7 @@ export default function LeaderboardScreen({
                 ) : undefined
               }
             />
-            <Text style={styles.help}>{section.help}</Text>
+            {section.help ? <Text style={styles.help}>{section.help}</Text> : null}
 
             {loading ? (
               <View style={styles.loading}>

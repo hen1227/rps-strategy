@@ -73,7 +73,7 @@ export default function AppearanceScreen() {
         <AppearancePreview />
 
         <Panel style={styles.panel}>
-          <SectionHeading eyebrow="Colour" title="Theme" />
+          <SectionHeading eyebrow="COLOUR" title="Theme" />
           <SwatchChips
             label="Theme"
             onChange={(theme) => choose({ theme })}
@@ -88,7 +88,7 @@ export default function AppearanceScreen() {
         </Panel>
 
         <Panel style={styles.panel}>
-          <SectionHeading eyebrow="Squares" title="Board" />
+          <SectionHeading eyebrow="SQUARES" title="Board" />
           <SwatchChips
             label="Board"
             onChange={(board) => choose({ board })}
@@ -111,7 +111,7 @@ export default function AppearanceScreen() {
         */}
         {PIECE_SETS.length > 1 ? (
           <Panel style={styles.panel}>
-            <SectionHeading eyebrow="Artwork" title="Pieces" />
+            <SectionHeading eyebrow="ARTWORK" title="Pieces" />
             <SwatchChips
               label="Piece set"
               onChange={(pieces) => choose({ pieces })}
@@ -127,7 +127,7 @@ export default function AppearanceScreen() {
         ) : null}
 
         <Panel style={styles.panel}>
-          <SectionHeading eyebrow="Audio" title="Sound" />
+          <SectionHeading eyebrow="AUDIO" title="Sound" />
           <SwatchChips
             label="Sound pack"
             onChange={(sound) => {

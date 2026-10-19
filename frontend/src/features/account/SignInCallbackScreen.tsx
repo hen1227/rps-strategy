@@ -1,4 +1,4 @@
-import { useRouter } from 'expo-router';
+import { useRouter, type Href } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
@@ -6,11 +6,12 @@ import SignInButtons from './SignInButtons';
 import { failureMessage } from '@/errors';
 import { links } from '@/navigation/links';
 import { useSettledSearchParams } from '@/navigation/useSettledSearchParams';
+import { receiptWorthShowing } from '@/store/accountSession';
 import { signInRefusalMessage } from '@/store/signInReturn';
 import { useGameStore } from '@/store/gameStore';
 import { colors, contentWidth, themedSheet } from '@/theme';
 import ScreenShell from '@/ui/ScreenShell';
-import { Banner, Panel, SectionHeading } from '@/ui/primitives';
+import { Banner, Panel, PrimaryButton, SectionHeading } from '@/ui/primitives';
 
 // Where a sign-in through the browser lands on the web: Discord's, and Apple's
 // on the website. Both come back with a ticket, and the ticket is redeemed the
@@ -36,6 +37,8 @@ export default function SignInCallbackScreen() {
 function TicketExchange({ error, ticket }: { error: string | null; ticket: string | null }) {
   const router = useRouter();
   const redeemSignInTicket = useGameStore((state) => state.redeemSignInTicket);
+  const pendingSignup = useGameStore((state) => state.pendingSignup);
+  const dropCarriedSignIn = useGameStore((state) => state.dropCarriedSignIn);
   const [failure, setFailure] = useState<string | null>(
     error ? signInRefusalMessage(error) : null,
   );
@@ -53,15 +56,47 @@ function TicketExchange({ error, ticket }: { error: string | null; ticket: strin
           setFailure(outcome.message);
           return;
         }
-        // Either signed in, or signed in and still needing a name — the account
-        // page shows whichever, and `replace` drops the spent ticket out of
-        // history on the way.
-        router.replace(links.account());
+        // A new identity, or a sign-in that made an account or linked a
+        // second way in, has a step left on the sign-in screen. A returning
+        // player goes back to wherever the sign-in started. `replace` drops
+        // the spent ticket out of history on the way.
+        const state = useGameStore.getState();
+        if (outcome.kind === 'unnamed' || receiptWorthShowing(state.signInReceipt)) {
+          router.replace(links.signIn());
+          return;
+        }
+        const back = state.signInReturnTo;
+        state.setSignInReturnTo(null);
+        state.clearSignInReceipt();
+        router.replace((back ?? links.account()) as Href);
       })
       .catch((caught: unknown) => setFailure(failureMessage(caught, 'That sign-in did not work.')));
   }, [error, redeemSignInTicket, router, ticket]);
 
+  // A sign-in that did not finish carries nothing into the next one: the
+  // identity it was carrying goes back to its own naming step.
+  const failed = Boolean(failure || !ticket);
+  useEffect(() => {
+    if (failed) dropCarriedSignIn();
+  }, [dropCarriedSignIn, failed]);
+
   if (failure || !ticket) {
+    // Somebody who left the naming step to sign in the other way, and did not
+    // finish that, still has the step: the identity they came with is good
+    // for a few more minutes. Nothing is carried any more, though.
+    if (pendingSignup) {
+      return (
+        <CallbackCard title="Sign-in">
+          <Banner message={failure ?? 'That sign-in did not finish.'} tone="error" />
+          <Text style={styles.help}>Nothing was changed.</Text>
+          <PrimaryButton
+            fullWidth
+            label="BACK"
+            onPress={() => router.replace(links.signIn())}
+          />
+        </CallbackCard>
+      );
+    }
     return (
       <CallbackCard title="Sign-in">
         <Banner message={failure ?? 'That sign-in did not finish.'} tone="error" />

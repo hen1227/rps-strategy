@@ -159,7 +159,7 @@ export default function YourEnginesPanel({
           Sign in, register a bot, and run the client to join.
         </Text>
         <View style={styles.actions}>
-          <GhostLink href={links.account()} label="SIGN IN" tone="accent" />
+          <GhostLink href={links.signIn(links.rounds())} label="SIGN IN" tone="accent" />
           <GhostLink href={links.botGuide()} label="HOW TO CONNECT A BOT" />
         </View>
       </Panel>
@@ -287,7 +287,8 @@ export default function YourEnginesPanel({
 
       {entries.length > 0 ? (
         <Text style={styles.note}>
-          Changes apply next round. Update `ladder` in rpsbot.conf too; restarting the client restores that setting.
+          Changes apply next round. Restarting the client resets this to the ladder setting in
+          rpsbot.conf.
         </Text>
       ) : null}
     </Panel>

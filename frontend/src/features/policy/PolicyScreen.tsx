@@ -5,7 +5,7 @@ import ScreenShell from '@/ui/ScreenShell';
 import { Panel, SectionHeading } from '@/ui/primitives';
 import type { PanelTone } from '@/ui/tones';
 
-export const LAST_UPDATED = 'October 1, 2026';
+export const LAST_UPDATED = 'October 10, 2026';
 export const CONTACT_DISCORD = '@henhen1227';
 
 // The policy text lives here as data rather than JSX so the screen body stays a
@@ -40,7 +40,8 @@ const sections: PolicySection[] = [
       "Older password accounts: a salted PBKDF2 password hash, removed when you link Discord or Apple. New accounts use Discord or Apple sign-in.",
       "Finished online games, kept indefinitely: both players, mode, result and reason, ranked status, ratings before and after, move count, time control, and start and finish times.",
       "Player totals: wins, losses, draws, games played, and a rating for each mode. Tournament records include your entry name, Discord handle, matches, and results.",
-      "Feedback: posts, replies, votes, and your username when posting. Bug reports also include app version, platform, and any game you attach. This information is public."
+      "Feedback: posts, replies, votes, and your username when posting. Bug reports also include app version, platform, and any game you attach. This information is public.",
+      "Match alerts: if you turn them on, the push token your phone or browser gives for notifications. It is used only to tell you a game was found, and is removed when you turn alerts off or delete your account."
     ]
   },
   {
@@ -48,7 +49,7 @@ const sections: PolicySection[] = [
     "title": "What other players can see",
     "paragraphs": [
       "Your opponent and the lobby can see your username, Discord handle, rating, and record. Anyone can watch live games.",
-      "Your opponent and spectators can read game chat. Chat stays in server memory during the game and is not saved to the database. Other players can still take screenshots.",
+      "Your opponent and spectators can read game chat. Chat stays in server memory during the game and is not saved to the database, except the recent conversation a report carries. Other players can still take screenshots.",
       "Messages and usernames containing listed slurs or strong profanity are rejected. Use reports for anything the filter misses.",
       "Anyone can read the feedback board. Posting, replying, and voting require an account signed in with Discord or Apple. Posts carry your username and remain public until deleted. Delete your own posts from the post menu, or ask me to remove them.",
       "Keep account problems and other private information off the board. Use reports or contact me directly."
@@ -75,10 +76,22 @@ const sections: PolicySection[] = [
     ]
   },
   {
+    "eyebrow": "USAGE STATISTICS",
+    "title": "Google Analytics",
+    "paragraphs": [
+      "The website and the apps use Google Analytics to count visits and see which features are used. In the EU, EEA, UK, and Switzerland, nothing is sent until you allow it. Elsewhere it is on by default, and starts off if your browser sends Global Privacy Control. Turn it on or off under Your account → Usage stats.",
+      "What is sent: the pages you open, with names and game IDs removed from the address; actions such as signing in, joining the queue, posting a challenge or feedback, copying a link, and starting and finishing a game, with its mode, result, and length; and your device type, operating system, app or browser version, language, and screen size.",
+      "What is never sent: your username, account ID, Discord or Apple ID, who you played, game IDs, or chat.",
+      "On the website, Google sets its _ga cookies and sees your IP address, which it uses to estimate your location. The apps send through my server instead, so Google never receives your phone's IP address. They keep a random analytics ID on the device and use your phone's region setting as your country.",
+      "The server also reports finished games and engines connecting, with no player information. An engine's public name and version are included.",
+      "Advertising features and Google signals are off. Google keeps the detailed data for 14 months; after that only totals remain. Usage statistics are not linked to your account, so they cannot be looked up or deleted with it. Turning them off stops sending, deletes the website's cookies, and deletes the apps' analytics ID. Google describes its own use of this data at policies.google.com/technologies/partner-sites."
+    ]
+  },
+  {
     "eyebrow": "DATA USE",
     "title": "What I do not do",
     "paragraphs": [
-      "No ads, analytics SDKs, trackers, or data sales. The public game archive is the only data shared. Only I can access the database. Web-server logs record IP addresses for operation and debugging, separately from game records."
+      "No ads, advertising trackers, or data sales. The only data shared is the public game archive and the usage statistics above. Match alerts are delivered by Apple, Google, or your browser's push service, and carry only the alert itself. Only I can access the database. Web-server logs record IP addresses for operation and debugging, separately from game records."
     ]
   },
   {
@@ -86,7 +99,7 @@ const sections: PolicySection[] = [
     "title": "Deleting your account",
     "paragraphs": [
       "Choose Delete account at the bottom of your account page and type your username to confirm. Deletion is immediate and permanent.",
-      "Your username, Discord and Apple links, titles, leaderboard entry, and sign-in are removed. If you signed in with Apple, this app is also disconnected from your Apple ID. Your bots are retired. Accounts with no finished games are deleted outright.",
+      "Your username, Discord and Apple links, titles, leaderboard entry, match alerts, and sign-in are removed. If you signed in with Apple, this app is also disconnected from your Apple ID. Your bots are retired. Accounts with no finished games are deleted outright.",
       "Finished games stay to preserve opponents’ records and ratings. Your name becomes “Deleted player” in game records, the archive, and saved move lists.",
       "Feedback posts and replies keep their text under “Deleted player”. Your votes are removed. To remove a post entirely, delete it before deleting your account, or ask me.",
       "Future public archive exports use the deleted name. Previously published files may still contain your old name and cannot be recalled.",
@@ -98,7 +111,7 @@ const sections: PolicySection[] = [
     "eyebrow": "ONLINE PLAY AGREEMENT",
     "title": "Rules for online play",
     "bullets": [
-      "No harassment, slurs, threats, or bigotry in chat, usernames, or Discord handles.",
+      "No harassment, slurs, threats, or bigotry in chat, usernames, or Discord handles. There is no tolerance for objectionable content or abusive players, and you agree to these rules before you first post.",
       "Play your own games. No engines, bots, or outside help during live play. Use analysis before or after a game.",
       "Do not rig results, throw games, sandbag, or use alternate accounts to dodge opponents or inflate ratings.",
       "Do not stall or leave a game to avoid a loss.",

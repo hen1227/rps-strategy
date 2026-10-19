@@ -2,6 +2,7 @@ import { useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  BackHandler,
   Modal,
   Pressable,
   ScrollView,
@@ -42,7 +43,7 @@ import { useTournamentCall } from '@/hooks/useTournamentCall';
 import { useWatchGame } from '@/hooks/useWatchGame';
 import { links } from '@/navigation/links';
 import { useGoTo } from '@/navigation/stack';
-import { up } from '@/navigation/upFrom';
+import { up, useBoardUpTarget } from '@/navigation/upFrom';
 import { chatRoomScopeOf } from '@/store/chatSelectors';
 import { useGameStore } from '@/store/gameStore';
 import { firstMoveCall } from '@/store/queueSelectors';
@@ -101,6 +102,13 @@ const PLAYER_BARS = 2 * 57 + 2 * 7;
  * alone, so the two must not drift apart.
  */
 const PHONE_PADDING = 10;
+/** How wide the page is, at the least, on a wide screen. */
+const SCREEN_WIDTH = 1180;
+/**
+ * The room the board leaves beside it on a wide screen: the side panel's 310,
+ * the gap before it and the page's padding, with some to spare for the panel.
+ */
+const SIDE_PANEL = 390;
 
 const formatTimeControl = (timeControl: TimeControl | null | undefined) => {
     if (!timeControl) return 'Live';
@@ -823,6 +831,8 @@ interface FinishedGameCardProps {
     onRematch?: (() => void) | null;
     onReviewGame: () => void;
     onReturn: () => void;
+    /** The page `onReturn` goes to, by name. */
+    returnLabel: string;
     playerColor: PlayerColor | null;
     wide?: boolean;
 }
@@ -834,6 +844,7 @@ function FinishedGameCard({
                               onRematch,
                               onReviewGame,
                               onReturn,
+                              returnLabel,
                               playerColor,
                               wide,
                           }: FinishedGameCardProps) {
@@ -928,7 +939,9 @@ function FinishedGameCard({
                     onPress={onReturn}
                     style={({pressed}) => [styles.finishedModesButton, pressed && styles.buttonPressed]}
                 >
-                    <Text style={styles.finishedModesButtonText}>Return to lobby</Text>
+                    <Text style={styles.finishedModesButtonText}>
+                        Return to {returnLabel.toLowerCase()}
+                    </Text>
                 </Pressable>
             </View>
         </View>
@@ -1063,6 +1076,7 @@ interface StatusCardProps extends StatusContentProps {
     opening: GameOpening | null;
     onRematch?: (() => void) | null;
     onReturn: () => void;
+    returnLabel: string;
     onReviewGame: () => void;
     wide?: boolean;
 }
@@ -1077,6 +1091,7 @@ function StatusCard({
                         opening,
                         onRematch,
                         onReturn,
+                        returnLabel,
                         onReviewGame,
                         playerColor,
                         selectedTile,
@@ -1089,6 +1104,7 @@ function StatusCard({
                 gameState={gameState}
                 onRematch={onRematch}
                 onReturn={onReturn}
+                returnLabel={returnLabel}
                 onReviewGame={onReviewGame}
                 opening={opening}
                 playerColor={playerColor}
@@ -1157,11 +1173,35 @@ function StatusCard({
     );
 }
 
+// Android's back button does what the board's own back control does. Left to
+// the navigator it would pop the board, and `SessionBridge` would push it
+// straight back while the game is in the store, so the press could never leave.
+// With nothing to do, because a rated game in progress cannot be left, the
+// press is swallowed rather than bounced.
+function HardwareBack({onPress}: {onPress?: () => void}) {
+    const onPressRef = useRef(onPress);
+    useEffect(() => {
+        onPressRef.current = onPress;
+    });
+    useFocusEffect(
+        useCallback(() => {
+            const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+                onPressRef.current?.();
+                return true;
+            });
+            return () => subscription.remove();
+        }, []),
+    );
+    return null;
+}
+
 export default function GameScreen() {
     // A board fills the screen, so everything off it is a `dismissTo` rather
     // than a page laid on top — see `navigation/stack` for the pile that used
     // to build up here, two screens at a time.
     const go = useGoTo();
+    // The lobby, or the analysis board this game was started from.
+    const boardUp = useBoardUpTarget();
     const handReview = useReviewHandoff((state) => state.hand);
     const reviewOpeningRef = useRef(false);
     const [showResignConfirmation, setShowResignConfirmation] = useState(false);
@@ -1308,11 +1348,15 @@ export default function GameScreen() {
     // the two player bars, the gaps around the board, and the page's padding.
     const {boardSize, height, isWide} = useBoardLayout({
         minimum: 190,
-        sidePanel: 390,
+        sidePanel: SIDE_PANEL,
         // What shares the board's column with it: a player bar above and below,
         // and the gap on either side of the board. `chrome` counts the strips
         // over the layout as well, because it is measured from the window.
         maxHeight: layoutHeight ? layoutHeight - PLAYER_BARS : undefined,
+        // Into that room, rather than stopping at the size a laptop draws it.
+        // Held there, a tall screen — an iPad, a big monitor — ended the board
+        // and the panel beside it well short of the bottom, over an empty band.
+        fill: true,
         chrome: headerHeight + bannerHeight + PLAYER_BARS + 7,
         narrowChrome: headerHeight + bannerHeight + (hasTerritory ? 336 : 306),
         // Series viewers scroll to the moves and chat; the header should not
@@ -1324,6 +1368,11 @@ export default function GameScreen() {
         // padding without widening this hands the board pixels it cannot have.
         narrowMargin: PHONE_PADDING * 2,
     });
+    // As wide as the board and its panel need, and never narrower than the page
+    // has always been: a board grown into a tall window takes the room it needs
+    // from the margins, not from the panel beside it. The header's contents keep
+    // to the same column.
+    const pageWidth = isWide ? {maxWidth: Math.max(SCREEN_WIDTH, boardSize + SIDE_PANEL)} : null;
     const compactSeriesHeader = isWatchingSeries && !isWide;
     // A wide screen draws the series bar inside the top bar, in the room
     // between the title and the time control that was otherwise empty. As a
@@ -1452,6 +1501,7 @@ export default function GameScreen() {
                         the same button in the same place whether or not the
                         game turns up. */}
                     <BackLink label={up.play.label} onPress={() => go(up.play.href)} />
+                    <HardwareBack onPress={() => go(up.play.href)} />
                 </View>
             </SafeAreaView>
         );
@@ -1655,7 +1705,7 @@ export default function GameScreen() {
     // pair at a time and why "back" took two or three presses to get anywhere.
     const returnToModes = () => {
         clearGame();
-        go(up.play.href);
+        go(boardUp.href);
     };
 
     // The game is deliberately left in the store: an online game's chat room
@@ -2031,6 +2081,7 @@ export default function GameScreen() {
             opening={opening}
             onRematch={rematch}
             onReturn={returnToModes}
+            returnLabel={boardUp.label}
             onReviewGame={openReview}
             playerColor={playerColor}
             selectedTile={selectedTile}
@@ -2073,16 +2124,19 @@ export default function GameScreen() {
     // beside the board. A bot game and a shared-device game are only in
     // this tab, so those leave freely.
     const backLink = (
-        <BackLink
-            disabled={!canLeave}
-            hint={
-                canLeave
-                    ? undefined
-                    : 'Resign or abort to leave a game in progress.'
-            }
-            label={up.play.label}
-            onPress={returnToModes}
-        />
+        <>
+            <BackLink
+                disabled={!canLeave}
+                hint={
+                    canLeave
+                        ? undefined
+                        : 'Resign or abort to leave a game in progress.'
+                }
+                label={boardUp.label}
+                onPress={returnToModes}
+            />
+            <HardwareBack onPress={canLeave ? returnToModes : undefined} />
+        </>
     );
     const matchIdentity = (
         <View
@@ -2190,7 +2244,7 @@ export default function GameScreen() {
                     */}
                     <View
                         onLayout={measureHeaderRow}
-                        style={[styles.headerInner, seriesInHeader && styles.headerInnerOneLine]}
+                        style={[styles.headerInner, pageWidth, seriesInHeader && styles.headerInnerOneLine]}
                     >
                         {!seriesInHeader && (
                             <View style={[styles.topBar, compactSeriesHeader && styles.topBarCompact]}>
@@ -2214,7 +2268,7 @@ export default function GameScreen() {
               so it gives that answer without anything here having to add the
               two of them up.
             */}
-            <View onLayout={measureLayout} style={styles.screen}>
+            <View onLayout={measureLayout} style={[styles.screen, pageWidth]}>
                 <GameTransition
                     gameKey={gameState.gameId}
                     leaving={switchingBoards}
@@ -2459,7 +2513,7 @@ const styles = themedSheet(() => ({
     screen: {
         flex: 1,
         width: '100%',
-        maxWidth: 1180,
+        maxWidth: SCREEN_WIDTH,
         alignSelf: 'center',
         paddingHorizontal: PHONE_PADDING,
     },
@@ -2500,7 +2554,7 @@ const styles = themedSheet(() => ({
     // run the full width of the window.
     headerInner: {
         width: '100%',
-        maxWidth: 1180,
+        maxWidth: SCREEN_WIDTH,
         alignSelf: 'center',
         gap: 7,
         paddingVertical: 7,

@@ -6,6 +6,7 @@ import { useGameStore } from '@/store/gameStore';
 import { activeRestriction, restrictionNotice } from '@/store/moderationSelectors';
 import { colors, players, radius, themedSheet } from '@/theme';
 import ChatMessageActions from '@/features/moderation/ChatMessageActions';
+import { useCommunityRules } from '@/features/policy/CommunityRules';
 import PlayerLink from '@/ui/PlayerLink';
 import TitleTag from '@/ui/TitleTag';
 import type { GameStatus } from '@/types/game';
@@ -93,6 +94,7 @@ export default function GameChat({
   wide,
 }: GameChatProps) {
   const [draft, setDraft] = useState('');
+  const { requireAgreement, rulesDialog } = useCommunityRules();
   // Which message's action sheet is open, or null. The message rather than its
   // id, because the sheet reports on what was said and the row it was opened
   // from is the only place that text is.
@@ -176,8 +178,10 @@ export default function GameChat({
 
   const send = () => {
     const text = draft.trim();
-    if (!text || !onSend(text)) return;
-    setDraft('');
+    if (!text) return;
+    requireAgreement(() => {
+      if (onSend(text)) setDraft('');
+    });
   };
 
   if (!chatVisible) {
@@ -386,6 +390,7 @@ export default function GameChat({
         was actually said in the room — hiding spectators is this reader's view
         setting, not a claim about what happened.
       */}
+      {rulesDialog}
       {actioning && (
         <ChatMessageActions
           message={actioning}

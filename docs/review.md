@@ -61,6 +61,17 @@ hand is not a deviation — it just advances.
 step and plays the engine's choice there, because the move being graded is the
 one that led into the position on screen.
 
+**A capture you step onto is drawn as its throw** — rock smashes scissors,
+scissors snip paper, paper wraps rock — the way it was when the game was
+played, as long as the step is one move forward taken on its own. Stepping
+faster than a move every 0.4 seconds (holding an arrow key, tapping through to
+move forty) is skimming, and gets the plain capture, as do a step back (taking a
+capture back is not a capture) and a jump of several moves. A game you are
+following as it is played always gets the effect, however fast it goes. The
+rule is `decideCaptureEffect` in `frontend/src/features/board/captureEffect.ts`,
+and it is the same on every board: a review, a live game you have stepped back
+in, a bot battle, the analysis board.
+
 ## The engine is off unless you ask for it
 
 A review opens with RPSFish switched off, and so does the analysis board.

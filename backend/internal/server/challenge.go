@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"strings"
 	"time"
 	"unicode"
@@ -440,8 +441,24 @@ func (server *Server) pendingChallengesFor(client *Client, now time.Time) []Chal
 
 // openChallenges is the public board: every unclaimed game anybody is waiting
 // behind, plain searches included.
+//
+// Whether an absent author can be called is asked here, at the moment the board
+// is published, rather than remembered on the seek. A person's devices come and
+// go on their own clock, and a remembered answer would be one more place for
+// the board to go on promising a call nobody can make. Present rows are skipped,
+// so a board of people at their screens costs no lookups at all.
 func (server *Server) openChallenges(now time.Time) []Challenge {
-	return server.seeks.Open(now)
+	challenges := server.seeks.Open(now)
+	for index := range challenges {
+		if challenges[index].Present {
+			continue
+		}
+		challenges[index].Callable = server.push.Reachable(
+			context.Background(),
+			challenges[index].Challenger.UserID,
+		)
+	}
+	return challenges
 }
 
 // broadcastOpenChallenges republishes the whole board.

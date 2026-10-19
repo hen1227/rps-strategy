@@ -143,10 +143,14 @@ export const shortFieldNote = (view: {
   minimumField: number;
 }): string | null => {
   if (view.inRound >= view.minimumField) return null;
+  // "In", the word the field's own badges use, not "entered": an engine can be
+  // entered and offline, and the panel under this one counts those separately.
+  // "No engines entered" above "5 more engines are entered but offline" said
+  // two opposite things about the same five engines.
   if (view.inRound === 0) {
-    return `No engines entered. At least ${view.minimumField} are needed to play.`;
+    return `No engines are in yet. At least ${view.minimumField} are needed to play.`;
   }
-  return `${view.inRound} entered; at least ${view.minimumField} needed to play.`;
+  return `${view.inRound} in; at least ${view.minimumField} needed to play.`;
 };
 
 /** One of your own engines, as this page has to talk about it. */

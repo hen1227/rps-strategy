@@ -54,17 +54,22 @@ export const savePushSubscription = (
   });
 
 /**
- * Register an iOS device token.
+ * Register a phone's token: an APNs device token, or an FCM registration token.
  *
- * The APNs twin of `savePushSubscription`, and separate for the same reason the
- * routes are: a browser hands over a URL and a pair of keys to encrypt for, and
- * a phone hands over a token and nothing else. One call taking either would be
- * a body where half the fields are always ignored.
+ * The native twin of `savePushSubscription`, and separate for the same reason
+ * the routes are: a browser hands over a URL and a pair of keys to encrypt for,
+ * and a phone hands over a token and nothing else. One call taking either would
+ * be a body where half the fields are always ignored. An iPhone sends no
+ * platform, as it always has, so a server from before Android still takes it.
  */
-export const savePushDevice = (token: string, identity: PushIdentity) =>
+export const savePushDevice = (
+  token: string,
+  transport: 'apns' | 'fcm',
+  identity: PushIdentity,
+) =>
   request<{ subscribed: boolean }>(`/api/push/devices${identityScope(identity)}`, {
     method: 'POST',
-    body: { token },
+    body: transport === 'fcm' ? { token, platform: 'android' } : { token },
     token: identityCredential(identity),
     what: 'Turning on alerts',
   });
@@ -90,6 +95,11 @@ export interface TestPushReport {
   removed?: number;
   /** Addresses that refused it or could not be reached, and were kept. */
   failed?: number;
+  /**
+   * The failures that were addresses too new for their push service to know
+   * yet. Counted in `failed` too; absent from a server from before it.
+   */
+  settling?: number;
 }
 
 /**

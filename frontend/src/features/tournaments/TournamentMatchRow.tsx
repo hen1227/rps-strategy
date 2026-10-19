@@ -232,6 +232,9 @@ const styles = themedSheet(() => ({
   versusRow: { flexDirection: 'row', alignItems: 'center', marginTop: 7 },
   player: {
     flex: 1,
+    // Or a long one-word engine name sets the row's width on the web, and the
+    // score and the opponent are pushed past the card's edge.
+    minWidth: 0,
     color: colors.textStrong,
     fontSize: 13,
     fontWeight: '900',

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"rps-strategy/backend/internal/persistence"
 )
@@ -20,6 +21,7 @@ import (
 var everyTransport = []persistence.PushTransport{
 	persistence.TransportWebPush,
 	persistence.TransportAPNs,
+	persistence.TransportFCM,
 }
 
 // A VAPID pair, generated once so the tests below cost one key generation
@@ -28,6 +30,11 @@ const (
 	testVAPIDPublic  = "BDvxBCimX9jqk-bzvVYj_o4ZcA3anoZUxhFTXCYC3cxZpK8bH0V59LeN7_yxBFEKU5yepXFNi48HlAGpCCANbHs"
 	testVAPIDPrivate = "hcUq3Q0hJdWBBSMEUUuc7pQC0OqI5xVaLHzTvFyD3Wg"
 )
+
+// settledAt is a registration time old enough that a push service calling the
+// address gone is believed at once. Most tests are about what an answer means,
+// not about how new the address is.
+func settledAt() int64 { return time.Now().Add(-time.Hour).UnixMilli() }
 
 // testSubscription builds a subscription against a real P-256 key, because the
 // encryption path validates the point and silently produces nothing if it is
@@ -43,10 +50,11 @@ func testSubscription(t *testing.T, userID string, endpoint string) persistence.
 		t.Fatal(err)
 	}
 	return persistence.PushSubscription{
-		Endpoint: endpoint,
-		UserID:   userID,
-		P256dh:   base64.RawURLEncoding.EncodeToString(private.PublicKey().Bytes()),
-		Auth:     base64.RawURLEncoding.EncodeToString(auth),
+		Endpoint:        endpoint,
+		UserID:          userID,
+		P256dh:          base64.RawURLEncoding.EncodeToString(private.PublicKey().Bytes()),
+		Auth:            base64.RawURLEncoding.EncodeToString(auth),
+		CreatedAtUnixMs: settledAt(),
 	}
 }
 
@@ -63,6 +71,7 @@ func pushTestServer(t *testing.T, handler http.HandlerFunc) (*Server, *httptest.
 	server.push.privateKey = testVAPIDPrivate
 	server.push.subject = "mailto:test@example.com"
 	server.push.client = endpoint.Client()
+	server.push.settleRetry = time.Millisecond
 	return server, endpoint
 }
 
@@ -164,6 +173,73 @@ func TestAGoneSubscriptionIsPrunedAndItsSeekDropped(t *testing.T) {
 		}
 	default:
 		t.Fatal("losing the last subscription must take the away seek off the board")
+	}
+}
+
+// A brand-new endpoint can be called gone by the push service for its first few
+// seconds and accepted after that. Believing the first answer deleted the
+// registration of anybody who pressed "Send a test" straight after turning
+// alerts on.
+func TestANewAddressCalledGoneIsAskedAgain(t *testing.T) {
+	var (
+		mu       sync.Mutex
+		attempts int
+	)
+	server, endpoint := pushTestServer(t, func(writer http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		attempts++
+		settled := attempts > 2
+		mu.Unlock()
+		if settled {
+			writer.WriteHeader(http.StatusCreated)
+			return
+		}
+		writer.WriteHeader(http.StatusGone)
+	})
+	seedAccount(t, server, "ada")
+	subscription := testSubscription(t, "ada", endpoint.URL+"/ada")
+	subscription.CreatedAtUnixMs = 0
+	if _, err := server.data.SavePushSubscription(context.Background(), subscription); err != nil {
+		t.Fatal(err)
+	}
+
+	report := server.push.SendTo("ada", pushPayload{Title: "hello"})
+	if report != (pushReport{Delivered: 1}) {
+		t.Fatalf("a new address that settles should be delivered to, got %+v", report)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if attempts != 3 {
+		t.Fatalf("expected two refusals and then a delivery, got %d attempts", attempts)
+	}
+}
+
+// One that never settles is not believed either, until it is old enough to be:
+// kept and reported as a failure, so the seek behind it stays, and the first
+// send after the grace prunes it.
+func TestANewAddressStillGoneIsKeptUntilItHasSettled(t *testing.T) {
+	server, endpoint := pushTestServer(t, func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusGone)
+	})
+	seedAccount(t, server, "ada")
+	subscription := testSubscription(t, "ada", endpoint.URL+"/ada")
+	subscription.CreatedAtUnixMs = 0
+	if _, err := server.data.SavePushSubscription(context.Background(), subscription); err != nil {
+		t.Fatal(err)
+	}
+	server.push.onUnreachable = func(userID string) {
+		t.Errorf("a new address must not take %s's seek off the board", userID)
+	}
+
+	if report := server.push.SendTo("ada", pushPayload{Title: "hello"}); report != (pushReport{Failed: 1, Settling: 1}) {
+		t.Fatalf("a new address still called gone should be a settling failure, got %+v", report)
+	}
+	reachable, err := server.data.HasPushSubscription(context.Background(), "ada", everyTransport...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reachable {
+		t.Fatal("a new address must not be forgotten on the push service's first word")
 	}
 }
 

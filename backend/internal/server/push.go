@@ -20,10 +20,11 @@ import (
 // the whole persistent queue rests on it: a seek survives a disconnect exactly
 // when its author can be called back, and nowhere else.
 //
-// It comes in two kinds now — a browser's Web Push subscription and an iOS
-// device token — and the split stops at the wire. One store answers "can this
-// person be called back", one payload says the same sentence, and `Send` fans
-// out to whatever a person happens to own. See `apns.go` for the other half.
+// It comes in three kinds now — a browser's Web Push subscription, an iOS
+// device token and an Android registration token — and the split stops at the
+// wire. One store answers "can this person be called back", one payload says
+// the same sentence, and `Send` fans out to whatever a person happens to own.
+// See `apns.go` and `fcm.go` for the other two.
 //
 // That makes restraint part of the design rather than a policy bolted on top.
 // The server sends exactly one kind of notification — your game has started, go
@@ -40,6 +41,21 @@ const (
 	// pushTimeout bounds one delivery attempt. A push service that is slow must
 	// not become a goroutine that lives for ever.
 	pushTimeout = 10 * time.Second
+	// pushSettleTime is how long a new address can be called gone without
+	// being believed. Chrome hands a page its endpoint before Google's push
+	// service has finished hearing about it: measured against real Chrome on
+	// 2026-10-15, a fresh endpoint answered 410 on and off for its first four
+	// to eight seconds and was accepted on every send after that. Believing the
+	// first answer deleted a working registration from anybody who pressed
+	// "Send a test" straight after turning alerts on. Every transport gets the
+	// same grace, because a dead address kept for a minute costs nothing,
+	// while a live one deleted costs the player their alerts.
+	pushSettleTime = time.Minute
+	// pushSettleRetry is how long to wait before asking about a settling
+	// address again, and pushSettleAttempts how many times to ask, all within
+	// the same pushTimeout. Eight a second apart outlast what was measured.
+	pushSettleRetry    = time.Second
+	pushSettleAttempts = 8
 )
 
 // pushSender delivers match summons, and knows whether it can.
@@ -61,12 +77,16 @@ type pushSender struct {
 	// each client must be told the truth about its own transport rather than
 	// about the pair.
 	webEnabled bool
-	// apns is the same promise kept for a phone. Never nil; disabled is its
-	// ordinary state.
+	// apns is the same promise kept for an iPhone, and fcm for an Android
+	// phone. Never nil; disabled is the ordinary state of each.
 	apns *apnsSender
+	fcm  *fcmSender
 	// client is swappable so a test can point deliveries at an httptest TLS
 	// server. Nothing in production sets it.
 	client webpush.HTTPClient
+	// settleRetry is pushSettleRetry, held here so a test need not wait a
+	// second per retry.
+	settleRetry time.Duration
 	// reachableOverride answers Reachable without touching the store. Tests set
 	// it because reachability is the single fact the away queue branches on,
 	// and standing up a push service to establish it would make every queue
@@ -81,10 +101,11 @@ type pushSender struct {
 
 func newPushSender(data *persistence.Store) *pushSender {
 	sender := &pushSender{
-		data:       data,
-		publicKey:  strings.TrimSpace(os.Getenv("RPS_VAPID_PUBLIC_KEY")),
-		privateKey: strings.TrimSpace(os.Getenv("RPS_VAPID_PRIVATE_KEY")),
-		subject:    strings.TrimSpace(os.Getenv("RPS_VAPID_SUBJECT")),
+		data:        data,
+		publicKey:   strings.TrimSpace(os.Getenv("RPS_VAPID_PUBLIC_KEY")),
+		privateKey:  strings.TrimSpace(os.Getenv("RPS_VAPID_PRIVATE_KEY")),
+		subject:     strings.TrimSpace(os.Getenv("RPS_VAPID_SUBJECT")),
+		settleRetry: pushSettleRetry,
 	}
 	sender.webEnabled = sender.publicKey != "" && sender.privateKey != "" && sender.subject != ""
 	if !sender.webEnabled && (sender.publicKey != "" || sender.privateKey != "" || sender.subject != "") {
@@ -94,6 +115,7 @@ func newPushSender(data *persistence.Store) *pushSender {
 			"RPS_VAPID_PRIVATE_KEY and RPS_VAPID_SUBJECT must all be set")
 	}
 	sender.apns = newAPNsSender()
+	sender.fcm = newFCMSender()
 	return sender
 }
 
@@ -103,7 +125,7 @@ func newPushSender(data *persistence.Store) *pushSender {
 // different question, asked by the two registration routes and answered per
 // client, because a browser being able to subscribe says nothing about a phone.
 func (sender *pushSender) enabled() bool {
-	return sender.webEnabled || sender.apns.enabled
+	return sender.webEnabled || sender.apns.enabled || sender.fcm.enabled
 }
 
 // canSend is whether a stored address is one this server is still configured to
@@ -111,10 +133,14 @@ func (sender *pushSender) enabled() bool {
 // from a deployment with browsers still subscribed, and an Apple key can expire
 // with phones still registered.
 func (sender *pushSender) canSend(transport persistence.PushTransport) bool {
-	if transport == persistence.TransportAPNs {
+	switch transport {
+	case persistence.TransportAPNs:
 		return sender.apns.enabled
+	case persistence.TransportFCM:
+		return sender.fcm.enabled
+	default:
+		return sender.webEnabled
 	}
-	return sender.webEnabled
 }
 
 // sendableTransports is every kind of address this server can deliver to now.
@@ -124,10 +150,11 @@ func (sender *pushSender) canSend(transport persistence.PushTransport) bool {
 // longer has is an address no summons can arrive at, and a seek kept on the
 // strength of it is a seek for somebody who will never be told.
 func (sender *pushSender) sendableTransports() []persistence.PushTransport {
-	transports := make([]persistence.PushTransport, 0, 2)
+	transports := make([]persistence.PushTransport, 0, 3)
 	for _, transport := range []persistence.PushTransport{
 		persistence.TransportWebPush,
 		persistence.TransportAPNs,
+		persistence.TransportFCM,
 	} {
 		if sender.canSend(transport) {
 			transports = append(transports, transport)
@@ -140,15 +167,20 @@ func (sender *pushSender) sendableTransports() []persistence.PushTransport {
 //
 // Sent both on the socket at connect and from the key route, because the client
 // needs it before it decides whether to offer anything: a browser reads
-// `webPush` and a phone reads `apns`, and neither should be shown a button that
-// this deployment could never honour.
+// `webPush`, an iPhone `apns` and an Android phone `fcm`, and none should be
+// shown a button that this deployment could never honour.
 type pushTransports struct {
 	WebPush bool `json:"webPush"`
 	APNs    bool `json:"apns"`
+	FCM     bool `json:"fcm"`
 }
 
 func (sender *pushSender) transports() pushTransports {
-	return pushTransports{WebPush: sender.webEnabled, APNs: sender.apns.enabled}
+	return pushTransports{
+		WebPush: sender.webEnabled,
+		APNs:    sender.apns.enabled,
+		FCM:     sender.fcm.enabled,
+	}
 }
 
 // pushPayload is what a service worker receives. Deliberately thin: it carries
@@ -197,6 +229,9 @@ const (
 	// deliveryFailed is a refusal or an outage. Nothing arrived, and the address
 	// is kept, because nothing about it is known to be wrong.
 	deliveryFailed
+	// deliverySettling is an address too new for its push service's "gone" to
+	// be believed, still called gone after every retry. Kept, like a failure.
+	deliverySettling
 )
 
 // pushReport is what one send came to, counted by address.
@@ -208,6 +243,10 @@ type pushReport struct {
 	// Failed is how many refused it or could not be reached this time, and
 	// were kept.
 	Failed int
+	// Settling is how many of the failures were addresses still too new to
+	// be reached: the cure is waiting a few seconds, not anything the player
+	// or this server can change.
+	Settling int
 }
 
 // SendTo is Send with a report of where it went, for the one caller that needs
@@ -238,23 +277,64 @@ func (sender *pushSender) SendTo(userID string, payload pushPayload) pushReport 
 		if !sender.canSend(subscription.Transport) {
 			continue
 		}
-		var outcome deliveryOutcome
-		if subscription.Transport == persistence.TransportAPNs {
-			outcome = sender.apns.send(ctx, subscription.Endpoint, payload)
-		} else {
-			outcome = sender.deliver(ctx, subscription, body)
-		}
-		switch outcome {
+		switch sender.deliverSettled(ctx, subscription, payload, body) {
 		case deliveryAccepted:
 			report.Delivered++
 		case deliveryGone:
 			report.Removed++
 			sender.forget(ctx, subscription)
+		case deliverySettling:
+			report.Failed++
+			report.Settling++
 		default:
 			report.Failed++
 		}
 	}
 	return report
+}
+
+// deliverSettled is one address's delivery, asked again while the address is
+// too new for "gone" to be believed. One still refused when the time runs out
+// is kept: the first send after pushSettleTime prunes it if it really is dead.
+func (sender *pushSender) deliverSettled(
+	ctx context.Context,
+	subscription persistence.PushSubscription,
+	payload pushPayload,
+	body []byte,
+) deliveryOutcome {
+	settledAt := time.UnixMilli(subscription.CreatedAtUnixMs).Add(pushSettleTime)
+	for attempt := 1; ; attempt++ {
+		outcome := sender.deliverOnce(ctx, subscription, payload, body)
+		if outcome != deliveryGone || !time.Now().Before(settledAt) {
+			return outcome
+		}
+		if attempt == pushSettleAttempts {
+			return deliverySettling
+		}
+		retry := time.NewTimer(sender.settleRetry)
+		select {
+		case <-ctx.Done():
+			retry.Stop()
+			return deliverySettling
+		case <-retry.C:
+		}
+	}
+}
+
+func (sender *pushSender) deliverOnce(
+	ctx context.Context,
+	subscription persistence.PushSubscription,
+	payload pushPayload,
+	body []byte,
+) deliveryOutcome {
+	switch subscription.Transport {
+	case persistence.TransportAPNs:
+		return sender.apns.send(ctx, subscription.Endpoint, payload)
+	case persistence.TransportFCM:
+		return sender.fcm.send(ctx, subscription.Endpoint, payload)
+	default:
+		return sender.deliver(ctx, subscription, body)
+	}
 }
 
 // Send delivers one payload to every device an account has registered.

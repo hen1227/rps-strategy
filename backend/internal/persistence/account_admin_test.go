@@ -202,6 +202,13 @@ func TestAnonymizeStripsTheNameFromTheStoredRecordToo(t *testing.T) {
 		t.Fatalf("archive: %v", err)
 	}
 
+	if _, err := store.SavePushSubscription(ctx, testSubscription("leaver", "https://push.example/leaver")); err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	if _, err := store.SavePushSubscription(ctx, testDevice("leaver", testDeviceToken)); err != nil {
+		t.Fatalf("register a phone: %v", err)
+	}
+
 	rewritten, err := store.AnonymizeAccount(ctx, "leaver")
 	if err != nil {
 		t.Fatalf("anonymize: %v", err)
@@ -235,6 +242,14 @@ func TestAnonymizeStripsTheNameFromTheStoredRecordToo(t *testing.T) {
 	}
 	if !remaining.Disabled || remaining.Registered {
 		t.Fatalf("the account should be disabled and stripped: %#v", remaining)
+	}
+	// And it must stop being a device anybody can be summoned on.
+	subscriptions, err := store.PushSubscriptionsFor(ctx, "leaver")
+	if err != nil {
+		t.Fatalf("read push subscriptions: %v", err)
+	}
+	if len(subscriptions) != 0 {
+		t.Fatalf("a deleted account must not keep its push registrations: %#v", subscriptions)
 	}
 	// And it must not be adoptable by the next key that turns up.
 	if _, err := store.EnsureAccountWithProfileKey(

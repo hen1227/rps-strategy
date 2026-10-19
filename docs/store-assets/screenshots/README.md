@@ -17,7 +17,7 @@ Upload them in file order:
 
 1. **Live match** (Total War): *Rock, paper, scissors, with a board and a clock.*
 2. **Spectating a corner race** (Intransitive): *Race for the corner their army started in.*
-3. **Analysis board** (Intransitive): *A real engine, running on your phone.* The iPad set says *iPad*. The Play sets say *showing its best lines* instead, because RPSFish runs natively only on iOS so far.
+3. **Analysis board** (Intransitive): *A real engine, running on your phone.* The iPad set says *iPad*. The Play sets say *showing its best lines*, from when RPSFish ran natively only on iOS; it runs on Android too now, so the iPhone caption fits them as well.
 4. **Game review** (Infiltration): *Every move graded. Both accuracies.*
 5. **Lobby**: *Ranked matches, bots, tournaments, and whoever is next to you.*
 6. **Practice bots**: *Six practice bots, from Pebble to Obsidian.*

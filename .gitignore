@@ -20,3 +20,7 @@ deploy/deploy.env
 
 # Apple push key. A .p8 in a repository is a .p8 leaked.
 *.p8
+
+# A Firebase service account key, which sends as this project. The
+# google-services.json the app is built with is not secret; this is.
+*firebase-adminsdk*.json

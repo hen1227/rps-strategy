@@ -5,20 +5,33 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import SignInButtons from './SignInButtons';
 import { Banner, LabeledInput, Panel, PrimaryButton, SectionHeading } from '@/ui/primitives';
 import { useAppleOffered } from '@/hooks/useSignInProviders';
+import type { SignInOutcome } from '@/store/accountSession';
 import { useGameStore } from '@/store/gameStore';
 import { colors, themedSheet } from '@/theme';
 
-// Getting into an account.
+// Getting into an account, or making one: the same buttons do both.
 //
 // Discord and Apple are the ways to make one, so they lead, as equals, and they
 // are the only thing most people will ever see here. Apple appears wherever
 // this build and this server can finish it; Android has no Apple sheet, so it
-// is Discord alone there. Underneath, folded away, is the password form for
-// accounts that predate the change — kept because those players still have to
-// be able to get in, and folded because offering it alongside would suggest it
-// is a choice somebody new could make.
+// is Discord alone there. Whether the press signs somebody in or starts a new
+// account is the server's answer, not a choice to put in front of them first —
+// the sign-in screen asks the one question that matters only once it knows the
+// identity is new: is this their first time, or do they already play here?
+//
+// Underneath, folded away, is the password form for accounts that predate the
+// change — kept because those players still have to be able to get in, and
+// folded because offering it alongside would suggest it is a choice somebody
+// new could make.
 
-export default function AccountSignInPanel() {
+interface AccountSignInPanelProps {
+  /** How a sign-in ended, for a screen that moves on when it does. */
+  onOutcome?: (outcome: SignInOutcome) => void;
+  /** Off where the page's own heading already says it. */
+  heading?: boolean;
+}
+
+export default function AccountSignInPanel({ onOutcome, heading = true }: AccountSignInPanelProps) {
   const signIn = useGameStore((state) => state.signIn);
   const appleOffered = useAppleOffered();
   const [showPasswordForm, setShowPasswordForm] = useState(false);
@@ -31,8 +44,9 @@ export default function AccountSignInPanel() {
     setBusy(true);
     setError(null);
     try {
-      await signIn(username.trim(), password);
+      const outcome = await signIn(username.trim(), password);
       setPassword('');
+      onOutcome?.(outcome);
     } catch (caught) {
       setError(failureMessage(caught, 'That did not work.'));
     } finally {
@@ -42,9 +56,12 @@ export default function AccountSignInPanel() {
 
   return (
     <Panel tone="accent">
-      <SectionHeading eyebrow="ACCOUNT" title="Sign in" />
-      <View style={styles.signInActions}>
-        <SignInButtons />
+      {heading ? <SectionHeading eyebrow="ACCOUNT" title="Sign in or sign up" /> : null}
+      {/* Says the thing people wonder before pressing: whether this button
+          is the one for somebody who has no account yet. */}
+      {heading ? <Text style={styles.help}>New here? You choose a name next.</Text> : null}
+      <View style={heading ? styles.signInActions : undefined}>
+        <SignInButtons onOutcome={onOutcome} />
       </View>
 
       {showPasswordForm ? (

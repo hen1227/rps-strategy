@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+  type LayoutChangeEvent,
+} from 'react-native';
 
 import { failureMessage } from '@/errors';
 import { useNow } from '@/hooks/useNow';
@@ -75,17 +82,6 @@ const dayAndTime = (unixMs?: number) =>
   unixMs
     ? `${new Date(unixMs).toLocaleDateString(undefined, { weekday: 'long' })} ${timeOfDay(unixMs)}`
     : '–';
-
-/** The weekday name the host's schedule is written in, for the plan line. */
-const HOST_DAYS = [
-  'Sunday',
-  'Monday',
-  'Tuesday',
-  'Wednesday',
-  'Thursday',
-  'Friday',
-  'Saturday',
-];
 
 /** The reader's own zone, as a short name to put beside a time. */
 const localZone = () => {
@@ -235,7 +231,7 @@ export default function WeekendScreen() {
     <ScreenShell width={contentWidth.standard}>
       <>
         <View style={styles.hero}>
-          <Text style={styles.eyebrow}>RPS STRATEGY</Text>
+          <Text style={styles.eyebrow}>COMPETE</Text>
           <Text style={styles.title}>Weekend Bot Arena</Text>
           <Text style={styles.blurb}>
             Every engine that is online, once a weekend.
@@ -300,14 +296,15 @@ export default function WeekendScreen() {
               />
               <Stat label="Games per match" value={String(view.gamesPerMatch)} />
             </View>
+            {/*
+              The terms, and no more. The colour swap is how any match here is
+              played, and the host's own clock repeated the time in the title in
+              somebody else's zone.
+            */}
             <Text style={styles.plan}>
-              {view.modeName} · rated · colours swap every game ·{' '}
-              {eligible <= view.roundRobinMax
-                ? 'everybody plays everybody'
-                : 'Swiss pairing'}{' '}
-              · needs {view.minimumField} engines to run · the host&apos;s clock says{' '}
-              {HOST_DAYS[view.startDay] ?? 'Saturday'} {view.startLocal}{' '}
-              {view.zone.replace(/^.*\//, '').replace(/_/g, ' ')}
+              {view.modeName} · rated ·{' '}
+              {eligible <= view.roundRobinMax ? 'everybody plays everybody' : 'Swiss pairing'} ·
+              needs {view.minimumField} engines
             </Text>
           </Panel>
         ) : null}
@@ -373,14 +370,12 @@ export default function WeekendScreen() {
             />
             {view.clock.votes < view.clock.minimumVotes ? (
               <Text style={styles.pollNote}>
-                {`${view.clock.minimumVotes} votes are needed to carry the ballot and there ${
-                  view.clock.votes === 1 ? 'is 1 so far' : `are ${view.clock.votes} so far`
-                }, so this weekend plays ${view.clock.leading} unless that changes.`}
+                {`Needs ${view.clock.minimumVotes} votes to count, ${view.clock.votes} so far. Until then, ${view.clock.leading} plays.`}
               </Text>
             ) : null}
             <Text style={styles.pollNote}>
               {view.clock.open
-                ? `Closes ${dayAndTime(view.clock.closesAtUnixMs)}. Change your mind as often as you like until then.`
+                ? `Closes ${dayAndTime(view.clock.closesAtUnixMs)}. You can change your vote until then.`
                 : 'Voting has closed for this weekend. The next ballot opens when this event finishes.'}
             </Text>
           </Panel>
@@ -501,7 +496,8 @@ export default function WeekendScreen() {
 function Stat({ label, value }: { label: string; value: string }) {
   return (
     <View style={styles.stat}>
-      <Text style={styles.statLabel}>{label}</Text>
+      {/* Capitals, as the hourly rounds' figures are: the two pages sit side by side. */}
+      <Text style={styles.statLabel}>{label.toUpperCase()}</Text>
       <Text style={styles.statValue}>{value}</Text>
     </View>
   );
@@ -528,13 +524,39 @@ interface SlotGridProps {
  * is, and the host's own weekday is never shown. Nobody in Seoul should have to
  * work out whose Saturday is meant.
  */
+/** The narrowest a slot is drawn: "12:00 PM" and a count, with room around them. */
+const CELL_MIN = 92;
+
+/**
+ * Every slot the same width, shared out from the row so that a full row runs
+ * to the panel's edge. A fixed 92 stopped short of it — by most of a cell on an
+ * iPad — and the gap read as a missing hour. The last row is still short when
+ * the hours do not divide evenly, which is the tidy remainder `cell` explains.
+ */
+const cellWidthFor = (rowWidth: number): number => {
+  if (rowWidth <= 0) return CELL_MIN;
+  const columns = Math.max(1, Math.floor((rowWidth + space.snug) / (CELL_MIN + space.snug)));
+  return Math.floor((rowWidth - space.snug * (columns - 1)) / columns);
+};
+
 function SlotGrid({ busy, days, leading, onToggle, signedIn }: SlotGridProps) {
   const most = Math.max(
     1,
     ...days.flatMap((day) => day.slots.map((entry) => entry.people)),
   );
+  const [rowWidth, setRowWidth] = useState(0);
+  const measure = (event: LayoutChangeEvent) => {
+    const measured = Math.round(event.nativeEvent.layout.width);
+    setRowWidth((current) => (current === measured ? current : measured));
+  };
+  const width = cellWidthFor(rowWidth);
   return (
-    <View style={styles.grid}>
+    <View onLayout={measure} style={styles.grid}>
+      {/*
+        First, not last: signed out, every cell below is dead, and saying so
+        after thirty-six of them was the last thing anybody read.
+      */}
+      {!signedIn ? <Text style={styles.pollNote}>Sign in to mark your slots.</Text> : null}
       {days.map((day) => (
         <View key={day.key} style={styles.day}>
           <View style={styles.dayHeading}>
@@ -555,6 +577,7 @@ function SlotGrid({ busy, days, leading, onToggle, signedIn }: SlotGridProps) {
                   onPress={() => onToggle(entry.slot)}
                   style={({ pressed }) => [
                     styles.cell,
+                    { width },
                     // The fill is the crowd; the border is you. Two channels, so
                     // a popular slot you cannot make still reads as popular.
                     entry.people > 0 && {
@@ -576,7 +599,6 @@ function SlotGrid({ busy, days, leading, onToggle, signedIn }: SlotGridProps) {
           </View>
         </View>
       ))}
-      {!signedIn ? <Text style={styles.pollNote}>Sign in to mark your slots.</Text> : null}
     </View>
   );
 }
@@ -604,6 +626,8 @@ function PollRows({ busy, kind, onVote, poll, signedIn }: PollRowsProps) {
   const most = Math.max(1, ...tallies.map((tally) => tally.votes));
   return (
     <View style={styles.poll}>
+      {/* Above the ballot for the same reason as the slots' note. */}
+      {!signedIn ? <Text style={styles.pollNote}>Sign in to vote.</Text> : null}
       {options.map((option) => {
         const votes = tallies.find((tally) => tally.choice === option)?.votes ?? 0;
         const mine = poll.mine === option;
@@ -649,9 +673,6 @@ function PollRows({ busy, kind, onVote, poll, signedIn }: PollRowsProps) {
           </Pressable>
         );
       })}
-      {!signedIn ? (
-        <Text style={styles.pollNote}>Sign in to vote.</Text>
-      ) : null}
     </View>
   );
 }
@@ -682,7 +703,7 @@ const styles = themedSheet(() => ({
     borderRadius: radius.medium,
     padding: space.medium - 2,
   },
-  statLabel: { color: colors.textFaint, ...type.label, fontSize: 9 },
+  statLabel: { color: colors.textFaint, ...type.eyebrow },
   statValue: { color: colors.text, fontSize: 20, fontWeight: '900', marginTop: space.tight },
   plan: { color: colors.textFaint, ...type.meta, marginTop: space.medium },
 
@@ -751,10 +772,12 @@ const styles = themedSheet(() => ({
   // them grow instead stretches that row's one orphan across the full width,
   // which is not. It is also the truthful shape: the fill opacity is the crowd,
   // so a wider cell reads as a more popular hour when it is only a remainder.
+  //
+  // A width rather than a basis, because the width is measured and changes:
+  // on iOS a changed `flexBasis` keeps the first value it was laid out with.
   cell: {
     flexGrow: 0,
-    flexBasis: 92,
-    width: 92,
+    width: CELL_MIN,
     alignItems: 'center',
     paddingVertical: space.small,
     paddingHorizontal: space.tight,

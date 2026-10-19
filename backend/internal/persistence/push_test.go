@@ -235,3 +235,37 @@ func TestAnUnknownTransportIsRefused(t *testing.T) {
 		t.Fatal("expected an unknown transport to be refused")
 	}
 }
+
+// An Android registration token is stored as its own kind, and anything that
+// could not be one is refused before it can make an account look reachable.
+func TestAnAndroidRegistrationTokenIsStoredAndCheckedForShape(t *testing.T) {
+	store := authTestStore(t)
+	ctx := t.Context()
+	registeredOwner(t, store, "alice", "Alice")
+	token := "dQw4w9WgXcQ:APA91bHun4MxP5egoKMwt2KZFBaFUH-1RYqx_xQ3eQ5HfZJ9o8nZ2tYyX0u2VQ7yK1n1bS0T"
+
+	saved, err := store.SavePushSubscription(ctx, PushSubscription{
+		Endpoint: token, UserID: "alice", Transport: TransportFCM, P256dh: "stray", Auth: "stray",
+	})
+	if err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	if saved.P256dh != "" || saved.Auth != "" {
+		t.Fatal("an FCM row carries no key material")
+	}
+	reachable, err := store.HasPushSubscription(ctx, "alice", TransportFCM)
+	if err != nil || !reachable {
+		t.Fatalf("expected the phone to be reachable over FCM: %v", err)
+	}
+	if reachable, _ := store.HasPushSubscription(ctx, "alice", TransportAPNs); reachable {
+		t.Fatal("an Android phone is not reachable over APNs")
+	}
+
+	for _, bad := range []string{"", "short", "https://push.example/not-a-token-but-long-enough", token + " " + token} {
+		if _, err := store.SavePushSubscription(ctx, PushSubscription{
+			Endpoint: bad, UserID: "alice", Transport: TransportFCM,
+		}); !errors.Is(err, ErrInvalidPushSubscription) {
+			t.Fatalf("%q: expected a refusal, got %v", bad, err)
+		}
+	}
+}

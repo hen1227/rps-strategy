@@ -62,7 +62,10 @@ export const useQueueCall = (): QueueCall | null => {
         connectionStatus,
         modes,
         atOwnBoard,
-        pushLive: pushStatus === 'granted',
+        // Both halves, because a registration outlives the server's means of
+        // using it: a device signed up while this server held a key it has
+        // since lost is still `granted` here, and nothing can reach it.
+        pushLive: pushStatus === 'granted' && pushEnabled,
         canOfferAlerts: canOfferAlerts(pushStatus, snoozedUntil, pushEnabled, nowMs),
         updating: Boolean(serverUpdate?.updating),
         nowMs,

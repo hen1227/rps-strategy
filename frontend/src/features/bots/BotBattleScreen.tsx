@@ -15,6 +15,7 @@ import {
   type ReviewMove,
 } from '@/engine/gameReview';
 import { boardSizeTag, encodePGN, encodePosition, formatMove, resultFor } from '@/engine/pgn';
+import { track } from '@/analytics/track';
 import { failureMessage } from '@/errors';
 import AccuracyCard from '@/features/analysis/AccuracyCard';
 import AnalysisEffortToggle from '@/features/analysis/AnalysisEffortToggle';
@@ -51,6 +52,14 @@ import type {
 } from '@/types/game';
 
 const MIN_MOVE_TIME_MS = 250;
+/** How wide the page is, at the least, on a wide screen. */
+const SCREEN_WIDTH = 1240;
+/**
+ * The room beside the board on a wide screen: the column's gutter for the eval
+ * bar, the gap before the panel, the panel's 360 and the page's padding, with a
+ * little to spare for the panel.
+ */
+const SIDE_PANEL = 455;
 
 /**
  * One move of a battle: the move, and what the bot that played it was doing.
@@ -295,6 +304,7 @@ function BotBattle({ blueProfile, mode, redProfile }: BotBattleProps) {
     setPgn(null);
     setCopyState('idle');
     startedAtRef.current = Date.now();
+    track('bot_match_start', { mode: mode.id, where: 'device' });
 
     // Watched battles keep a short, consistent pacing floor so fast searches
     // remain readable. A search that takes longer than the floor is not delayed
@@ -418,11 +428,23 @@ function BotBattle({ blueProfile, mode, redProfile }: BotBattleProps) {
   // so the walk always has a report; the guard keeps that in the types.
   const report = analysis.report;
 
-  const { boardSize, height, isWide } = useBoardLayout({
+  // On a wide screen the board's column shares a row with the panel, and holds
+  // more than the board: a player bar above it and one below, and the replay
+  // controls under those. Both are measured, and the board takes the row's
+  // height less the rest of the column. It grows into that rather than stopping
+  // at the size a laptop draws it: held there, a tall screen ended the column
+  // well short of the panel beside it, over an empty band. `chrome` is only the
+  // estimate for the first frame, before anything has been measured.
+  const [wideRowHeight, setWideRowHeight] = useState<number | null>(null);
+  const [columnRest, setColumnRest] = useState<number | null>(null);
+  const { boardSize, isWide } = useBoardLayout({
     minimum: 220,
-    sidePanel: 455,
+    sidePanel: SIDE_PANEL,
     chrome: 245,
     narrowHeightShare: 0.47,
+    fill: true,
+    maxHeight:
+      wideRowHeight !== null && columnRest !== null ? wideRowHeight - columnRest : undefined,
   });
   const latestGame = positions[positions.length - 1] ?? initialGame;
   const visibleGame = positions[Math.min(cursor, positions.length - 1)] ?? latestGame;
@@ -448,7 +470,15 @@ function BotBattle({ blueProfile, mode, redProfile }: BotBattleProps) {
   const analysisNote = analysisProgress(analysis, running);
 
   const playerStack = (
-    <View style={[styles.playerStack, { width: boardSize + 38 }]}>
+    <View
+      onLayout={(event) => {
+        // Less the board, which is drawn at the size this screen chose, so what
+        // is left is everything else the column holds.
+        const rest = Math.ceil(event.nativeEvent.layout.height) - boardSize;
+        setColumnRest((current) => (current === rest ? current : rest));
+      }}
+      style={[styles.playerStack, { width: boardSize + 38 }]}
+    >
       <PlayerBar
         badge="BOT"
         captured={captures.Red}
@@ -524,7 +554,7 @@ function BotBattle({ blueProfile, mode, redProfile }: BotBattleProps) {
           {cursor === latestIndex
             ? running
               ? `Following live at move ${latestIndex}. The bots continue independently of these controls.`
-              : `${moves.length} moves played. Use the timeline to review the complete fight.`
+              : `${plural(moves.length, 'move')} played. Use the timeline to review the complete fight.`
             : `Viewing move ${cursor} while the bots ${running ? 'keep fighting' : 'remain at the final position'}. Press End to catch up.`}
         </Text>
         <Text
@@ -662,7 +692,17 @@ function BotBattle({ blueProfile, mode, redProfile }: BotBattleProps) {
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'right', 'bottom', 'left']}>
-      <View style={styles.screen}>
+      {/*
+        As wide as the board and its panel need, and never narrower than the
+        page has always been: a board grown into a tall window takes the room
+        it needs from the margins, not from the panel.
+      */}
+      <View
+        style={[
+          styles.screen,
+          isWide && { maxWidth: Math.max(SCREEN_WIDTH, boardSize + SIDE_PANEL) },
+        ]}
+      >
         <View style={styles.topBar}>
           <BackLink href={up.battle.href} label={up.battle.label} />
           <View style={styles.titleCopy}>
@@ -692,12 +732,25 @@ function BotBattle({ blueProfile, mode, redProfile }: BotBattleProps) {
         </View>
 
         {isWide ? (
-          <View style={styles.wideLayout}>
+          <View
+            onLayout={(event) => {
+              const next = Math.floor(event.nativeEvent.layout.height);
+              setWideRowHeight((current) => (current === next ? current : next));
+            }}
+            style={styles.wideLayout}
+          >
             {playerStack}
+            {/*
+              Bounded by the row, so the move list scrolls down to the foot of
+              the page. A height counted from the window did not know about a
+              tablet's safe area: once the moves outgrew it the panel ran past
+              the bottom of the screen, and the end of the list could be
+              scrolled no further than the screen's edge.
+            */}
             <ScrollView
               contentContainerStyle={styles.widePanelContent}
               showsVerticalScrollIndicator={false}
-              style={[styles.widePanel, { maxHeight: height - 92 }]}
+              style={[styles.widePanel, { maxHeight: wideRowHeight ?? boardSize }]}
             >
               {panel}
             </ScrollView>
@@ -727,7 +780,7 @@ const styles = themedSheet(() => ({
   screen: {
     flex: 1,
     width: '100%',
-    maxWidth: 1240,
+    maxWidth: SCREEN_WIDTH,
     alignSelf: 'center',
     paddingHorizontal: 12,
     paddingBottom: 10,

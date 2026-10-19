@@ -20,6 +20,14 @@ export interface EngineLinesCardProps {
   emptyMessage?: string;
   /** Replaces the default depth-and-nodes line in the header. */
   meta?: string | null;
+  /**
+   * Blank rows to hold the card open while a search has nothing to show yet.
+   *
+   * For a board that is searched afresh after every move. Without them the
+   * card shrinks to one row each time a move is played and grows back when the
+   * first depth lands, and everything under it jumps twice.
+   */
+  pendingRows?: number;
   turn: PlayerColor;
 }
 
@@ -27,6 +35,7 @@ export default function EngineLinesCard({
   analysis,
   emptyMessage = 'No legal continuation.',
   meta,
+  pendingRows = 0,
   turn,
 }: EngineLinesCardProps) {
   const defaultMeta = analysis
@@ -37,7 +46,11 @@ export default function EngineLinesCard({
     <View style={styles.card}>
       <View style={styles.header}>
         <Text style={styles.eyebrow}>TOP MOVES FOR {turn.toUpperCase()}</Text>
-        {analysis ? <Text style={styles.meta}>{meta ?? defaultMeta}</Text> : null}
+        {analysis ? (
+          <Text style={styles.meta}>{meta ?? defaultMeta}</Text>
+        ) : pendingRows > 0 ? (
+          <Text style={styles.meta}> </Text>
+        ) : null}
       </View>
       {analysis?.lines?.length ? (
         analysis.lines.map((line, index) => (
@@ -62,6 +75,12 @@ export default function EngineLinesCard({
               ) : null}
             </View>
             <Text style={styles.lineScore}>{formatScore(line.score)}</Text>
+          </View>
+        ))
+      ) : pendingRows > 0 ? (
+        Array.from({ length: pendingRows }, (_, index) => (
+          <View key={index} style={styles.lineRow}>
+            <View style={[styles.lineRank, styles.lineRankPending]} />
           </View>
         ))
       ) : (
@@ -101,6 +120,7 @@ const styles = themedSheet(() => ({
     justifyContent: 'center',
     borderRadius: radius.small,
   },
+  lineRankPending: { backgroundColor: colors.surfaceMuted },
   lineRankText: { color: colors.textInverse, fontSize: 9, fontWeight: '900' },
   lineCopy: { flex: 1, minWidth: 0 },
   lineMove: { color: colors.textStrong, fontSize: 12, fontWeight: '900' },

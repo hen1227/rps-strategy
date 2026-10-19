@@ -1,12 +1,13 @@
 // Whether this device can be called back, and how it becomes able to be.
 //
-// Two transports, one state machine. A browser is reached through Web Push and
-// an iPhone through APNs, and those have nothing in common on the wire — a URL
-// and a pair of encryption keys against a device token — but everything in
-// common above it: the same offer, the same statuses, the same one notification,
-// and the same rule that what holds a place in the queue is an address the
-// *server* knows about. Only `detect`, `enable`, `disable` and the two helpers
-// they share branch, and the iOS half of each lives in `pushApns.ts`.
+// Three transports, one state machine. A browser is reached through Web Push,
+// an iPhone through APNs and an Android phone through FCM, and those have
+// nothing in common on the wire — a URL and a pair of encryption keys against a
+// device token — but everything in common above it: the same offer, the same
+// statuses, the same one notification, and the same rule that what holds a
+// place in the queue is an address the *server* knows about. Only `detect`,
+// `enable`, `disable` and the two helpers they share branch, and the phones'
+// half of each lives in `pushNative.ts`.
 //
 // A store of its own rather than a slice of the game store, following
 // `bottomInset` and `reviewHandoff`: nothing in the game store needs push, and
@@ -18,13 +19,14 @@
 // This file is imported during the static export, which runs in Node with no
 // `window`, no `navigator` and no `Notification` — the same rule
 // `localIdentity.ts` follows for `localStorage`, and for the same reason. It is
-// also why `expo-notifications` is reached through `await import('./pushApns')`
+// also why `expo-notifications` is reached through `await import('./pushNative')`
 // rather than imported: a native module at module scope would be evaluated by
 // the export and by every unit test in this directory.
 
 import { Platform } from 'react-native';
 import { create } from 'zustand';
 
+import { track } from '@/analytics/track';
 import type { PushTransportSupport } from '@/types/protocol';
 
 import {
@@ -67,21 +69,23 @@ export type PushStatus =
 export type PushCapability = 'ready' | 'needs-home-screen' | 'unsupported';
 
 /** How this build is reached. */
-export type PushTransport = 'web-push' | 'apns';
+export type PushTransport = 'web-push' | 'apns' | 'fcm';
 
-/**
- * The transport this build can use, or `null` where the server has no way in.
- *
- * Android is that `null`: it would be FCM, which this server does not speak.
- * Saying so here is what stops an Android build from registering an FCM token
- * on the APNs route and looking reachable for ever while nothing is delivered.
- */
+/** The two a phone can be: the transports `pushNative.ts` answers for. */
+export type NativePushTransport = Exclude<PushTransport, 'web-push'>;
+
+const isNative = (transport: PushTransport): transport is NativePushTransport =>
+  transport !== 'web-push';
+
+/** The transport this build can use, or `null` where the server has no way in. */
 export const activePushTransport = (): PushTransport | null => {
   switch (Platform.OS) {
     case 'web':
       return 'web-push';
     case 'ios':
       return 'apns';
+    case 'android':
+      return 'fcm';
     default:
       return null;
   }
@@ -102,7 +106,15 @@ export const pushEnabledFor = (
 ): boolean => {
   if (!transport) return false;
   if (!support) return transport === 'web-push' && enabled;
-  return transport === 'apns' ? support.apns : support.webPush;
+  switch (transport) {
+    case 'apns':
+      return support.apns;
+    // Absent from a server that predates Android, which has no way to reach one.
+    case 'fcm':
+      return support.fcm === true;
+    default:
+      return support.webPush;
+  }
 };
 
 /**
@@ -117,7 +129,7 @@ export type WebPushFacts = {
   isStandalone: boolean;
 };
 
-/** What a native build's capability turns on. */
+/** What an iPhone build's capability turns on. */
 export type ApnsFacts = {
   transport: 'apns';
   /** Whether `expo-notifications` is actually linked into this binary. */
@@ -132,12 +144,32 @@ export type ApnsFacts = {
 };
 
 /**
+ * What an Android build's capability turns on.
+ *
+ * No emulator rule: an emulator with Google Play services is handed a real FCM
+ * token that really delivers. What an Android build can lack instead is its
+ * Firebase config, without which there is no token to be had at all.
+ */
+export type FcmFacts = {
+  transport: 'fcm';
+  hasNotificationsModule: boolean;
+  /** Whether the build was made with a `google-services.json`. */
+  hasFirebaseConfig: boolean;
+};
+
+export type NativePushFacts = ApnsFacts | FcmFacts;
+
+/**
  * The capability decision, as a pure function of a handful of facts about the
  * device, so it can be tested without one.
  */
-export const pushCapabilityFrom = (facts: WebPushFacts | ApnsFacts): PushCapability => {
+export const pushCapabilityFrom = (facts: WebPushFacts | NativePushFacts): PushCapability => {
   if (facts.transport === 'apns') {
     if (!facts.hasNotificationsModule || facts.isSimulator) return 'unsupported';
+    return 'ready';
+  }
+  if (facts.transport === 'fcm') {
+    if (!facts.hasNotificationsModule || !facts.hasFirebaseConfig) return 'unsupported';
     return 'ready';
   }
   if (!facts.hasServiceWorker || !facts.hasPushManager) return 'unsupported';
@@ -201,26 +233,34 @@ const webPushCapability = (): PushCapability => {
  * Permission alone is not the bargain, exactly as on the web: what holds a
  * place in the queue is a token the server is holding, so a granted permission
  * with no token of ours reports as unasked and offers to fix itself. The token
- * is re-read on every look because iOS is entitled to hand back a different
- * one — after a restore from backup, most often — and re-posted on every look
- * whether it changed or not, for the reasons on `refreshRegistration`.
+ * is re-read on every look because the OS is entitled to hand back a different
+ * one — after a restore from backup on iOS, and whenever FCM rotates it on
+ * Android — and re-posted on every look whether it changed or not, for the
+ * reasons on `refreshRegistration`.
  *
  * A permission that has gone is the opposite case, and only this side can see
  * it: see `withdrawRegistration`.
  */
-const detectDevice = async (sessionToken: string | null): Promise<Partial<PushStore>> => {
-  const apns = await import('./pushApns');
-  if (pushCapabilityFrom(apns.apnsFacts()) !== 'ready') return { status: 'unsupported' };
+const detectDevice = async (
+  transport: NativePushTransport,
+  sessionToken: string | null,
+): Promise<Partial<PushStore>> => {
+  const native = await import('./pushNative');
+  if (pushCapabilityFrom(native.nativeFacts(transport)) !== 'ready') {
+    return { status: 'unsupported' };
+  }
 
-  const permission = await apns.apnsPermission();
+  const permission = await native.nativePermission();
   if (permission !== 'granted') {
-    await withdrawRegistration('apns', sessionToken);
+    await withdrawRegistration(transport, sessionToken);
     return { status: permission === 'denied' ? 'denied' : 'unasked', endpoint: null };
   }
 
   if (!readPushEndpoint()) return { status: 'unasked', endpoint: null };
-  const token = await apns.apnsDeviceToken();
-  await refreshRegistration(token, () => savePushDevice(token, identity(sessionToken)));
+  const token = await native.nativeDeviceToken();
+  await refreshRegistration(token, () =>
+    savePushDevice(token, transport, identity(sessionToken)),
+  );
   return { status: 'granted', endpoint: token, error: null };
 };
 
@@ -230,14 +270,17 @@ const detectDevice = async (sessionToken: string | null): Promise<Partial<PushSt
  * No gesture rule to respect here — that is a web constraint — but the order is
  * the web's anyway: ask, and only register a device whose owner said yes.
  */
-const enableDevice = async (sessionToken: string | null): Promise<Partial<PushStore>> => {
-  const apns = await import('./pushApns');
-  const permission = await apns.requestApnsPermission();
+const enableDevice = async (
+  transport: NativePushTransport,
+  sessionToken: string | null,
+): Promise<Partial<PushStore>> => {
+  const native = await import('./pushNative');
+  const permission = await native.requestNativePermission();
   if (permission !== 'granted') {
     return { status: permission === 'denied' ? 'denied' : 'unasked' };
   }
-  const token = await apns.apnsDeviceToken();
-  await savePushDevice(token, identity(sessionToken));
+  const token = await native.nativeDeviceToken();
+  await savePushDevice(token, transport, identity(sessionToken));
   savePushEndpoint(token);
   return { status: 'granted', endpoint: token, error: null };
 };
@@ -299,7 +342,7 @@ const withdrawRegistration = async (
   const known = readPushEndpoint();
   if (!known) return;
   try {
-    if (transport === 'apns') await deletePushDevice(known, identity(sessionToken));
+    if (isNative(transport)) await deletePushDevice(known, identity(sessionToken));
     else await deletePushSubscription(known, identity(sessionToken));
     clearPushEndpoint();
   } catch {
@@ -340,9 +383,9 @@ export const usePushStore = create<PushStore>()((set, get) => ({
       set({ status: 'unsupported' });
       return;
     }
-    if (transport === 'apns') {
+    if (isNative(transport)) {
       try {
-        set(await detectDevice(sessionToken));
+        set(await detectDevice(transport, sessionToken));
       } catch {
         // A failure here must never break matchmaking: the queue still works, it
         // just cannot outlive the app.
@@ -405,10 +448,12 @@ export const usePushStore = create<PushStore>()((set, get) => ({
       set({ status: 'unsupported' });
       return;
     }
-    if (transport === 'apns') {
+    if (isNative(transport)) {
       set({ status: 'enabling', error: null });
       try {
-        set(await enableDevice(sessionToken));
+        const enabled = await enableDevice(transport, sessionToken);
+        set(enabled);
+        if (enabled.status === 'granted') track('alerts_enable', { platform: Platform.OS });
       } catch (error) {
         set({ status: 'error', error: enableFailureMessage(error) });
       }
@@ -451,6 +496,7 @@ export const usePushStore = create<PushStore>()((set, get) => ({
       await savePushSubscription(payloadFrom(subscription), identity(sessionToken));
       savePushEndpoint(subscription.endpoint);
       set({ status: 'granted', endpoint: subscription.endpoint, error: null });
+      track('alerts_enable', { platform: 'web' });
     } catch (error) {
       set({ status: 'error', error: enableFailureMessage(error) });
     }
@@ -464,10 +510,11 @@ export const usePushStore = create<PushStore>()((set, get) => ({
     clearPushEndpoint();
     set({ status: 'unasked', endpoint: null, error: null });
     try {
-      if (activePushTransport() === 'apns') {
+      const transport = activePushTransport();
+      if (transport && isNative(transport)) {
         // The OS permission is deliberately left alone: it is the player's to
-        // give and take away, and iOS has nothing to unsubscribe from anyway.
-        // Deleting the server's row is what stops the summons.
+        // give and take away, and a phone has nothing to unsubscribe from
+        // anyway. Deleting the server's row is what stops the summons.
         if (endpoint) await deletePushDevice(endpoint, identity(sessionToken));
         return;
       }

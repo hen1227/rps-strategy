@@ -163,7 +163,18 @@ type Challenge struct {
 	//
 	// Deliberately not omitempty: false is the value carrying the information,
 	// and a client that saw no field could not tell "away" from "old server".
-	Present         bool  `json:"present"`
+	Present bool `json:"present"`
+	// Callable is whether a notification can reach the author of a row that is
+	// not Present. Away is not the same as callable: a phone in somebody's
+	// pocket keeps its socket for up to a minute after the app goes to the
+	// background, and a tab can sit idle for hours, and neither says anything
+	// about whether that person turned alerts on. A lobby that read one as the
+	// other promised to call back people it had no way to reach.
+	//
+	// Worked out only for a row that is not Present, because a present author
+	// is seated on the spot and needs no calling, so it is false on every
+	// present row. Not omitempty, for the reason Present is not.
+	Callable        bool  `json:"callable"`
 	CreatedAtUnixMs int64 `json:"createdAtUnixMs"`
 	// Zero for a seek that does not expire, which is what a plain search is.
 	ExpiresAtUnixMs int64 `json:"expiresAtUnixMs,omitempty"`

@@ -146,7 +146,7 @@ export default function OfficialTournamentScreen() {
                 />
                 <Text style={styles.body}>
                     Every bot on this site stops taking games from{' '}
-                    <Text style={styles.emphasis}>{officialTournament.botsOfflineLabel}</Text> . This covers the tournament and time either side.
+                    <Text style={styles.emphasis}>{officialTournament.botsOfflineLabel}</Text>. This covers the tournament and time either side.
                 </Text>
                 {/*
           The server's own account of the same thing, which is the one that

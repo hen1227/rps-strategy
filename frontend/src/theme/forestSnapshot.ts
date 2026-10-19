@@ -167,6 +167,8 @@ export const FOREST_SNAPSHOT = {
     "annotation": "#f2811d",
     "annotationTint": "rgba(242, 129, 29, 0.78)",
     "annotationMark": "rgba(255, 255, 255, 0.76)",
+    "captureStroke": "rgba(255, 255, 255, 0.92)",
+    "captureEdge": "rgba(23, 22, 19, 0.5)",
     "analysisArrows": [
       "#a3d160",
       "#8fb4d8",

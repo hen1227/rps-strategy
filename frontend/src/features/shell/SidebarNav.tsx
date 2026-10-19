@@ -6,6 +6,7 @@ import { useNavContext } from './useNavContext';
 import TournamentPromoLink from './TournamentPromoLink';
 import { headlineRating, ratingIsRankable } from '@/features/ratings/scale';
 import {IOS_APP_URL, SOURCE_URL, iosAppIsBeta, links, webGoatGuy} from '@/navigation/links';
+import { navRowProps } from '@/navigation/stack';
 import { useGameStore } from '@/store/gameStore';
 import { colors, radius, space, themedSheet, type } from '@/theme';
 import GitHubMark from '@/ui/GitHubMark';
@@ -87,7 +88,11 @@ export default function SidebarNav() {
                 // styles and the current-page marker pinned above its own label
                 // instead of beside it. A real `<a href>` is worth keeping —
                 // middle-click, copy-link, crawlers — so the press feedback goes.
-                <Link asChild href={section.href} key={section.id} replace>
+                //
+                // `navRowProps`: a replace between sections, and the analysis
+                // board laid over the shell rather than put in its place, so
+                // its "‹ Lobby" pops back instead of pushing a new lobby.
+                <Link asChild href={section.href} key={section.id} {...navRowProps(section)}>
                   <Pressable
                     {...hoverProps('row')}
                     accessibilityLabel={section.label}

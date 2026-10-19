@@ -31,12 +31,19 @@
 // of a board goes to the lobby, to a player's page, to the opening book and to
 // that game's review, and all four want the board gone. Only the page being
 // left decides.
+//
+// With one exception, and it is the only move that looks at the destination: a
+// game started from the analysis board is laid *over* it. PLAY A BOT and PASS
+// AND PLAY hand the position being studied to a game, and the game's way out
+// is back to that position — which only exists if the analysis board is still
+// underneath, with its line intact, rather than replaced by the game. See
+// `useBoardUpTarget` in `upFrom` for the other half.
 
 import { usePathname, useRouter, useSegments } from 'expo-router';
 import { useCallback } from 'react';
 import type { Href } from 'expo-router';
 
-import { pageOf } from './links';
+import { navRowMove, stackMove } from './stackMove';
 
 /**
  * The route group every lobby section sits in — see `src/app/(shell)/_layout.tsx`.
@@ -48,27 +55,6 @@ import { pageOf } from './links';
  * the pile above back. The router already knows which group it is in.
  */
 const SHELL_GROUP = '(shell)';
-
-/** How a move should be dispatched: the three the router offers that we use. */
-type StackMove = 'navigate' | 'replace' | 'dismissTo';
-
-/**
- * The move for going to `to` from the page `from`.
- *
- * `fromShell` is whether the page being left is a section of the lobby shell,
- * which is the whole of the decision — see the note at the top of this file.
- *
- * The same page again is `replace`, and that is not only about stack depth:
- * `replace` gives the route a fresh key, so the screen unmounts and comes back
- * up on its new parameters. Swapping which game you are watching, or which line
- * of the book you are reading, depends on that remount to start over — the
- * other two moves hand the same screen new parameters and let it decide, which
- * a screen holding "I have already asked for my game" cannot do.
- */
-const stackMove = (from: string, to: Href, fromShell: boolean): StackMove => {
-  if (pageOf(to) === from) return 'replace';
-  return fromShell ? 'navigate' : 'dismissTo';
-};
 
 /** Whether the page showing is a section of the lobby shell. */
 const useInShell = (): boolean => {
@@ -134,3 +120,11 @@ export const useStackProps = (href: Href): { replace?: true; dismissTo?: true } 
       return { dismissTo: true };
   }
 };
+
+/**
+ * The rule for a row of the shell's own navigation, as props for its `<Link>`:
+ * `replace` between sections, and laid over the shell for the row that leaves
+ * it. See `navRowMove`.
+ */
+export const navRowProps = (row: { external?: boolean }): { replace?: true } =>
+  navRowMove(row) === 'replace' ? { replace: true } : {};

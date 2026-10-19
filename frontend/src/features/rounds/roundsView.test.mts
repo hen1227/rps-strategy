@@ -164,9 +164,12 @@ test('a field too small to run a round says so before the hour', () => {
   assert.equal(shortFieldNote({ inRound: 5, minimumField: 2 }), null);
   assert.match(
     shortFieldNote({ inRound: 1, minimumField: 2 }) ?? '',
-    /^1 entered; at least 2 needed to play\./,
+    /^1 in; at least 2 needed to play\./,
   );
-  assert.match(shortFieldNote({ inRound: 0, minimumField: 2 }) ?? '', /^No engines entered\. At least 2 are needed to play\./);
+  assert.match(
+    shortFieldNote({ inRound: 0, minimumField: 2 }) ?? '',
+    /^No engines are in yet\. At least 2 are needed to play\./,
+  );
 });
 
 test('your own engines are joined to the field, and retired slots are dropped', () => {

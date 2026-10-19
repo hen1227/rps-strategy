@@ -76,6 +76,13 @@ import {
 // the board *and* the bar rather than stopping short of it. Kept next to the
 // style that lays those two out (`boardWithEval`), which is its other half.
 const EVAL_BAR_GUTTER = 38;
+/** How wide the page is, at the least, on a wide screen. */
+const SCREEN_WIDTH = 1240;
+/**
+ * The room beside the board on a wide screen: the column's gutter for the eval
+ * bar, the gap before the panel, the panel's 360, and the page's padding.
+ */
+const SIDE_PANEL = 440;
 
 const EMPTY_POSITIONS: AnalysisGame[] = [];
 const EMPTY_MOVES: RecordedMove[] = [];
@@ -346,6 +353,12 @@ export default function ReviewScreen() {
     ok: boolean;
   } | null>(null);
   const [widePanelHeight, setWidePanelHeight] = useState<number | null>(null);
+  // Everything in the board's column on a wide screen that is not the board:
+  // the replay controls under it, the run's table over it, and the chat at the
+  // foot while the run is still being played. That column does not scroll, so
+  // whatever does not fit in it goes off the bottom of the window — the board
+  // is the part that gives the room up.
+  const [columnRest, setColumnRest] = useState<number | null>(null);
   // How much room the run's table over the board is taking, so the board can
   // give it up rather than pushing what is under it off the screen.
   const [seriesTableHeight, setSeriesTableHeight] = useState(0);
@@ -630,9 +643,22 @@ export default function ReviewScreen() {
   // from, so its height is not a constant. Without this the board keeps the room
   // it had before there was a table over it and the chat underneath is pushed
   // off the bottom of the window.
+  //
+  // That is the estimate, for the first frame. Once the row and the column
+  // have been measured the board takes the row's height less the rest of the
+  // column, which counts the table, the controls and the chat as they were
+  // actually drawn — and grows into it, rather than stopping at the size a
+  // laptop draws it: held there, a tall screen ended the board well short of
+  // the panel beside it, over an empty band.
   const { boardSize, isWide } = useBoardLayout({
-    sidePanel: 440,
+    sidePanel: SIDE_PANEL,
+    // The default allowance for the header, and the replay controls under the
+    // board on top of it.
+    chrome: 166,
     below: (showChat ? 240 : 0) + seriesTableHeight,
+    fill: true,
+    maxHeight:
+      widePanelHeight !== null && columnRest !== null ? widePanelHeight - columnRest : undefined,
   });
 
   if (loadError && !record) {
@@ -1011,7 +1037,17 @@ export default function ReviewScreen() {
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'right', 'bottom', 'left']}>
-      <View style={styles.screen}>
+      {/*
+        As wide as the board and its panel need, and never narrower than the
+        page has always been: a board grown into a tall window takes the room
+        it needs from the margins, not from the panel.
+      */}
+      <View
+        style={[
+          styles.screen,
+          isWide && { maxWidth: Math.max(SCREEN_WIDTH, boardSize + SIDE_PANEL) },
+        ]}
+      >
         <View style={styles.topBar}>
           <View style={styles.topBarRow}>
             <BackLink href={upTarget.href} label={upTarget.label} />
@@ -1099,7 +1135,15 @@ export default function ReviewScreen() {
             }}
             style={styles.wideLayout}
           >
-            <View style={[styles.boardColumn, { width: boardSize + 38 }]}>
+            <View
+              onLayout={(event) => {
+                // Less the board, which is drawn at the size this screen chose,
+                // so what is left is everything else the column holds.
+                const rest = Math.ceil(event.nativeEvent.layout.height) - boardSize;
+                setColumnRest((current) => (current === rest ? current : rest));
+              }}
+              style={[styles.boardColumn, { width: boardSize + 38 }]}
+            >
               {boardBlock}
               {controls}
               {/*
@@ -1151,7 +1195,7 @@ const styles = themedSheet(() => ({
   screen: {
     flex: 1,
     width: '100%',
-    maxWidth: 1240,
+    maxWidth: SCREEN_WIDTH,
     alignSelf: 'center',
     paddingHorizontal: 12,
     paddingBottom: 10,
@@ -1209,9 +1253,15 @@ const styles = themedSheet(() => ({
   widePanelContent: { paddingBottom: 18 },
   mobileContent: { alignItems: 'center', paddingBottom: 24, gap: 12 },
   panelStack: { width: '100%', gap: 10 },
+  // Wraps, with the buttons going under the sentence rather than squeezing it.
+  // A game from a series has three of them, and beside three a panel at its
+  // narrowest — which is what a board grown into a tall window leaves it —
+  // had about thirty points for the sentence, one word to a line.
   recordCard: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'center',
+    justifyContent: 'flex-end',
     gap: 12,
     padding: 13,
     borderRadius: 11,
@@ -1219,7 +1269,10 @@ const styles = themedSheet(() => ({
     borderColor: colors.border,
     backgroundColor: colors.surface,
   },
-  recordCopy: { flex: 1, minWidth: 0 },
+  // What the sentence is owed before the buttons go under it: two short lines.
+  // A minimum rather than a basis: iOS starts a row's one flexible item from
+  // zero whatever basis it is given, and the row then never wrapped.
+  recordCopy: { flex: 1, minWidth: 120 },
   // Stacked on a phone, where two buttons side by side would squeeze the line
   // of text beside them into one word per row.
   recordActions: { gap: 6 },

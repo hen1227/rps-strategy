@@ -145,6 +145,12 @@ export const buildTheme = (spec: ThemeSpec, boardSpec: BoardSpec) => {
     annotationTint: withAlpha(signals.orange, 0.78),
     annotationMark: withAlpha(boardSpec.paper, 0.76),
 
+    // The marks a capture leaves for a moment — the dust, the cut, the sheet —
+    // in the board's paper, edged in its ink for the same reason an arrow is:
+    // a mark that lands on either colour of square has to separate from both.
+    captureStroke: withAlpha(boardSpec.paper, 0.92),
+    captureEdge: withAlpha(boardSpec.ink, 0.5),
+
     // Ranked suggestions, best first — and one colour per rank, all the way to
     // the five the board will draw. The last two are the review's own
     // annotation hues, which were chosen to stand apart from both players'

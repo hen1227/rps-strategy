@@ -1,5 +1,5 @@
 import { useRef, useState, type ReactNode } from 'react';
-import { Pressable, ScrollView, Text, View } from 'react-native';
+import { Platform, Pressable, ScrollView, Text, View } from 'react-native';
 
 import {
   entrantHandle,
@@ -12,6 +12,20 @@ import { colors, radius, themedSheet } from '@/theme';
 import PlayerLink from '@/ui/PlayerLink';
 import { Badge, EmptyState, Panel } from '@/ui/primitives';
 import { playedRecord } from './tournamentBoard';
+
+/**
+ * A spotlight figure on one line, shrunk if it has to be.
+ *
+ * The aside gives each figure about 96 points on an iPad, and "100%" at this
+ * size wants more: iOS broke it over two lines and dropped its label a line
+ * below the other two. The web never breaks "100%" — no break is allowed
+ * before a percent sign — so it keeps its own rendering rather than gaining an
+ * ellipsis there.
+ */
+const FIT_ONE_LINE =
+  Platform.OS === 'web'
+    ? {}
+    : ({ numberOfLines: 1, adjustsFontSizeToFit: true, minimumFontScale: 0.6 } as const);
 
 interface Props {
   tournament: Tournament;
@@ -47,6 +61,15 @@ export default function TournamentOverview({
 
   return (
     <View
+      // A fresh pair of columns each time the layout switches, on a phone or
+      // a tablet. The first layout is always the stacked one — the width is
+      // not known until it has been measured — and iOS's layout engine keeps
+      // each column's stacked height as its starting size when the row
+      // arrives: `flex` there starts from a cached basis, not from zero, and
+      // does not shrink. So the standings came out as wide as they had been
+      // tall, and the spotlight beside them ran off an iPad's screen. The web
+      // lays out afresh every time and never showed it.
+      key={wide ? 'columns' : 'stacked'}
       onLayout={(event) => {
         setWidth(event.nativeEvent.layout.width);
         offsets.current.top = event.nativeEvent.layout.y;
@@ -203,7 +226,6 @@ export default function TournamentOverview({
               3 points per win · 1 per draw
               {hasByes ? ' · Byes count as wins' : ''}
               {hasTies ? ' · T marks a shared place' : ''}
-              {'\n'}Select › to see a player’s performance.
             </Text>
           </>
         )}
@@ -253,11 +275,13 @@ export default function TournamentOverview({
               </View>
               <View style={styles.metrics}>
                 <View style={styles.metric}>
-                  <Text style={styles.bigNumber}>{focused.points}</Text>
+                  <Text style={styles.bigNumber} {...FIT_ONE_LINE}>
+                    {focused.points}
+                  </Text>
                   <Text style={styles.metricLabel}>POINTS</Text>
                 </View>
                 <View style={styles.metric}>
-                  <Text style={styles.bigNumber}>
+                  <Text style={styles.bigNumber} {...FIT_ONE_LINE}>
                     {!ranked
                       ? '–'
                       : focusedTied
@@ -267,7 +291,7 @@ export default function TournamentOverview({
                   <Text style={styles.metricLabel}>RANK</Text>
                 </View>
                 <View style={styles.metric}>
-                  <Text style={styles.bigNumber}>
+                  <Text style={styles.bigNumber} {...FIT_ONE_LINE}>
                     {record.winRate === null ? '—' : `${record.winRate}%`}
                   </Text>
                   <Text style={styles.metricLabel}>WIN RATE</Text>
@@ -350,8 +374,9 @@ const styles = themedSheet(() => ({
   asideWide: { flex: 1 },
   heading: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   headingCopy: { flex: 1, minWidth: 0 },
+  // Neutral, like every other eyebrow: green is for the button worth pressing.
   eyebrow: {
-    color: colors.accent,
+    color: colors.textFaint,
     fontSize: 10,
     fontWeight: '900',
     letterSpacing: 1.5,

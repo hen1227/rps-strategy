@@ -36,6 +36,11 @@ type PanelCopy = { eyebrow: string; title: string; body: string; action: string 
  */
 const IS_NATIVE = Platform.OS !== 'web';
 const DEVICE = IS_NATIVE ? 'device' : 'browser';
+/** Where a phone keeps this app's notification switch. */
+const NOTIFICATION_SETTINGS =
+  Platform.OS === 'android'
+    ? 'Settings › Apps › RPS Strategy › Notifications'
+    : 'Settings › Notifications › RPS Strategy';
 
 const COPY: Record<PushStatus | 'server-off', PanelCopy> = {
   unasked: {
@@ -115,14 +120,17 @@ const NATIVE_COPY: Partial<Record<PushStatus | 'server-off', PanelCopy>> = {
   enabling: {
     eyebrow: 'MATCH ALERTS',
     title: 'Turning alerts on…',
-    body: 'Registering this device with the Apple notification service.',
+    body:
+      Platform.OS === 'android'
+        ? "Registering this device with Google's notification service."
+        : 'Registering this device with the Apple notification service.',
     action: null,
   },
   denied: {
     eyebrow: 'MATCH ALERTS',
     title: 'Notifications are switched off',
     body:
-      "Enable alerts in Settings › Notifications › RPS Strategy. Until then, keep the app open to stay queued.",
+      `Enable alerts in ${NOTIFICATION_SETTINGS}. Until then, keep the app open to stay queued.`,
     action: null,
   },
   unsupported: {
@@ -243,16 +251,26 @@ function AlertsCard({
  *
  * Only `delivered` means a push service took it. Everything else has to say
  * whose problem it is: an address that has gone is cured by turning alerts off
- * and on, and a refusal is this server's own fault. Telling somebody to check
- * their settings for that sends them looking for a fault that is not theirs.
+ * and on, one that is still new by waiting, and a refusal is this server's own
+ * fault. Telling somebody to check their settings for that sends them looking
+ * for a fault that is not theirs.
  */
-const testResultMessage = ({ delivered, removed = 0, failed = 0 }: TestPushReport): string => {
+const testResultMessage = ({
+  delivered,
+  removed = 0,
+  failed = 0,
+  settling = 0,
+}: TestPushReport): string => {
   if (delivered > 0) {
     return `Sent to ${delivered} ${delivered === 1 ? DEVICE : `${DEVICE}s`}. If nothing appeared, ${
       IS_NATIVE
-        ? 'check Settings › Notifications › RPS Strategy.'
+        ? `check ${NOTIFICATION_SETTINGS}.`
         : "check this device's notification settings for your browser."
     }`;
+  }
+  // A registration a few seconds old that the push service has not heard of yet.
+  if (settling > 0 && settling === failed) {
+    return `This ${DEVICE} is still registering. Try again in a few seconds.`;
   }
   if (failed > 0) return 'Nothing was sent. The problem is on our side, not in your settings.';
   if (removed > 0) {
