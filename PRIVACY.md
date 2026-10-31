@@ -1,10 +1,12 @@
 # Privacy Policy & Online Play Agreement
 
-*Last updated: October 10, 2026*
+*Last updated: October 23, 2026*
 
 ## Every game is recorded
 
 RPS Strategy is run by Henhen1227, LLC, Henry's company, on a self-hosted server. This agreement is with the LLC, and “I” on this page means Henry Abrahamsen (@henhen1227), acting for it. Online games are recorded and linked to your account. Play fairly and treat other players well.
+
+RPS Strategy is not meant for children. Do not play online, chat, or sign in if you are under 13, or under the age your country sets for agreeing to online services.
 
 ## What I store
 
@@ -22,7 +24,7 @@ Player totals: wins, losses, draws, games played, and a rating for each mode. To
 
 Feedback: posts, replies, votes, and your username when posting. Bug reports also include app version, platform, and any game you attach. This information is public.
 
-Match alerts: if you turn them on, the push token your phone or browser gives for notifications. It is used only to tell you a game was found, and is removed when you turn alerts off or delete your account.
+Match alerts: if you turn them on, the push token your phone or browser gives for notifications. It is used only to tell you a game was found or that somebody took your challenge link, and is removed when you turn alerts off or delete your account.
 
 ## What other players can see
 
@@ -32,13 +34,13 @@ Your opponent and spectators can read game chat. Chat stays in server memory dur
 
 Messages and usernames containing listed slurs or strong profanity are rejected. Use reports for anything the filter misses.
 
-Anyone can read the feedback board. Posting, replying, and voting require an account signed in with Discord or Apple. Posts carry your username and remain public until deleted. Delete your own posts from the post menu, or ask me to remove them.
+Anyone can read the feedback board. Posting, replying, and voting require an account signed in with Discord or Apple. Posts carry your username and remain public until deleted. Delete your own posts with DELETE MINE on the post, or ask me to remove them.
 
 Keep account problems and other private information off the board. Use reports or contact me directly.
 
 ## Reporting and blocking
 
-Report or block a player from the ⋯ menu in chat or from their profile.
+Report or block a player from the ⋯ menu in chat or from their profile. Report a feedback post or reply with REPORT beside it.
 
 Reports include the recent conversation. I review them within 24 hours and may mute, restrict, or remove an account. Anyone can report, including guests. You will not receive an outcome update.
 
@@ -46,7 +48,7 @@ Your block list is private. Blocking hides messages in both directions and preve
 
 ## The public game archive
 
-Finished games are published daily on Hugging Face for research and to let others check opening statistics.
+Finished games are published daily on [Hugging Face](https://huggingface.co/datasets/Henhen1227/rps-strategy-games) for research and to let others check opening statistics.
 
 Exports include moves and clock readings, mode, result and reason, ranked status, ratings before and after, time control, and start and finish times. Games finished from September 9, 2026 onward include both usernames.
 
@@ -54,13 +56,13 @@ Exports exclude Discord IDs and handles, Apple IDs, account IDs, account key has
 
 Games finished before September 9, 2026 use “Anonymous player” for both names.
 
-Published files may already have been downloaded and cannot be recalled. Renaming your account changes future exports only. Contact me to exclude your name from future files.
+Published files are never rewritten, and may already have been downloaded. Renaming your account changes future exports only. Contact me to exclude your name from future files.
 
 ## Usage statistics
 
 The website and the apps use Google Analytics to count visits and see which features are used. In the EU, EEA, UK, and Switzerland, nothing is sent until you allow it. Elsewhere it is on by default, and starts off if your browser sends Global Privacy Control. Turn it on or off under Your account → Usage stats.
 
-What is sent: the pages you open, with names and game IDs removed from the address; actions such as signing in, joining the queue, posting a challenge or feedback, copying a link, and starting and finishing a game, with its mode, result, and length; and your device type, operating system, app or browser version, language, and screen size.
+What is sent: the pages you open, with names and game IDs removed from the address; actions such as signing in, joining the queue, posting a challenge or feedback, copying a link, and starting and finishing a game, with its mode, result, and length; and your device type, model and brand, operating system, app or browser version, language, and screen size.
 
 What is never sent: your username, account ID, Discord or Apple ID, who you played, game IDs, or chat.
 
@@ -72,21 +74,25 @@ Advertising features and Google signals are off. Google keeps the detailed data 
 
 ## What I do not do
 
-No ads, advertising trackers, or data sales. The only data shared is the public game archive and the usage statistics above. Match alerts are delivered by Apple, Google, or your browser's push service, and carry only the alert itself. Only I can access the database. Web-server logs record IP addresses for operation and debugging, separately from game records.
+No ads, advertising trackers, or data sales. The public game archive is the only data I share. Google Analytics processes the usage statistics above for me. Match alerts are delivered by Apple, Google, or your browser's push service, and carry only the alert itself. Only I can access the database. Web-server logs record IP addresses for operation and debugging, separately from game records.
 
 ## Deleting your account
 
-Choose Delete account at the bottom of your account page and type your username to confirm. Deletion is immediate and permanent.
+In the app or on the website, open You → Your account, choose DELETE ACCOUNT at the bottom, and type your username to confirm. Deletion is immediate and permanent. An account that signs in with Discord or Apple can be deleted this way from any browser: sign in at rps.henhen1227.com/account first.
+
+If you played without signing in and no longer have the device, email support@henhen1227.com with your username, and the Account ID shown on Your account if you have it. I will delete the account and reply within 30 days. An account that signs in with Discord or Apple is deleted by signing in instead, so nobody can delete yours by writing in.
 
 Your username, Discord and Apple links, titles, leaderboard entry, match alerts, and sign-in are removed. If you signed in with Apple, this app is also disconnected from your Apple ID. Your bots are retired. Accounts with no finished games are deleted outright.
 
 Finished games stay to preserve opponents’ records and ratings. Your name becomes “Deleted player” in game records, the archive, and saved move lists.
 
-Feedback posts and replies keep their text under “Deleted player”. Your votes are removed. To remove a post entirely, delete it before deleting your account, or ask me.
+Feedback posts and replies keep their text under “Deleted player”, and opening names you published stay on their lines without your name. Your votes are removed. To remove a post entirely, delete it before deleting your account, or ask me.
 
-Future public archive exports use the deleted name. Previously published files may still contain your old name and cannot be recalled.
+Reports filed by you or about you are kept, with the names and conversation they recorded, so moderation decisions stay on record.
 
-If deletion fails, contact me on Discord (@henhen1227) for help.
+Future public archive exports use the deleted name. Files already published are never rewritten, so they keep your old name.
+
+If deletion fails, email support@henhen1227.com or contact me on Discord (@henhen1227).
 
 Clearing browser data removes your local account key. Discord or Apple sign-in restores a linked account. Without a linked account, losing that key means losing access.
 
@@ -103,4 +109,4 @@ Clearing browser data removes your local account key. Discord or Apple sign-in r
 
 I update this page and its date when the policy changes. Continuing to play means you agree to the current version.
 
-Post bugs and suggestions under You → Feedback. For private questions or problems reports cannot resolve, contact @henhen1227 on Discord.
+Post bugs and suggestions under You → Feedback. For private questions or problems reports cannot resolve, email support@henhen1227.com or contact @henhen1227 on Discord.

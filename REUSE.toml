@@ -52,3 +52,13 @@ path = "frontend/src/ui/GitHubMark.tsx"
 precedence = "override"
 SPDX-FileCopyrightText = ["2026 Henhen1227, LLC", "2026 GitHub Inc."]
 SPDX-License-Identifier = "AGPL-3.0-or-later AND MIT"
+
+# Hugging Face's mark, beside it, on the link to the game data. The component is
+# ours; the path is copied from Simple Icons, which are CC0, so there is no
+# notice to carry. The mark is Hugging Face's trademark, and the note in the
+# file says what its brand page offers.
+[[annotations]]
+path = "frontend/src/ui/HuggingFaceMark.tsx"
+precedence = "override"
+SPDX-FileCopyrightText = ["2026 Henhen1227, LLC", "Simple Icons contributors"]
+SPDX-License-Identifier = "AGPL-3.0-or-later AND CC0-1.0"

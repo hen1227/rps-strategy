@@ -39,6 +39,7 @@ export interface NavContext {
 export type SectionId =
     | 'appearance'
     | 'play'
+    | 'challenge'
     | 'bots'
     | 'my-bots'
     | 'bot-docs'
@@ -136,6 +137,16 @@ export const SECTIONS: readonly Section[] = [
         label: 'Play Online',
         href: links.lobby(),
         path: '/',
+    },
+    {
+        // A challenge link's page. Nobody navigates to "a challenge", but
+        // standing on one is standing in the lobby, so it lights Play.
+        id: 'challenge',
+        group: 'play',
+        label: 'Challenge',
+        href: links.challenge(''),
+        path: '/challenge',
+        hidden: true,
     },
 
     {

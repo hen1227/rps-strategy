@@ -99,11 +99,23 @@ export interface CapturedPiecesProps {
   /** The side the captured pieces belonged to. */
   color: SideColor;
   tally: PieceTally | null | undefined;
+  /**
+   * How many pieces to show, in drawing order, while a finished card counts
+   * them out. The rest are laid out but invisible, so the tray is its final
+   * size from the start. All of them when absent.
+   */
+  revealed?: number;
 }
 
-export default function CapturedPieces({ advantage = 0, color, tally }: CapturedPiecesProps) {
+export default function CapturedPieces({
+  advantage = 0,
+  color,
+  revealed = Infinity,
+  tally,
+}: CapturedPiecesProps) {
   const groups = PIECE_ORDER.filter((piece) => (tally?.[piece] ?? 0) > 0);
   if (groups.length === 0) return null;
+  let drawn = 0;
 
   const summary = groups
     .map((piece) => `${tally?.[piece] ?? 0} ${piece.toLowerCase()}`)
@@ -118,11 +130,17 @@ export default function CapturedPieces({ advantage = 0, color, tally }: Captured
     >
       {groups.map((piece) => (
         <View key={piece} style={styles.group}>
-          {Array.from({ length: tally?.[piece] ?? 0 }, (_unused, index) => (
-            <View key={index} style={index > 0 && styles.stacked}>
-              <PieceIcon piece={piece} color={color} size={PIECE_SIZE} />
-            </View>
-          ))}
+          {Array.from({ length: tally?.[piece] ?? 0 }, (_unused, index) => {
+            drawn += 1;
+            return (
+              <View
+                key={index}
+                style={[index > 0 && styles.stacked, drawn > revealed && styles.uncounted]}
+              >
+                <PieceIcon piece={piece} color={color} size={PIECE_SIZE} />
+              </View>
+            );
+          })}
         </View>
       ))}
       {advantage > 0 && <Text style={styles.advantage}>+{advantage}</Text>}
@@ -143,6 +161,7 @@ const styles = themedSheet(() => ({
   group: { flexDirection: 'row', alignItems: 'center' },
   // Chess.com fans a group of like pieces out from a single stack.
   stacked: { marginLeft: -PIECE_SIZE * 0.45 },
+  uncounted: { opacity: 0 },
   advantage: {
     color: colors.textMuted,
     fontSize: 11,

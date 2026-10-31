@@ -157,7 +157,7 @@ export default function TournamentRegisterForm({
     setSubmitting(true);
     setError(null);
     try {
-      const registered = await signupForTournament(tournament.tournamentId, {
+      const registered = await signupForTournament(sessionToken ?? '', tournament.tournamentId, {
         userId: accountId,
         ign,
         discord,
@@ -295,7 +295,7 @@ export default function TournamentRegisterForm({
       )}
       <Checkbox
         checked={agreed}
-        label="I understand tournament chat may be unfiltered, agree to take part, and accept the privacy policy and play agreement."
+        label="I agree to take part, and accept the privacy policy and play agreement."
         onToggle={() => setAgreed((current) => !current)}
       />
       <View style={styles.submit}>

@@ -12,7 +12,7 @@ import { tournamentCallToAction, type TournamentCall } from '@/store/tournamentS
 export const useTournamentCall = (): TournamentCall | null => {
   const accountId = useGameStore((state) => state.accountId);
   const tournaments = useGameStore((state) => state.tournaments);
-  const gameState = useGameStore((state) => state.gameState);
+  const inGame = useGameStore((state) => Boolean(state.gameState));
   const isSpectating = useGameStore((state) => state.isSpectating);
 
   const call = useMemo(
@@ -20,6 +20,6 @@ export const useTournamentCall = (): TournamentCall | null => {
     [tournaments, accountId],
   );
 
-  const isPlayingOwnGame = Boolean(gameState) && !isSpectating;
+  const isPlayingOwnGame = inGame && !isSpectating;
   return isPlayingOwnGame ? null : call;
 };

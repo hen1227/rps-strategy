@@ -1,13 +1,10 @@
-import { Link } from 'expo-router';
-import type { Href } from 'expo-router';
-import { Linking, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 
-import { SOURCE_URL, links, webGoatGuy } from '@/navigation/links';
-import { useStackProps } from '@/navigation/stack';
-import { colors, contentWidth, radius, space, themedSheet, type } from '@/theme';
+import { InwardCard, OutwardCard, ui } from './creditsUi';
+import type { OutwardLink } from './creditsUi';
+import { links, webGoatGuy } from '@/navigation/links';
+import { contentWidth } from '@/theme';
 import ScreenShell from '@/ui/ScreenShell';
-import LinkRow from '@/ui/LinkRow';
-import { Panel, SectionHeading } from '@/ui/primitives';
 
 // Where this game came from, and who it came from.
 //
@@ -21,15 +18,6 @@ import { Panel, SectionHeading } from '@/ui/primitives';
 // says plainly that the games are not mine, names who made them, and sends
 // people to his site rather than trying to keep them here. That is the whole
 // reason it exists — the rest of this app is the fan part.
-
-/** One thing to open, somewhere that is not this site. */
-interface OutwardLink {
-  title: string;
-  detail: string;
-  url: string;
-  /** The mark in front of it: a play triangle for a video, a dot otherwise. */
-  mark: string;
-}
 
 const videos: OutwardLink[] = [
   {
@@ -65,78 +53,6 @@ const elsewhere: OutwardLink[] = [
   },
 ];
 
-// Last, under everything that is WebGoatGuy's: the code this build is made of,
-// and the licences of the packages it is built on. The AGPL expects a network
-// service to offer its source to the people using it, and most of those
-// licences ask for their notice to travel with the app, so both need a place a
-// player can find, and a credits page is where people look for them.
-const source: OutwardLink = {
-  title: 'RPS Strategy is open source',
-  detail:
-    'The code behind this site and the app, under the AGPL-3.0. The bot kit and its protocol documents are MIT, so a bot built from them is yours to license.',
-  url: SOURCE_URL,
-  mark: '◆',
-};
-
-/**
- * Where a link goes, as a reader checks it: the site, not the whole address.
- * "youtube.com" says what pressing it does; the video's id after it said nothing.
- */
-const siteOf = (url: string): string => {
-  const match = /^[a-z]+:\/\/(?:www\.)?([^/?#]+)/i.exec(url);
-  return match ? match[1]! : url;
-};
-
-/** A card that opens something outside the app. */
-function OutwardCard({ link }: { link: OutwardLink }) {
-  return (
-    <Pressable
-      accessibilityHint="Opens outside this site"
-      accessibilityLabel={link.title}
-      accessibilityRole="link"
-      onPress={() => Linking.openURL(link.url)}
-      style={({ pressed }) => [styles.card, pressed && styles.pressed]}
-    >
-      <Text style={styles.cardMark}>{link.mark}</Text>
-      <View style={styles.cardCopy}>
-        <Text style={styles.cardTitle}>{link.title}</Text>
-        <Text style={styles.cardDetail}>{link.detail}</Text>
-        {/*
-          Where it goes, written out under the description. A link that hides
-          where it goes is one people are right not to press, and this page is
-          nothing but links off the site.
-        */}
-        <Text numberOfLines={1} style={styles.cardURL}>
-          {siteOf(link.url)}
-        </Text>
-      </View>
-      <Text style={styles.cardChevron}>↗</Text>
-    </Pressable>
-  );
-}
-
-/** A card that opens a page of this site, drawn like the ones that leave it. */
-function InwardCard({ title, detail, href }: { title: string; detail: string; href: Href }) {
-  const stack = useStackProps(href);
-  return (
-    <Link asChild href={href} {...stack}>
-      {/*
-        One style object rather than OutwardCard's pressed-state array. On the
-        web, Link asChild hands its child's style to a real anchor, and an array
-        there takes the whole page down during hydration.
-      */}
-      <Pressable accessibilityLabel={title} accessibilityRole="link" style={styles.card}>
-        <Text style={styles.cardMark}>◆</Text>
-        <View style={styles.cardCopy}>
-          <Text style={styles.cardTitle}>{title}</Text>
-          <Text style={styles.cardDetail}>{detail}</Text>
-        </View>
-        <Text style={styles.cardChevron}>›</Text>
-      </Pressable>
-    </Link>
-  );
-}
-
 // No back button, like every other *section* of the shell.
 //
 // It carried one for as long as it was not a section: the sidebar was there,
@@ -148,88 +64,41 @@ function InwardCard({ title, detail, href }: { title: string; detail: string; hr
 export default function CreditsScreen() {
   return (
     <ScreenShell width={contentWidth.reading}>
-      <View style={styles.hero}>
-        <Text style={styles.heroEyebrow}>CREDIT WHERE IT IS DUE</Text>
-        <Text style={styles.heroTitle}>WebGoatGuy made this game</Text>
-        <Text style={styles.heroSubtitle}>
+      <View style={ui.hero}>
+        <Text style={ui.heroEyebrow}>CREDIT WHERE IT IS DUE</Text>
+        <Text style={ui.heroTitle}>WebGoatGuy made this game</Text>
+        <Text style={ui.heroSubtitle}>
           WebGoatGuy created every game mode here.
         </Text>
       </View>
 
-      <View style={styles.section}>
-        <Text style={styles.sectionLabel}>THE VIDEOS</Text>
+      <View style={ui.section}>
+        <Text style={ui.sectionLabel}>THE VIDEOS</Text>
         {videos.map((link) => (
           <OutwardCard key={link.url} link={link} />
         ))}
       </View>
 
-      <View style={styles.section}>
-        <Text style={styles.sectionLabel}>WHERE TO GO NEXT</Text>
+      <View style={ui.section}>
+        <Text style={ui.sectionLabel}>WHERE TO GO NEXT</Text>
         {elsewhere.map((link) => (
           <OutwardCard key={link.url} link={link} />
         ))}
       </View>
 
-      <View style={styles.section}>
-        <Text style={styles.sectionLabel}>THIS APP</Text>
-        <OutwardCard link={source} />
+      {/*
+        Last, under everything that is WebGoatGuy's: what this build is made of.
+        The source, the engine, the game data and the licences of the packages
+        underneath are a page of their own now, and this is the one way to it.
+      */}
+      <View style={ui.section}>
+        <Text style={ui.sectionLabel}>THIS APP</Text>
         <InwardCard
-          detail="The open-source packages this site and the app are built on, and the licence of each."
-          href={links.licences()}
-          title="Open-source licences"
+          detail="The code, the engine, and every game played here."
+          href={links.openSource()}
+          title="RPS Strategy is open source"
         />
       </View>
     </ScreenShell>
   );
 }
-
-const styles = themedSheet(() => ({
-  // No padding on top: the trail that used to sit above this is gone, and
-  // `ScreenShell` already opens every page with the same room.
-  hero: { paddingBottom: space.snug },
-  heroEyebrow: { ...type.eyebrow, color: colors.textFaint, letterSpacing: 2.1 },
-  heroTitle: {
-    color: colors.textStrong,
-    fontSize: 34,
-    fontWeight: '900',
-    letterSpacing: -1,
-    marginTop: space.tight,
-  },
-  heroSubtitle: {
-    ...type.bodyStrong,
-    color: colors.textMuted,
-    lineHeight: 20,
-    marginTop: space.small,
-  },
-
-  body: { ...type.bodyStrong, color: colors.textMuted, lineHeight: 19, marginTop: space.small },
-  tagInline: { color: colors.goldBright, fontWeight: '900' },
-
-  section: { gap: space.small },
-  sectionLabel: { ...type.eyebrow, color: colors.textFaint, letterSpacing: 1.4 },
-
-  card: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: space.medium,
-    padding: space.medium,
-    borderRadius: radius.large,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surface,
-  },
-  // Neutral: the marks say what kind of link a card is, and green is for the
-  // one button on a page worth pressing.
-  cardMark: { color: colors.textFaint, fontSize: 12, lineHeight: 20 },
-  // `minWidth: 0` so a long description wraps instead of pushing the chevron
-  // off the end of the card. See the note in MobileTopBar.
-  cardCopy: { flex: 1, minWidth: 0, gap: space.hair },
-  cardTitle: { ...type.rowTitle, color: colors.textStrong, fontSize: 13 },
-  cardDetail: { ...type.body, color: colors.textMuted, marginTop: space.hair },
-  cardURL: { ...type.meta, color: colors.textFaint, marginTop: space.tight },
-  cardChevron: { color: colors.textFaint, fontSize: 13, lineHeight: 20 },
-
-  rows: { marginTop: space.small },
-
-  pressed: { opacity: 0.7 },
-}));

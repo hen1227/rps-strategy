@@ -137,7 +137,7 @@ func TestAnEngineIsNotEnteredOneEventAtATime(t *testing.T) {
 	byAccount := signupRequest(t, handler, cup.TournamentID, map[string]any{
 		"userId": bot.UserID, "ign": "Fishy", "discord": "bot.fishy",
 		"agreedToUnfilteredChat": true,
-	}, "")
+	}, session)
 	if byAccount.Code != http.StatusForbidden {
 		t.Fatalf("expected 403 entering a bot account directly, got %d: %s",
 			byAccount.Code, byAccount.Body)
@@ -414,7 +414,7 @@ func TestBotsOnlyFieldStillAdmitsEnginesAndBarsPeople(t *testing.T) {
 	person := signupRequest(t, handler, "engines", map[string]any{
 		"userId": "watcher", "ign": "Watcher", "discord": "watcher.discord",
 		"agreedToUnfilteredChat": true,
-	}, "")
+	}, entrantSession(t, data, "watcher"))
 	if person.Code != http.StatusForbidden {
 		t.Fatalf("expected a person to be barred, got %d: %s", person.Code, person.Body)
 	}

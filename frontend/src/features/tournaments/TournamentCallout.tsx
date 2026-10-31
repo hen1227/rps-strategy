@@ -1,5 +1,7 @@
+import { useEffect } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
+import { haptic } from '@/haptics/haptics';
 import { colors, radius, themedSheet } from '@/theme';
 import { useGameStore } from '@/store/gameStore';
 import { CALL_TO_ACTION_COPY, type TournamentCall } from '@/store/tournamentSelectors';
@@ -12,6 +14,13 @@ import { GhostButton, PrimaryButton } from '@/ui/primitives';
 // The call arrives as a prop, and the absolutely positioned layer it sits in
 // lives in `shell/CalloutLayer`: the queue bar wants the same strip of screen,
 // so something above both of them has to decide which one is showing.
+
+// The match a tap last announced. Module-level rather than state, because the
+// card is rebuilt whenever the layer above it is — a theme change, the queue
+// card giving way to this one — and a match is announced once, not once per
+// rebuild.
+let announcedMatch: string | null = null;
+
 export default function TournamentCallout({ call }: { call: TournamentCall }) {
   const connectionStatus = useGameStore((state) => state.connectionStatus);
   const readyForTournamentMatch = useGameStore((state) => state.readyForTournamentMatch);
@@ -22,6 +31,15 @@ export default function TournamentCallout({ call }: { call: TournamentCall }) {
   const copy = CALL_TO_ACTION_COPY[call.kind];
   const isWaiting = call.kind === 'waiting';
   const isUrgent = call.kind === 'play' || call.kind === 'ready';
+
+  // A tap as the card turns urgent: somebody is now waiting on this player.
+  // Once per match, so a match going from ready to live does not tap twice.
+  const urgentMatch = isUrgent ? `${call.tournamentId}:${call.matchId}` : null;
+  useEffect(() => {
+    if (!urgentMatch || urgentMatch === announcedMatch) return;
+    announcedMatch = urgentMatch;
+    haptic('notice');
+  }, [urgentMatch]);
 
   return (
     <View style={[styles.card, isUrgent && styles.cardUrgent]}>

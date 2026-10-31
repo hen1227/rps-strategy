@@ -42,6 +42,17 @@ export const links = {
    */
   watch: (gameId: string): Href => ({ pathname: '/watch', params: { gameId } }),
 
+  /**
+   * A challenge link: a game offered to whoever opens this address.
+   *
+   * Opening it takes the game; opening it after somebody else has is a way in
+   * to watch. The code travels in the query string for the reason at the top
+   * of this file. A section of the shell rather than a full-screen page,
+   * because whoever takes a link while its author is away waits in the lobby,
+   * and this page is the part of the lobby they wait on.
+   */
+  challenge: (code: string): Href => ({ pathname: '/challenge', params: { code } }),
+
   /** The analysis board, optionally opened on a particular mode. */
   analysis: (modeId?: ModeID): Href =>
     modeId ? { pathname: '/analysis', params: { mode: modeId } } : '/analysis',
@@ -236,6 +247,11 @@ export const links = {
   admin: (tab?: string): Href =>
     tab ? { pathname: '/admin', params: { tab } } : '/admin',
   policy: (): Href => '/policy',
+  /**
+   * How to delete an account, on a page of its own: the address the Play
+   * listing gives for deletion requests. See `DeleteAccountInfoScreen`.
+   */
+  deleteAccount: (): Href => '/delete-account',
 
   /** Themes, boards, piece sets and sounds. */
   appearance: (): Href => '/appearance',
@@ -251,11 +267,21 @@ export const links = {
   credits: (): Href => '/credits',
 
   /**
+   * What anybody may take from this project: the source, the engine, the game
+   * data and the bot kit, each with its licence.
+   *
+   * Under the credits page rather than a section of its own, and reached from
+   * its last card. Its own address so the README and the data set's card can
+   * link to it.
+   */
+  openSource: (): Href => '/open-source',
+
+  /**
    * The licence of every third-party package the site and the app ship.
    *
-   * Under the credits page rather than a section of its own. It answers the
-   * same question for the software this is built on that Credits answers for
-   * the games.
+   * Under the open-source page rather than a section of its own. It answers
+   * the same question for the software this is built on that that page answers
+   * for this project's own.
    */
   licences: (): Href => '/licences',
 
@@ -377,6 +403,14 @@ export const gameReviewURL = (gameId: string) => shareURL(links.review(gameId));
 export const watchGameURL = (gameId: string) => shareURL(links.watch(gameId));
 
 /**
+ * A challenge link, for its author to send to whoever they want to play.
+ *
+ * Unlike every other address here it is a key rather than a page: whoever
+ * opens it first gets the game. It is only ever handed to its author.
+ */
+export const challengeLinkURL = (code: string) => shareURL(links.challenge(code));
+
+/**
  * One player's page, for a link handed to somebody who is not here.
  *
  * By name rather than by id, always: the id is an implementation detail and the
@@ -447,10 +481,21 @@ export const webGoatGuy = {
 
 /**
  * This project's own source. It is published under the AGPL, which expects a
- * network service to offer its source to the people using it, so the credits
- * page and the licences page both link here.
+ * network service to offer its source to the people using it, so the
+ * open-source page, the licences page and the sidebar all link here.
  */
 export const SOURCE_URL = 'https://github.com/hen1227/rps-strategy';
+
+/**
+ * Every finished game played here, published daily on Hugging Face under CC0.
+ * PRIVACY.md promises it, so the policy links here, and so do the open-source
+ * page, the sidebar and the opening explorer, which is the page people come to
+ * for the numbers this data is made of.
+ */
+export const DATASET_URL = 'https://huggingface.co/datasets/Henhen1227/rps-strategy-games';
+
+/** The engine's own source, a separate repository under the LGPL. */
+export const ENGINE_SOURCE_URL = 'https://github.com/hen1227/rpsfish';
 
 /**
  * Where to get the iOS app. For now that is its TestFlight beta. Once the app

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { failureMessage } from '@/errors';
+import { haptic } from '@/haptics/haptics';
 import { getTitleCatalogue, setAccountTitle } from '@/store/api/accounts';
 import { isSignedIn } from '@/store/accountSession';
 import { useGameStore } from '@/store/gameStore';
@@ -212,7 +213,10 @@ function Choice({
       accessibilityRole="radio"
       accessibilityState={{ selected, disabled }}
       disabled={disabled}
-      onPress={onPress}
+      onPress={() => {
+        if (!selected) haptic('choose');
+        onPress();
+      }}
       style={({ pressed }) => [
         styles.choice,
         selected && styles.choiceSelected,

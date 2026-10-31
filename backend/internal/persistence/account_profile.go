@@ -12,6 +12,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"rps-strategy/backend/internal/textfilter"
 )
 
 const (
@@ -272,6 +274,11 @@ func validateDiscord(discord string) (string, error) {
 			"%w: Discord cannot contain spaces or control characters",
 			ErrInvalidAccountProfile,
 		)
+	}
+	// Shown on the player's page beside their name, so held to the rule names
+	// are. See validateUsername.
+	if !textfilter.CleanName(discord) {
+		return "", fmt.Errorf("%w: choose a different Discord handle", ErrInvalidAccountProfile)
 	}
 	return discord, nil
 }

@@ -138,9 +138,7 @@ func TestATournamentBarRefusesSignups(t *testing.T) {
 	}
 	defer data.Close()
 	server := NewWithStoreAndAdminToken(data, nil, "test-secret")
-	if _, err := data.EnsureAccount(t.Context(), "banned", "Banned"); err != nil {
-		t.Fatal(err)
-	}
+	session := registeredSession(t, data, "banned", "Banned")
 	restriction, err := data.SetRestriction(
 		t.Context(), "banned", persistence.RestrictTournament, "no-showed twice", "admin", nil,
 	)
@@ -159,7 +157,7 @@ func TestATournamentBarRefusesSignups(t *testing.T) {
 			"userId": "banned", "ign": "Banned", "discord": "banned.discord",
 			"agreedToUnfilteredChat": true,
 		},
-		"",
+		session,
 	)
 	if response.Code != http.StatusForbidden {
 		t.Fatalf("expected the signup to be refused, got %d: %s", response.Code, response.Body)

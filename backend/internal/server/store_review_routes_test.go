@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -232,5 +233,44 @@ func TestSignInMethodsKeepsTheLinkPromptOffAReviewAccount(t *testing.T) {
 	}
 	if got := methodsFor(legacyToken); !got.AwaitingLink {
 		t.Fatalf("a legacy password account should be asked to link: %#v", got)
+	}
+}
+
+// Anybody who knows a name can spend its sign-in bucket with wrong guesses,
+// from as many addresses as they like. For a store review account that would
+// stall a review, and its password is too random to be worth guessing, so it
+// spends only the bucket of the address signing in. An ordinary name still
+// spends both.
+func TestWrongGuessesElsewhereDoNotLockAReviewerOut(t *testing.T) {
+	server, _, _ := discordTestServer(t)
+	handler := server.Routes()
+	made, recorder := putStoreReview(t, handler, "apple", map[string]string{"username": "ReviewAda"})
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("reset: %d %s", recorder.Code, recorder.Body)
+	}
+
+	login := func(username, password, address string) int {
+		request := httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(
+			`{"username":"`+username+`","password":"`+password+`"}`,
+		))
+		request.Header.Set("Content-Type", "application/json")
+		// From the proxy, as production is, so the forwarded address counts.
+		request.RemoteAddr = "127.0.0.1:12345"
+		request.Header.Set("X-Real-IP", address)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		return response.Code
+	}
+	for attempt := range authAttemptBurst + 2 {
+		address := "198.51.100." + strconv.Itoa(attempt+1)
+		_ = login("ReviewAda", "wrong-guess", address)
+		_ = login("SomebodyElse", "wrong-guess", address)
+	}
+
+	if code := login("ReviewAda", made.Password, "203.0.113.7"); code != http.StatusOK {
+		t.Fatalf("expected the reviewer to sign in from a fresh address, got %d", code)
+	}
+	if code := login("SomebodyElse", "wrong-guess", "203.0.113.8"); code != http.StatusTooManyRequests {
+		t.Fatalf("expected an ordinary name to stay throttled, got %d", code)
 	}
 }

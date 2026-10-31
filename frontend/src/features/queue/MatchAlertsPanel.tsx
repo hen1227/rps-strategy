@@ -88,7 +88,7 @@ const COPY: Record<PushStatus | 'server-off', PanelCopy> = {
     eyebrow: 'MATCH ALERTS',
     title: 'Match notifications are on',
     body:
-      "Close the tab and keep your place in the queue. We only notify you when a game starts.",
+      "Close the tab and keep your place in the queue. We only notify you when a game is ready.",
     action: 'TURN OFF',
   },
   'server-off': {
@@ -107,7 +107,7 @@ const NATIVE_COPY: Partial<Record<PushStatus | 'server-off', PanelCopy>> = {
     eyebrow: 'MATCH ALERTS',
     title: 'Wait for a game with the app closed',
     body:
-      "Enable alerts to stay queued with the app closed. We only notify you when a game starts.",
+      "Enable alerts to stay queued with the app closed. We only notify you when a game is ready.",
     action: 'TURN ON ALERTS ▶',
   },
   error: {
@@ -144,7 +144,7 @@ const NATIVE_COPY: Partial<Record<PushStatus | 'server-off', PanelCopy>> = {
     eyebrow: 'MATCH ALERTS',
     title: 'Match notifications are on',
     body:
-      "Close the app and keep your place in the queue. We only notify you when a game starts.",
+      "Close the app and keep your place in the queue. We only notify you when a game is ready.",
     action: 'TURN OFF',
   },
   'server-off': {

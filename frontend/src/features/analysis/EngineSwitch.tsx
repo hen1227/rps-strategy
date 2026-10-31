@@ -1,5 +1,6 @@
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { haptic } from '@/haptics/haptics';
 import { colors, radius, themedSheet } from '@/theme';
 
 /**
@@ -40,7 +41,10 @@ export default function EngineSwitch({ enabled, offDetail, onToggle }: EngineSwi
         accessibilityLabel="RPSFish engine"
         accessibilityRole="switch"
         accessibilityState={{ checked: enabled }}
-        onPress={onToggle}
+        onPress={() => {
+          haptic(enabled ? 'toggleOff' : 'toggleOn');
+          onToggle();
+        }}
         style={({ pressed }) => [
           styles.button,
           enabled && styles.buttonActive,

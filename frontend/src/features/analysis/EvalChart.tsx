@@ -13,6 +13,7 @@ import Svg, {
 import MoveQualityBadge from './MoveQualityBadge';
 import { chartMarks, markBudget } from './chartMarks';
 import type { ExpectedScorePoint, GradableMove, ReviewMove } from '@/engine/gameReview';
+import { haptic } from '@/haptics/haptics';
 import { colors, evaluationChart, moveQuality, players, themedSheet } from '@/theme';
 
 const FALLBACK_WIDTH = 360;
@@ -255,7 +256,10 @@ export default function EvalChart<TMove extends GradableMove>({
               focusable={false}
               key={index}
               onFocus={(event) => event.currentTarget?.blur?.()}
-              onPress={() => onSelect(index)}
+              onPress={() => {
+                if (index !== currentIndex) haptic('step');
+                onSelect(index);
+              }}
               style={styles.scrubberCell}
               tabIndex={-1}
             />

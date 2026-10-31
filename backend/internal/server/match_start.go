@@ -124,8 +124,9 @@ func (server *Server) startAcceptedChallenge(posted *Seek, taker *Client) {
 }
 
 // seatMatch opens the board for two seeks and calls whoever is not looking at
-// it. The seats arrive in the order they will be seated, Red first.
-func (server *Server) seatMatch(red, blue *startSeat) {
+// it. The seats arrive in the order they will be seated, Red first. It returns
+// the game, or nil when none could be made.
+func (server *Server) seatMatch(red, blue *startSeat) *GameSession {
 	redClient := server.seatClient(red.seek)
 	blueClient := server.seatClient(blue.seek)
 	// Anything either player was doing that conflicts with sitting down — a
@@ -151,7 +152,7 @@ func (server *Server) seatMatch(red, blue *startSeat) {
 		server.requeueOrRelease(blue)
 		server.broadcastOpenChallenges()
 		server.broadcastModePlayerCounts()
-		return
+		return nil
 	}
 
 	// Two rows just left the public board, and a plain search is published
@@ -162,6 +163,7 @@ func (server *Server) seatMatch(red, blue *startSeat) {
 
 	server.summon(session, red.seek, blue.seek, redClient == nil)
 	server.summon(session, blue.seek, red.seek, blueClient == nil)
+	return session
 }
 
 // seatClient resolves the socket that will sit in a seat, preferring the one
@@ -358,6 +360,9 @@ func (server *Server) cancelUnstartedGame(
 		GameID:  session.gameID,
 		Message: reason.tellWaiting(),
 	})
+	// A link that led to this game leads nowhere now, so it is closed rather
+	// than left pointing everybody who opens it at a board that never existed.
+	server.closeChallengeLinkForGame(session.gameID, "The game was called off before it began.")
 
 	// Only the player who was waiting gets their place back. Losing it is the
 	// consequence of not turning up, and it is what keeps the queue honest.

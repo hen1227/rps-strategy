@@ -211,3 +211,14 @@ func TestAccountProfileValidation(t *testing.T) {
 		t.Fatalf("an empty Discord handle should be allowed: %v", err)
 	}
 }
+
+// A typed Discord handle is shown on the player's page beside their name, so it
+// is refused for what a name would be refused for.
+func TestATypedDiscordHandleIsHeldToTheNameFilter(t *testing.T) {
+	if _, err := validateDiscord("xXshitlordXx"); !errors.Is(err, ErrInvalidAccountProfile) {
+		t.Fatalf("expected a filtered handle to be refused, got %v", err)
+	}
+	if handle, err := validateDiscord("ada.lovelace"); err != nil || handle != "ada.lovelace" {
+		t.Fatalf("expected an ordinary handle to pass, got %q, %v", handle, err)
+	}
+}

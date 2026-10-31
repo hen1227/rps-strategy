@@ -32,6 +32,7 @@ import BoardExportButton from '@/features/board/BoardExportButton';
 import { capturedPieces } from '@/features/board/CapturedPieces';
 import PlayerBar from '@/features/game/PlayerBar';
 import { colourResultLabel } from '@/features/game/resultLabels';
+import { haptic } from '@/haptics/haptics';
 import { useBoardLayout } from '@/hooks/useBoardLayout';
 import type { GameAnalysisResult } from '@/hooks/useGameAnalysis';
 import useGameAnalysis from '@/hooks/useGameAnalysis';
@@ -593,6 +594,7 @@ function BotBattle({ blueProfile, mode, redProfile }: BotBattleProps) {
             onPress={async () => {
               try {
                 await Clipboard.setStringAsync(pgn);
+                haptic('copied');
                 setCopyState('copied');
               } catch (error) {
                 setCopyState('error');

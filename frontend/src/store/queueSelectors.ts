@@ -70,8 +70,17 @@ export interface QueueSource {
 
 const clampAtZero = (value: number) => (value > 0 ? value : 0);
 
+/** What a mode is called when this device has never heard of it. */
+const UNKNOWN_MODE = 'a game';
+
 const modeNameFor = (modes: ModeDefinition[], modeId: string | null | undefined) =>
-  modes.find((mode) => mode.id === modeId)?.name ?? 'a game';
+  modes.find((mode) => mode.id === modeId)?.name ?? UNKNOWN_MODE;
+
+/** "Looking for a Total War opponent", "Looking for an Intransitive opponent". */
+export const lookingFor = (modeName: string) => {
+  if (modeName === UNKNOWN_MODE) return 'Looking for an opponent';
+  return `Looking for ${/^[aeiou]/i.test(modeName) ? 'an' : 'a'} ${modeName} opponent`;
+};
 
 /**
  * What the player is waiting on, or null when they are waiting on nothing.
@@ -237,14 +246,14 @@ export interface QueueCopy {
 
 export const QUEUE_COPY: Record<QueueCallKind, QueueCopy> = {
   searching_tethered: {
-    title: (call) => `Looking for a ${call.modeName} opponent`,
+    title: (call) => lookingFor(call.modeName),
     detail: (call) => `${formatWait(call.waitedMs)} in · this tab has to stay open to hold your place`,
     nativeDetail: (call) =>
       `${formatWait(call.waitedMs)} in · RPS has to stay open to hold your place`,
     action: 'LEAVE QUEUE',
   },
   searching_untethered: {
-    title: (call) => `Looking for a ${call.modeName} opponent`,
+    title: (call) => lookingFor(call.modeName),
     detail: (call) => `${formatWait(call.waitedMs)} in · close the tab if you like, we will call you back`,
     nativeDetail: (call) =>
       `${formatWait(call.waitedMs)} in · leave the app if you like, we will call you back`,

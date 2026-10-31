@@ -5,6 +5,7 @@ import ReachLegend from './ReachLegend';
 import ReachSettingsModal from './ReachSettingsModal';
 import ReachSummary from './ReachSummary';
 import { REACH_VIEWS, REACH_VIEW_LABELS, type ReachView } from './settings';
+import { haptic } from '@/haptics/haptics';
 import type { ReachToolResult } from '@/hooks/useReach';
 import { useGameStore } from '@/store/gameStore';
 import { colors, radius, space, themedSheet } from '@/theme';
@@ -37,7 +38,10 @@ function TogglePill({
       accessibilityLabel={`${label}, ${checked ? 'on' : 'off'}`}
       accessibilityRole="switch"
       accessibilityState={{ checked }}
-      onPress={onPress}
+      onPress={() => {
+        haptic(checked ? 'toggleOff' : 'toggleOn');
+        onPress();
+      }}
       style={({ pressed }) => [
         styles.pill,
         checked && styles.pillOn,
@@ -115,7 +119,10 @@ export default function ReachPanel({ tool }: ReachPanelProps) {
                 accessibilityRole="radio"
                 accessibilityState={{ selected }}
                 key={view}
-                onPress={() => setSettings({ view })}
+                onPress={() => {
+                  if (!selected) haptic('choose');
+                  setSettings({ view });
+                }}
                 style={({ pressed }) => [
                   styles.viewChip,
                   selected && styles.viewChipOn,

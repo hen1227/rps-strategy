@@ -10,6 +10,7 @@ import {
   formatCountdown,
   formatWait,
   lobbyGate,
+  lookingFor,
   queueCallState,
   updatePausedReason,
   waitingPresence,
@@ -355,4 +356,12 @@ test('the first-move countdown goes urgent at ten seconds and never negative', (
 test('the first-move countdown never promises more than the window', () => {
   const call = firstMoveCall(NOW + FIRST_MOVE_WINDOW_MS + 5_000, true, null, NOW)!;
   assert.equal(call.remainingMs, FIRST_MOVE_WINDOW_MS);
+});
+
+// Two of the three modes start with a vowel, and the card under every search
+// read "Looking for a Intransitive opponent" for as long as the search lasted.
+test('a search names its mode with the right article', () => {
+  assert.equal(lookingFor('Total War'), 'Looking for a Total War opponent');
+  assert.equal(lookingFor('Intransitive'), 'Looking for an Intransitive opponent');
+  assert.equal(lookingFor('Infiltration'), 'Looking for an Infiltration opponent');
 });

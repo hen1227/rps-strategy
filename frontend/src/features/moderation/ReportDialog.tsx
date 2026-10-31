@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { failureMessage } from '@/errors';
+import { haptic } from '@/haptics/haptics';
 import { fileReport, getReportPolicy, type NewReport } from '@/store/api/moderation';
 import { useGameStore } from '@/store/gameStore';
 import { colors, radius, space, themedSheet, type } from '@/theme';
@@ -193,7 +194,10 @@ export default function ReportDialog({
                 accessibilityRole="radio"
                 accessibilityState={{ checked: chosen }}
                 key={option.id}
-                onPress={() => setCategory(option.id)}
+                onPress={() => {
+                  if (!chosen) haptic('choose');
+                  setCategory(option.id);
+                }}
                 style={({ pressed }) => [
                   styles.category,
                   chosen && styles.categoryChosen,

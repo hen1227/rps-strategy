@@ -39,6 +39,13 @@ type ClientMessage struct {
 	// pairing has to compare two of them.
 	PreferredColor game.PlayerColor `json:"preferredColor,omitempty"`
 
+	// AppVersion and Platform say which build an `authenticate` comes from:
+	// the version in app.json, and "ios", "android" or "web". Every build
+	// before 1.0 sends neither, which is why a missing one is never refused.
+	// See app_version.go.
+	AppVersion string `json:"appVersion,omitempty"`
+	Platform   string `json:"platform,omitempty"`
+
 	// Engine-bot fields. `authenticate_bot` carries a bot's whole
 	// registration: the durable token that identifies it, plus the name and
 	// settings its config file asserts on every connect.
@@ -92,6 +99,10 @@ type ClientMessage struct {
 	// the server takes its word — and overrules it in the one direction it
 	// knows better, by treating a closed socket as away.
 	Present bool `json:"present,omitempty"`
+
+	// LinkCode names a challenge link: the code at the end of the address
+	// somebody was sent. See challenge_link.go.
+	LinkCode string `json:"linkCode,omitempty"`
 }
 
 // QueueSnapshot is a search as a reconnecting client needs to be told about it.
@@ -178,6 +189,54 @@ type Challenge struct {
 	CreatedAtUnixMs int64 `json:"createdAtUnixMs"`
 	// Zero for a seek that does not expire, which is what a plain search is.
 	ExpiresAtUnixMs int64 `json:"expiresAtUnixMs,omitempty"`
+}
+
+// ChallengeLinkState is where a challenge link has got to.
+type ChallengeLinkState string
+
+const (
+	// LinkOpen is a link nobody has taken yet. It expires.
+	LinkOpen ChallengeLinkState = "open"
+	// LinkWaiting is a link somebody has taken while its author was not at
+	// the screen: the taker waits in the lobby for as long as they like, and
+	// the game opens when the author is back.
+	LinkWaiting ChallengeLinkState = "waiting"
+	// LinkStarted is a link that became a game. It names the game from then
+	// on, so the people it was sent to can watch.
+	LinkStarted ChallengeLinkState = "started"
+	// LinkClosed is a link that leads nowhere: expired, cancelled, or never
+	// issued. Only ever sent, never stored.
+	LinkClosed ChallengeLinkState = "closed"
+)
+
+// ChallengeLink is the wire form of a challenge link: a game offered to
+// whoever opens an address its author sent them. One shape for every audience
+// — the author, the person who took it, and everybody else who opened it — so
+// each client works out its own part in it from the two profiles.
+type ChallengeLink struct {
+	Code string `json:"code"`
+	// Challenger and Setup are absent only on a closed link, which the server
+	// no longer holds and so can say nothing about but its code.
+	Challenger *game.PlayerProfile `json:"challenger,omitempty"`
+	ModeName   string              `json:"modeName,omitempty"`
+	Setup      *game.GameSetup     `json:"setup,omitempty"`
+	State      ChallengeLinkState  `json:"state"`
+	// Taker is who took it, from the moment they did.
+	Taker *game.PlayerProfile `json:"taker,omitempty"`
+	// GameID is the game it became.
+	GameID          string `json:"gameId,omitempty"`
+	CreatedAtUnixMs int64  `json:"createdAtUnixMs,omitempty"`
+	// ExpiresAtUnixMs is when an open link stops being takeable. Absent once
+	// somebody has taken it, because a taker waits as long as they like.
+	ExpiresAtUnixMs int64 `json:"expiresAtUnixMs,omitempty"`
+	// AuthorStatus is why a taken link has not become a game yet: its author
+	// is "away" (nothing connected), "idle" (connected, not looking) or
+	// "busy" (playing something else). Only on a waiting link.
+	AuthorStatus string `json:"authorStatus,omitempty"`
+	// AuthorCalled is whether a notification could be sent to the author when
+	// the link was taken, so the person waiting can be told whether anybody is
+	// coming or whether they are waiting on the author noticing by chance.
+	AuthorCalled bool `json:"authorCalled,omitempty"`
 }
 
 // LiveGameSeries places a live game inside the bot series it is one game of.
@@ -271,6 +330,16 @@ type ServerMessage struct {
 	Tournaments []TournamentSnapshot  `json:"tournaments,omitempty"`
 	Challenge   *Challenge            `json:"challenge,omitempty"`
 	Challenges  []Challenge           `json:"challenges,omitempty"`
+	// StoreURL is where `update_required` sends a build too old for this
+	// server. Empty when no store address is set, and the app then points at
+	// the website instead.
+	StoreURL string `json:"storeUrl,omitempty"`
+	// ChallengeLink is one link as it now stands, carried on `challenge_link`.
+	ChallengeLink *ChallengeLink `json:"challengeLink,omitempty"`
+	// ChallengeLinks is every link this account is part of — the one it sent
+	// out, the one it is waiting on — carried on connection_ready so a
+	// reconnecting client is told rather than left guessing.
+	ChallengeLinks []ChallengeLink `json:"challengeLinks,omitempty"`
 	// OpenChallenges is the public board of challenges nobody has claimed.
 	// Separate from Challenges, which is this player's own private inbox: the
 	// two are different lists to different audiences, and merging them would

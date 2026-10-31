@@ -34,6 +34,7 @@ import Board from '@/features/board/Board';
 import { namedResultLabel } from '@/features/game/resultLabels';
 import BoardExportButton from '@/features/board/BoardExportButton';
 import { capturedPieces } from '@/features/board/CapturedPieces';
+import CopyFENButton from '@/features/board/CopyFENButton';
 import type { ShareCardInput } from '@/features/board/export/shareCard';
 import { usePieceDrag } from '@/features/board/pieceDrag';
 import SeriesLink from '@/features/bots/SeriesLink';
@@ -42,6 +43,7 @@ import SeriesScoreTable from '@/features/bots/SeriesScoreTable';
 import GameChat from '@/features/game/GameChat';
 import GameTransition from '@/features/game/GameTransition';
 import { failureMessage } from '@/errors';
+import { haptic } from '@/haptics/haptics';
 import { useBoardLayout } from '@/hooks/useBoardLayout';
 import { useBoardSelection } from '@/hooks/useBoardSelection';
 import { useSeriesForGame } from '@/hooks/useBotSeries';
@@ -887,7 +889,10 @@ export default function ReviewScreen() {
           </Text>
           <Pressable
             accessibilityRole="button"
-            onPress={() => goTo(branch.baseIndex)}
+            onPress={() => {
+              haptic('press');
+              goTo(branch.baseIndex);
+            }}
             style={({ pressed }) => [styles.branchButton, pressed && styles.pressed]}
           >
             <Text style={styles.branchButtonText}>Back to the game</Text>
@@ -929,6 +934,7 @@ export default function ReviewScreen() {
               onPress={async () => {
                 try {
                   await Clipboard.setStringAsync(gameReviewURL(gameId));
+                  haptic('copied');
                   setCopyState({ what: 'link', ok: true });
                 } catch {
                   setCopyState({ what: 'link', ok: false });
@@ -947,6 +953,7 @@ export default function ReviewScreen() {
             onPress={async () => {
               try {
                 await Clipboard.setStringAsync(record.pgn);
+                haptic('copied');
                 setCopyState({ what: 'pgn', ok: true });
               } catch {
                 setCopyState({ what: 'pgn', ok: false });
@@ -1029,8 +1036,14 @@ export default function ReviewScreen() {
         // stepping through it, and the position worth taking away is whichever
         // one stopped you — including one off the record, down a line of your
         // own. COPY PGN on the card above is the other half of that pair and
-        // hands over the whole game.
-        titleAccessory={<BoardExportButton board={exportBoard} />}
+        // hands over the whole game. COPY FEN is the dialog's first answer
+        // brought out where it can be found without opening anything.
+        titleAccessory={
+          <View style={styles.boardActions}>
+            <CopyFENButton board={exportBoard} />
+            <BoardExportButton board={exportBoard} />
+          </View>
+        }
       />
     </View>
   );
@@ -1288,6 +1301,9 @@ const styles = themedSheet(() => ({
     backgroundColor: colors.accentSurfaceRaised,
   },
   copyButtonText: { color: colors.accentSoft, fontSize: 8, fontWeight: '900' },
+  // One child for the score sheet's title row, which spreads its children out:
+  // handed two, it would put COPY FEN in the middle of the card.
+  boardActions: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   branchNotice: {
     flexDirection: 'row',
     alignItems: 'center',

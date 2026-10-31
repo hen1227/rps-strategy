@@ -16,14 +16,15 @@ import { useBlocking } from './useBlocking';
 // that only offered reporting from inside a game would leave them with nowhere
 // to go.
 //
-// Nothing is shown on your own page, and nothing is shown for a bot: an engine
-// does not type, cannot be reported for what it said, and blocking one would
-// only stop you challenging it — which the page already lets you not do.
+// Nothing is shown on your own page. A bot gets REPORT and no BLOCK: an engine
+// does not type, but its name, description and picture are its owner's words,
+// and they can be reported like anybody's. Blocking one would only stop you
+// challenging it, which the page already lets you not do.
 
 export interface PlayerModerationRowProps {
   userId: string;
   username: string;
-  /** Bots get nothing here. See the note above. */
+  /** Bots get REPORT only. See the note above. */
   isBot?: boolean;
 }
 
@@ -36,9 +37,9 @@ export default function PlayerModerationRow({
   const [reporting, setReporting] = useState(false);
   const blocking = useBlocking();
 
-  if (isBot || !userId || userId === accountId) return null;
+  if (!userId || userId === accountId) return null;
 
-  const blocked = blocking.isBlocked(userId);
+  const blocked = !isBot && blocking.isBlocked(userId);
 
   return (
     <View style={styles.root}>
@@ -51,24 +52,26 @@ export default function PlayerModerationRow({
         >
           <Text style={styles.buttonText}>REPORT</Text>
         </Pressable>
-        <Pressable
-          accessibilityLabel={blocked ? `Unblock ${username}` : `Block ${username}`}
-          accessibilityRole="button"
-          accessibilityState={{ disabled: blocking.busy }}
-          disabled={blocking.busy}
-          onPress={() =>
-            blocked ? blocking.unblock(userId) : blocking.block({ userId, username })
-          }
-          style={({ pressed }) => [
-            styles.button,
-            blocked && styles.buttonActive,
-            pressed && styles.pressed,
-          ]}
-        >
-          <Text style={[styles.buttonText, blocked && styles.buttonTextActive]}>
-            {blocked ? 'BLOCKED' : 'BLOCK'}
-          </Text>
-        </Pressable>
+        {isBot ? null : (
+          <Pressable
+            accessibilityLabel={blocked ? `Unblock ${username}` : `Block ${username}`}
+            accessibilityRole="button"
+            accessibilityState={{ disabled: blocking.busy }}
+            disabled={blocking.busy}
+            onPress={() =>
+              blocked ? blocking.unblock(userId) : blocking.block({ userId, username })
+            }
+            style={({ pressed }) => [
+              styles.button,
+              blocked && styles.buttonActive,
+              pressed && styles.pressed,
+            ]}
+          >
+            <Text style={[styles.buttonText, blocked && styles.buttonTextActive]}>
+              {blocked ? 'BLOCKED' : 'BLOCK'}
+            </Text>
+          </Pressable>
+        )}
       </View>
 
       {blocked && (

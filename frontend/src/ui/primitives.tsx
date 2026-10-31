@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 
 import { hoverProps } from './hover';
+import { haptic } from '@/haptics/haptics';
 import type { BadgeTone, BannerTone, ButtonTone, PanelTone } from './tones';
 import { useStackProps } from '@/navigation/stack';
 import { colors, players, radius, space, themedSheet, type } from '@/theme';
@@ -119,14 +120,23 @@ export function PrimaryButton({
   accessibilityLabel,
   fullWidth,
 }: ButtonProps) {
+  // The green button is the one thing on a card worth pressing, and it says so
+  // under the finger as well as on the screen. The grey tones stay silent.
+  const press =
+    tone === 'accent' && onPress
+      ? () => {
+          haptic('press');
+          onPress();
+        }
+      : onPress;
   return (
     <Pressable
       {...(tone === 'discord' ? {} : hoverProps(tone === 'accent' ? 'primary' : 'secondary'))}
       accessibilityLabel={accessibilityLabel ?? label}
       accessibilityRole="button"
-      accessibilityState={{ disabled: Boolean(disabled) }}
+      accessibilityState={{ disabled: Boolean(disabled || loading), busy: Boolean(loading) }}
       disabled={disabled || loading}
-      onPress={onPress}
+      onPress={press}
       style={({ pressed }) => [
         styles.primaryButton,
         tone === 'quiet' && styles.primaryButtonQuiet,
@@ -209,6 +219,8 @@ export interface GhostLinkProps {
  * depends on the page the link is drawn on rather than on the link.
  * `useStackProps` reads that off the router — see `navigation/stack`.
  */
+const tapForPress = () => haptic('press');
+
 export function GhostLink({
   href,
   label,
@@ -219,7 +231,14 @@ export function GhostLink({
   const stack = useStackProps(href);
 
   return (
-    <Link asChild href={href} {...stack}>
+    <Link
+      asChild
+      href={href}
+      {...stack}
+      // The accent link is a green button that happens to navigate, and taps
+      // like one.
+      onPress={tone === 'accent' ? tapForPress : undefined}
+    >
       <Pressable
         {...hoverProps(tone === 'accent' ? 'primary' : 'secondary')}
         accessibilityLabel={accessibilityLabel ?? label}
@@ -311,7 +330,10 @@ export function Checkbox({ checked, label, onToggle }: CheckboxProps) {
     <Pressable
       accessibilityRole="checkbox"
       accessibilityState={{ checked: Boolean(checked) }}
-      onPress={onToggle}
+      onPress={() => {
+        haptic(checked ? 'toggleOff' : 'toggleOn');
+        onToggle();
+      }}
       style={({ pressed }) => [styles.checkboxRow, pressed && styles.pressed]}
     >
       <View style={[styles.checkbox, checked && styles.checkboxChecked]}>
@@ -365,7 +387,12 @@ export function OptionChips<Value extends string | number | boolean | null>({
               accessibilityState={{ selected, disabled: Boolean(disabled) }}
               disabled={disabled}
               key={String(option.value)}
-              onPress={() => onChange(option.value)}
+              onPress={() => {
+                // Tapped only when the choice changes: the row reports a press
+                // on the chip already chosen too, and nothing changed there.
+                if (!selected) haptic('choose');
+                onChange(option.value);
+              }}
               style={({ pressed }) => [
                 styles.chip,
                 selected && styles.chipSelected,
@@ -428,15 +455,16 @@ export function ToggleChips<Value extends string | number>({
               accessibilityState={{ checked: selected, disabled: Boolean(disabled) }}
               disabled={disabled}
               key={String(option.value)}
-              onPress={() =>
+              onPress={() => {
+                haptic(selected ? 'toggleOff' : 'toggleOn');
                 onChange(
                   options
                     .map((candidate) => candidate.value)
                     .filter((candidate) =>
                       candidate === option.value ? !selected : chosen.has(candidate),
                     ),
-                )
-              }
+                );
+              }}
               style={({ pressed }) => [
                 styles.chip,
                 styles.toggleChip,

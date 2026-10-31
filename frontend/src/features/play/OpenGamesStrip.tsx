@@ -2,16 +2,21 @@ import { useRouter } from 'expo-router';
 import { useMemo } from 'react';
 import { ScrollView, Text, View } from 'react-native';
 
+import { AwaitedLinkActions, OwnLinkActions } from './ChallengeLinkActions';
 import { openGameCards, type OpenGameCard } from './openGames';
 import ModePreview from '@/features/game/ModePreview';
+import { useWideScreen } from '@/hooks/useBoardLayout';
+import { useNow } from '@/hooks/useNow';
 import { useLobbyGate } from '@/hooks/useQueueCall';
 import { links } from '@/navigation/links';
 import { useHere } from '@/navigation/useHere';
+import { linkStatusLine, linkTitle, type ChallengeLinkRole } from '@/store/challengeLinkSelectors';
 import { useGameStore } from '@/store/gameStore';
 import { setupSummary } from '@/store/setupSelectors';
 import { titledName } from '@/store/spectateSelectors';
 import { colors, radius, space, themedSheet, type } from '@/theme';
 import { Badge, GhostButton, PrimaryButton, SectionHeading, TextButton } from '@/ui/primitives';
+import type { ChallengeLink } from '@/types/protocol';
 
 // Somebody is waiting for a game: here, near the top, at a height that never
 // changes.
@@ -35,6 +40,16 @@ export default function OpenGamesStrip() {
   const openChallenges = useGameStore((state) => state.openChallenges);
   const challengeNotice = useGameStore((state) => state.challengeNotice);
   const accountId = useGameStore((state) => state.accountId);
+  const ownLink = useGameStore((state) => state.ownLink);
+  const awaitedLink = useGameStore((state) => state.awaitedLink);
+  // A challenge link lives in the Right now rail, which a phone does not have.
+  // There it leads this strip instead, which is where a phone looks for what
+  // is waiting on it — and drawing it in both on a wide screen would be the
+  // same link twice, side by side.
+  const wide = useWideScreen();
+  const linkCards: { link: ChallengeLink; role: ChallengeLinkRole }[] = [];
+  if (!wide && ownLink) linkCards.push({ link: ownLink, role: 'author' });
+  if (!wide && awaitedLink) linkCards.push({ link: awaitedLink, role: 'taker' });
 
   const cards = useMemo(
     () =>
@@ -55,7 +70,7 @@ export default function OpenGamesStrip() {
     <View style={styles.section}>
       <SectionHeading title="Open games" />
       <View style={styles.slot}>
-        {cards.length === 0 ? (
+        {cards.length === 0 && linkCards.length === 0 ? (
           <View style={styles.empty}>
             <Text style={styles.emptyTitle}>Nobody is waiting right now</Text>
             <Text numberOfLines={3} style={styles.emptyDetail}>
@@ -69,6 +84,9 @@ export default function OpenGamesStrip() {
             showsHorizontalScrollIndicator={false}
             style={styles.scroller}
           >
+            {linkCards.map(({ link, role }) => (
+              <LinkCard key={`link:${role}:${link.code}`} link={link} role={role} />
+            ))}
             {cards.map((card) => (
               <GameCard card={card} key={card.key} />
             ))}
@@ -90,6 +108,52 @@ function GameCard({ card }: { card: OpenGameCard }) {
     );
   }
   return <ChallengeCard card={card} />;
+}
+
+/**
+ * A challenge link: yours, still out, or one you took and are waiting on.
+ *
+ * The same card as a posted game, so a phone shows its own link the way it
+ * shows its own posted game: the board it starts from, whose it is, where it
+ * stands, and the way to act on it.
+ */
+function LinkCard({ link, role }: { link: ChallengeLink; role: ChallengeLinkRole }) {
+  const mode = useGameStore(
+    (state) => state.modes.find((candidate) => candidate.id === link.setup?.modeId) ?? null,
+  );
+  const now = useNow(30_000);
+  return (
+    <View style={[styles.card, role === 'taker' && styles.cardForYou]}>
+      <ModePreview mode={mode} position={link.setup?.startingPosition} size={CARD_BOARD} />
+      <View style={styles.cardCopy}>
+        <View style={styles.cardText}>
+          <View style={styles.cardHead}>
+            <Text numberOfLines={1} style={styles.cardMode}>
+              {(mode?.name ?? link.modeName ?? '').toUpperCase()}
+            </Text>
+            {link.state === 'waiting' ? (
+              <Badge label="WAITING" tone="live" />
+            ) : (
+              <Badge label="LINK" />
+            )}
+          </View>
+          <Text numberOfLines={1} style={styles.cardTitle}>
+            {linkTitle(link, role)}
+          </Text>
+          <Text numberOfLines={1} style={styles.cardMeta}>
+            {now ? linkStatusLine(link, role, now) : ' '}
+          </Text>
+        </View>
+        <View style={styles.cardActions}>
+          {role === 'author' ? (
+            <OwnLinkActions link={link} narrow />
+          ) : (
+            <AwaitedLinkActions link={link} />
+          )}
+        </View>
+      </View>
+    </View>
+  );
 }
 
 type ChallengeCardModel = Exclude<OpenGameCard, { kind: 'notice' }>;

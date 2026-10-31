@@ -23,9 +23,12 @@ const SEARCH_TICK_MS = 1000;
  * as long as they were practising.
  */
 const useAtOwnBoard = () => {
-  const gameState = useGameStore((state) => state.gameState);
+  // A boolean, not the game: the game is a new object on every move.
+  const atServerBoard = useGameStore(
+    (state) => Boolean(state.gameState) && !state.gameState?.bot && !state.gameState?.local,
+  );
   const isSpectating = useGameStore((state) => state.isSpectating);
-  return Boolean(gameState) && !gameState?.bot && !gameState?.local && !isSpectating;
+  return atServerBoard && !isSpectating;
 };
 
 export const useQueueCall = (): QueueCall | null => {

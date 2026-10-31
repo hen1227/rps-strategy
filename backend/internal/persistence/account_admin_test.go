@@ -355,3 +355,66 @@ func TestTheOwnerIsGrantedAdminOnStartup(t *testing.T) {
 		t.Fatalf("no owner account: %v", err)
 	}
 }
+
+// An owner who never played, but whose engine ran a series, used to be refused
+// with a foreign-key error: the hard delete took the bots with it, and a run
+// names its two bots with no ON DELETE. The run is the other engine's history
+// too, so the account is stripped instead, like one that played.
+func TestAnonymizeKeepsAnAccountWhoseBotRanASeries(t *testing.T) {
+	store := authTestStore(t)
+	ctx := t.Context()
+	mine := ownedBot(t, store, "Mine")
+	theirs := ownedBot(t, store, "Theirs")
+	if _, err := store.CreateBotSeries(ctx, BotSeries{
+		SeriesID:    "run-1",
+		ModeID:      game.ModeTotalWar,
+		FirstBotID:  mine.BotID,
+		SecondBotID: theirs.BotID,
+		Pairs:       1,
+	}); err != nil {
+		t.Fatalf("create series: %v", err)
+	}
+	if err := store.RetireBot(ctx, mine.BotID); err != nil {
+		t.Fatalf("retire: %v", err)
+	}
+
+	if _, err := store.AnonymizeAccount(ctx, "owner-Mine"); err != nil {
+		t.Fatalf("anonymize an owner whose bot ran a series: %v", err)
+	}
+	account, err := store.Account(ctx, "owner-Mine")
+	if err != nil {
+		t.Fatalf("the account should be stripped, not deleted: %v", err)
+	}
+	if account.Username != "Deleted player" {
+		t.Fatalf("expected the name to be gone, got %q", account.Username)
+	}
+	if _, err := store.BotSeries(ctx, "run-1"); err != nil {
+		t.Fatalf("the other engine's run should survive: %v", err)
+	}
+}
+
+// A deleted account's opening names stay on their lines, without its name.
+func TestAnonymizeTakesTheAuthorOffOpeningNames(t *testing.T) {
+	store := authTestStore(t)
+	ctx := t.Context()
+	registeredOwner(t, store, "namer", "Namer")
+	if _, err := store.PublishPlayerOpeningName(
+		ctx, "V3", []string{"f8-g7"}, "Skipping Stone", "namer", "Namer",
+	); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+
+	if _, err := store.AnonymizeAccount(ctx, "namer"); err != nil {
+		t.Fatalf("anonymize: %v", err)
+	}
+	names, err := store.OpeningNames(ctx, "V3")
+	if err != nil {
+		t.Fatalf("read names: %v", err)
+	}
+	if len(names) != 1 || names[0].Name != "Skipping Stone" {
+		t.Fatalf("expected the name to stay on its line, got %#v", names)
+	}
+	if names[0].AuthorUserID != "" || names[0].AuthorUsername != "" {
+		t.Fatalf("expected no author on the name, got %#v", names[0])
+	}
+}

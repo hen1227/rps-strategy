@@ -72,6 +72,15 @@ frontend/modules/rpsfish/android/build
 frontend/modules/rpsfish/android/build/**
 frontend/modules/rpsfish/android/.cxx
 frontend/modules/rpsfish/android/.cxx/**
+frontend/modules/rpsfish/android/.gradle
+frontend/modules/rpsfish/android/.gradle/**
+
+# The shallow clone eas-cli makes of this repository keeps its .git: a pack of
+# every tracked file at HEAD, about 30 MB of store screenshots, the feature
+# graphic's PSD and the whole backend. Nothing on the builder reads it, and
+# eas-cli deletes it from the archive when this file names it.
+.git
+.git/**
 
 # Local build output and caches.
 frontend/.expo

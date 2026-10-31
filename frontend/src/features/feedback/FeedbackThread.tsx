@@ -6,6 +6,8 @@ import VoteButton from './VoteButton';
 import { timeAgo } from './relativeTime';
 import { statusTone } from './statusTone';
 import ConfirmButton from '@/features/admin/ConfirmButton';
+import ReportDialog from '@/features/moderation/ReportDialog';
+import { useCommunityRules } from '@/features/policy/CommunityRules';
 import { feedbackItemURL, links } from '@/navigation/links';
 import type { FeedbackAnswer } from '@/store/api/feedback';
 import { colors, radius, space, themedSheet, type } from '@/theme';
@@ -62,13 +64,25 @@ export default function FeedbackThread({
   // One key names whichever destructive button is armed, so pressing any other
   // disarms it. See `ConfirmButton`.
   const [armed, setArmed] = useState<string | null>(null);
+  // The post or reply being reported, with its words attached: the host may
+  // read the report after the author has deleted what it was about.
+  const [reporting, setReporting] = useState<{
+    targetUserId: string;
+    targetName: string;
+    context: string;
+  } | null>(null);
+  const { requireAgreement, rulesDialog } = useCommunityRules();
 
   const isHost = Boolean(account?.isAdmin);
   const mine = Boolean(item.authorUserId) && item.authorUserId === account?.userId;
   const mayPost = Boolean(policy?.mayPost);
   const tone = statusTone(item.status);
+  // Anybody's but your own, and not the host's: the host is who reads them.
+  // Only with an author on record, which a deleted player's post no longer has.
+  const reportable = (authorUserId: string | undefined, fromHost: boolean | undefined) =>
+    Boolean(authorUserId) && authorUserId !== account?.userId && !fromHost && !isHost;
 
-  const send = async () => {
+  const post = async () => {
     const body = reply.trim();
     if (!body) return;
     setSending(true);
@@ -76,6 +90,9 @@ export default function FeedbackThread({
     setSending(false);
     if (posted) setReply('');
   };
+  // A reply is read by everybody on the board, as a post is, so it is held to
+  // the same rules the first time.
+  const send = () => requireAgreement(() => void post());
 
   return (
     <View style={styles.page}>
@@ -176,6 +193,20 @@ export default function FeedbackThread({
                 tone="quiet"
               />
             ) : null}
+            {reportable(item.authorUserId, item.fromHost) ? (
+              <GhostButton
+                accessibilityLabel={`Report ${item.title}`}
+                compact
+                label="REPORT"
+                onPress={() =>
+                  setReporting({
+                    targetUserId: item.authorUserId ?? '',
+                    targetName: item.authorName,
+                    context: [`Feedback post: ${item.title}`, item.body].filter(Boolean).join('\n'),
+                  })
+                }
+              />
+            ) : null}
           </View>
         </View>
       </Panel>
@@ -193,6 +224,7 @@ export default function FeedbackThread({
           {(item.thread ?? []).map((comment) => {
             const ownComment =
               Boolean(comment.authorUserId) && comment.authorUserId === account?.userId;
+            const reportComment = reportable(comment.authorUserId, comment.fromHost);
             return (
               <View
                 key={comment.commentId}
@@ -207,7 +239,7 @@ export default function FeedbackThread({
                   </Text>
                 </View>
                 <Text style={styles.commentBody}>{comment.body}</Text>
-                {ownComment || isHost ? (
+                {ownComment || isHost || reportComment ? (
                   <View style={styles.commentActions}>
                     {isHost ? (
                       <GhostButton
@@ -218,17 +250,33 @@ export default function FeedbackThread({
                         }
                       />
                     ) : null}
-                    <ConfirmButton
-                      armed={armed === comment.commentId}
-                      busy={false}
-                      label="DELETE"
-                      onArm={() => setArmed(comment.commentId)}
-                      onConfirm={() => {
-                        setArmed(null);
-                        void onDeleteComment(comment.commentId);
-                      }}
-                      tone="quiet"
-                    />
+                    {ownComment || isHost ? (
+                      <ConfirmButton
+                        armed={armed === comment.commentId}
+                        busy={false}
+                        label="DELETE"
+                        onArm={() => setArmed(comment.commentId)}
+                        onConfirm={() => {
+                          setArmed(null);
+                          void onDeleteComment(comment.commentId);
+                        }}
+                        tone="quiet"
+                      />
+                    ) : null}
+                    {reportComment ? (
+                      <GhostButton
+                        accessibilityLabel={`Report ${comment.authorName}'s reply`}
+                        compact
+                        label="REPORT"
+                        onPress={() =>
+                          setReporting({
+                            targetUserId: comment.authorUserId ?? '',
+                            targetName: comment.authorName,
+                            context: `Reply on: ${item.title}\n${comment.authorName}: ${comment.body}`,
+                          })
+                        }
+                      />
+                    ) : null}
                   </View>
                 ) : null}
               </View>
@@ -266,6 +314,14 @@ export default function FeedbackThread({
       {isHost ? (
         <HostControls item={item} onAnswer={onAnswer} onDelete={onDelete} policy={policy} />
       ) : null}
+      {rulesDialog}
+      <ReportDialog
+        context={reporting?.context}
+        onClose={() => setReporting(null)}
+        targetName={reporting?.targetName ?? ''}
+        targetUserId={reporting?.targetUserId}
+        visible={reporting !== null}
+      />
     </View>
   );
 }

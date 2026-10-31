@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
+import { haptic } from '@/haptics/haptics';
 import { useNow } from '@/hooks/useNow';
 import { useGameStore } from '@/store/gameStore';
 import { activeRestriction, restrictionNotice } from '@/store/moderationSelectors';
@@ -229,7 +230,10 @@ export default function GameChat({
               accessibilityLabel={`${showSpectatorMessages ? 'Hide' : 'Show'} spectator messages`}
               accessibilityRole="switch"
               accessibilityState={{ checked: showSpectatorMessages }}
-              onPress={onToggleSpectatorMessages}
+              onPress={() => {
+                haptic(showSpectatorMessages ? 'toggleOff' : 'toggleOn');
+                onToggleSpectatorMessages();
+              }}
               style={({ pressed }) => [
                 styles.spectatorToggle,
                 showSpectatorMessages && styles.spectatorToggleOn,
@@ -370,7 +374,10 @@ export default function GameChat({
           accessibilityRole="button"
           accessibilityState={{ disabled: !canSend }}
           disabled={!canSend}
-          onPress={send}
+          onPress={() => {
+            haptic('press');
+            send();
+          }}
           style={({ pressed }) => [
             styles.sendButton,
             !canSend && styles.sendButtonDisabled,

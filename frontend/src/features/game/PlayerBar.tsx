@@ -10,7 +10,7 @@ import {
 
 import CapturedPieces, { TRAY_HEIGHT, type CaptureTray } from '@/features/board/CapturedPieces';
 import { useWideLayout } from '@/hooks/useBoardLayout';
-import type { TimeExtension } from '@/store/clockSelectors';
+import { LOW_TIME_MS, type TimeExtension } from '@/store/clockSelectors';
 import PlayerLink from '@/ui/PlayerLink';
 import TitleTag from '@/ui/TitleTag';
 import { clock as clockColors, colors, players, radius, themedSheet } from '@/theme';
@@ -22,8 +22,6 @@ import {
   type PlayerProfile,
   type SideColor,
 } from '@/types/game';
-
-const LOW_TIME_MS = 20_000;
 
 // Long enough to be read, short enough that a player in time trouble is not
 // waiting on it: the chip has left the clock before the next second ticks.

@@ -12,11 +12,12 @@ import ScreenShell from '@/ui/ScreenShell';
 import { Panel, SectionHeading } from '@/ui/primitives';
 
 import AppearancePreview from './AppearancePreview';
+import HapticsSettings from './HapticsSettings';
 import SoundSampler from './SoundSampler';
 import SwatchChips from './SwatchChips';
 import { BoardSwatch, PieceSwatch, SoundSwatch, ThemeSwatch } from './swatches';
 
-// Choosing how the game looks and sounds.
+// Choosing how the game looks, sounds and feels.
 //
 // Independent axes rather than one combined "look", because the combinations
 // are what make a small curated set feel large — five themes by five boards is
@@ -148,6 +149,8 @@ export default function AppearanceScreen() {
             value={appearance.sound}
           />
         </Panel>
+
+        <HapticsSettings />
       </View>
       <SoundSampler token={sampleToken} />
     </ScreenShell>

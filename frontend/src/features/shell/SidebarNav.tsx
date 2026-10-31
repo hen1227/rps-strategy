@@ -5,11 +5,12 @@ import { sectionForPath, sectionsInGroup, visibleGroups } from './sections';
 import { useNavContext } from './useNavContext';
 import TournamentPromoLink from './TournamentPromoLink';
 import { headlineRating, ratingIsRankable } from '@/features/ratings/scale';
-import {IOS_APP_URL, SOURCE_URL, iosAppIsBeta, links, webGoatGuy} from '@/navigation/links';
+import {DATASET_URL, IOS_APP_URL, SOURCE_URL, iosAppIsBeta, links, webGoatGuy} from '@/navigation/links';
 import { navRowProps } from '@/navigation/stack';
 import { useGameStore } from '@/store/gameStore';
 import { colors, radius, space, themedSheet, type } from '@/theme';
 import GitHubMark from '@/ui/GitHubMark';
+import HuggingFaceMark from '@/ui/HuggingFaceMark';
 import { hoverProps } from '@/ui/hover';
 
 // The desktop navigation.
@@ -147,9 +148,10 @@ export default function SidebarNav() {
           What stays down here are the links that are not pages of this site
           and so cannot be sections. First the iOS app, on the web only: inside
           the app it would be an invitation to install what is already open.
-          Then somebody else's Discord, and beside it this site's own source.
-          That one is GitHub's mark with no label, because a second label would
-          not fit beside the first in this column.
+          Then somebody else's Discord, and beside it this site's own source and
+          its game data. Those two are GitHub's and Hugging Face's marks with no
+          label, because a second label would not fit beside the first in this
+          column, and the people who want either one know the mark.
         */}
         {Platform.OS === 'web' ? (
           <Link asChild href={IOS_APP_URL} replace>
@@ -183,6 +185,15 @@ export default function SidebarNav() {
               style={styles.source}
             >
               <GitHubMark color={colors.textStrong} size={16} />
+            </Pressable>
+          </Link>
+          <Link asChild href={DATASET_URL} replace>
+            <Pressable
+              accessibilityLabel="Game data on Hugging Face"
+              accessibilityRole="link"
+              style={styles.source}
+            >
+              <HuggingFaceMark color={colors.textStrong} size={16} />
             </Pressable>
           </Link>
         </View>

@@ -30,6 +30,9 @@ export const useQueuePresence = (): void => {
   const connect = useGameStore((state) => state.connect);
   const connected = useGameStore((state) => state.connectionStatus === 'connected');
   const isSearching = useGameStore((state) => state.queue.isSearching);
+  // A challenge link is the other thing that waits on this tab: its game opens
+  // when its author is looking at the screen.
+  const linked = useGameStore((state) => Boolean(state.ownLink || state.awaitedLink));
   const lastActivityAt = useRef(0);
   const lastReported = useRef<boolean | null>(null);
   const lastReportAt = useRef(0);
@@ -146,6 +149,6 @@ export const useQueuePresence = (): void => {
   // and never sent the notification, because as far as the server knew it was
   // being looked at.
   useEffect(() => {
-    if (connected && isSearching) reassert.current?.();
-  }, [connected, isSearching]);
+    if (connected && (isSearching || linked)) reassert.current?.();
+  }, [connected, isSearching, linked]);
 };

@@ -78,7 +78,11 @@ export const up = {
   player: { label: 'Leaderboard', href: links.leaderboard() } as UpTarget,
   tournamentInfo: { label: 'Tournaments', href: links.tournaments() } as UpTarget,
   /** Reached only from the credits page, which is where the question it answers is asked. */
-  licences: { label: 'Credits', href: links.credits() } as UpTarget,
+  openSource: { label: 'Credits', href: links.credits() } as UpTarget,
+  /** Reached only from the open-source page, as the last thing on it. */
+  licences: { label: 'Open source', href: links.openSource() } as UpTarget,
+  /** One section of the policy, on its own, so it goes back to the rest. */
+  deleteAccount: { label: 'Privacy', href: links.policy() } as UpTarget,
 } as const satisfies Record<string, UpTarget>;
 
 /**

@@ -28,6 +28,7 @@ import {
   walkOpeningLine,
   type OpeningStep,
 } from '@/engine/openingLine';
+import { haptic } from '@/haptics/haptics';
 import { colors, radius, space, themedSheet } from '@/theme';
 import type { ModeDefinition, ModeID } from '@/types/game';
 import { Badge, GhostButton, Panel, PrimaryButton } from '@/ui/primitives';
@@ -374,6 +375,7 @@ function CopyableCommand() {
       onPress={async () => {
         try {
           await Clipboard.setStringAsync(PUBLISH_COMMAND);
+          haptic('copied');
           setCopied(true);
         } catch {
           setCopied(false);

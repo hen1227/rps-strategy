@@ -3,6 +3,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { captureSoundFor, type GameSound } from '@/appearance/gameSound';
 import { applyAnalysisMove, type AnalysisGame, type AppliedMove } from '@/engine/analysisGame';
 import { judgeSolveMove, solveGame, type SolvePosition } from '@/engine/puzzleSolve';
+import { haptic } from '@/haptics/haptics';
+import { VERDICT_DELAY_MS } from '@/haptics/recipes';
 import { useBoardSelection } from '@/hooks/useBoardSelection';
 import { cueGameSound } from '@/store/soundCue';
 import type { ModeDefinition, Move, Position } from '@/types/game';
@@ -100,12 +102,16 @@ export const useSolveSession = ({
       cueGameSound(soundOf(game, judged.applied, to));
       setGame(judged.applied.game);
       setLastMove({ from, to });
+      // The verdict is felt a beat after the move's own tap, so the two read
+      // as the answer and then whether it was right.
       if (judged.verdict === 'solved') {
         setState('solved');
+        setTimeout(() => haptic('solved'), VERDICT_DELAY_MS);
         onSolvedRef.current?.();
         return;
       }
       setState('wrong');
+      setTimeout(() => haptic('wrong'), VERDICT_DELAY_MS);
       setMisses((count) => count + 1);
       const restore = () => {
         takeBack.current = null;
@@ -122,6 +128,7 @@ export const useSolveSession = ({
       }
       takeBack.current = setTimeout(() => {
         cueGameSound(replySoundOf(after, answered, reply.to));
+        haptic(answered.captured ? 'captured' : 'theirMove');
         setGame(answered.game);
         setLastMove(reply);
         takeBack.current = setTimeout(restore, REPLY_HOLD_MS);

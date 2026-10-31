@@ -10,7 +10,11 @@ import { AppState, Platform, View } from 'react-native';
 
 import { useAnalytics } from '@/analytics/useAnalytics';
 import { GameSoundEffects } from '@/hooks/useGameSounds';
+import GameHaptics from '@/haptics/GameHaptics';
+import { hapticsAvailable } from '@/haptics/haptics';
+import ChallengeAcceptedPopup from '@/features/play/ChallengeAcceptedPopup';
 import CalloutLayer from '@/features/shell/CalloutLayer';
+import UpdateRequired from '@/features/shell/UpdateRequired';
 import { useKeyboardRoom } from '@/hooks/useKeyboardRoom';
 import { useNativeAlerts } from '@/hooks/useNativeAlerts';
 import { useQueuePresence } from '@/hooks/useQueuePresence';
@@ -120,24 +124,48 @@ function SessionBridge() {
   }, [detectPush, sessionToken, accountUserId]);
 
   // On the web a notification is delivered to the service worker, which cannot
-  // reach the store. It messages every open tab instead, and a visible one takes
-  // the banner down itself: shouting at somebody who is looking straight at the
-  // answer is how a useful alert becomes an annoying one. `useNativeAlerts`
-  // keeps the same promise on a phone, where there is no worker to message.
+  // reach the store. It messages every open tab instead, and one that somebody
+  // is looking at takes the banner down itself: shouting at somebody who is
+  // looking straight at the answer is how a useful alert becomes an annoying
+  // one. Coming back to the tab takes it down too, as coming back to the app
+  // does on a phone (`useNativeAlerts`): the summons has been answered, and a
+  // banner that asks for a click stays on screen until it gets one.
+  //
+  // Looking means visible *and* focused. Visible alone is a tab on a second
+  // monitor, or behind the corner of another window, and that is exactly who
+  // the server sends a summons to: somebody it has heard nothing from for a
+  // minute and a half.
   useEffect(() => {
     const container = globalThis.navigator?.serviceWorker;
-    if (!container) return;
+    if (!container || typeof document === 'undefined' || typeof window === 'undefined') return;
+    const takeDown = () => {
+      if (document.visibilityState !== 'visible' || !document.hasFocus()) return;
+      // Asked on every return to the tab now, so a browser that refuses to
+      // say is a browser that has nothing to take down rather than an error.
+      void container
+        .getRegistration('/')
+        .then((registration) =>
+          registration?.getNotifications({ tag: 'rps-match' }).then((notifications) => {
+            for (const notification of notifications) notification.close();
+          }),
+        )
+        .catch(() => undefined);
+    };
     const onMessage = (event: MessageEvent) => {
-      if (event.data?.type !== 'rps-match-summons') return;
-      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
-      void container.getRegistration('/').then((registration) =>
-        registration?.getNotifications({ tag: 'rps-match' }).then((notifications) => {
-          for (const notification of notifications) notification.close();
-        }),
-      );
+      if (event.data?.type === 'rps-match-summons') takeDown();
     };
     container.addEventListener('message', onMessage);
-    return () => container.removeEventListener('message', onMessage);
+    // Both, because a window brought forward can turn visible a moment before
+    // it is focused, and one beside another window is focused without its
+    // visibility changing at all.
+    document.addEventListener('visibilitychange', takeDown);
+    window.addEventListener('focus', takeDown);
+    takeDown();
+    return () => {
+      container.removeEventListener('message', onMessage);
+      document.removeEventListener('visibilitychange', takeDown);
+      window.removeEventListener('focus', takeDown);
+    };
   }, []);
 
   useEffect(() => {
@@ -232,14 +260,16 @@ export default function RootLayout() {
   return (
     <ThemeProvider value={navigationTheme()}>
       <GameSoundEffects />
+      {hapticsAvailable() ? <GameHaptics /> : null}
       {/* The one place the app has to say out loud which way round it is. */}
       <StatusBar style={activeScheme() === 'dark' ? 'light' : 'dark'} />
       <SessionBridge />
       {/*
-        Only the routed tree is keyed. `SessionBridge` and `GameSoundEffects`
-        sit outside it deliberately: the socket, the tournament board and the
-        sound player must survive the rebuild above, and a second `connect()`
-        on a socket already open would be a wasted round trip at launch.
+        Only the routed tree is keyed. `SessionBridge`, `GameSoundEffects`
+        and `GameHaptics` sit outside it deliberately: the socket, the
+        tournament board, the sound player and the last game state felt must
+        survive the rebuild above, and a second `connect()` on a socket
+        already open would be a wasted round trip at launch.
       */}
       <View key={treeKey} style={{ flex: 1, paddingBottom: keyboardRoom }}>
         {/*
@@ -268,6 +298,13 @@ export default function RootLayout() {
           }}
         />
         <CalloutLayer />
+        {/*
+          Beside the stack, like the call-out layer, so it reaches the author
+          over the board their challenge link just opened.
+        */}
+        <ChallengeAcceptedPopup />
+        {/* Last, so it covers every card above it. */}
+        <UpdateRequired />
       </View>
     </ThemeProvider>
   );

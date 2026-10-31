@@ -31,6 +31,7 @@ import { Badge, GhostButton, PrimaryButton, TextButton } from '@/ui/primitives';
 const FEATURE_TWO_COLUMNS = 560;
 const FEATURE_BOARD = 188;
 const FEATURE_BOARD_NARROW = 124;
+const FEATURE_BOARD_COMPACT = 88;
 const VARIANT_BOARD = 88;
 
 /** How many people are at a board in this mode right now. */
@@ -142,6 +143,10 @@ export function FeaturedModeCard({ mode, onHowToPlay }: ModeCardProps) {
     setWidth((current) => (current === measured ? current : measured));
   };
   const wide = width >= FEATURE_TWO_COLUMNS;
+  // A 320-point phone leaves only 116 points beside the usual preview, which
+  // splits "Intransitive" mid-word. Keep the copy readable by shrinking the
+  // decorative board before taking any more space from the title.
+  const previewSize = width > 0 && width < 340 ? FEATURE_BOARD_COMPACT : FEATURE_BOARD_NARROW;
   const playing = usePlayingCount(mode);
   const rating = useModeRating(mode);
   const searchingHere = useSearchingHere(mode);
@@ -206,7 +211,7 @@ export function FeaturedModeCard({ mode, onHowToPlay }: ModeCardProps) {
         <>
           {kicker}
           <View style={styles.featureTop}>
-            <ModePreview mode={mode} size={FEATURE_BOARD_NARROW} />
+            <ModePreview mode={mode} size={previewSize} />
             <View style={styles.featureCopy}>{copy}</View>
           </View>
           <PlayModeButton emphasis="primary" fullWidth mode={mode} />

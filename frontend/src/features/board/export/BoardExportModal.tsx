@@ -2,8 +2,9 @@ import { useEffect, useMemo, useState } from 'react';
 import * as Clipboard from 'expo-clipboard';
 import { ActivityIndicator, Image, ScrollView, StyleSheet, Text, View } from 'react-native';
 
-import { encodePosition, encodePositionPGN } from '@/engine/pgn';
+import { encodePositionFEN, encodePositionPGN } from '@/engine/pgn';
 import { failureMessage } from '@/errors';
+import { haptic } from '@/haptics/haptics';
 import { colors, radius, space, themedSheet, type } from '@/theme';
 import { SITE_URL } from '@/store/serverConfig';
 import ModalCard from '@/ui/ModalCard';
@@ -78,8 +79,7 @@ export default function BoardExportModal({ visible, onClose, board }: BoardExpor
   const [previewError, setPreviewError] = useState<string | null>(null);
 
   const fen = useMemo(
-    () =>
-      encodePosition(grid, currentTurn, { territory: modeHasFeature(mode, 'territory') }),
+    () => encodePositionFEN({ currentTurn, grid, mode }),
     [currentTurn, grid, mode],
   );
   const record = useMemo(
@@ -155,6 +155,7 @@ export default function BoardExportModal({ visible, onClose, board }: BoardExpor
   const copyText = async (text: string, what: string) => {
     try {
       const ok = await Clipboard.setStringAsync(text);
+      if (ok) haptic('copied');
       setStatus(
         ok
           ? { text: `${what} copied to your clipboard.`, bad: false }

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { Platform } from 'react-native';
 
 import { deviceStorage } from '@/store/deviceStorage';
 import { verifyAdminToken } from '@/store/api/tournaments';
@@ -55,6 +56,15 @@ export interface AdminToken {
    * button, neither of which means anything to somebody who simply is one.
    */
   bySession: boolean;
+  /**
+   * Whether a screen should offer its host door at all. Always to an
+   * administrator or to a verified token, and on the web to anybody, because a
+   * host with no account pastes the token into a browser. A phone shows the
+   * door to nobody else: it asks for a server secret no player has, and an app
+   * reviewer reads a button that opens it as a feature they were not given
+   * the means to try.
+   */
+  offered: boolean;
   unlock: (draft: string) => Promise<boolean>;
   lock: () => void;
   verifying: boolean;
@@ -127,6 +137,7 @@ export function useAdminToken(): AdminToken {
       token: sessionToken ?? '',
       unlocked: true,
       bySession: true,
+      offered: true,
       unlock,
       lock,
       verifying: false,
@@ -137,6 +148,7 @@ export function useAdminToken(): AdminToken {
     token,
     unlocked: verified && Boolean(token),
     bySession: false,
+    offered: Platform.OS === 'web' || (verified && Boolean(token)),
     unlock,
     lock,
     verifying,

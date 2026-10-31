@@ -15,6 +15,7 @@ import (
 	"rps-strategy/backend/internal/game"
 	"rps-strategy/backend/internal/persistence"
 	"rps-strategy/backend/internal/rpsi"
+	"rps-strategy/backend/internal/textfilter"
 )
 
 // Engine bots: connections that are programs rather than people.
@@ -941,6 +942,14 @@ func (server *Server) releaseBotMove(client *Client, gameID string) {
 func (server *Server) beginBotHandshake(client *Client) {
 	server.ask(client, "", []string{"rpsi"}, "rpsiok", botHandshakeTimeout, func(lines []string) {
 		handshake := rpsi.ParseHandshake(lines)
+		// What an engine calls itself is shown beside the bot's name, on its
+		// page and the leaderboard, so it is held to the rule names are. A label
+		// the filter refuses is dropped rather than the engine turned away: it
+		// is a program its owner may not be able to change, and the bot's own
+		// name, which was checked when it was claimed, still says what it is.
+		handshake.Name = filteredEngineLabel(handshake.Name)
+		handshake.Author = filteredEngineLabel(handshake.Author)
+		handshake.Version = filteredEngineLabel(handshake.Version)
 		client.bot.mu.Lock()
 		client.bot.handshake = handshake
 		botID := client.bot.botID
@@ -954,7 +963,7 @@ func (server *Server) beginBotHandshake(client *Client) {
 		// somebody wrapping a binary they cannot change.
 		engineVersion := handshake.Version
 		if engineVersion == "" {
-			engineVersion = declared
+			engineVersion = filteredEngineLabel(declared)
 		}
 
 		if handshake.Protocol != 0 && handshake.Protocol != rpsi.ProtocolVersion {
@@ -1503,4 +1512,13 @@ func (server *Server) expireBotExchanges(now time.Time) {
 			server.faultBot(client, pending.gameID, "the engine did not answer in time")
 		}
 	}
+}
+
+// filteredEngineLabel is a label an engine reported about itself, or nothing
+// when the name filter refuses it.
+func filteredEngineLabel(label string) string {
+	if !textfilter.CleanName(label) {
+		return ""
+	}
+	return label
 }

@@ -84,6 +84,46 @@ export interface Challenge {
 }
 
 /**
+ * Where a challenge link has got to. `closed` is only ever sent: an expired,
+ * cancelled or unknown link, carrying nothing but its code.
+ */
+export type ChallengeLinkState = 'open' | 'waiting' | 'started' | 'closed';
+
+/**
+ * Why a taken link has not become a game yet: its author has nothing connected
+ * (`away`), is connected and not looking (`idle`), or is in another game
+ * (`busy`). `here` is the moment before the game opens.
+ */
+export type ChallengeLinkAuthorStatus = 'here' | 'busy' | 'idle' | 'away';
+
+/**
+ * A game offered to whoever opens an address its author sent them.
+ *
+ * One shape for everybody it reaches — its author, whoever took it, and anybody
+ * else who opened it — so each client works out its own part in it from
+ * `challenger` and `taker`. See `challengeLinkRole`.
+ */
+export interface ChallengeLink {
+  code: string;
+  /** Absent on a `closed` link, which the server no longer holds. */
+  challenger?: PlayerProfile;
+  modeName?: string;
+  setup?: GameSetup;
+  state: ChallengeLinkState;
+  /** Who took it, from the moment they did. */
+  taker?: PlayerProfile;
+  /** The game it became. */
+  gameId?: string;
+  createdAtUnixMs?: number;
+  /** When an open link stops being takeable. Absent once somebody took it. */
+  expiresAtUnixMs?: number;
+  /** Only on a `waiting` link. */
+  authorStatus?: ChallengeLinkAuthorStatus;
+  /** Whether a notification could be sent to the author when it was taken. */
+  authorCalled?: boolean;
+}
+
+/**
  * A search as a reconnecting client needs to be told about it.
  *
  * `queuedForMs` is a duration rather than an instant because the two ends do
@@ -1020,7 +1060,16 @@ export interface FeedbackPolicy {
 /* -------------------------------------------------------- client messages -- */
 
 export type ClientMessage =
-  | { type: 'authenticate'; userId: string; profileKey: string; sessionToken: string }
+  | {
+      type: 'authenticate';
+      userId: string;
+      profileKey: string;
+      sessionToken: string;
+      /** This build, for the server's version check: app.json's version. */
+      appVersion?: string;
+      /** `ios`, `android` or `web`. */
+      platform?: string;
+    }
   // Deliberately no `startingPosition`. Ranked matchmaking pairs on mode and
   // time control; pairing on an arbitrary board would mean waiting for someone
   // who happened to draw the same one. A custom position goes out as a
@@ -1051,6 +1100,26 @@ export type ClientMessage =
   | { type: 'cancel_challenge'; challengeId: string }
   | { type: 'accept_challenge'; challengeId: string }
   | { type: 'decline_challenge'; challengeId: string }
+  /** Put out a link to this game. Refused like a posted game is. */
+  | { type: 'create_challenge_link'; setup: GameSetup }
+  /**
+   * Followed a link. The server takes it for us if it is open and not ours, and
+   * otherwise answers with how it stands; either way it keeps us told. A link
+   * we took and left is only shown, so reloading the page we left on does not
+   * put us back in the wait.
+   */
+  | { type: 'open_challenge_link'; linkCode: string }
+  /** PLAY on a link's page: take it, even one we left before. */
+  | { type: 'take_challenge_link'; linkCode: string }
+  /**
+   * Go on being told about a link already open on this page — after a
+   * reconnection, which loses the old socket's place. Never takes it.
+   */
+  | { type: 'watch_challenge_link'; linkCode: string }
+  /** The author taking their link back. */
+  | { type: 'cancel_challenge_link'; linkCode: string }
+  /** Whoever took a link giving up waiting on it. */
+  | { type: 'leave_challenge_link'; linkCode: string }
   // No `startingPosition` here either: the server's bot challenge does not
   // take one. `preferredColor` is a plain field rather than a `setup`, because
   // this message names its mode and its clock the same one-at-a-time way.
@@ -1117,6 +1186,11 @@ export interface ConnectionReadyMessage {
   challenges?: Challenge[];
   /** The public board of challenges nobody has claimed yet. */
   openChallenges?: Challenge[];
+  /**
+   * The link this account sent out and the one it is waiting on, while neither
+   * has become a game. Absent means none, which is why the handler clears both.
+   */
+  challengeLinks?: ChallengeLink[];
   /** What a ranked bot match is played at. See `RankedMatchTerms`. */
   rankedTerms?: RankedMatchTerms;
   /** People per mode who are waiting *and* at the keyboard right now. */
@@ -1177,6 +1251,11 @@ export interface ConnectionReadyMessage {
 export type ServerMessage =
   | ConnectionReadyMessage
   | { type: 'authentication_failed'; message?: string }
+  /**
+   * This build is too old for the server, which closes the socket after
+   * saying so. `storeUrl` is where to update it, when the server knows.
+   */
+  | { type: 'update_required'; message?: string; storeUrl?: string }
   | {
       type: 'mode_player_counts';
       modePlayerCounts?: ModeCounts;
@@ -1244,6 +1323,11 @@ export type ServerMessage =
   | { type: 'challenge_cancelled'; challenge?: Challenge; message?: string }
   | { type: 'challenge_unavailable'; challenge?: Challenge; message?: string }
   | { type: 'challenge_rejected'; message?: string }
+  /**
+   * A challenge link as it now stands, to everybody concerned. `message` is why
+   * something just asked of it was refused, or why it closed.
+   */
+  | { type: 'challenge_link'; challengeLink?: ChallengeLink; message?: string }
   | {
       type: 'match_found';
       color?: PlayerColor;

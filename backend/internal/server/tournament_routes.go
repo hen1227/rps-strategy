@@ -84,6 +84,22 @@ func (server *Server) signupForTournament(writer http.ResponseWriter, request *h
 		writeAPIError(writer, http.StatusBadRequest, err.Error())
 		return
 	}
+	// Signed in, like the withdrawal below, and the entry is the account that
+	// asked, under its own name. Both used to come from the body, which let
+	// anybody enter anybody — every game record carries both players' ids —
+	// under a name no filter had seen. The app has only ever sent its own id
+	// and username, so a body naming somebody else is refused rather than
+	// quietly corrected.
+	account, ok := server.requireSession(writer, request)
+	if !ok {
+		return
+	}
+	if claimed := strings.TrimSpace(signup.UserID); claimed != "" && claimed != account.UserID {
+		writeAPIError(writer, http.StatusForbidden, "you can only enter yourself")
+		return
+	}
+	signup.UserID = account.UserID
+	signup.IGN = account.Username
 	if strings.TrimSpace(signup.BotID) != "" {
 		writeAPIError(writer, http.StatusConflict, botTournamentSwitchHint)
 		return

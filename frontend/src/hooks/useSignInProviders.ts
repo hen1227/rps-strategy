@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 
 import { signInProviders, type SignInProviders } from '@/store/api/bots';
+import { ApiError } from '@/store/api/http';
 import { APPLE_PROVIDER } from '@/store/appleAuth';
 import { useGameStore } from '@/store/gameStore';
 
@@ -14,13 +15,23 @@ import { useGameStore } from '@/store/gameStore';
 //
 // Fetched once per page load and shared, like the identity policy. A server too
 // old to have the route answers 404, which is the same as answering no: it
-// cannot sign anybody in with Apple. So does a request that fails, for this
-// screen — but a failure is not remembered, so the next screen to ask tries
-// again.
+// cannot sign anybody in with Apple. A failure of any kind is not remembered,
+// so the next screen to ask tries again.
 
-/** What a server that could not be asked offers beyond Discord: nothing. Discord
- *  is listed as offered because its button never asks; see above. */
+/** What a server that answered with a failure offers beyond Discord: nothing.
+ *  Discord is listed as offered because its button never asks; see above. */
 const UNANSWERED: SignInProviders = Object.freeze({ discord: true, apple: false, appleWeb: false });
+
+/**
+ * What a server that could not be reached is taken to offer: Apple too, on a
+ * phone. Nothing is known about it, but the two buttons have to stand or fall
+ * together. Discord's never asks, so it stays through a network blip, and an
+ * Apple button that vanished beside it would be a sign-in offered without
+ * Apple's (App Review guideline 4.8). Pressed, either one says the server could
+ * not be reached. The website's Apple button is not a store rule, and stays
+ * hidden until a server says it can finish it.
+ */
+const UNREACHED: SignInProviders = Object.freeze({ discord: true, apple: true, appleWeb: false });
 
 let cached: SignInProviders | null = null;
 let inFlight: Promise<SignInProviders> | null = null;
@@ -32,7 +43,9 @@ const load = (): Promise<SignInProviders> => {
       cached = providers;
       return providers;
     })
-    .catch(() => UNANSWERED)
+    .catch((error: unknown) =>
+      error instanceof ApiError && error.status === null ? UNREACHED : UNANSWERED,
+    )
     .finally(() => {
       inFlight = null;
     });

@@ -10,6 +10,9 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.henhen1227.rps-strategy",
+      "associatedDomains": [
+        "applinks:rps.henhen1227.com"
+      ],
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       },
@@ -55,6 +58,183 @@
         "android.permission.SYSTEM_ALERT_WINDOW",
         "android.permission.READ_EXTERNAL_STORAGE",
         "android.permission.WRITE_EXTERNAL_STORAGE"
+      ],
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "data": [
+            {
+              "scheme": "https",
+              "host": "rps.henhen1227.com",
+              "path": "/"
+            },
+            {
+              "scheme": "https",
+              "host": "rps.henhen1227.com",
+              "path": "/account"
+            },
+            {
+              "scheme": "https",
+              "host": "rps.henhen1227.com",
+              "path": "/account/sign-in"
+            },
+            {
+              "scheme": "https",
+              "host": "rps.henhen1227.com",
+              "path": "/account/bots"
+            },
+            {
+              "scheme": "https",
+              "host": "rps.henhen1227.com",
+              "path": "/account/bots/connect"
+            },
+            {
+              "scheme": "https",
+              "host": "rps.henhen1227.com",
+              "path": "/account/bots/notation"
+            },
+            {
+              "scheme": "https",
+              "host": "rps.henhen1227.com",
+              "path": "/account/bots/protocol"
+            },
+            {
+              "scheme": "https",
+              "host": "rps.henhen1227.com",
+              "path": "/admin"
+            },
+            {
+              "scheme": "https",
+              "host": "rps.henhen1227.com",
+              "path": "/analysis"
+            },
+            {
+              "scheme": "https",
+              "host": "rps.henhen1227.com",
+              "path": "/appearance"
+            },
+            {
+              "scheme": "https",
+              "host": "rps.henhen1227.com",
+              "path": "/battle"
+            },
+            {
+              "scheme": "https",
+              "host": "rps.henhen1227.com",
+              "path": "/bots"
+            },
+            {
+              "scheme": "https",
+              "host": "rps.henhen1227.com",
+              "path": "/bots/series"
+            },
+            {
+              "scheme": "https",
+              "host": "rps.henhen1227.com",
+              "path": "/challenge"
+            },
+            {
+              "scheme": "https",
+              "host": "rps.henhen1227.com",
+              "path": "/credits"
+            },
+            {
+              "scheme": "https",
+              "host": "rps.henhen1227.com",
+              "path": "/delete-account"
+            },
+            {
+              "scheme": "https",
+              "host": "rps.henhen1227.com",
+              "path": "/explorer"
+            },
+            {
+              "scheme": "https",
+              "host": "rps.henhen1227.com",
+              "path": "/feedback"
+            },
+            {
+              "scheme": "https",
+              "host": "rps.henhen1227.com",
+              "path": "/leaderboard"
+            },
+            {
+              "scheme": "https",
+              "host": "rps.henhen1227.com",
+              "path": "/learn"
+            },
+            {
+              "scheme": "https",
+              "host": "rps.henhen1227.com",
+              "path": "/licences"
+            },
+            {
+              "scheme": "https",
+              "host": "rps.henhen1227.com",
+              "path": "/nightly"
+            },
+            {
+              "scheme": "https",
+              "host": "rps.henhen1227.com",
+              "path": "/open-source"
+            },
+            {
+              "scheme": "https",
+              "host": "rps.henhen1227.com",
+              "path": "/openings"
+            },
+            {
+              "scheme": "https",
+              "host": "rps.henhen1227.com",
+              "path": "/play"
+            },
+            {
+              "scheme": "https",
+              "host": "rps.henhen1227.com",
+              "path": "/player"
+            },
+            {
+              "scheme": "https",
+              "host": "rps.henhen1227.com",
+              "path": "/policy"
+            },
+            {
+              "scheme": "https",
+              "host": "rps.henhen1227.com",
+              "path": "/review"
+            },
+            {
+              "scheme": "https",
+              "host": "rps.henhen1227.com",
+              "path": "/rounds"
+            },
+            {
+              "scheme": "https",
+              "host": "rps.henhen1227.com",
+              "path": "/tournament-info"
+            },
+            {
+              "scheme": "https",
+              "host": "rps.henhen1227.com",
+              "path": "/tournaments"
+            },
+            {
+              "scheme": "https",
+              "host": "rps.henhen1227.com",
+              "path": "/watch"
+            },
+            {
+              "scheme": "https",
+              "host": "rps.henhen1227.com",
+              "path": "/weekend"
+            }
+          ],
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ]
+        }
       ]
     },
     "web": {

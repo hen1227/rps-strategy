@@ -114,6 +114,7 @@ type Participant struct {
 type Server struct {
 	hub            *Hub
 	seeks          *seekBoard
+	links          *linkBoard // every challenge link that is out; see challenge_link.go
 	registry       *game.ModeRegistry
 	data           *persistence.Store
 	upgrader       websocket.Upgrader
@@ -171,6 +172,9 @@ type Server struct {
 	// Analytics, when this deployment has a stream to send them to. See
 	// google_analytics.go.
 	analytics *gaSender
+	// appVersions is the oldest app build each platform may still connect
+	// with. See app_version.go.
+	appVersions appVersionGate
 
 	// Signing in, and the short-lived maps it needs: a Discord flow out at its
 	// consent screen; an Apple sign-in out at the phone's sheet (keyed by its
@@ -294,6 +298,7 @@ func NewWithRegistryAndStore(
 	originAllowed := originChecker(allowedOrigins)
 	server := &Server{
 		hub:            NewHub(),
+		links:          newLinkBoard(),
 		registry:       registry,
 		data:           data,
 		originAllowed:  originAllowed,
@@ -322,6 +327,7 @@ func NewWithRegistryAndStore(
 		botSeriesRuns:      newBotSeriesRunner(),
 		push:               newPushSender(data),
 		analytics:          newGASender(),
+		appVersions:        newAppVersionGate(),
 		discord:            newDiscordAuth(),
 		discordFlows:       newTTLStore[discordFlow](discordFlowLifetime, signInMaximumPending),
 		apple:              newAppleAuth(),
@@ -385,6 +391,9 @@ func (server *Server) Run(ctx context.Context) {
 			server.expireChallenges(now)
 			server.expireBotExchanges(now)
 			server.expireUnstartedGames(now)
+			// After the unstarted games, so a link whose game was just called
+			// off is closed before this looks at it.
+			server.sweepChallengeLinks(now)
 			// Before autoReadyBotMatches, which is the one path that *wants*
 			// a reserved engine: the pairing it does is the reservation being
 			// honoured rather than broken.
@@ -465,6 +474,9 @@ func (server *Server) Routes() http.Handler {
 	mux.HandleFunc("DELETE /api/accounts/{userID}", server.deleteOwnAccount)
 	mux.HandleFunc("GET /api/accounts/{userID}/games", server.getGameHistory)
 	mux.HandleFunc("GET /api/accounts/{userID}/games/pgn", server.getAccountGamePGNs)
+	// How many finished games there are, which is how big the public data set
+	// on Hugging Face is, give or take the day it has not exported yet.
+	mux.HandleFunc("GET /api/archive", server.getArchiveSummary)
 	mux.HandleFunc("GET /api/games/{gameID}/pgn", server.getGamePGN)
 	mux.HandleFunc("GET /api/games/{gameID}/accuracy", server.getGameAccuracy)
 	mux.HandleFunc("PUT /api/games/{gameID}/accuracy", server.putGameAccuracy)
@@ -973,6 +985,16 @@ func (server *Server) handleWebSocket(writer http.ResponseWriter, request *http.
 		return
 	}
 
+	// Before the account is touched, so a build too old for this server gets
+	// no further than being told to update.
+	if refusal, refused := server.appVersions.refusal(
+		authentication.Platform, authentication.AppVersion,
+	); refused {
+		_ = connection.WriteJSON(refusal)
+		_ = connection.Close()
+		return
+	}
+
 	account, err := server.authenticateBrowser(request.Context(), authentication)
 	if err != nil {
 		message := "this device's local account key does not match the account"
@@ -997,6 +1019,7 @@ func (server *Server) handleWebSocket(writer http.ResponseWriter, request *http.
 		server:     server,
 		readLimit:  maxMessage,
 	}
+	client.connectedAt = time.Now()
 	server.hub.Register(client)
 	// Whatever this person was already waiting behind is handed straight back,
 	// so a reconnection — or a second tab — resumes a search rather than being
@@ -1049,6 +1072,9 @@ func (server *Server) handleWebSocket(writer http.ResponseWriter, request *http.
 		// What a ranked match is played at, so the Bots page can say so
 		// before anybody presses for one.
 		RankedTerms: rankedMatchTerms(),
+		// The link this person sent out, and the one they are waiting on, so
+		// a reload finds both where it left them.
+		ChallengeLinks: server.challengeLinksFor(account.UserID),
 	})
 	go client.writePump()
 	client.readPump()
@@ -1064,6 +1090,18 @@ func (server *Server) handleMessage(client *Client, message ClientMessage) {
 		server.declineChallenge(client, message.ChallengeID)
 	case "cancel_challenge":
 		server.cancelChallenge(client, message.ChallengeID)
+	case "create_challenge_link":
+		server.createChallengeLink(client, message.requestedSetup())
+	case "open_challenge_link":
+		server.openChallengeLink(client, message.LinkCode)
+	case "take_challenge_link":
+		server.retakeChallengeLink(client, message.LinkCode)
+	case "watch_challenge_link":
+		server.watchChallengeLink(client, message.LinkCode)
+	case "cancel_challenge_link":
+		server.cancelChallengeLink(client, message.LinkCode)
+	case "leave_challenge_link":
+		server.leaveChallengeLink(client, message.LinkCode)
 	case "queue_presence":
 		server.setQueuePresence(client, message.Present)
 	case "join_queue":
@@ -2231,6 +2269,10 @@ func (server *Server) disconnect(client *Client) {
 	// the notification. The thirty-second window is the only thing that calls a
 	// game off by itself; anybody who knows they cannot play presses abort.
 	server.releaseSeeksOnDisconnect(client, "The challenger disconnected.")
+	// Nothing else about a link changes when a socket closes. Its author can be
+	// called back, and its taker is let go by the sweep only once a reload has
+	// had time to come back — see challengeLinkTakerGrace.
+	server.links.unwatch(client)
 	now := time.Now()
 	var disconnected *Participant
 	wasSpectating := false

@@ -349,6 +349,24 @@ function main() {
     note: 'The analysis engine. It is by the same author as the rest of RPS Strategy, but it is a separate program with its own repository and licence.',
   });
 
+  // The Rust standard library, compiled into the engine: core, alloc, std and
+  // compiler_builtins are linked into the native libraries and the WebAssembly
+  // build alike, and the engine has no other dependency. Rust's licence is
+  // either of two, at the user's choice, so both texts go with it.
+  packages.push({
+    name: 'Rust standard library',
+    version: null,
+    licence: 'MIT OR Apache-2.0',
+    platforms: ['android', 'ios', 'web'],
+    url: 'https://github.com/rust-lang/rust',
+    from: null,
+    texts: [
+      textIndex(`MIT License\n\nCopyright (c) The Rust Project Contributors\n\n${mitPermission}`),
+      textIndex(apache),
+    ],
+    note: 'Compiled into RPSFish, which has no other dependency. Its licence is either of these, at your choice.',
+  });
+
   // GitHub's mark, on the sidebar's link to this repository. It is one path
   // copied out of Octicons into src/ui/GitHubMark.tsx rather than a package,
   // so neither measurement above can see it, and the MIT still asks for its

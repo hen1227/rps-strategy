@@ -103,10 +103,11 @@ export default function DeleteAccountPanel({ account, onDeleted }: DeleteAccount
         <Text style={styles.dialogBody}>What goes, immediately and for good:</Text>
         <View style={styles.bullets}>
           {[
-            'Your username and your Discord link.',
+            'Your username, and your Discord and Apple links.',
             "Your titles and leaderboard entry.",
             "Your sign-in. This account cannot be recovered.",
             'Any bots you own are retired and stop playing.',
+            'Match alerts, on every device.',
           ].map((line) => (
             <View key={line} style={styles.bulletRow}>
               <Text style={styles.bulletMark}>◆</Text>
@@ -115,19 +116,23 @@ export default function DeleteAccountPanel({ account, onDeleted }: DeleteAccount
           ))}
         </View>
 
-        {hasPlayed && (
-          <>
-            <Text style={styles.dialogBody}>What stays, and why:</Text>
-            <View style={styles.bullets}>
-              <View style={styles.bulletRow}>
-                <Text style={styles.bulletMark}>◆</Text>
-                <Text style={styles.bulletText}>
-                  Finished games stay in the archive under “Deleted player” to preserve your opponents’ records and ratings.
-                </Text>
-              </View>
+        <Text style={styles.dialogBody}>What stays, and why:</Text>
+        <View style={styles.bullets}>
+          {[
+            ...(hasPlayed
+              ? [
+                  'Finished games stay in the archive under “Deleted player” to preserve your opponents’ records and ratings.',
+                  'Games already in the public download keep the name they were published with.',
+                ]
+              : []),
+            'Your feedback posts and opening names stay up without your name. Delete any posts you want gone first.',
+          ].map((line) => (
+            <View key={line} style={styles.bulletRow}>
+              <Text style={styles.bulletMark}>◆</Text>
+              <Text style={styles.bulletText}>{line}</Text>
             </View>
-          </>
-        )}
+          ))}
+        </View>
 
         <LabeledInput
           autoCapitalize="none"

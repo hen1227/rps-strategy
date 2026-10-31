@@ -269,6 +269,24 @@ func writePGN(writer http.ResponseWriter, text string) {
 	_, _ = writer.Write([]byte(text))
 }
 
+// archiveSummary is the size of the public game archive, for the line on the
+// open-source page that says how much of it there is.
+type archiveSummary struct {
+	Games int `json:"games"`
+}
+
+func (server *Server) getArchiveSummary(writer http.ResponseWriter, request *http.Request) {
+	total, err := server.data.CountFinishedGames(request.Context())
+	if err != nil {
+		writeArchiveError(writer, err)
+		return
+	}
+	// A count that moves by a few hundred a day: five minutes stale is
+	// nothing, and it keeps a busy page from counting the table per visit.
+	writer.Header().Set("Cache-Control", "public, max-age=300")
+	writeJSON(writer, http.StatusOK, archiveSummary{Games: total})
+}
+
 func writeArchiveError(writer http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, persistence.ErrGamePGNNotFound):

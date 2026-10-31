@@ -89,6 +89,7 @@ export default function ModalCard({
             <Pressable
               accessibilityLabel={dismissLabel}
               accessibilityRole="button"
+              hitSlop={8}
               onPress={onClose}
               style={({ pressed }) => [styles.closeButton, pressed && styles.pressed]}
             >

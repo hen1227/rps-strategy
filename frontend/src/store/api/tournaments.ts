@@ -230,11 +230,22 @@ export interface TournamentSignup {
   reservationToken?: string;
 }
 
-/** Enter yourself. */
-export const signupForTournament = (tournamentId: string, signup: TournamentSignup) =>
+/**
+ * Enter yourself.
+ *
+ * Signed in, like the withdrawal below: the server enters the account the
+ * session belongs to, under its own username, and refuses a body that names
+ * anybody else.
+ */
+export const signupForTournament = (
+  sessionToken: string,
+  tournamentId: string,
+  signup: TournamentSignup,
+) =>
   request<Tournament>(`/api/tournaments/${encodeURIComponent(tournamentId)}/signups`, {
     method: 'POST',
     body: signup,
+    token: sessionToken,
     what: 'Registering',
   });
 

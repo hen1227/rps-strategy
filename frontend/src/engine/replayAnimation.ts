@@ -6,6 +6,24 @@
 
 import type { Piece, PlayerColor, Position, Tile } from '@/types/game';
 
+// A catch-up finishes before even the fastest watched bot can make its next
+// move (250ms), so reaching the live edge never makes the board fall behind.
+const FAST_REPLAY_MAX_DURATION = 220;
+const FAST_REPLAY_MIN_DURATION = 72;
+const FAST_REPLAY_MOVE_DURATION = 12;
+
+/**
+ * How long the board takes to wind through a jump of more than one move.
+ *
+ * Here rather than in the board so the replay controls can tap along with it:
+ * a jump to the start is felt winding back at the speed it is drawn.
+ */
+export const fastReplayDuration = (steps: number) =>
+  Math.min(
+    FAST_REPLAY_MAX_DURATION,
+    Math.max(FAST_REPLAY_MIN_DURATION, steps * FAST_REPLAY_MOVE_DURATION),
+  );
+
 /**
  * Anything that carries an occupant.
  *

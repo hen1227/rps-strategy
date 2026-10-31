@@ -50,6 +50,48 @@ type Client struct {
 	// engine session with it, and so every existing `&Client{...}` in tests
 	// keeps compiling unchanged.
 	bot *botClient
+
+	// presence is what this tab last said about the person behind it. A seek
+	// keeps its own copy for pairing; this one is what a challenge link asks
+	// before it opens a board for somebody who is not searching at all. Unset
+	// reads as here to isHere, for the reason Seek.CurrentPresence gives: a
+	// socket that has said nothing about itself is one somebody just opened. A
+	// link's author has to say so — see readyToBeSeated.
+	presenceMu sync.Mutex
+	presence   Presence
+	// connectedAt is when the socket authenticated. Zero for the clients tests
+	// build by hand, which therefore read as long connected.
+	connectedAt time.Time
+}
+
+// setPresence records what this tab says about itself, and reports whether
+// that changed anything. Recorded even when it changes nothing, because a tab
+// that has said "here" is a different thing from one that has said nothing —
+// see readyToBeSeated.
+func (client *Client) setPresence(presence Presence) bool {
+	client.presenceMu.Lock()
+	defer client.presenceMu.Unlock()
+	changed := client.currentPresenceLocked() != presence
+	client.presence = presence
+	return changed
+}
+
+// isHere reports whether somebody is looking at this tab, as far as it has
+// said. Nil is nobody.
+func (client *Client) isHere() bool {
+	if client == nil {
+		return false
+	}
+	client.presenceMu.Lock()
+	defer client.presenceMu.Unlock()
+	return client.currentPresenceLocked() == PresenceHere
+}
+
+func (client *Client) currentPresenceLocked() Presence {
+	if client.presence == "" {
+		return PresenceHere
+	}
+	return client.presence
 }
 
 // isBot reports whether this connection is an engine rather than a person.

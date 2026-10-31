@@ -256,7 +256,10 @@ func (store *Store) signup(
 		return Tournament{}, fmt.Errorf("%w: Discord must be between 2 and 64 characters", ErrInvalidTournament)
 	}
 	if !agreedToUnfilteredChat {
-		return Tournament{}, fmt.Errorf("%w: unfiltered chat agreement is required", ErrInvalidTournament)
+		// The column and the wire name still say "unfiltered chat", from when
+		// tournament rooms were. Every room is filtered now, so the sentence a
+		// player reads no longer claims otherwise.
+		return Tournament{}, fmt.Errorf("%w: agree to take part to enter", ErrInvalidTournament)
 	}
 
 	transaction, err := store.db.BeginTx(ctx, nil)

@@ -13,9 +13,16 @@ import { createLocalSlice, initialLocalState } from './localSession';
 import { createSessionSlice } from './accountSession';
 import { createReachSlice } from './reachTool';
 import { chatRoomIdOf, chatRoomScopeOf, withChatMessage } from './chatSelectors';
+import {
+  applyChallengeLink,
+  challengeLinksOnConnect,
+  type ChallengeLinkSlots,
+  type ViewedLink,
+} from './challengeLinkSelectors';
 import { grantedTimeExtension, type TimeExtension } from './clockSelectors';
 import { activePushTransport, pushEnabledFor } from './push';
 import { WS_URL } from './serverConfig';
+import { appPlatform, appVersion } from './clientBuild';
 import {
   isStandardSetup,
   preferredColorOf,
@@ -37,6 +44,7 @@ import { timeControlLabel } from '@/analytics/events';
 import { inferMoveBetweenGrids } from '@/engine/moveDiff';
 import {
   samePosition,
+  selectionAfterMove,
   type GameSetup,
   type ModeDefinition,
   type ModeID,
@@ -51,11 +59,13 @@ import type {
   BotDrain,
   BotPresence,
   Challenge,
+  ChallengeLink,
   ChatMessage,
   ChatRoomScope,
   LiveGameSummary,
   ModeCounts,
   RankedMatchTerms,
+  RatingUpdate,
   Restriction,
   ServerMessage,
   ServerNotice,
@@ -214,6 +224,14 @@ const clearPersistedGame = () => {
   return null;
 };
 
+/** The four link fields, as `challengeLinkSelectors` reads them. */
+const challengeLinkSlotsOf = (state: LobbyState): ChallengeLinkSlots => ({
+  ownLink: state.ownLink,
+  awaitedLink: state.awaitedLink,
+  viewedLink: state.viewedLink,
+  acceptedLink: state.acceptedLink,
+});
+
 // An HTTP payload has no live match state, so both merges keep whatever the
 // socket already told us about readiness and running games.
 const carryLiveState = (next: Tournament, existing: Tournament | undefined): Tournament => ({
@@ -281,6 +299,12 @@ export interface LobbyState {
   connectionStatus: ConnectionStatus;
   error: string | null;
   /**
+   * Set when the server has said this build is too old to play online. Never
+   * cleared: nothing short of a new build makes it untrue, so the socket is
+   * not tried again either.
+   */
+  updateRequired: { message: string; storeUrl: string } | null;
+  /**
    * Bumped every time the server turns a move down.
    *
    * A count rather than a flag because the interesting thing is that it
@@ -288,6 +312,15 @@ export interface LobbyState {
    * a listener watching that would hear the first and miss the second.
    */
   rejectedMoveCount: number;
+  /**
+   * What the game just finished did to both ratings, as the server sent it
+   * with the final position, and which game that was.
+   *
+   * Named for its game rather than cleared when the next one starts: a reader
+   * compares the id with the board it is drawing, so a result left over from
+   * the last game cannot be shown on this one.
+   */
+  ratingUpdate: (RatingUpdate & { gameId: string }) | null;
   modes: ModeDefinition[];
   engineBots: BotPresence[];
   /**
@@ -406,6 +439,20 @@ export interface LobbyState {
   outgoingChallenge: Challenge | null;
   acceptingChallengeId: string | null;
   challengeNotice: string | null;
+  /**
+   * The challenge link this account sent out, until somebody plays it or it
+   * closes. Every `challenge_link` message moves this and the three fields
+   * below it; `challengeLinkSelectors` is where that is decided.
+   */
+  ownLink: ChallengeLink | null;
+  /** The link this account took, and is waiting in the lobby on. */
+  awaitedLink: ChallengeLink | null;
+  /** The link the challenge page's address names, as the server last told it. */
+  viewedLink: ViewedLink | null;
+  /** A link of ours that just became the game on this screen, for the popup. */
+  acceptedLink: ChallengeLink | null;
+  /** Between asking for a link and being handed one. */
+  creatingLink: boolean;
   /** The clock a game gets when nobody chose one, as the server defines it. */
   defaultTimeControl: TimeControl | null;
   queue: QueueState;
@@ -523,6 +570,25 @@ export interface LobbyActions {
   acceptChallenge: (challengeId: string) => void;
   declineChallenge: (challengeId: string) => void;
   cancelChallenge: (challengeId: string) => void;
+  /** Put out a link to this game, for whoever is sent it. */
+  createChallengeLink: (setup: GameSetup) => boolean;
+  /**
+   * The challenge page following the link in its address: taking it when it is
+   * open and somebody else's, and being kept told about it whatever happens.
+   */
+  /**
+   * `pressed` is the page's PLAY button, which takes the link even when this
+   * account took it once and left. Followed without it, a link left before is
+   * only shown, so reloading the page does not put anybody back in the wait.
+   */
+  openChallengeLink: (code: string, pressed?: boolean) => void;
+  /** The same page after a reconnection: told again, never taking anything. */
+  watchChallengeLink: (code: string) => void;
+  cancelChallengeLink: (code: string) => void;
+  leaveChallengeLink: (code: string) => void;
+  dismissAcceptedLink: () => void;
+  /** The challenge page going away, and its link with it. */
+  forgetViewedLink: () => void;
   /**
    * Play a connected engine. `seat` is the side the challenger wants; 'random'
    * lets the server seat them, which it does as Red — the first move, the same
@@ -566,7 +632,9 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
   gameSessionId: readGameSessionId(),
   connectionStatus: 'disconnected',
   error: null,
+  updateRequired: null,
   rejectedMoveCount: 0,
+  ratingUpdate: null,
   modes: BASE_MODES,
   // Engines connected from someone's machine. Deliberately *not* named after
   // botPlayerCount below, which counts people practising against a browser
@@ -599,6 +667,11 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
   outgoingChallenge: null,
   acceptingChallengeId: null,
   challengeNotice: null,
+  ownLink: null,
+  awaitedLink: null,
+  viewedLink: null,
+  acceptedLink: null,
+  creatingLink: false,
   defaultTimeControl: null,
   queue: initialQueue,
   firstMoveDeadline: null,
@@ -622,6 +695,7 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
   showSpectatorMessages: true,
 
   connect: () => {
+    if (get().updateRequired) return;
     const existing = get().socket;
     if (
       existing &&
@@ -648,6 +722,10 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
         // A signed-in player is their account here rather than whatever this
         // browser is called. The server prefers the token when it is set.
         sessionToken: get().sessionToken ?? '',
+        // So a server that has moved on can tell an older build to update
+        // rather than leave it to fail. See `update_required` below.
+        appVersion: appVersion(),
+        platform: appPlatform(),
       });
     };
     socket.onerror = () => {
@@ -699,6 +777,11 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
       openChallenges: [],
       outgoingChallenge: null,
       acceptingChallengeId: null,
+      // Whoever connects next may be somebody else, and is told their own.
+      ownLink: null,
+      awaitedLink: null,
+      acceptedLink: null,
+      creatingLink: false,
     });
   },
 
@@ -745,7 +828,18 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
           // Somebody who came back to find their search gone deserves a reason,
           // not an inexplicably empty lobby.
           const lostQueue = state.queue.isSearching && !message.queue && !message.gameId;
+          // The same for a link: the server says what is still out, and a link
+          // that went while this socket was away is said out loud.
+          const links = challengeLinksOnConnect(
+            challengeLinkSlotsOf(state),
+            message.challengeLinks,
+            message.account?.userId ?? state.accountId,
+          );
           return {
+            ownLink: links.slots.ownLink,
+            awaitedLink: links.slots.awaitedLink,
+            acceptedLink: links.slots.acceptedLink,
+            creatingLink: false,
             queue,
             queueMiss: null,
             pushEnabled: pushEnabledFor(
@@ -771,7 +865,9 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
             standingNotice: message.notice?.text ? message.notice : null,
             challengeNotice: lostQueue
               ? 'Your search ended while you were offline. Press play to start again.'
-              : state.challengeNotice,
+              : links.lost
+                ? 'Your challenge link ended while you were offline.'
+                : state.challengeNotice,
             connectionStatus: gameSessionId || spectatedGameId ? 'rejoining' : 'connected',
             account: message.account ?? state.account,
             // Who the server just said we are. On a browser where somebody has
@@ -824,6 +920,22 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
         set({
           connectionStatus: 'disconnected',
           error: message.message ?? 'This device could not authenticate the local account.',
+        });
+        break;
+      case 'update_required':
+        // The server closes the socket after this. Trying again would get the
+        // same answer, so nothing does: `connect` checks the flag too, for the
+        // callers that reconnect on their own when the app comes back.
+        shouldReconnect = false;
+        set({
+          connectionStatus: 'disconnected',
+          error: null,
+          updateRequired: {
+            message:
+              message.message ??
+              'This version of RPS Strategy is too old to play online. Update it to keep playing.',
+            storeUrl: message.storeUrl ?? '',
+          },
         });
         break;
       case 'mode_player_counts': {
@@ -1006,6 +1118,8 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
                 atUnixMs: Date.now(),
               }
             : null,
+          // A link's popup announces the game, and there is no game.
+          acceptedLink: null,
           error: null,
         });
         break;
@@ -1086,8 +1200,42 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
           };
         });
         break;
+      case 'challenge_link': {
+        const link = message.challengeLink;
+        if (!link?.code) break;
+        const state = get();
+        // The game this tab is seated in, which is what tells the tab that was
+        // seated from the author's other tabs: only that one gets the popup.
+        const ownGameId =
+          state.gameState && !state.isSpectating && !state.gameState.bot && !state.gameState.local
+            ? state.gameState.gameId
+            : null;
+        const { slots, notice } = applyChallengeLink(
+          challengeLinkSlotsOf(state),
+          link,
+          message.message ?? null,
+          { accountId: state.accountId, ownGameId },
+        );
+        const handedOver =
+          state.creatingLink && slots.ownLink?.code === link.code && link.state === 'open';
+        if (handedOver && link.setup) {
+          track('challenge_post', {
+            mode: link.setup.modeId,
+            ranked: link.setup.casual ? 'casual' : 'ranked',
+            time_control: timeControlLabel(link.setup.timeControl),
+            kind: 'link',
+          });
+        }
+        set({
+          ...slots,
+          creatingLink: handedOver ? false : state.creatingLink,
+          challengeNotice: notice ?? state.challengeNotice,
+        });
+        break;
+      }
       case 'challenge_rejected':
         set({
+          creatingLink: false,
           acceptingChallengeId: null,
           error: message.message ?? 'The challenge could not be completed.',
         });
@@ -1247,6 +1395,14 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
         // the pair. Both players and every spectator get the same pair, so the
         // flourish plays on all of their boards at once.
         const bonusMs = grantedTimeExtension(current.gameState, message.gameState);
+        // A piece picked up on the opponent's turn stays in hand through their
+        // reply unless the reply took it, and its moves are asked for the
+        // moment the turn is this player's.
+        const kept =
+          message.gameState && !isFinished && !isSpectating
+            ? selectionAfterMove(current.selectedTile, message.gameState.grid, current.playerColor)
+            : null;
+        const turnPassed = current.gameState.currentTurn !== message.gameState?.currentTurn;
         set((state) => ({
           gameState: message.gameState,
           // Kept rather than cleared when a message arrives without one. A
@@ -1261,11 +1417,18 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
           gameSessionId: isSpectating ? null : persistGame(message.gameState),
           spectatedGameId: isSpectating && isFinished ? null : state.spectatedGameId,
           lastMove: inferLastMove(state.gameState, message.gameState) ?? state.lastMove,
-          selectedTile: null,
-          validMoves: [],
+          selectedTile: kept,
+          validMoves: kept && !turnPassed ? state.validMoves : [],
           opponentReconnectDeadline: isFinished ? null : state.opponentReconnectDeadline,
+          ratingUpdate:
+            message.ratingUpdate && message.gameState
+              ? { ...message.ratingUpdate, gameId: message.gameState.gameId }
+              : state.ratingUpdate,
           error: null,
         }));
+        if (kept && turnPassed && message.gameState?.currentTurn === current.playerColor) {
+          send(current.socket, { type: 'request_moves', from: kept });
+        }
         break;
       }
       case 'chat_message':
@@ -1319,7 +1482,11 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
             return {};
           }
           const validMoves = message.validMoves ?? [];
-          return validMoves.length > 0
+          // None back for a piece picked up as the turn passed is the server
+          // saying it is not this player's move yet, not that the piece is
+          // stuck, so it stays selected.
+          const waiting = state.gameState?.currentTurn !== state.playerColor;
+          return validMoves.length > 0 || waiting
             ? { validMoves }
             : { selectedTile: null, validMoves: [] };
         });
@@ -1407,10 +1574,11 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
   },
 
   reportPresence: (present) => {
-    const { socket, queue } = get();
+    const { socket, queue, ownLink, awaitedLink } = get();
     // Nothing is waiting on us, so nothing needs to know where we are. An idle
-    // browsing session should generate no presence traffic at all.
-    if (!queue.isSearching) return;
+    // browsing session should generate no presence traffic at all. A link is
+    // something waiting on us: its game opens when its author is looking.
+    if (!queue.isSearching && !ownLink && !awaitedLink) return;
     send(socket, { type: 'queue_presence', present });
   },
 
@@ -1494,6 +1662,65 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
       set({ error: 'Connect to the server before cancelling the challenge.' });
     }
   },
+
+  createChallengeLink: (setup) => {
+    const { socket, serverUpdate } = get();
+    if (!setup?.modeId) {
+      set({ error: 'No game modes are available.' });
+      return false;
+    }
+    // Refused here for the reason `joinQueue` gives: the server turns every new
+    // game away during a drain, and a link is one.
+    if (serverUpdate) {
+      set({ error: updatePausedReason(serverUpdate.note) });
+      return false;
+    }
+    if (!send(socket, { type: 'create_challenge_link', setup })) {
+      set({ error: 'Connect to the server before making a challenge link.' });
+      return false;
+    }
+    set({ error: null, challengeNotice: null, creatingLink: true });
+    return true;
+  },
+
+  openChallengeLink: (code, pressed = false) => {
+    const linkCode = code.trim();
+    if (!linkCode) return;
+    const asked = send(get().socket, {
+      type: pressed ? 'take_challenge_link' : 'open_challenge_link',
+      linkCode,
+    });
+    set((state) => ({
+      viewedLink: {
+        code: linkCode,
+        link: state.viewedLink?.code === linkCode ? state.viewedLink.link : null,
+        message: null,
+        asking: asked,
+      },
+    }));
+  },
+
+  watchChallengeLink: (code) => {
+    const linkCode = code.trim();
+    if (!linkCode) return;
+    send(get().socket, { type: 'watch_challenge_link', linkCode });
+  },
+
+  cancelChallengeLink: (code) => {
+    if (!code || !send(get().socket, { type: 'cancel_challenge_link', linkCode: code })) {
+      set({ error: 'Connect to the server before cancelling the link.' });
+    }
+  },
+
+  leaveChallengeLink: (code) => {
+    if (!code || !send(get().socket, { type: 'leave_challenge_link', linkCode: code })) {
+      set({ error: 'Connect to the server before leaving.' });
+    }
+  },
+
+  dismissAcceptedLink: () => set({ acceptedLink: null }),
+
+  forgetViewedLink: () => set({ viewedLink: null }),
 
   challengeBot: (botId, modeId, seat = 'random') => {
     const preferredColor = preferredColorOf(seat);
@@ -1634,12 +1861,15 @@ const createLobbySlice: StateCreator<GameStore, [], [], LobbySlice> = (set, get)
     }
 
     const tile = gameState.grid[position.y]?.[position.x];
-    if (gameState.currentTurn !== playerColor || tile?.occupantOwner !== playerColor) {
+    if (!playerColor || tile?.occupantOwner !== playerColor) {
       set({ selectedTile: null, validMoves: [] });
       return;
     }
 
     set({ selectedTile: position, validMoves: [], error: null });
+    // Picked up ahead of the opponent's reply. The legal moves are asked for
+    // when the turn comes round, because the reply can change them.
+    if (gameState.currentTurn !== playerColor) return;
     if (!send(socket, { type: 'request_moves', from: position })) {
       set({ selectedTile: null, error: 'Could not request legal moves from the server.' });
     }

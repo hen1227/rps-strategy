@@ -8,6 +8,7 @@ import { notEntered } from './rankedMatch';
 import { MIN_MINUTES, type BotSeriesForm } from './useBotSeriesForm';
 import { engineElo, engineRatingState } from '@/features/live/liveSelectors';
 import { ratingLabel } from '@/features/ratings/scale';
+import { haptic } from '@/haptics/haptics';
 import { links } from '@/navigation/links';
 import { botIconUrl } from '@/store/api/bots';
 import { useGameStore } from '@/store/gameStore';
@@ -212,7 +213,10 @@ function StakesPicker({
             accessibilityState={{ selected }}
             aria-checked={selected}
             key={option.title}
-            onPress={() => onChange(option.value)}
+            onPress={() => {
+              if (!selected) haptic('choose');
+              onChange(option.value);
+            }}
             style={({ pressed }) => [
               styles.stakesOption,
               selected && styles.stakesOptionSelected,
@@ -293,7 +297,7 @@ export default function BotSeriesPanel({
           eyebrow={asHost ? 'HOST' : 'BOT SERIES'}
           title="Pit two engines against each other"
           trailing={
-            admin.bySession ? undefined : (
+            admin.bySession || !admin.offered ? undefined : (
               <GhostButton
                 compact
                 label={hostFormOpen || asHost ? 'CLOSE' : 'HOST CONTROLS'}

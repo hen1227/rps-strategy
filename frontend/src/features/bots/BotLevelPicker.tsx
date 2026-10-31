@@ -2,6 +2,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import BotIcon from './BotIcon';
 import { BOT_PROFILES } from '@/engine/bots/profiles';
+import { haptic } from '@/haptics/haptics';
 import { colors, radius, space, themedSheet, type } from '@/theme';
 
 // The difficulty ladder, as tiles.
@@ -43,7 +44,10 @@ export default function BotLevelPicker({
               accessibilityRole="radio"
               accessibilityState={{ checked: selected }}
               key={profile.id}
-              onPress={() => onSelect(profile.id)}
+              onPress={() => {
+                if (!selected) haptic('choose');
+                onSelect(profile.id);
+              }}
               style={({ pressed }) => [
                 styles.level,
                 compact && styles.levelCompact,

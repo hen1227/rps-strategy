@@ -97,13 +97,13 @@ export default function LiveNowPanel() {
   const snapshot = useLiveSnapshot();
   const watchGame = useWatchGame();
   const spectatedGameId = useGameStore((state) => state.spectatedGameId);
-  const gameState = useGameStore((state) => state.gameState);
+  const inGame = useGameStore((state) => Boolean(state.gameState));
   const connectionStatus = useGameStore((state) => state.connectionStatus);
 
   // The rail's rule, for the same reason: watching is off the table while you
   // are at a board of your own, and before the socket is up there is nothing to
   // watch with.
-  const busy = connectionStatus !== 'connected' || Boolean(gameState) || Boolean(spectatedGameId);
+  const busy = connectionStatus !== 'connected' || inGame || Boolean(spectatedGameId);
   const boards = allLiveBoards(snapshot);
   const featured = boards[0];
   // Nothing is live: no panel. An empty box under a heading about live games is

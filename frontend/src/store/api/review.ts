@@ -11,6 +11,13 @@ export const getGamePGN = (gameId: string) =>
     what: 'Loading the game record',
   });
 
+/**
+ * How many finished games the archive holds, which is the size of the public
+ * data set on Hugging Face, give or take the day it has not exported yet.
+ */
+export const getArchiveSummary = () =>
+  request<{ games: number }>('/api/archive', { what: 'Counting the game archive' });
+
 /** One player's stored review of a game. */
 export interface StoredAccuracy {
   accuracy: number;

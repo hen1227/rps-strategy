@@ -277,7 +277,7 @@ func (server *Server) sendTestPush(writer http.ResponseWriter, request *http.Req
 	report := server.push.SendTo(account.UserID, pushPayload{
 		Kind:  "test",
 		Title: "Notifications are working",
-		Body:  "This is the only kind of alert RPS sends, and only when a game starts.",
+		Body:  "This is the only kind of alert RPS sends, and only when a game is ready.",
 		Tag:   "rps-test",
 	})
 	writeJSON(writer, http.StatusOK, map[string]any{

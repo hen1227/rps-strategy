@@ -1,7 +1,8 @@
 import { useRouter } from 'expo-router';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Text, TextInput, View, type LayoutChangeEvent } from 'react-native';
 
+import ChallengeLinkShareModal from './ChallengeLinkShareModal';
 import GameSettingsModal from './GameSettingsModal';
 import LocalPlayPanel from './LocalPlayPanel';
 import { FeaturedModeCard, VariantModeCard } from './ModeCards';
@@ -85,7 +86,11 @@ export default function PlayOnlineScreen() {
   const outgoingChallenge = useGameStore((state) => state.outgoingChallenge);
   const challengePlayer = useGameStore((state) => state.challengePlayer);
   const postOpenChallenge = useGameStore((state) => state.postOpenChallenge);
-  const gameState = useGameStore((state) => state.gameState);
+  const createChallengeLink = useGameStore((state) => state.createChallengeLink);
+  // One link out at a time, so with one out the button shows it again rather
+  // than making another.
+  const hasLink = useGameStore((state) => Boolean(state.ownLink));
+  const inGame = useGameStore((state) => Boolean(state.gameState));
   // Read for its sentence only. Whether anything is paused at all is the gate's
   // answer below, so the two cannot disagree about it.
   const serverUpdate = useGameStore((state) => state.serverUpdate);
@@ -99,6 +104,8 @@ export default function PlayOnlineScreen() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [positionOpen, setPositionOpen] = useState(false);
   const [pgnOpen, setPgnOpen] = useState(false);
+  const [linkOpen, setLinkOpen] = useState(false);
+  const closeLink = useCallback(() => setLinkOpen(false), []);
 
   const go = useGoTo();
   // A device that has never been here sees the lessons first, once — see
@@ -258,7 +265,7 @@ export default function PlayOnlineScreen() {
         answer for when it is down, so the gate that serves them would take it
         away at precisely the moment it is the only thing that still works.
       */}
-      <LocalPlayPanel disabled={Boolean(gameState)} modes={playableModes} />
+      <LocalPlayPanel disabled={inGame} modes={playableModes} />
 
       {setup ? (
         <Panel>
@@ -377,6 +384,36 @@ export default function PlayOnlineScreen() {
                     </Text>
                   ) : null}
                 </View>
+                {/*
+                  The same game, offered by address instead: for somebody who
+                  is not in the lobby to be challenged. A second way to send
+                  this game rather than a second form, so it reads the knobs
+                  above and leaves the opponent field to the button over it.
+                  Grey, because the green one above is the main way in.
+                */}
+                <View style={styles.linkRow}>
+                  <Text style={styles.linkHint}>
+                    {hasLink ? 'Your link is out.' : 'Or send a link. Whoever opens it plays you.'}
+                  </Text>
+                  <GhostButton
+                    accessibilityLabel={
+                      hasLink ? 'Show your challenge link' : 'Make a link to this game to send'
+                    }
+                    compact
+                    disabled={!hasLink && (gate.atBoard || gate.paused)}
+                    label={hasLink ? 'YOUR LINK' : 'SHARE A LINK'}
+                    onPress={() => {
+                      if (hasLink) {
+                        setLinkOpen(true);
+                        return;
+                      }
+                      if (!createChallengeLink(setup)) return;
+                      resetDraft();
+                      setSettingsOpen(false);
+                      setLinkOpen(true);
+                    }}
+                  />
+                </View>
               </View>
             </View>
 
@@ -442,6 +479,7 @@ export default function PlayOnlineScreen() {
         title="Custom game setup"
         visible={positionOpen}
       />
+      <ChallengeLinkShareModal onClose={closeLink} visible={linkOpen} />
       <PGNImportModal
         onClose={() => setPgnOpen(false)}
         onLoad={(pgn) => {
@@ -507,6 +545,18 @@ const styles = themedSheet(() => ({
   },
   builderButton: { gap: space.snug },
   actionHint: { ...type.meta, color: colors.textFaint },
+  linkRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: space.small,
+    marginTop: space.medium,
+  },
+  // `flexBasis` rather than `flex`: a lone flexible item in a row is started
+  // at zero on iOS and never wraps, which would squeeze this to a word a line
+  // beside the button instead of putting the button under it.
+  linkHint: { ...type.meta, color: colors.textFaint, flexGrow: 1, flexBasis: 160 },
 
   opponentField: { alignSelf: 'stretch' },
   // A username is short. Letting the field run the width of a desktop panel

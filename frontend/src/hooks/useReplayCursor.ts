@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 import { useReplayKeyboard } from './useReplayKeyboard';
 
@@ -55,6 +55,45 @@ export interface ReplayCursorOptions {
   onChange?: () => void;
 }
 
+/**
+ * Where the cursor goes when the line underneath it changes, or `null` to stay.
+ *
+ * `previous` is the length the cursor last saw. It starts from zero rather
+ * than from the length the hook mounted with, so that "the line has only just
+ * arrived" is true on the first look whether the game was already in the store
+ * or turned up a render later.
+ */
+const cursorForLine = ({
+  cursor,
+  follow,
+  length,
+  previous,
+  sameLine,
+}: {
+  cursor: number;
+  follow: boolean;
+  length: number;
+  previous: number;
+  sameLine: boolean;
+}): number | null => {
+  if (length === 0) return null;
+  // A line the viewer has never stood in: it has only just arrived, or it is
+  // a different game than the one they were looking at. Either way, where the
+  // cursor happens to be is not a place anybody chose.
+  //
+  // This is what somebody who presses WATCH on a game at move thirteen needs.
+  // Without it the cursor stayed at zero and they were shown the opening
+  // position of a game they had asked to see live, under a card telling them
+  // the game had moved on. Only for a follower: a review opens at the first
+  // move on purpose.
+  if (follow && (previous === 0 || !sameLine)) return length - 1;
+  // A watched game pulls along a viewer who is already at the end of it.
+  if (length > previous && follow && cursor >= length - 2) return length - 1;
+  // And any line that has shrunk past the cursor pulls it back inside.
+  if (cursor > length - 1) return length - 1;
+  return null;
+};
+
 export const useReplayCursor = ({
   length,
   follow = false,
@@ -83,42 +122,34 @@ export const useReplayCursor = ({
   const goToFirst = useCallback(() => goTo(0), [goTo]);
   const goToLast = useCallback(() => goTo(length - 1), [goTo, length]);
 
-  const atLiveEdge = cursor >= lastIndex;
-
-  // Three jobs, all about the line underneath the cursor changing.
-  //
-  // Counted from zero rather than from the length this mounted with, so that
-  // "the line has only just arrived" is true on the first run whether the game
-  // was already in the store or turned up a render later.
-  const previousLength = useRef(0);
-  const previousLine = useRef(lineId);
+  // The line as the cursor last saw it, compared during render rather than in
+  // an effect. An effect moved the cursor a render late: the render that
+  // brought a longer line still stood on the old end, so a live board spent a
+  // whole render — the slowest part of a move on a phone — drawing the
+  // position before the move, and the piece waited that long to set off.
+  const [seen, setSeen] = useState({ length: 0, lineId, moved: false });
+  if (seen.length !== length || seen.lineId !== lineId) {
+    const target = cursorForLine({
+      cursor: cursorRef.current,
+      follow,
+      length,
+      previous: seen.length,
+      sameLine: seen.lineId === lineId,
+    });
+    setSeen({ length, lineId, moved: target !== null });
+    if (target !== null) setCursor(target);
+  }
+  // The ref catches up once the move is on screen, and `onChange` hears about
+  // it then too: neither may happen during a render React could still discard.
+  useLayoutEffect(() => {
+    cursorRef.current = cursor;
+  }, [cursor]);
   useEffect(() => {
-    const previous = previousLength.current;
-    const sameLine = previousLine.current === lineId;
-    previousLength.current = length;
-    previousLine.current = lineId;
-    if (length === 0) return;
-    // A line the viewer has never stood in: it has only just arrived, or it is
-    // a different game than the one they were looking at. Either way, where the
-    // cursor happens to be is not a place anybody chose.
-    //
-    // This is what somebody who presses WATCH on a game at move thirteen needs.
-    // Without it the cursor stayed at zero and they were shown the opening
-    // position of a game they had asked to see live, under a card telling them
-    // the game had moved on. Only for a follower: a review opens at the first
-    // move on purpose.
-    if (follow && (previous === 0 || !sameLine)) {
-      goTo(length - 1);
-      return;
-    }
-    // A watched game pulls along a viewer who is already at the end of it.
-    if (length > previous && follow && cursorRef.current >= length - 2) {
-      goTo(length - 1);
-      return;
-    }
-    // And any line that has shrunk past the cursor pulls it back inside.
-    if (cursorRef.current > length - 1) goTo(length - 1);
-  }, [follow, goTo, length, lineId]);
+    if (seen.moved) onChange?.();
+    // `seen` is replaced each time the line changes, so this runs once per change.
+  }, [seen]);
+
+  const atLiveEdge = cursor >= lastIndex;
 
   useReplayKeyboard({
     enabled: keyboard,

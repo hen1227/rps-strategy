@@ -1,0 +1,117 @@
+{
+  "applinks": {
+    "details": [
+      {
+        "appIDs": [
+          "5BHAWQJGY5.com.henhen1227.rps-strategy"
+        ],
+        "components": [
+          {
+            "/": "/account/callback",
+            "exclude": true,
+            "comment": "Where Discord and Apple return a web sign-in. Claiming it would carry a sign-in begun in the browser into the app halfway through."
+          },
+          {
+            "/": "/"
+          },
+          {
+            "/": "/account"
+          },
+          {
+            "/": "/account/sign-in"
+          },
+          {
+            "/": "/account/bots"
+          },
+          {
+            "/": "/account/bots/connect"
+          },
+          {
+            "/": "/account/bots/notation"
+          },
+          {
+            "/": "/account/bots/protocol"
+          },
+          {
+            "/": "/admin"
+          },
+          {
+            "/": "/analysis"
+          },
+          {
+            "/": "/appearance"
+          },
+          {
+            "/": "/battle"
+          },
+          {
+            "/": "/bots"
+          },
+          {
+            "/": "/bots/series"
+          },
+          {
+            "/": "/challenge"
+          },
+          {
+            "/": "/credits"
+          },
+          {
+            "/": "/delete-account"
+          },
+          {
+            "/": "/explorer"
+          },
+          {
+            "/": "/feedback"
+          },
+          {
+            "/": "/leaderboard"
+          },
+          {
+            "/": "/learn"
+          },
+          {
+            "/": "/licences"
+          },
+          {
+            "/": "/nightly"
+          },
+          {
+            "/": "/open-source"
+          },
+          {
+            "/": "/openings"
+          },
+          {
+            "/": "/play"
+          },
+          {
+            "/": "/player"
+          },
+          {
+            "/": "/policy"
+          },
+          {
+            "/": "/review"
+          },
+          {
+            "/": "/rounds"
+          },
+          {
+            "/": "/tournament-info"
+          },
+          {
+            "/": "/tournaments"
+          },
+          {
+            "/": "/watch"
+          },
+          {
+            "/": "/weekend"
+          }
+        ]
+      }
+    ]
+  }
+}

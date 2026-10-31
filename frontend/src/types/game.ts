@@ -295,6 +295,20 @@ export const samePosition = (
   second: Position | null | undefined,
 ) => Boolean(first && second && first.x === second.x && first.y === second.y);
 
+/**
+ * What is left of a selection once the board has moved: the square, if it
+ * still holds a piece of `color`. A piece picked up while the opponent was
+ * thinking stays in hand through their reply, unless the reply took it.
+ */
+export const selectionAfterMove = (
+  selected: Position | null,
+  grid: Grid,
+  color: PlayerColor | null,
+) =>
+  selected && color && tileAt(grid, selected.x, selected.y)?.occupantOwner === color
+    ? selected
+    : null;
+
 export const sameMove = (first: Move | null | undefined, second: Move | null | undefined) =>
   Boolean(first && second && samePosition(first.from, second.from) && samePosition(first.to, second.to));
 

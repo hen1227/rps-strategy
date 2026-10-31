@@ -1,6 +1,7 @@
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import type { RefinePass } from '@/engine/gameAnalysis';
+import { haptic } from '@/haptics/haptics';
 import { colors, radius, themedSheet } from '@/theme';
 
 /**
@@ -55,7 +56,10 @@ export default function AnalysisEffortToggle({
         accessibilityLabel="Quick review"
         accessibilityRole="switch"
         accessibilityState={{ checked: quick }}
-        onPress={onToggleQuick}
+        onPress={() => {
+          haptic(quick ? 'toggleOff' : 'toggleOn');
+          onToggleQuick();
+        }}
         style={({ pressed }) => [
           styles.button,
           quick && styles.buttonActive,

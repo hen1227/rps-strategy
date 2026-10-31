@@ -389,6 +389,31 @@ func (store *Store) IsStoreReviewAccount(ctx context.Context, userID string) (bo
 	return isStoreReviewAccount(ctx, store.db, userID)
 }
 
+// IsStoreReviewUsername reports whether a name is one a reset gave a reviewer
+// account. By name rather than by account, because the sign-in limiter asks
+// before the password has said who is signing in.
+func (store *Store) IsStoreReviewUsername(ctx context.Context, username string) (bool, error) {
+	key := UsernameKey(username)
+	if key == "" {
+		return false, nil
+	}
+	rows, err := store.db.QueryContext(ctx, `SELECT username FROM store_review_accounts`)
+	if err != nil {
+		return false, fmt.Errorf("check store review username: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return false, fmt.Errorf("check store review username: %w", err)
+		}
+		if UsernameKey(name) == key {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
 func isStoreReviewAccount(
 	ctx context.Context,
 	runner interface {

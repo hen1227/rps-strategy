@@ -8,6 +8,13 @@
 
 import type { ActiveGame } from './types';
 
+/**
+ * Under this, a clock is in time trouble: its face turns red and counts tenths,
+ * and the phone buzzes once as it crosses. One number for all three, so they
+ * arrive together.
+ */
+export const LOW_TIME_MS = 20_000;
+
 /** A three-minute bonus, the moment it landed on both clocks. */
 export interface TimeExtension {
   /** The local instant it arrived. Changing it is what replays the flourish. */

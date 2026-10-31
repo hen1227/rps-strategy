@@ -16,6 +16,7 @@ import { reviewSourceFromPGN } from '@/engine/gameReview';
 import {
   decodePosition,
   encodePosition,
+  encodePositionFEN,
   encodePositionPGN,
   parsePGN,
   startingRowsFrom,
@@ -57,6 +58,15 @@ test('a mode with territory writes the field, and one without leaves it off', ()
       modeHasFeature(mode, 'territory') ? 3 : 2,
       `${mode.name} should write ${modeHasFeature(mode, 'territory') ? 'three' : 'two'} fields`,
     );
+  }
+});
+
+test('a bare FEN copy is the FEN the record copy carries', () => {
+  // COPY FEN and COPY AS PGN sit side by side, so pasting either one must give
+  // the same board.
+  for (const mode of ALL_TEST_MODES) {
+    const game = playedOut(mode, 3);
+    assert.equal(encodePositionFEN(game), fenOf(encodePositionPGN(game)), mode.name);
   }
 });
 

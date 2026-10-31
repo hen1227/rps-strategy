@@ -364,8 +364,8 @@ UPDATE accounts SET disabled = ?, updated_at_unix_ms = ? WHERE user_id = ?
 // AnonymizeAccount removes a person from the record while leaving the games.
 //
 // It hard-deletes only when the account appears nowhere — no history, no
-// archived game, no tournament signup — which is the case for an account that
-// registered and never played. Otherwise it strips the identity in place and
+// archived game, no tournament signup, no run one of its bots played — which
+// is the case for an account that registered and never played. Otherwise it strips the identity in place and
 // rewrites the denormalised names, including the copies inside the stored PGN
 // text, and returns how many records it touched.
 func (store *Store) AnonymizeAccount(ctx context.Context, userID string) (int, error) {
@@ -411,11 +411,19 @@ SELECT COUNT(*) FROM bots WHERE owner_user_id = ? AND retired_at_unix_ms IS NULL
 		return 0, fmt.Errorf("retire this account's %d bot(s) first", liveBots)
 	}
 
+	// A bot's runs count too. Deleting the account deletes its bots, and a run
+	// names both of its bots with no ON DELETE, so an owner who never played but
+	// whose engine did was refused with a foreign-key error. A run is the other
+	// engine's history as much as this one's, so such an account is stripped
+	// rather than deleted, like one that played.
 	var appearances int
 	if err := transaction.QueryRowContext(ctx, `
 SELECT (SELECT COUNT(*) FROM game_history WHERE red_player_id = ?1 OR blue_player_id = ?1)
      + (SELECT COUNT(*) FROM game_pgn     WHERE red_player_id = ?1 OR blue_player_id = ?1)
      + (SELECT COUNT(*) FROM tournament_players WHERE user_id = ?1)
+     + (SELECT COUNT(*) FROM bot_series
+        WHERE first_bot_id  IN (SELECT bot_id FROM bots WHERE owner_user_id = ?1)
+           OR second_bot_id IN (SELECT bot_id FROM bots WHERE owner_user_id = ?1))
 `, userID).Scan(&appearances); err != nil {
 		return 0, fmt.Errorf("anonymize account: count appearances: %w", err)
 	}
@@ -428,6 +436,16 @@ SELECT (SELECT COUNT(*) FROM game_history WHERE red_player_id = ?1 OR blue_playe
 	// behind an id that no longer resolves.
 	if err := AnonymizeFeedbackAuthorshipTx(ctx, transaction, userID, anonymousName); err != nil {
 		return 0, err
+	}
+	// The opening names it published stay, because a name belongs to the line
+	// now and other players have learned the line by it, but they stop saying
+	// who named them. Both branches again: the "names by players" list would
+	// otherwise go on showing the name of an account that is gone.
+	if _, err := transaction.ExecContext(ctx, `
+UPDATE opening_names SET author_user_id = '', author_username = ''
+ WHERE author_user_id = ?
+`, userID); err != nil {
+		return 0, fmt.Errorf("anonymize account: opening names: %w", err)
 	}
 	// Every sign-in goes, in both branches, so the identity is free again for
 	// the person to sign up with afresh — a stripped row still holding it would

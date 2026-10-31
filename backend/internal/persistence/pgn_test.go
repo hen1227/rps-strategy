@@ -215,6 +215,41 @@ func TestExportArchivedGamesPagesInOrder(t *testing.T) {
 	}
 }
 
+// The count the open-source page shows has to leave out what the Hugging Face
+// export leaves out, or the page promises games the data set does not have.
+func TestCountFinishedGamesLeavesOutInterruptedGames(t *testing.T) {
+	store, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	for _, gameID := range []string{"finished-a", "finished-b", "interrupted"} {
+		played := finishedTestGame(t, gameID, game.ModeTotalWar)
+		if _, err := store.ArchiveGame(
+			context.Background(),
+			played.Record(),
+			notation.Metadata{FinishedAt: time.Now()},
+			"",
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := store.db.Exec(
+		"UPDATE game_pgn SET outcome = 'unfinished' WHERE game_id = 'interrupted'",
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	total, err := store.CountFinishedGames(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 2 {
+		t.Fatalf("expected 2 finished games, got %d", total)
+	}
+}
+
 func TestAccountArchivedGamesFindsBothColors(t *testing.T) {
 	store, err := Open(":memory:")
 	if err != nil {

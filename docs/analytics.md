@@ -80,14 +80,14 @@ refuses anything not listed there.
 | `sign_up` | web, apps | `method`: discord, apple, unknown |
 | `login` | web, apps | `method`: discord, apple, password, unknown |
 | `queue_join` | web, apps | `mode` |
-| `challenge_post` | web, apps | `mode`, `ranked`, `time_control`, `kind` (open or direct) |
+| `challenge_post` | web, apps | `mode`, `ranked`, `time_control`, `kind` (open, direct, or link) |
 | `game_start` | web, apps | `mode`, `kind` (online, practice, local), `opponent` (human or bot), `time_control` |
 | `game_end` | web, apps | `mode`, `kind`, `opponent`, `result` (win, loss, draw, or decided for pass-and-play), `end_reason`, `moves` |
 | `bot_match_start` | web, apps | `mode`, `where` (device or server), `ranked` |
 | `tournament_signup` | web, apps | none |
 | `feedback_post` | web, apps | `kind` |
 | `alerts_enable` | web, apps | `platform` |
-| `share` | web, apps | `content_type` (the kind of page, e.g. review or player), `method`: copy |
+| `share` | web, apps | `content_type` (the kind of page, e.g. review, player or challenge), `method`: copy or share (the system share sheet) |
 | `tutorial_begin` | web, apps | `source`: first_launch (opened by itself on a new device), how_to_play, or link |
 | `tutorial_complete` | web, apps | none. Every lesson answered |
 | `game_finished` | server | `mode`, `ranked`, `players` (human_vs_human, human_vs_bot, bot_vs_bot), `setting` (match, tournament, arena, bot_series), `winner` (red, blue, draw), `end_reason`, `moves`, `duration_sec`, `time_control` |

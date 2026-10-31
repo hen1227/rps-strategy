@@ -1,9 +1,11 @@
-import { useEffect, useRef, type ReactNode } from 'react';
+import { memo, useCallback, useEffect, useRef, type ReactNode } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import MoveQualityBadge from './MoveQualityBadge';
-import type { GradableMove, ReviewMove } from '@/engine/gameReview';
+import { useAppearanceGeneration } from '@/appearance/store';
+import type { GradableMove, MoveGrade, ReviewMove } from '@/engine/gameReview';
 import { formatMove, type NotatedMove } from '@/engine/pgn';
+import { haptic } from '@/haptics/haptics';
 import { colors, radius, themedSheet } from '@/theme';
 
 // A compact two-column score sheet. Both post-game review and a running bot
@@ -76,6 +78,103 @@ interface MoveRow<TMove extends ListedMove> {
   blue: ReviewMove<TMove> | undefined;
 }
 
+/** One cell of the score sheet, as plain values a row can compare. */
+interface MoveCell {
+  /** The position the move leads to, which is what pressing it selects. */
+  position: number;
+  token: string;
+  label: string;
+  selected: boolean;
+  book: boolean;
+  pending: boolean;
+  /** A grade is one of `MOVE_GRADES`, so the same grade is the same object. */
+  grade: MoveGrade | undefined;
+}
+
+interface MoveRowViewProps {
+  number: number;
+  cells: readonly (MoveCell | null)[];
+  graded: boolean;
+  onSelect: (position: number) => void;
+}
+
+const sameCell = (a: MoveCell | null, b: MoveCell | null) =>
+  a === b ||
+  (a !== null &&
+    b !== null &&
+    a.position === b.position &&
+    a.token === b.token &&
+    a.label === b.label &&
+    a.selected === b.selected &&
+    a.book === b.book &&
+    a.pending === b.pending &&
+    a.grade === b.grade);
+
+/**
+ * One numbered row, redrawn only when what it shows changes.
+ *
+ * The list is handed a new array of new moves after every move, so without
+ * this a forty-move game redrew all forty rows each time one was added — on
+ * the live board, in the same render the board has to finish before the piece
+ * can set off.
+ */
+const MoveRowView = memo(
+  function MoveRowView({ number, cells, graded, onSelect }: MoveRowViewProps) {
+    // Drawn in the theme's colours, so it redraws when they change even though
+    // none of its props have.
+    useAppearanceGeneration();
+    return (
+      <View style={styles.row}>
+        <Text style={styles.number}>{number}</Text>
+        {cells.map((cell, column) =>
+          cell ? (
+            <Pressable
+              accessibilityLabel={cell.label}
+              accessibilityRole="button"
+              accessibilityState={{ selected: cell.selected }}
+              key={column}
+              onPress={() => {
+                if (!cell.selected) haptic('step');
+                onSelect(cell.position);
+              }}
+              style={({ pressed }) => [
+                styles.cell,
+                cell.selected && styles.cellActive,
+                pressed && styles.pressed,
+              ]}
+            >
+              <Text numberOfLines={1} style={styles.move}>
+                {cell.token}
+              </Text>
+              {/*
+                A dealt opening move gets no grade badge. It is still
+                evaluated — the chart would have a hole in it otherwise —
+                but nobody chose it, so calling it good or bad would be a
+                claim about a player that is not true.
+              */}
+              {cell.book ? (
+                <Text style={styles.bookMark}>book</Text>
+              ) : !graded ? null : cell.pending || !cell.grade ? (
+                <View style={styles.pipPending} />
+              ) : (
+                <MoveQualityBadge accessible={false} compact grade={cell.grade} showLabel={false} />
+              )}
+            </Pressable>
+          ) : (
+            <View key={column} style={styles.cell} />
+          ),
+        )}
+      </View>
+    );
+  },
+  (a, b) =>
+    a.number === b.number &&
+    a.graded === b.graded &&
+    a.onSelect === b.onSelect &&
+    a.cells.length === b.cells.length &&
+    a.cells.every((cell, index) => sameCell(cell, b.cells[index] ?? null)),
+);
+
 export default function MoveAnalysisList<TMove extends ListedMove>({
   emptyText = 'This game has no moves yet.',
   footer,
@@ -91,6 +190,29 @@ export default function MoveAnalysisList<TMove extends ListedMove>({
   for (let index = 0; index < moves.length; index += 2) {
     rows.push({ number: index / 2 + 1, red: moves[index], blue: moves[index + 1] });
   }
+
+  // Stable, so no row redraws because the screen above handed the list a new
+  // callback, which it does on every render.
+  const latestSelect = useRef(onSelect);
+  latestSelect.current = onSelect;
+  const select = useCallback((position: number) => latestSelect.current(position), []);
+  const cellFor = (move: ReviewMove<TMove>): MoveCell => ({
+    position: move.index + 1,
+    token: formatMove(move),
+    label: `Move ${move.index + 1}, ${formatMove(move)}${
+      !graded
+        ? ''
+        : move.isBook
+          ? ', opening book'
+          : move.pending
+            ? ''
+            : `, ${move.grade.symbol}, ${move.grade.label}`
+    }`,
+    selected: selectedIndex === move.index + 1,
+    book: Boolean(move.isBook),
+    pending: move.pending,
+    grade: move.pending ? undefined : move.grade,
+  });
 
   // Follow the game down the list, but only for somebody standing at the end of
   // it. A viewer who has scrolled up to look at move four is reading, and
@@ -108,59 +230,15 @@ export default function MoveAnalysisList<TMove extends ListedMove>({
       <Text style={styles.empty}>{emptyText}</Text>
     ) : (
       <View style={styles.rows}>
-          {rows.map((row) => (
-            <View key={row.number} style={styles.row}>
-              <Text style={styles.number}>{row.number}</Text>
-              {[row.red, row.blue].map((move, column) =>
-                move ? (
-                  <Pressable
-                    accessibilityLabel={`Move ${move.index + 1}, ${formatMove(move)}${
-                      !graded
-                        ? ''
-                        : move.isBook
-                          ? ', opening book'
-                          : move.pending
-                            ? ''
-                            : `, ${move.grade.symbol}, ${move.grade.label}`
-                    }`}
-                    accessibilityRole="button"
-                    accessibilityState={{ selected: selectedIndex === move.index + 1 }}
-                    key={column}
-                    onPress={() => onSelect(move.index + 1)}
-                    style={({ pressed }) => [
-                      styles.cell,
-                      selectedIndex === move.index + 1 && styles.cellActive,
-                      pressed && styles.pressed,
-                    ]}
-                  >
-                    <Text numberOfLines={1} style={styles.move}>
-                      {formatMove(move)}
-                    </Text>
-                    {/*
-                      A dealt opening move gets no grade badge. It is still
-                      evaluated — the chart would have a hole in it otherwise —
-                      but nobody chose it, so calling it good or bad would be a
-                      claim about a player that is not true.
-                    */}
-                    {move.isBook ? (
-                      <Text style={styles.bookMark}>book</Text>
-                    ) : !graded ? null : move.pending ? (
-                      <View style={styles.pipPending} />
-                    ) : (
-                      <MoveQualityBadge
-                        accessible={false}
-                        compact
-                        grade={move.grade}
-                        showLabel={false}
-                      />
-                    )}
-                  </Pressable>
-                ) : (
-                  <View key={column} style={styles.cell} />
-                ),
-              )}
-            </View>
-          ))}
+        {rows.map((row) => (
+          <MoveRowView
+            cells={[row.red, row.blue].map((move) => (move ? cellFor(move) : null))}
+            graded={graded}
+            key={row.number}
+            number={row.number}
+            onSelect={select}
+          />
+        ))}
       </View>
     );
 

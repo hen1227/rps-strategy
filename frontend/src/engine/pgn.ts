@@ -758,6 +758,15 @@ export interface PositionRecord {
 }
 
 /**
+ * One position as a bare FEN, with the territory field only where the mode's
+ * rules read it — see `EncodePositionOptions`. The one place a board on screen
+ * is turned into a FEN to hand over, so the copy button and the export dialog
+ * cannot disagree about what that field is.
+ */
+export const encodePositionFEN = ({ currentTurn, grid, mode }: PositionRecord) =>
+  encodePosition(grid, currentTurn, { territory: modeHasFeature(mode, 'territory') });
+
+/**
  * One position, written as a record that has not been played yet.
  *
  * A board on its own is not something this project can hand around: a FEN says
@@ -781,12 +790,7 @@ export const encodePositionPGN = ({ currentTurn, grid, mode }: PositionRecord) =
       { name: 'ModeId', value: mode.id },
       { name: 'BoardSize', value: boardSizeTag(grid) },
       { name: 'SetUp', value: '1' },
-      {
-        name: 'FEN',
-        value: encodePosition(grid, currentTurn, {
-          territory: modeHasFeature(mode, 'territory'),
-        }),
-      },
+      { name: 'FEN', value: encodePositionFEN({ currentTurn, grid, mode }) },
       { name: 'Result', value: RESULT_UNFINISHED },
       { name: 'Generator', value: GENERATOR },
     ],

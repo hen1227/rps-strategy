@@ -217,7 +217,8 @@ export default function ProfileScreen({ handle, settled }: ProfileScreenProps) {
               is a complaint, and putting them in the same row would make the
               second one as easy to press by accident as the first.
 
-              Renders nothing on your own page or on a bot's — see the component.
+              Renders nothing on your own page, and only REPORT on a bot's — see
+              the component.
             */}
             <PlayerModerationRow
               isBot={isBot}

@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 
 import type { AnalysisGame } from '@/engine/analysisGame';
+import { haptic } from '@/haptics/haptics';
 import { useSettledSearchParams } from '@/navigation/useSettledSearchParams';
 import {
   lineKey,
@@ -519,7 +520,10 @@ export default function OpeningBookScreen() {
             <Pressable
               accessibilityRole="switch"
               accessibilityState={{ checked: curator.active }}
-              onPress={() => curator.setActive(!curator.active)}
+              onPress={() => {
+                haptic(curator.active ? 'toggleOff' : 'toggleOn');
+                curator.setActive(!curator.active);
+              }}
               style={({ pressed }) => [
                 styles.curatorSwitch,
                 curator.active && styles.curatorSwitchOn,
@@ -809,7 +813,7 @@ export default function OpeningBookScreen() {
             onRefresh={refreshSuggestions}
             refreshing={refreshing}
           />
-        ) : (
+        ) : !curator.available && !curator.admin.offered ? null : (
           // Somebody who is already unlocked has simply switched the controls
           // off, so the way back in is the switch, not a second panel telling
           // them about it.

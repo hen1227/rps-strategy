@@ -40,6 +40,7 @@ import type { ShareCardInput } from '@/features/board/export/shareCard';
 import { usePieceDrag } from '@/features/board/pieceDrag';
 import PGNImportModal from '@/features/pgn/PGNImportModal';
 import PositionSetupModal from '@/features/pgn/PositionSetupModal';
+import { haptic } from '@/haptics/haptics';
 import { useBoardLayout } from '@/hooks/useBoardLayout';
 import { useBoardSelection } from '@/hooks/useBoardSelection';
 import { useReach } from '@/hooks/useReach';
@@ -168,7 +169,10 @@ function SwitchChip({
       accessibilityLabel={name}
       accessibilityRole="switch"
       accessibilityState={{ checked }}
-      onPress={onToggle}
+      onPress={() => {
+        haptic(checked ? 'toggleOff' : 'toggleOn');
+        onToggle();
+      }}
       style={({ pressed }) => [
         styles.switchChip,
         checked && styles.switchChipActive,
@@ -322,7 +326,10 @@ function AnalysisPanel({
             accessibilityRole="button"
             accessibilityState={{ disabled: !canMakeBestMove }}
             disabled={!canMakeBestMove}
-            onPress={onMakeBestMove}
+            onPress={() => {
+              haptic('press');
+              onMakeBestMove();
+            }}
             style={({ pressed }) => [
               styles.bestMoveButton,
               !canMakeBestMove && styles.bestMoveButtonDisabled,
@@ -742,7 +749,9 @@ function AnalysisBoard({ mode }: { mode: ModeDefinition }) {
       <Board
         analysisArrows={engineOn ? analysis?.lines ?? [] : []}
         boardSize={boardSize}
-        canMove={canMove}
+        // Not while the reach tool is waiting for a square to put its ghost
+        // on: that tap is the tool's, and must not pick a piece up.
+        canMove={canMove && !(reachTool.active && reachTool.settings.placingGhost)}
         grid={game.grid}
         lastMove={history[history.length - 1]?.move ?? null}
         lastMoveGrade={engineOn ? lastGradedMove?.grade ?? null : null}

@@ -215,7 +215,7 @@ func (sender *apnsSender) send(ctx context.Context, token string, payload pushPa
 	// player acts on it.
 	request.Header.Set(
 		"apns-expiration",
-		strconv.FormatInt(time.Now().Add(pushTTL).Unix(), 10),
+		strconv.FormatInt(time.Now().Add(payload.lifetime()).Unix(), 10),
 	)
 	// Apple's word for the Web Push tag: a second summons for the same game
 	// replaces the first banner instead of stacking beside it.

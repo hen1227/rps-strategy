@@ -125,10 +125,11 @@ export const nativeDeviceToken = async (): Promise<string> => {
 };
 
 /**
- * The kind the server sends unasked. Anything else was asked for by somebody
+ * The kinds the server sends unasked: a game that has started, and a challenge
+ * link somebody took and is waiting on. Anything else was asked for by somebody
  * pressing a button, which is the whole difference below.
  */
-const SUMMONS_KIND = 'match_started';
+const SUMMONS_KINDS: readonly unknown[] = ['match_started', 'challenge_accepted'];
 
 /**
  * Whether a notification's data says it is a match summons.
@@ -141,7 +142,9 @@ const SUMMONS_KIND = 'match_started';
  * summons there is.
  */
 const isSummons = (data: unknown): boolean =>
-  typeof data === 'object' && data !== null && (data as { kind?: unknown }).kind === SUMMONS_KIND;
+  typeof data === 'object' &&
+  data !== null &&
+  SUMMONS_KINDS.includes((data as { kind?: unknown }).kind);
 
 /**
  * Whether a notification sitting in the shade is a summons.

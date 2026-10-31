@@ -2,6 +2,27 @@
 
 A real-time, full-stack Rock–Paper–Scissors strategy game on a 9×9 board.
 
+[![Dataset on Hugging Face](https://huggingface.co/datasets/huggingface/badges/resolve/main/dataset-on-hf-sm.svg)](https://huggingface.co/datasets/Henhen1227/rps-strategy-games)
+
+## Game data
+
+Every finished game played on [the site](https://rps.henhen1227.com) is
+published daily on Hugging Face as
+[`Henhen1227/rps-strategy-games`](https://huggingface.co/datasets/Henhen1227/rps-strategy-games),
+under CC0. Each row is a complete PGN record, plus columns to filter on without
+parsing it.
+
+```python
+from datasets import load_dataset
+
+games = load_dataset("Henhen1227/rps-strategy-games", split="train")
+```
+
+Read [the data set card](https://huggingface.co/datasets/Henhen1227/rps-strategy-games)
+before using it: the rules changed on 2026-09-03, and most games are engine
+against engine. [`PRIVACY.md`](PRIVACY.md) says what is published and what is
+not. The export itself is `backend/cmd/exportgames` and `tools/hf-export/`.
+
 ## Structure
 
 - `backend/` — Go HTTP/WebSocket server, modular game modes, SQLite accounts/history, Elo, ranked matchmaking, and a complete PGN record of every game played. See [`backend/README.md`](backend/README.md) for its package layout.

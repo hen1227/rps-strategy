@@ -268,7 +268,7 @@ export default function FeedbackScreen({ item, compose, gameId }: FeedbackScreen
 
       {policy?.contactName ? (
         <Text style={styles.footnote}>
-          Posts are public. Report players from their profile. For private account help, message{' '}
+          Posts are public. Report one from its page. For private account help, message{' '}
           {policy.contactName}.
         </Text>
       ) : null}

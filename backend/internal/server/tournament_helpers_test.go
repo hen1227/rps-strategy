@@ -47,3 +47,16 @@ func verifiedEntrants(t *testing.T, data *persistence.Store, ids ...string) {
 		registeredSession(t, data, id, id)
 	}
 }
+
+// entrantSession signs one verified entrant in, making the account first if
+// need be. Entering an event takes a session: the route enters whoever is
+// signed in, under their own name, and nobody else.
+func entrantSession(t *testing.T, data *persistence.Store, userID string) string {
+	t.Helper()
+	verifiedEntrants(t, data, userID)
+	token, err := data.CreateSession(t.Context(), userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return token
+}

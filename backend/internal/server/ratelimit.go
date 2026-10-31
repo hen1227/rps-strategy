@@ -135,10 +135,17 @@ func (server *Server) allowAuthAttempt(
 	request *http.Request,
 	username string,
 ) bool {
-	for _, key := range []string{
-		"ip:" + clientIP(request),
-		"user:" + strings.ToLower(strings.TrimSpace(username)),
-	} {
+	keys := []string{"ip:" + clientIP(request)}
+	// The per-name bucket stops a guessing attack spread over many addresses,
+	// and it is also a lock anybody who knows a name can turn: eight wrong
+	// guesses a minute keep its owner out. The store review accounts are the
+	// ones worth turning it on, since a review that cannot sign in stalls for
+	// days, and the ones that need it least, since their passwords are the
+	// reset script's 79 random bits. So they spend only the address's bucket.
+	if reviewer, err := server.data.IsStoreReviewUsername(request.Context(), username); err != nil || !reviewer {
+		keys = append(keys, "user:"+strings.ToLower(strings.TrimSpace(username)))
+	}
+	for _, key := range keys {
 		if allowed, wait := server.authLimiter.Allow(key); !allowed {
 			writer.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds())+1))
 			writeAPIError(writer, http.StatusTooManyRequests, "too many attempts; try again shortly")

@@ -98,7 +98,7 @@ export default function BotsScreen() {
     const botPlayerCount = useGameStore((state) => state.botPlayerCount);
     const startBotGame = useGameStore((state) => state.startBotGame);
     const challengeBot = useGameStore((state) => state.challengeBot);
-    const gameState = useGameStore((state) => state.gameState);
+    const inGame = useGameStore((state) => Boolean(state.gameState));
     const connectionStatus = useGameStore((state) => state.connectionStatus);
     // Which engines are this account's own, for the tint on their cards. The
     // roster publishes the owner's id on every row — see BotPresence.ownerUserId
@@ -221,10 +221,10 @@ export default function BotsScreen() {
     // the iOS binary, so the practice board is offered wherever it can actually
     // be played.
     const nativeBotsSupported = isEngineAvailable();
-    const launchBlocked = !nativeBotsSupported || Boolean(gameState);
+    const launchBlocked = !nativeBotsSupported || inGame;
     // Challenging an engine is not in conflict with being queued: the server
     // releases the seek when the bot game starts.
-    const challengeBlocked = connectionStatus !== 'connected' || Boolean(gameState);
+    const challengeBlocked = connectionStatus !== 'connected' || inGame;
 
     const profile = BOT_PROFILES.find((entry) => entry.id === profileId) ?? BOT_PROFILES[0]!;
     const opponent = BOT_PROFILES.find((entry) => entry.id === opponentId) ?? BOT_PROFILES[0]!;

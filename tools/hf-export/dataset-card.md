@@ -2,7 +2,7 @@
 license: cc0-1.0
 pretty_name: RPS Strategy game archive
 size_categories:
-  - 1K<n<10K
+  - 10K<n<100K
 tags:
   - games
   - board-games
@@ -18,9 +18,14 @@ configs:
 
 # RPS Strategy game archive
 
-Every finished game played on [RPS Strategy](https://api-rps.henhen1227.com),
+Every finished game played on [RPS Strategy](https://rps.henhen1227.com),
 updated once a day. Complete records: every move, both clocks after every
 action, draw offers and time extensions, and how the game ended.
+
+The site is open source:
+[hen1227/rps-strategy](https://github.com/hen1227/rps-strategy) holds the
+server that records these games, the rules that replay them, and the exporter
+that publishes this file.
 
 **The games are not my invention.** Intransitive, Total War and Infiltration
 were designed by WebGoatGuy, who runs the original implementation at

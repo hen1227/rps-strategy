@@ -1,8 +1,21 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Pressable, StyleSheet, Text, View, type LayoutChangeEvent } from 'react-native';
 
+import { fastReplayDuration } from '@/engine/replayAnimation';
+import { haptic } from '@/haptics/haptics';
+import { burstOffsets, type HapticEvent } from '@/haptics/recipes';
 import { colors, radius, themedSheet } from '@/theme';
 import { arrows } from '@/ui/arrows';
+
+// How long an arrow is held before it starts to repeat, and how fast it then
+// walks the game. A detent every 90ms is quick enough to cross a long game in a
+// few seconds and slow enough that every move is still a tap of its own.
+const HOLD_DELAY_MS = 350;
+const HOLD_REPEAT_MS = 90;
+
+/** A step that lands on either end of the game is felt as a stop. */
+const detentAt = (position: number, total: number): HapticEvent =>
+  position <= 0 || position >= total ? 'stop' : 'step';
 
 export interface ReplayControlsProps {
   /**
@@ -55,20 +68,84 @@ export default function ReplayControls({
 
   const atFirst = current <= 0;
   const atLast = current >= total;
+
+  // Every move is a detent under the finger, the way a dial clicks: a step taps,
+  // a held arrow taps once per move it walks, and the end of the game is a stop.
+  // A held arrow outlives the render that started it, so it reads where the
+  // viewer stands, and the step to take, through refs: a caller's step can be a
+  // closure over the position it was drawn at, and walking with that one would
+  // take the same step over and over. It keeps its own count of where it has
+  // walked to, so it knows the end is coming before the render that shows it.
+  const standing = useRef({ current, total });
+  standing.current = { current, total };
+  const steps = useRef({ onNext, onPrevious });
+  steps.current = { onNext, onPrevious };
+  const walk = useRef<{ at: number; timer: ReturnType<typeof setTimeout> | null }>({
+    at: 0,
+    timer: null,
+  });
+  const stopWalking = () => {
+    if (walk.current.timer) clearTimeout(walk.current.timer);
+    walk.current.timer = null;
+  };
+  useEffect(() => stopWalking, []);
+
+  const stepBy = (direction: -1 | 1, move: () => void) => () => {
+    const next = standing.current.current + direction;
+    move();
+    haptic(detentAt(next, standing.current.total));
+  };
+
+  const walkBy = (direction: -1 | 1) => () => {
+    stopWalking();
+    walk.current.at = standing.current.current;
+    const tick = () => {
+      const next = walk.current.at + direction;
+      if (next < 0 || next > standing.current.total) {
+        walk.current.timer = null;
+        return;
+      }
+      walk.current.at = next;
+      if (direction < 0) steps.current.onPrevious();
+      else steps.current.onNext();
+      const detent = detentAt(next, standing.current.total);
+      haptic(detent);
+      walk.current.timer = detent === 'stop' ? null : setTimeout(tick, HOLD_REPEAT_MS);
+    };
+    tick();
+  };
+
+  // A jump winds the whole way in one animation, and is felt winding: a run of
+  // taps spread over the time the board takes to draw it, ending in the stop.
+  const jumpTo = (target: number, move: () => void) => () => {
+    const moves = Math.abs(target - standing.current.current);
+    move();
+    const offsets = burstOffsets(moves, moves > 1 ? fastReplayDuration(moves) : 0);
+    offsets.forEach((offset, index) => {
+      const event = index === offsets.length - 1 ? 'stop' : 'step';
+      if (offset === 0) haptic(event);
+      else setTimeout(() => haptic(event), offset);
+    });
+  };
+
   const control = (
     accessibilityLabel: string,
     text: string,
     onPress: () => void,
     disabled = false,
     hint?: string,
+    onHold?: () => void,
   ): ReactNode => (
     <Pressable
       accessibilityHint={hint}
       accessibilityLabel={accessibilityLabel}
       accessibilityRole="button"
       accessibilityState={{ disabled }}
+      delayLongPress={HOLD_DELAY_MS}
       disabled={disabled}
+      onLongPress={onHold}
       onPress={onPress}
+      onPressOut={onHold ? stopWalking : undefined}
       style={({ pressed }) => [
         styles.button,
         disabled && styles.disabled,
@@ -91,13 +168,14 @@ export default function ReplayControls({
         <View style={{ width: reserved }} />
       </View>
       <View style={styles.group}>
-        {control('Jump to the starting position', arrows.jumpBack, onFirst, atFirst)}
+        {control('Jump to the starting position', arrows.jumpBack, jumpTo(0, onFirst), atFirst)}
         {control(
           'Previous position',
           arrows.back,
-          onPrevious,
+          stepBy(-1, onPrevious),
           atFirst,
-          'You can also press the left arrow key.',
+          'You can also press the left arrow key, or hold this to walk back.',
+          walkBy(-1),
         )}
         <View style={styles.badge}>
           <Text style={styles.label}>{label}</Text>
@@ -108,11 +186,17 @@ export default function ReplayControls({
         {control(
           'Next position',
           arrows.forward,
-          onNext,
+          stepBy(1, onNext),
           atLast,
-          'You can also press the right arrow key.',
+          'You can also press the right arrow key, or hold this to walk forward.',
+          walkBy(1),
         )}
-        {control('Jump to the latest position', arrows.jumpForward, onLast, atLast)}
+        {control(
+          'Jump to the latest position',
+          arrows.jumpForward,
+          jumpTo(total, onLast),
+          atLast,
+        )}
       </View>
       <View style={[styles.side, styles.sideEnd]}>
         {accessory ? <View onLayout={measure}>{accessory}</View> : null}

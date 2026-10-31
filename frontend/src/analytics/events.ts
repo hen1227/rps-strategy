@@ -31,7 +31,12 @@ export interface AnalyticsEvents {
   sign_up: { method: SignInMethod };
   login: { method: SignInMethod };
   queue_join: { mode: string };
-  challenge_post: { mode: string; ranked: RankedFlag; time_control: string; kind: 'open' | 'direct' };
+  challenge_post: {
+    mode: string;
+    ranked: RankedFlag;
+    time_control: string;
+    kind: 'open' | 'direct' | 'link';
+  };
   game_start: { mode: string; kind: GameKind; opponent: 'human' | 'bot'; time_control: string };
   game_end: {
     mode: string;
@@ -47,8 +52,11 @@ export interface AnalyticsEvents {
   tournament_signup: Record<string, never>;
   feedback_post: { kind: string };
   alerts_enable: { platform: string };
-  /** A link copied to share. `content_type` is the kind of page, never which one. */
-  share: { content_type: string; method: 'copy' };
+  /**
+   * A link copied, or handed to the system's share sheet. `content_type` is the
+   * kind of page, never which one.
+   */
+  share: { content_type: string; method: 'copy' | 'share' };
   /**
    * The lessons opened, and every one of them answered. Google's own names for
    * the two, so its reports know them as a tutorial: how many who start one

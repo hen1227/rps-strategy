@@ -4,6 +4,7 @@ import {
   useEffect,
   useLayoutEffect,
   useMemo,
+  useReducer,
   useRef,
   useState,
 } from 'react';
@@ -36,14 +37,23 @@ import {
 import PieceIcon from './PieceIcon';
 import { usePieceDrag } from './pieceDrag';
 import TileMark from './TileMark';
-import { overlayCellAt, type BoardOverlay } from './overlay';
-import { tintForTile } from './tint';
+import { overlayCellAt, type BoardOverlay, type OverlayCell } from './overlay';
+import { tintForTile, type TileTint } from './tint';
+import {
+  boardTouchHaptic,
+  knownMoves,
+  type BoardTouchState,
+  type MovesAtGrab,
+} from './touchHaptics';
 import MoveQualityBadge from '@/features/analysis/MoveQualityBadge';
+import { haptic } from '@/haptics/haptics';
+import { useAppearanceGeneration } from '@/appearance/store';
 import { MAX_BOARD } from '@/hooks/useBoardLayout';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
 import {
   animatedReplayPieceTracks,
   buildReplayPieceTracks,
+  fastReplayDuration,
   replayGridSignature,
   type PieceTrack,
   type ReplayTracks,
@@ -157,11 +167,6 @@ const BOARD_BORDER_WIDTH = 3;
 // The capture effect resizes a taker as it lands and must hand it back at its
 // own size inside this; see `ATTACKER_SETTLED_BY_MS`.
 const MOVE_ANIMATION_DURATION = 230;
-// A catch-up finishes before even the fastest watched bot can make its next
-// move (250ms), so reaching the live edge never makes the board fall behind.
-const FAST_REPLAY_MAX_DURATION = 220;
-const FAST_REPLAY_MIN_DURATION = 72;
-const FAST_REPLAY_MOVE_DURATION = 12;
 // How long a dropped piece waits where it was let go for the move to come
 // back. A local board answers within a frame; this is the server's round
 // trip, with room for a slow phone connection, and is only ever reached when
@@ -310,6 +315,7 @@ interface CarriedMove {
 
 /** A carried piece takes no touches, so it is handed these and never re-rendered by new ones. */
 const ignoreDragActive = () => {};
+const ignoreDragOver = () => {};
 const ignoreDragStart = () => {};
 const refuseDrop = () => false;
 
@@ -330,6 +336,8 @@ interface DraggablePieceProps {
   onDragActiveChange: (active: boolean) => void;
   /** Returns whether the board is holding the piece where it was let go. */
   onDragEnd: (from: Position, to: Position, offset: DropOffset) => boolean;
+  /** Told when the square a drop would land on changes, and only then. */
+  onDragOver: (from: Position, over: Position) => void;
   onDragStart: (position: Position) => void;
   tile: Tile;
   /** The move this piece is making, while it makes it. */
@@ -351,6 +359,7 @@ const DraggablePiece = memo(function DraggablePiece({
   isSelected,
   onDragActiveChange,
   onDragEnd,
+  onDragOver,
   onDragStart,
   tile,
   travel,
@@ -417,8 +426,10 @@ const DraggablePiece = memo(function DraggablePiece({
     isFlipped,
     onDragActiveChange,
     onDragEnd,
+    onDragOver,
     onDragStart,
     position: { x: boardX, y: boardY },
+    tile,
   });
   latest.current = {
     boardSize,
@@ -427,9 +438,27 @@ const DraggablePiece = memo(function DraggablePiece({
     isFlipped,
     onDragActiveChange,
     onDragEnd,
+    onDragOver,
     onDragStart,
     position: { x: boardX, y: boardY },
+    tile,
   };
+
+  // A piece can be in hand while the opponent moves, and their move can take
+  // it. This view then belongs to the taker, which must not follow the finger,
+  // so the drag is dropped on the spot and the rest of the gesture ignored.
+  const grabbed = useRef<string | null>(null);
+  // The square a drop would land on now, so a drag reports a change of square
+  // rather than every frame of one.
+  const overSquare = useRef<Position | null>(null);
+  const pieceKey = `${tile.occupantOwner}:${tile.occupant}`;
+  useEffect(() => {
+    if (!isDragging || grabbed.current === pieceKey) return;
+    grabbed.current = null;
+    setIsDragging(false);
+    latest.current.onDragActiveChange(false);
+    translation.setValue({ x: 0, y: 0 });
+  }, [isDragging, pieceKey, translation]);
 
   const panResponder = useMemo(
     () =>
@@ -439,6 +468,9 @@ const DraggablePiece = memo(function DraggablePiece({
           latest.current.dragEnabled &&
           Math.abs(gesture.dx) + Math.abs(gesture.dy) > 4,
         onPanResponderGrant: () => {
+          const { tile: held } = latest.current;
+          grabbed.current = `${held.occupantOwner}:${held.occupant}`;
+          overSquare.current = latest.current.position;
           setIsDragging(true);
           // Announced on the grant rather than on the first movement, which is
           // the whole point: the page has to stop scrolling before the finger
@@ -447,9 +479,19 @@ const DraggablePiece = memo(function DraggablePiece({
           latest.current.onDragStart(latest.current.position);
         },
         onPanResponderMove: (_, gesture) => {
+          if (grabbed.current === null) return;
           translation.setValue({ x: gesture.dx, y: gesture.dy });
+          // The release's own rounding, so the square reported is the square a
+          // drop now would land on. Arithmetic only: nothing renders for it.
+          const { boardSize, isFlipped, position, shape } = latest.current;
+          const over = positionFromDrag(position, gesture.dx, gesture.dy, boardSize, isFlipped, shape);
+          if (samePosition(over, overSquare.current)) return;
+          overSquare.current = over;
+          latest.current.onDragOver(position, over);
         },
         onPanResponderRelease: (_, gesture) => {
+          if (grabbed.current === null) return;
+          grabbed.current = null;
           const { position } = latest.current;
           const to = positionFromDrag(
             position,
@@ -468,6 +510,8 @@ const DraggablePiece = memo(function DraggablePiece({
           if (!held) resetPosition();
         },
         onPanResponderTerminate: () => {
+          if (grabbed.current === null) return;
+          grabbed.current = null;
           setIsDragging(false);
           latest.current.onDragActiveChange(false);
           resetPosition();
@@ -837,6 +881,189 @@ const arrowInk = (arrow: AnalysisArrow, rank: number) => {
  */
 const arrowRank = (arrow: AnalysisArrow, index: number) => arrow.rank ?? index;
 
+interface BoardSquareProps {
+  /** The square as the archive names it: file `x`, rank `y`, both from zero. */
+  x: number;
+  y: number;
+  occupant: Tile['occupant'];
+  occupantOwner: Tile['occupantOwner'];
+  /** Whose goal or territory this is, as plain values so equal tints compare equal. */
+  tintKind: TileTint['kind'] | null;
+  tintColor: TileTint['color'] | null;
+  overlayCell: OverlayCell | null;
+  overlayLabelSize: number;
+  overArt: boolean;
+  isSelected: boolean;
+  isValid: boolean;
+  isHighlighted: boolean;
+  /** Which end of the last move this square is, if either. */
+  lastMove: 'from' | 'to' | null;
+  /** The last move's grade, on the square it landed on. */
+  gradeLabel: string | null;
+  /** The rank number down the left edge and the file letter along the bottom. */
+  showRank: boolean;
+  showFile: boolean;
+  onPress: (x: number, y: number) => void;
+}
+
+/**
+ * One square: its colour, its marks, its edge label and its name.
+ *
+ * Memoised on plain values, so a move redraws the squares it changes — the two
+ * it moved between, and the selection and dots it clears — rather than all
+ * eighty-one. Every move used to rebuild every square before the piece could
+ * set off, and on a phone that was most of the wait.
+ */
+const BoardSquare = memo(function BoardSquare({
+  x,
+  y,
+  occupant,
+  occupantOwner,
+  tintKind,
+  tintColor,
+  overlayCell,
+  overlayLabelSize,
+  overArt,
+  isSelected,
+  isValid,
+  isHighlighted,
+  lastMove,
+  gradeLabel,
+  showRank,
+  showFile,
+  onPress,
+}: BoardSquareProps) {
+  // The square draws in the theme's colours, so it redraws when they change
+  // even though none of its props have.
+  useAppearanceGeneration();
+  const tint = tintKind && tintColor ? { kind: tintKind, color: tintColor } : null;
+  const isCapture = isValid && occupant !== 'Empty';
+  const isLight = (x + y) % 2 === 0;
+  const isLastMoveFrom = lastMove === 'from';
+  const isLastMoveTo = lastMove === 'to';
+  const overlayLabel = overlayCell?.describe ? `, ${overlayCell.describe}` : '';
+  const tintLabel = tint
+    ? tint.kind === 'goal'
+      ? `, ${tint.color} goal tile`
+      : `, owned by ${tint.color}`
+    : '';
+  const highlightLabel = isHighlighted ? ', marked' : '';
+  const selectionLabel = isSelected ? ', selected' : '';
+  const lastMoveLabel = isLastMoveFrom
+    ? ', previous move origin'
+    : isLastMoveTo
+      ? `, previous move destination${gradeLabel ? `, ${gradeLabel} move` : ''}`
+      : '';
+
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`${occupantOwner} ${occupant} on ${
+        FILES[x]
+      }${y + 1}${tintLabel}${selectionLabel}${highlightLabel}${lastMoveLabel}${overlayLabel}`}
+      onPress={() => onPress(x, y)}
+      style={[
+        styles.tile,
+        isLight ? styles.lightTile : styles.darkTile,
+        overArt && (isLight ? styles.lightTileOverArt : styles.darkTileOverArt),
+      ]}
+    >
+      {tint && (
+        <>
+          <View
+            style={[
+              styles.tileTint,
+              tint.color === 'Red' ? styles.redTint : styles.blueTint,
+              tint.kind === 'goal' && styles.goalTint,
+            ]}
+          />
+          <TileMark owner={tint.color} variant={tint.kind} />
+        </>
+      )}
+      {overlayCell && (
+        <>
+          {overlayCell.fill && (
+            <View
+              style={[
+                styles.overlayFill,
+                { backgroundColor: overlayCell.fill },
+                overlayCell.dim && styles.overlayDim,
+              ]}
+            />
+          )}
+          {overlayCell.ring && (
+            <View style={[styles.overlayRing, { borderColor: overlayCell.ring }]} />
+          )}
+          {overlayCell.labels?.length ? (
+            <View
+              pointerEvents="none"
+              style={[styles.overlayLabels, overlayCell.dim && styles.overlayDim]}
+            >
+              {/*
+                Keyed by position, not by text: a contested square shows both
+                sides' answer and they are often the same string — `R3` over
+                `R3`, told apart by colour.
+              */}
+              {overlayCell.labels.map((entry, line) => (
+                <Text
+                  key={`${line}-${entry.text}`}
+                  style={[
+                    styles.overlayLabel,
+                    { color: entry.color ?? board.labelOnDark },
+                    overlayLabelText(overlayLabelSize, overlayCell.labels?.length ?? 1),
+                  ]}
+                >
+                  {entry.text}
+                </Text>
+              ))}
+            </View>
+          ) : null}
+        </>
+      )}
+      {(isLastMoveFrom || isLastMoveTo) && (
+        <>
+          <View
+            style={[
+              styles.lastMoveTint,
+              isLastMoveFrom ? styles.lastMoveFromTint : styles.lastMoveToTint,
+            ]}
+          />
+          <TileMark style={styles.lastMoveMark} variant={isLastMoveFrom ? 'moveFrom' : 'moveTo'} />
+        </>
+      )}
+      {isSelected && (
+        <>
+          <View style={styles.selectionTint} />
+          <TileMark style={styles.selectionMark} variant="selection" />
+        </>
+      )}
+      {isHighlighted && (
+        <>
+          <View style={styles.annotationTint} />
+          <TileMark style={styles.annotationMark} variant="annotation" />
+        </>
+      )}
+      {isValid &&
+        (isCapture ? (
+          <View style={styles.captureRing} />
+        ) : (
+          <View style={styles.validDot} />
+        ))}
+
+      {showRank && (
+        <Text style={[styles.rankLabel, isLight ? styles.labelOnLight : styles.labelOnDark]}>
+          {y + 1}
+        </Text>
+      )}
+      {showFile && (
+        <Text style={[styles.fileLabel, isLight ? styles.labelOnLight : styles.labelOnDark]}>
+          {FILES[x]}
+        </Text>
+      )}
+    </Pressable>
+  );
+});
+
 export interface BoardProps {
   /**
    * Ranked suggestions, best first, of which the board draws the top five.
@@ -981,15 +1208,26 @@ export default function Board({
     return () => clearTimeout(timer);
   }, [heldDrop, holdDrop]);
 
-  // Read by the drag callbacks, which outlive the render they were made in.
-  const selection = useRef({ selectedTile, validMoves });
-  selection.current = { selectedTile, validMoves };
+  // Read by the drag and press callbacks, which outlive the render they were
+  // made in and have to judge a touch before they pass it on: what it should
+  // feel like depends on the board as it was drawn when the finger landed.
+  const selection = useRef<BoardTouchState>({
+    canMove,
+    grid,
+    mover: activeMoveColor,
+    selectedTile,
+    validMoves,
+  });
+  selection.current = { canMove, grid, mover: activeMoveColor, selectedTile, validMoves };
   // The press below can clear the moves a piece was already showing — a second
   // press on a selected piece deselects it — so they are kept for the drop.
-  const movesAtGrab = useRef<{ from: Position; moves: Position[] } | null>(null);
+  const movesAtGrab = useRef<MovesAtGrab | null>(null);
 
   const handleDragStart = useCallback(
     (position: Position) => {
+      // Felt before anything else happens, the touch itself being the news.
+      const feel = boardTouchHaptic(selection.current, { kind: 'press', square: position });
+      if (feel) haptic(feel);
       holdDrop(null);
       const { selectedTile: selected, validMoves: moves } = selection.current;
       movesAtGrab.current = samePosition(selected, position)
@@ -1017,19 +1255,27 @@ export default function Board({
     [],
   );
 
+  // A dragged piece crossing onto a square it could land on ticks, once per
+  // square. Stable, so no piece re-renders for it.
+  const handleDragOver = useCallback((from: Position, over: Position) => {
+    const touch = selection.current;
+    const known = knownMoves(touch, from, movesAtGrab.current);
+    const feel = boardTouchHaptic(touch, { kind: 'over', from, over, known });
+    if (feel) haptic(feel);
+  }, []);
+
   // A square the board cannot vouch for springs home at once, as it always
   // has: holding it would leave a refused move hanging for the whole timeout.
   // Online the legal moves arrive a round trip after the grab, so only a flick
-  // faster than that is ever unvouched for.
+  // faster than that is ever unvouched for. The drop is felt here, under the
+  // finger — placed, refused, or nothing yet — before it is passed on.
   const handleDragEnd = useCallback(
     (from: Position, to: Position, offset: DropOffset) => {
       if (samePosition(from, to)) return false;
-      const { selectedTile: selected, validMoves: moves } = selection.current;
-      const grabbed = movesAtGrab.current;
-      const known = [
-        ...(grabbed && samePosition(grabbed.from, from) ? grabbed.moves : []),
-        ...(samePosition(selected, from) ? moves : []),
-      ];
+      const touch = selection.current;
+      const known = knownMoves(touch, from, movesAtGrab.current);
+      const feel = boardTouchHaptic(touch, { kind: 'drop', from, to, known });
+      if (feel) haptic(feel);
       const legal = known.some((move) => samePosition(move, to));
       if (legal) holdDrop({ from, to, offset });
       onPieceDrop(from, to);
@@ -1056,7 +1302,16 @@ export default function Board({
     : positionSignature;
   const previousGrid = useRef(grid);
   const previousReplayIndex = useRef(replayIndex);
-  const [replayTransition, setReplayTransition] = useState<ReplayTransitionState | null>(null);
+  // What is playing now: the move's transition, and below, its capture
+  // effect. Written as the move commits and read by every render after it.
+  // Refs rather than state, because the render that receives a move already
+  // draws both: copying them into state from the layout effect re-rendered the
+  // whole board a second time before the move's first frame, which on a phone
+  // is a pause you can see. Only the end of one needs a render, and `settle`
+  // is it.
+  const replayTransitionRef = useRef<ReplayTransitionState | null>(null);
+  const replayTransition = replayTransitionRef.current;
+  const [, settle] = useReducer((settled: number) => settled + 1, 0);
 
   // What the capture effect needs to tell a move being played from a step
   // through the record: how long ago the board last moved, and where the end of
@@ -1067,7 +1322,8 @@ export default function Board({
   const lineEnd = Array.isArray(replayPositions) ? replayPositions.length - 1 : null;
   const lineEndAtLastChange = useRef(lineEnd);
   const lastChangeAt = useRef(Number.NEGATIVE_INFINITY);
-  const [captureEffect, setCaptureEffect] = useState<CaptureEffectState | null>(null);
+  const captureEffectRef = useRef<CaptureEffectState | null>(null);
+  const captureEffect = captureEffectRef.current;
 
   // Work out the requested transition during the render that receives the new
   // grid. Waiting until an effect to do this lets the destination position
@@ -1222,12 +1478,7 @@ export default function Board({
         progress: new NativeAnimated.Value(0),
         tracks,
         duration:
-          replay.steps === 1
-            ? MOVE_ANIMATION_DURATION
-            : Math.min(
-                FAST_REPLAY_MAX_DURATION,
-                Math.max(FAST_REPLAY_MIN_DURATION, replay.steps * FAST_REPLAY_MOVE_DURATION),
-              ),
+          replay.steps === 1 ? MOVE_ANIMATION_DURATION : fastReplayDuration(replay.steps),
         key,
       };
     }
@@ -1240,13 +1491,17 @@ export default function Board({
     previousGrid.current = grid;
     previousReplayIndex.current = replayIndex;
     if (positionChanged) {
-      setReplayTransition(requestedReplayTransition);
-      setCaptureEffect(visibleCaptureEffect);
+      replayTransitionRef.current = requestedReplayTransition;
+      captureEffectRef.current = visibleCaptureEffect;
       lastChangeAt.current = changedAt;
       lineEndAtLastChange.current = lineEnd;
       // Played or not, a held drop is settled by the next position: the move
       // carried it away, or the piece is still on its square and goes home.
-      holdDrop(null);
+      // A piece the move is carrying lets go when it lands instead, in
+      // `handleReplayTransitionComplete`: letting go here re-rendered the board
+      // between the move arriving and its first frame.
+      if (requestedReplayTransition?.drop) heldDropRef.current = null;
+      else holdDrop(null);
     }
     // `requestedReplayTransition` and the capture effect are deliberately
     // captured from the render caused by these props. Adding them as
@@ -1318,11 +1573,18 @@ export default function Board({
   );
 
   const handleReplayTransitionComplete = useCallback((key: string) => {
-    setReplayTransition((current) => (current?.key === key ? null : current));
+    const transition = replayTransitionRef.current;
+    if (transition?.key !== key) return;
+    replayTransitionRef.current = null;
+    // A dropped piece this move carried has landed, so nothing is held now.
+    if (transition.drop) setHeldDrop(null);
+    settle();
   }, []);
 
   const handleCaptureEffectComplete = useCallback((key: string) => {
-    setCaptureEffect((current) => (current?.key === key ? null : current));
+    if (captureEffectRef.current?.key !== key) return;
+    captureEffectRef.current = null;
+    settle();
   }, []);
   useCaptureEffectClock(visibleCaptureEffect, handleCaptureEffectComplete);
 
@@ -1467,6 +1729,16 @@ export default function Board({
     [highlights],
   );
 
+  // Stable, so no square redraws because the screen above handed the board a
+  // new callback, which it does on every render.
+  const tilePress = useRef(onTilePress);
+  tilePress.current = onTilePress;
+  const pressSquare = useCallback((x: number, y: number) => {
+    const feel = boardTouchHaptic(selection.current, { kind: 'press', square: { x, y } });
+    if (feel) haptic(feel);
+    tilePress.current({ x, y });
+  }, []);
+
   const annotationArrows = useMemo(() => {
     if (!pendingArrow || samePosition(pendingArrow.from, pendingArrow.to)) return arrows;
     return [
@@ -1500,151 +1772,33 @@ export default function Board({
           <View key={`row-${displayY}`} style={styles.row}>
             {row.map((tile, displayX) => {
               const position = { x: tile.x, y: tile.y };
-              const isSelected = samePosition(selectedTile, position);
-              const isValid = validMoveKeys.has(`${tile.x}:${tile.y}`);
-              const isCapture = isValid && tile.occupant !== 'Empty';
-              const isLight = (tile.x + tile.y) % 2 === 0;
-              const isHighlighted = highlightKeys.has(`${tile.x}:${tile.y}`);
-              const isLastMoveFrom = samePosition(displayedLastMove?.from, position);
-              const isLastMoveTo = samePosition(displayedLastMove?.to, position);
               const tint = tintForTile(modeId, tile, shape, era);
-              const overlayCell = overlayCellAt(overlay, tile.x, tile.y);
-              const overlayLabel = overlayCell?.describe ? `, ${overlayCell.describe}` : '';
-              const tintLabel = tint
-                ? tint.kind === 'goal'
-                  ? `, ${tint.color} goal tile`
-                  : `, owned by ${tint.color}`
-                : '';
-              const highlightLabel = isHighlighted ? ', marked' : '';
-              const selectionLabel = isSelected ? ', selected' : '';
-              const lastMoveLabel = isLastMoveFrom
-                ? ', previous move origin'
-                : isLastMoveTo
-                  ? `, previous move destination${
-                      lastMoveGrade ? `, ${lastMoveGrade.label} move` : ''
-                    }`
-                  : '';
-
+              const lastMoveHere = samePosition(displayedLastMove?.from, position)
+                ? 'from'
+                : samePosition(displayedLastMove?.to, position)
+                  ? 'to'
+                  : null;
               return (
-                <Pressable
+                <BoardSquare
+                  gradeLabel={lastMoveHere === 'to' ? (lastMoveGrade?.label ?? null) : null}
+                  isHighlighted={highlightKeys.has(`${tile.x}:${tile.y}`)}
+                  isSelected={samePosition(selectedTile, position)}
+                  isValid={validMoveKeys.has(`${tile.x}:${tile.y}`)}
                   key={`${tile.x}-${tile.y}`}
-                  accessibilityRole="button"
-                  accessibilityLabel={`${tile.occupantOwner} ${tile.occupant} on ${
-                    FILES[tile.x]
-                  }${tile.y + 1}${tintLabel}${selectionLabel}${highlightLabel}${lastMoveLabel}${overlayLabel}`}
-                  onPress={() => onTilePress(position)}
-                  style={[
-                    styles.tile,
-                    isLight ? styles.lightTile : styles.darkTile,
-                    overArt && (isLight ? styles.lightTileOverArt : styles.darkTileOverArt),
-                  ]}
-                >
-                  {tint && (
-                    <>
-                      <View
-                        style={[
-                          styles.tileTint,
-                          tint.color === 'Red' ? styles.redTint : styles.blueTint,
-                          tint.kind === 'goal' && styles.goalTint,
-                        ]}
-                      />
-                      <TileMark owner={tint.color} variant={tint.kind} />
-                    </>
-                  )}
-                  {overlayCell && (
-                    <>
-                      {overlayCell.fill && (
-                        <View
-                          style={[
-                            styles.overlayFill,
-                            { backgroundColor: overlayCell.fill },
-                            overlayCell.dim && styles.overlayDim,
-                          ]}
-                        />
-                      )}
-                      {overlayCell.ring && (
-                        <View style={[styles.overlayRing, { borderColor: overlayCell.ring }]} />
-                      )}
-                      {overlayCell.labels?.length ? (
-                        <View
-                          pointerEvents="none"
-                          style={[styles.overlayLabels, overlayCell.dim && styles.overlayDim]}
-                        >
-                          {/*
-                            Keyed by position, not by text: a contested square
-                            shows both sides' answer and they are often the same
-                            string — `R3` over `R3`, told apart by colour.
-                          */}
-                          {overlayCell.labels.map((entry, line) => (
-                            <Text
-                              key={`${line}-${entry.text}`}
-                              style={[
-                                styles.overlayLabel,
-                                { color: entry.color ?? board.labelOnDark },
-                                overlayLabelText(overlayLabelSize, overlayCell.labels?.length ?? 1),
-                              ]}
-                            >
-                              {entry.text}
-                            </Text>
-                          ))}
-                        </View>
-                      ) : null}
-                    </>
-                  )}
-                  {(isLastMoveFrom || isLastMoveTo) && (
-                    <>
-                      <View
-                        style={[
-                          styles.lastMoveTint,
-                          isLastMoveFrom ? styles.lastMoveFromTint : styles.lastMoveToTint,
-                        ]}
-                      />
-                      <TileMark
-                        style={styles.lastMoveMark}
-                        variant={isLastMoveFrom ? 'moveFrom' : 'moveTo'}
-                      />
-                    </>
-                  )}
-                  {isSelected && (
-                    <>
-                      <View style={styles.selectionTint} />
-                      <TileMark style={styles.selectionMark} variant="selection" />
-                    </>
-                  )}
-                  {isHighlighted && (
-                    <>
-                      <View style={styles.annotationTint} />
-                      <TileMark style={styles.annotationMark} variant="annotation" />
-                    </>
-                  )}
-                  {isValid &&
-                    (isCapture ? (
-                      <View style={styles.captureRing} />
-                    ) : (
-                      <View style={styles.validDot} />
-                    ))}
-
-                  {displayX === 0 && (
-                    <Text
-                      style={[
-                        styles.rankLabel,
-                        isLight ? styles.labelOnLight : styles.labelOnDark,
-                      ]}
-                    >
-                      {tile.y + 1}
-                    </Text>
-                  )}
-                  {displayY === shape.rows - 1 && (
-                    <Text
-                      style={[
-                        styles.fileLabel,
-                        isLight ? styles.labelOnLight : styles.labelOnDark,
-                      ]}
-                    >
-                      {FILES[tile.x]}
-                    </Text>
-                  )}
-                </Pressable>
+                  lastMove={lastMoveHere}
+                  occupant={tile.occupant}
+                  occupantOwner={tile.occupantOwner}
+                  onPress={pressSquare}
+                  overArt={overArt}
+                  overlayCell={overlayCellAt(overlay, tile.x, tile.y)}
+                  overlayLabelSize={overlayLabelSize}
+                  showFile={displayY === shape.rows - 1}
+                  showRank={displayX === 0}
+                  tintColor={tint?.color ?? null}
+                  tintKind={tint?.kind ?? null}
+                  x={tile.x}
+                  y={tile.y}
+                />
               );
             })}
           </View>
@@ -1773,6 +1927,7 @@ export default function Board({
                   key={`${tile.x}-${tile.y}`}
                   onDragActiveChange={ignoreDragActive}
                   onDragEnd={refuseDrop}
+                  onDragOver={ignoreDragOver}
                   onDragStart={ignoreDragStart}
                   tile={carried.tile}
                   travel={carried.travel}
@@ -1801,6 +1956,7 @@ export default function Board({
                 key={`${tile.x}-${tile.y}`}
                 onDragActiveChange={handleDragActiveChange}
                 onDragEnd={handleDragEnd}
+                onDragOver={handleDragOver}
                 onDragStart={handleDragStart}
                 tile={tile}
               />

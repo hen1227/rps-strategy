@@ -21,6 +21,7 @@ import { decodePosition, encodePosition, startingRowsFrom } from '@/engine/pgn';
 import { failureMessage } from '@/errors';
 import type { PieceLook } from '@/features/board/pieceLook';
 import PieceIcon from '@/features/board/PieceIcon';
+import { haptic } from '@/haptics/haptics';
 import { board, colors, players, radius, themedSheet } from '@/theme';
 import ModalCard from '@/ui/ModalCard';
 import {
@@ -428,7 +429,8 @@ export default function PositionSetupModal({
           </Pressable>
           <Pressable
             accessibilityRole="button"
-            onPress={() =>
+            onPress={() => {
+              haptic('press');
               onApply({
                 position: { rows },
                 board: {
@@ -443,8 +445,8 @@ export default function PositionSetupModal({
                     showTerritory ? effectiveOwners : undefined,
                   ),
                 },
-              })
-            }
+              });
+            }}
             style={({ pressed }) => [styles.applyButton, pressed && styles.pressed]}
           >
             <Text style={styles.applyText}>USE POSITION</Text>
@@ -471,7 +473,10 @@ export default function PositionSetupModal({
                       accessibilityRole="radio"
                       accessibilityState={{ checked: selected }}
                       key={option}
-                      onPress={() => setLayer(option)}
+                      onPress={() => {
+                        if (!selected) haptic('choose');
+                        setLayer(option);
+                      }}
                       style={({ pressed }) => [
                         styles.layerTab,
                         selected && styles.layerTabSelected,
@@ -499,7 +504,10 @@ export default function PositionSetupModal({
                         accessibilityRole="radio"
                         accessibilityState={{ checked: selected }}
                         key={tool.letter}
-                        onPress={() => setSelectedOwner(tool.letter)}
+                        onPress={() => {
+                          if (!selected) haptic('choose');
+                          setSelectedOwner(tool.letter);
+                        }}
                         style={({ pressed }) => [
                           styles.tool,
                           selected && styles.toolSelected,
@@ -530,7 +538,10 @@ export default function PositionSetupModal({
                         accessibilityRole="radio"
                         accessibilityState={{ checked: selected }}
                         key={tool.symbol}
-                        onPress={() => setSelectedSymbol(tool.symbol)}
+                        onPress={() => {
+                          if (!selected) haptic('choose');
+                          setSelectedSymbol(tool.symbol);
+                        }}
                         style={({ pressed }) => [
                           styles.tool,
                           selected && styles.toolSelected,
@@ -622,6 +633,7 @@ export default function PositionSetupModal({
                       accessibilityState={{ checked: selected }}
                       key={side}
                       onPress={() => {
+                        if (!selected) haptic('choose');
                         releaseFenDraft();
                         setCurrentTurn(side);
                       }}
@@ -710,7 +722,9 @@ export default function PositionSetupModal({
                   accessibilityRole="button"
                   onPress={async () => {
                     try {
-                      setCopied({ text: fenText, ok: await Clipboard.setStringAsync(fenText) });
+                      const ok = await Clipboard.setStringAsync(fenText);
+                      if (ok) haptic('copied');
+                      setCopied({ text: fenText, ok });
                     } catch {
                       // `setStringAsync` resolves `false` on the web rather than
                       // throwing when the browser refuses the clipboard, so both

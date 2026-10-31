@@ -9,6 +9,7 @@ import {
 } from 'react-native';
 
 import { failureMessage } from '@/errors';
+import { haptic } from '@/haptics/haptics';
 import { useNow } from '@/hooks/useNow';
 import { useWatchGame } from '@/hooks/useWatchGame';
 import {
@@ -574,7 +575,10 @@ function SlotGrid({ busy, days, leading, onToggle, signedIn }: SlotGridProps) {
                   accessibilityState={{ checked: entry.mine, disabled: !signedIn }}
                   disabled={!signedIn || Boolean(busy)}
                   key={entry.slot}
-                  onPress={() => onToggle(entry.slot)}
+                  onPress={() => {
+                    haptic(entry.mine ? 'toggleOff' : 'toggleOn');
+                    onToggle(entry.slot);
+                  }}
                   style={({ pressed }) => [
                     styles.cell,
                     { width },
@@ -639,7 +643,10 @@ function PollRows({ busy, kind, onVote, poll, signedIn }: PollRowsProps) {
             accessibilityState={{ selected: mine, disabled: !poll.open || !signedIn }}
             disabled={!poll.open || !signedIn || Boolean(busy)}
             key={option}
-            onPress={() => onVote(kind, option)}
+            onPress={() => {
+              if (!mine) haptic('choose');
+              onVote(kind, option);
+            }}
             style={({ pressed }) => [
               styles.pollRow,
               mine && styles.pollRowMine,

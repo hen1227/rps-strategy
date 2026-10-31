@@ -1,5 +1,6 @@
 import { StyleSheet, Pressable, Text, View } from 'react-native';
 
+import { haptic } from '@/haptics/haptics';
 import { colors, radius, space, themedSheet, type } from '@/theme';
 
 // One row of tabs.
@@ -55,7 +56,10 @@ export default function TabBar<Value extends string | number>({
             accessibilityRole="tab"
             accessibilityState={{ selected }}
             key={String(option.value)}
-            onPress={() => onChange(option.value)}
+            onPress={() => {
+              if (!selected) haptic('choose');
+              onChange(option.value);
+            }}
             style={({ pressed }) => [
               styles.tab,
               fill && styles.tabFill,

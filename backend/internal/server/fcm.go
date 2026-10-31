@@ -197,7 +197,7 @@ func (sender *fcmSender) send(ctx context.Context, token string, payload pushPay
 		Data:         data,
 		Android: fcmAndroidConfig{
 			Priority:    "HIGH",
-			TTL:         fmt.Sprintf("%ds", int(pushTTL.Seconds())),
+			TTL:         fmt.Sprintf("%ds", int(payload.lifetime().Seconds())),
 			CollapseKey: payload.Tag,
 			Notification: fcmAndroidNotification{
 				ChannelID: fcmChannel,

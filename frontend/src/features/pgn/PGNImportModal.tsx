@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput } from 'react-native';
 
 import { decodePosition, encodePositionPGN } from '@/engine/pgn';
+import { haptic } from '@/haptics/haptics';
 import { colors, radius, themedSheet } from '@/theme';
 import ModalCard from '@/ui/ModalCard';
 import type { ModeDefinition } from '@/types/game';
@@ -110,7 +111,10 @@ export default function PGNImportModal({
           </Pressable>
           <Pressable
             accessibilityRole="button"
-            onPress={load}
+            onPress={() => {
+              haptic('press');
+              load();
+            }}
             style={({ pressed }) => [styles.loadButton, pressed && styles.pressed]}
           >
             <Text style={styles.loadText}>{positionMode ? 'LOAD' : 'ANALYZE GAME'}</Text>

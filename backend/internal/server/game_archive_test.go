@@ -194,6 +194,16 @@ func TestArchiveRoutesServeStoredGames(t *testing.T) {
 	if recorder.Code != http.StatusNotFound {
 		t.Fatalf("expected 404 for an unknown game, got %d", recorder.Code)
 	}
+
+	recorder = httptest.NewRecorder()
+	routes.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/archive", nil))
+	var summary archiveSummary
+	if err := json.NewDecoder(recorder.Body).Decode(&summary); err != nil {
+		t.Fatal(err)
+	}
+	if recorder.Code != http.StatusOK || summary.Games != 1 {
+		t.Fatalf("expected the archive to count one game, got %d: %+v", recorder.Code, summary)
+	}
 }
 
 func TestBulkExportRequiresTheHostToken(t *testing.T) {

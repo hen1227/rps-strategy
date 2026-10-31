@@ -19,6 +19,7 @@ import QuietMoveMeter from '@/features/analysis/QuietMoveMeter';
 import TerritoryMeter from '@/features/analysis/TerritoryMeter';
 import { NameThisOpening, OpeningBadge } from '@/features/openings/OpeningBadge';
 import ReachPanel from '@/features/reach/ReachPanel';
+import { haptic } from '@/haptics/haptics';
 import { useGameOpening } from '@/hooks/useGameOpening';
 import { useReach } from '@/hooks/useReach';
 import Board from '@/features/board/Board';
@@ -27,11 +28,14 @@ import { colourResultLabel } from '@/features/game/resultLabels';
 import type { ShareCardInput } from '@/features/board/export/shareCard';
 import {usePieceDrag} from '@/features/board/pieceDrag';
 import { capturedPieces } from '@/features/board/CapturedPieces';
+import FinishTally, { CountingText, tallyTotal, type FinishTallyData } from './FinishTally';
+import { ownedSquares, ratingChangeFor, tallySides } from './finishCount';
 import GameChat from './GameChat';
 import GameTransition from './GameTransition';
 import PlayerBar from './PlayerBar';
 import SpectateRail from './SpectateRail';
 import SpectateResultModal from './SpectateResultModal';
+import { useFinishCount } from './useFinishCount';
 import ServerBanner from '@/features/shell/ServerBanner';
 import type { GameOpening } from '@/engine/openingBook';
 import { useBoardLayout } from '@/hooks/useBoardLayout';
@@ -57,6 +61,7 @@ import KeyboardLift from '@/ui/KeyboardLift';
 import { arrows } from '@/ui/arrows';
 import {
   FIRST_TO_MOVE,
+  modeHasFeature,
   opposingColor,
   type GameEndReason,
   type ModeDefinition,
@@ -379,7 +384,10 @@ function OfferNotice({acceptLabel, detail, disabled, onAccept, onDecline, title}
                 <Pressable
                     accessibilityRole="button"
                     disabled={disabled}
-                    onPress={onAccept}
+                    onPress={() => {
+                        haptic('press');
+                        onAccept();
+                    }}
                     style={({pressed}) => [
                         styles.drawAcceptButton,
                         disabled && styles.actionButtonDisabled,
@@ -593,7 +601,10 @@ function BotGameActions({
                         accessibilityLabel={reachShowing ? 'Hide the reach maps' : 'Show the reach maps'}
                         accessibilityRole="switch"
                         accessibilityState={{checked: reachShowing}}
-                        onPress={onReach}
+                        onPress={() => {
+                            haptic(reachShowing ? 'toggleOff' : 'toggleOn');
+                            onReach();
+                        }}
                         style={({pressed}) => [
                             styles.actionButton,
                             reachShowing && styles.reachButtonOn,
@@ -765,7 +776,10 @@ function OpponentSearchNotice({onJoin, waitingModes}: OpponentSearchNoticeProps)
                         accessibilityLabel={`Join the ${mode.name} queue`}
                         accessibilityRole="button"
                         key={mode.id}
-                        onPress={() => onJoin(mode.id)}
+                        onPress={() => {
+                            haptic('press');
+                            onJoin(mode.id);
+                        }}
                         style={({pressed}) => [
                             styles.searchNoticeJoin,
                             pressed && styles.buttonPressed,
@@ -855,6 +869,21 @@ function FinishedGameCard({
             ? '1  ·  0'
             : '0  ·  1';
 
+    // What the game came to and what it was worth, counted out under the result
+    // one tap at a time. See `finishCount` for the order and the timing.
+    const ratingUpdate = useGameStore((state) => state.ratingUpdate);
+    const rating = ratingChangeFor(ratingUpdate, gameState.gameId, playerColor);
+    const tally = useMemo<FinishTallyData | null>(() => {
+        const sides = tallySides(playerColor);
+        if (modeHasFeature(gameState.mode, 'territory')) {
+            return {kind: 'squares', sides, counts: ownedSquares(gameState.grid)};
+        }
+        return {kind: 'taken', sides, trays: capturedPieces(gameState)};
+    }, [gameState, playerColor]);
+    const total = tallyTotal(tally);
+    const counted = useFinishCount(gameState.gameId, total, rating);
+    const ratingDelta = rating ? rating.after - rating.before : 0;
+
     return (
         <View
             accessibilityLiveRegion="polite"
@@ -877,6 +906,35 @@ function FinishedGameCard({
                     <Text style={styles.finishedScoreLabel}>FINAL</Text>
                     <Text style={styles.outcomeScore}>{score}</Text>
                 </View>
+                {rating && (
+                    <View
+                        accessible
+                        accessibilityLabel={`Rating ${rating.after}, ${
+                            ratingDelta === 0
+                                ? 'unchanged'
+                                : `${ratingDelta > 0 ? 'up' : 'down'} ${Math.abs(ratingDelta)}`
+                        }`}
+                        style={styles.finishedScoreBlock}
+                    >
+                        <Text style={styles.finishedScoreLabel}>RATING</Text>
+                        <View style={styles.ratingLine}>
+                            <CountingText
+                                final={String(rating.after)}
+                                style={styles.outcomeScore}
+                                value={String(counted.rating ?? rating.after)}
+                            />
+                            <Text
+                                style={[
+                                    styles.ratingDelta,
+                                    ratingDelta > 0 && styles.outcomeTitleWin,
+                                    ratingDelta < 0 && styles.outcomeTitleLoss,
+                                ]}
+                            >
+                                {ratingDelta > 0 ? `+${ratingDelta}` : ratingDelta < 0 ? `−${-ratingDelta}` : '±0'}
+                            </Text>
+                        </View>
+                    </View>
+                )}
             </View>
             <View style={styles.outcomeReason}>
                 <View style={styles.outcomeMethodBadge}>
@@ -884,6 +942,7 @@ function FinishedGameCard({
                 </View>
                 <Text style={styles.outcomeDetail}>{outcome.detail}</Text>
             </View>
+            {tally && total > 0 && <FinishTally shown={counted.tally} tally={tally}/>}
             {/* These don't look good. Too much unuseful information. */}
             {/*{Boolean(gameState.bot) && (*/}
             {/*    <Text style={styles.outcomeUnrated}>*/}
@@ -906,7 +965,10 @@ function FinishedGameCard({
                 <Pressable
                     accessibilityHint="Opens a move-by-move replay of this game."
                     accessibilityRole="button"
-                    onPress={onReviewGame}
+                    onPress={() => {
+                        haptic('press');
+                        onReviewGame();
+                    }}
                     style={({pressed}) => [styles.reviewGameButton, pressed && styles.buttonPressed]}
                 >
                     <View style={styles.reviewGameCopy}>
@@ -1157,7 +1219,10 @@ function StatusCard({
                     <Pressable
                         accessibilityLabel="Review game"
                         accessibilityRole="button"
-                        onPress={onReviewGame}
+                        onPress={() => {
+                            haptic('press');
+                            onReviewGame();
+                        }}
                         style={({pressed}) => [styles.statusReviewButton, pressed && styles.buttonPressed]}
                     >
                         <Text style={styles.statusReviewText}>Review game</Text>
@@ -1537,13 +1602,15 @@ export default function GameScreen() {
     const isConnected = connectionStatus === 'connected';
     // At a local board every turn is this keyboard's, which is the whole point:
     // the same person plays both sides. Everywhere else it is the usual
-    // question of whether the colour to move is yours.
-    const isMyTurn = local
+    // question of whether the colour to move is yours — though your own pieces
+    // can be picked up on the opponent's turn too, the way you can reach for
+    // one across a chessboard. Only the move itself waits.
+    const canHandlePieces = local
         ? gameState.status === 'InProgress'
         : !isSpectating &&
         (isConnected || Boolean(bot)) &&
-        gameState.status === 'InProgress' &&
-        gameState.currentTurn === playerColor;
+        gameState.status === 'InProgress';
+    const isMyTurn = canHandlePieces && (Boolean(local) || gameState.currentTurn === playerColor);
     // A board that exists but has not been played on. Read off the position
     // rather than tracked separately: a stopped clock in a game in progress is
     // the server's own way of saying it, so this cannot go stale.
@@ -1895,8 +1962,14 @@ export default function GameScreen() {
                 // Nothing can be played from a position the game has already
                 // left. The tap handler below brings the viewer back rather
                 // than refusing, so a player who stepped back to look at
-                // something is one tap from their own move again.
-                canMove={isMyTurn && atLiveEdge}
+                // something is one tap from their own move again. Nor while
+                // the reach tool is waiting for a square to put its ghost on:
+                // that tap is the tool's, and must not be felt as a move.
+                canMove={
+                    canHandlePieces &&
+                    atLiveEdge &&
+                    !(reachTool.active && reachTool.settings.placingGhost)
+                }
                 grid={visibleGrid}
                 lastMove={visibleLastMove}
                 modeId={gameState.mode.id}
@@ -2978,6 +3051,13 @@ const styles = themedSheet(() => ({
         fontWeight: '900',
         fontVariant: ['tabular-nums'],
         marginTop: 3,
+    },
+    ratingLine: {flexDirection: 'row', alignItems: 'baseline', gap: 4},
+    ratingDelta: {
+        color: colors.textMuted,
+        fontSize: 10,
+        fontWeight: '900',
+        fontVariant: ['tabular-nums'],
     },
     outcomeReason: {
         flexDirection: 'row',

@@ -453,6 +453,59 @@ func TestEveryBrowserIsNotified(t *testing.T) {
 	}
 }
 
+// One slow address must not cost a person their other devices. A browser whose
+// push service is having a bad minute, registered before the phone, used to
+// spend the deadline the phone's summons needed.
+func TestASlowAddressDoesNotHoldUpTheOthers(t *testing.T) {
+	release := make(chan struct{})
+	phoneReached := make(chan struct{}, 1)
+	server, endpoint := pushTestServer(t, func(writer http.ResponseWriter, request *http.Request) {
+		if strings.HasPrefix(request.URL.Path, "/3/device/") {
+			select {
+			case phoneReached <- struct{}{}:
+			default:
+			}
+			writer.WriteHeader(http.StatusOK)
+			return
+		}
+		select {
+		case <-release:
+		case <-request.Context().Done():
+		}
+		writer.WriteHeader(http.StatusCreated)
+	})
+	withAPNs(t, server, endpoint)
+	seedAccount(t, server, "ada")
+	if _, err := server.data.SavePushSubscription(
+		context.Background(),
+		testSubscription(t, "ada", endpoint.URL+"/laptop"),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := server.data.SavePushSubscription(context.Background(), persistence.PushSubscription{
+		Endpoint:        testDeviceToken,
+		UserID:          "ada",
+		Transport:       persistence.TransportAPNs,
+		CreatedAtUnixMs: settledAt() + 1000,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan pushReport, 1)
+	go func() { done <- server.push.SendTo("ada", pushPayload{Title: "hello", Tag: "rps-match"}) }()
+	select {
+	case <-phoneReached:
+	case <-time.After(2 * time.Second):
+		close(release)
+		<-done
+		t.Fatal("the phone was not summoned until the browser's push service answered")
+	}
+	close(release)
+	if report := <-done; report.Delivered != 2 {
+		t.Fatalf("expected both devices to be reached, got %+v", report)
+	}
+}
+
 // A malformed key stores cleanly and then silently never delivers, so it has to
 // be refused at the moment somebody could still be told.
 func TestMalformedKeysAreRefusedAtSubscribeTime(t *testing.T) {

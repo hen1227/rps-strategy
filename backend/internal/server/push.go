@@ -1,12 +1,14 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"log"
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	webpush "github.com/SherClockHolmes/webpush-go"
@@ -27,10 +29,12 @@ import (
 // See `apns.go` and `fcm.go` for the other two.
 //
 // That makes restraint part of the design rather than a policy bolted on top.
-// The server sends exactly one kind of notification — your game has started, go
-// and play it — and there is deliberately no second one. A queue you can walk
-// away from is worth having; an app that pings you about other people's
-// activity is worth muting, and a muted app cannot call anybody back at all.
+// The server sends one kind of notification — a game is waiting for you, go and
+// play it — and there is deliberately no other. It comes in two words: your
+// game has started, and somebody took your challenge link and is waiting for
+// you in the lobby. A queue you can walk away from is worth having; an app that
+// pings you about other people's activity is worth muting, and a muted app
+// cannot call anybody back at all.
 
 const (
 	// pushTTL is how long a push service should hold a notification for a
@@ -192,6 +196,20 @@ type pushPayload struct {
 	Body   string `json:"body"`
 	Tag    string `json:"tag"`
 	GameID string `json:"gameId,omitempty"`
+	// TTL is how long a push service should hold this for a device that is
+	// offline, or zero for pushTTL. Only a summons with a longer wait behind it
+	// sets one: a challenge link's taker waits for as long as they like, so
+	// telling its author is worth more than the forty-five seconds a seat is
+	// held. Never sent to the device.
+	TTL time.Duration `json:"-"`
+}
+
+// lifetime is how long this notification is worth delivering.
+func (payload pushPayload) lifetime() time.Duration {
+	if payload.TTL > 0 {
+		return payload.TTL
+	}
+	return pushTTL
 }
 
 // Reachable reports whether an account has anywhere to be notified.
@@ -273,16 +291,38 @@ func (sender *pushSender) SendTo(userID string, payload pushPayload) pushReport 
 		log.Printf("encode push payload: %v", err)
 		return report
 	}
+	sendable := make([]persistence.PushSubscription, 0, len(subscriptions))
 	for _, subscription := range subscriptions {
-		if !sender.canSend(subscription.Transport) {
-			continue
+		if sender.canSend(subscription.Transport) {
+			sendable = append(sendable, subscription)
 		}
-		switch sender.deliverSettled(ctx, subscription, payload, body) {
+	}
+	// Every address at once, each on a clock of its own. One after another
+	// under one deadline, a push service slow to answer — or an address still
+	// settling, which is asked again for most of that deadline — spent the time
+	// every device after it needed, and somebody whose browser's push service
+	// was having a bad minute was not told on their phone either.
+	outcomes := make([]deliveryOutcome, len(sendable))
+	var deliveries sync.WaitGroup
+	for index, subscription := range sendable {
+		deliveries.Go(func() {
+			deliveryCtx, cancelDelivery := context.WithTimeout(context.Background(), pushTimeout)
+			defer cancelDelivery()
+			outcomes[index] = sender.deliverSettled(deliveryCtx, subscription, payload, body)
+		})
+	}
+	deliveries.Wait()
+
+	// A clock of its own here too: the one above may be spent by now.
+	pruneCtx, cancelPrune := context.WithTimeout(context.Background(), pushTimeout)
+	defer cancelPrune()
+	for index, outcome := range outcomes {
+		switch outcome {
 		case deliveryAccepted:
 			report.Delivered++
 		case deliveryGone:
 			report.Removed++
-			sender.forget(ctx, subscription)
+			sender.forget(pruneCtx, sendable[index])
 		case deliverySettling:
 			report.Failed++
 			report.Settling++
@@ -333,7 +373,7 @@ func (sender *pushSender) deliverOnce(
 	case persistence.TransportFCM:
 		return sender.fcm.send(ctx, subscription.Endpoint, payload)
 	default:
-		return sender.deliver(ctx, subscription, body)
+		return sender.deliver(ctx, subscription, body, payload.lifetime())
 	}
 }
 
@@ -373,8 +413,12 @@ func (sender *pushSender) deliver(
 	ctx context.Context,
 	subscription persistence.PushSubscription,
 	body []byte,
+	lifetime time.Duration,
 ) deliveryOutcome {
-	response, err := webpush.SendNotificationWithContext(ctx, body, &webpush.Subscription{
+	// A copy of its own, because webpush-go pads the plaintext in place, in
+	// whatever capacity the slice it is handed has spare, and every address of
+	// one send is delivered at the same moment from the same body.
+	response, err := webpush.SendNotificationWithContext(ctx, bytes.Clone(body), &webpush.Subscription{
 		Endpoint: subscription.Endpoint,
 		Keys: webpush.Keys{
 			P256dh: subscription.P256dh,
@@ -385,7 +429,7 @@ func (sender *pushSender) deliver(
 		Subscriber:      sender.subject,
 		VAPIDPublicKey:  sender.publicKey,
 		VAPIDPrivateKey: sender.privateKey,
-		TTL:             int(pushTTL.Seconds()),
+		TTL:             int(lifetime.Seconds()),
 		Urgency:         webpush.UrgencyHigh,
 	})
 	if err != nil {

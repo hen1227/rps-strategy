@@ -1,6 +1,7 @@
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { adminStyles } from './adminStyles';
+import { haptic } from '@/haptics/haptics';
 import type { AccountQuery, AccountSort } from '@/store/api/bots';
 import { colors, radius, space, themedSheet, type } from '@/theme';
 import { GhostButton, LabeledInput, OptionChips } from '@/ui/primitives';
@@ -71,7 +72,10 @@ function Toggle({
       accessibilityRole="switch"
       accessibilityState={{ checked: active, disabled: Boolean(disabled) }}
       disabled={disabled}
-      onPress={onPress}
+      onPress={() => {
+        haptic(active ? 'toggleOff' : 'toggleOn');
+        onPress();
+      }}
       style={({ pressed }) => [
         styles.toggle,
         active && styles.toggleActive,

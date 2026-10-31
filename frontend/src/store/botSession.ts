@@ -24,6 +24,7 @@ import { analyzeExclusive } from '@/engine/rpsfish/client';
 import {
   opposingColor,
   samePosition,
+  selectionAfterMove,
   type GameEndReason,
   type ModeDefinition,
   type Move,
@@ -261,13 +262,21 @@ export const createBotSlice: StateCreator<GameStore, [], [], BotSlice> = (set, g
   // Applies a legal move for whichever side is to move and, when the bot is
   // next, starts it thinking.
   const applyMove = (from: Position, to: Position) => {
-    const { botGame, botHistory, botMoves } = get();
+    const { botGame, botHistory, botMoves, botSession, selectedTile } = get();
     if (!botGame) return false;
     const source = botGame.grid[from.y]?.[from.x];
     const destination = botGame.grid[to.y]?.[to.x];
     if (!source || !destination || source.occupant === 'Empty') return false;
     const result = applyAnalysisMove(botGame, from, to);
     if (!result) return false;
+    // A piece the player picked up while the bot was thinking stays in hand
+    // through its reply, unless the reply took it. The player's own move puts
+    // down whatever they were holding.
+    const playerColor = botSession?.playerColor ?? null;
+    const kept =
+      result.mover !== playerColor && result.game.status === 'InProgress'
+        ? selectionAfterMove(selectedTile, result.game.grid, playerColor)
+        : null;
     publish({
       botGame: result.game,
       botHistory: [...botHistory, botGame],
@@ -282,8 +291,8 @@ export const createBotSlice: StateCreator<GameStore, [], [], BotSlice> = (set, g
         },
       ],
       lastMove: { from, to },
-      selectedTile: null,
-      validMoves: [],
+      selectedTile: kept,
+      validMoves: kept ? validMovesFor(result.game, kept) : [],
       // A draw offer is spent for one move only, the same rule a server game
       // follows, and a hint belongs to the position it was asked about.
       session: {
@@ -453,7 +462,16 @@ export const createBotSlice: StateCreator<GameStore, [], [], BotSlice> = (set, g
     botSelectTile: (position) => {
       const { botGame, botSession, selectedTile, validMoves } = get();
       if (!botSession || !botGame || botGame.status !== 'InProgress') return;
-      if (botGame.currentTurn !== botSession.playerColor) return;
+      // On the bot's turn a piece can be picked up but not moved; its moves
+      // are worked out once the bot has replied.
+      if (botGame.currentTurn !== botSession.playerColor) {
+        const mine = botGame.grid[position.y]?.[position.x]?.occupantOwner === botSession.playerColor;
+        publish({
+          selectedTile: mine && !samePosition(selectedTile, position) ? position : null,
+          validMoves: [],
+        });
+        return;
+      }
 
       if (selectedTile && validMoves.some((move) => samePosition(move, position))) {
         if (applyMove(selectedTile, position)) runBotTurn();

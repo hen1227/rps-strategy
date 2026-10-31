@@ -194,6 +194,27 @@ server holding different projects — is logged and kept, like Apple's
 `DeviceTokenNotForTopic`, because pruning on it would wipe every Android device
 over a deployment mistake.
 
+#### Turning away an outdated app
+
+A phone keeps the build it installed until its owner updates it, so the server
+has to keep working for builds already in the stores. When a change cannot,
+raise that platform's minimum:
+
+```sh
+RPS_MIN_APP_VERSION_IOS=1.2.0
+RPS_IOS_STORE_URL=https://apps.apple.com/app/id<the app's Apple ID>
+RPS_MIN_APP_VERSION_ANDROID=1.2.0
+```
+
+Every app from 1.0 on sends its version and platform with `authenticate`. A
+build older than its platform's minimum is answered `update_required`, with the
+store address, and the socket is closed before any account is touched; the app
+shows a blocking "Update RPS Strategy" screen. The website is never refused, and
+nor is a build from before 1.0, which sends no version. Nothing is refused while
+the minimums are unset. Android's store address defaults to its Play listing;
+the App Store's has to be set, because its number is Apple's, and without it
+the button opens the website. See `internal/server/app_version.go`.
+
 ## Orange Pi production deployment
 
 Production uses systemd to supervise the Go process and Nginx to proxy HTTP and

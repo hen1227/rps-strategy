@@ -32,6 +32,14 @@ func (server *Server) setQueuePresence(client *Client, present bool) {
 		server.broadcastOpenChallenges()
 		server.broadcastModePlayerCounts()
 	}
+	// The same report is what a challenge link waits on: somebody who took
+	// your link is sitting in the lobby, and coming back to the tab is the
+	// moment their game should open. Every "here" is acted on, not only a
+	// change to it: the first thing a reconnected tab says is "here", which
+	// changes nothing on paper and is exactly the moment to open the game.
+	if client.setPresence(presence) || present {
+		server.challengeLinkPresenceChanged(client)
+	}
 }
 
 // seekCanOutliveSocket reports whether a seek may sit on the board with nobody

@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import { Pressable, Text, View, type LayoutChangeEvent } from 'react-native';
 
+import { haptic } from '@/haptics/haptics';
 import { colors, radius, space, themedSheet, type } from '@/theme';
 
 // A row of choices that show themselves.
@@ -82,7 +83,10 @@ export default function SwatchChips<Value extends string>({
             accessibilityRole="radio"
             accessibilityState={{ selected }}
             key={option.value}
-            onPress={() => onChange(option.value)}
+            onPress={() => {
+              if (!selected) haptic('choose');
+              onChange(option.value);
+            }}
             style={({ pressed }) => [
               styles.chip,
               { width },

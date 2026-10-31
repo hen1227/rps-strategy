@@ -78,7 +78,7 @@ func TestTournamentHTTPFlowAndAdminAuthentication(t *testing.T) {
 			"userId": "eager", "ign": "Eager", "discord": "eager.discord",
 			"agreedToUnfilteredChat": true,
 		},
-		"",
+		entrantSession(t, data, "eager"),
 	)
 	if early.Code != http.StatusConflict {
 		t.Fatalf("expected a draft to refuse signups, got %d: %s", early.Code, early.Body)
@@ -102,7 +102,6 @@ func TestTournamentHTTPFlowAndAdminAuthentication(t *testing.T) {
 		t.Fatalf("expected registration after publishing, got %q", tournament.Status)
 	}
 
-	verifiedEntrants(t, data, "first-user", "second-user")
 	for _, signup := range []map[string]any{
 		{
 			"userId": "first-user", "ign": "First", "discord": "first.discord",
@@ -119,7 +118,7 @@ func TestTournamentHTTPFlowAndAdminAuthentication(t *testing.T) {
 			http.MethodPost,
 			"/api/tournaments/"+tournament.TournamentID+"/signups",
 			signup,
-			"",
+			entrantSession(t, data, signup["userId"].(string)),
 		)
 		if response.Code != http.StatusCreated {
 			t.Fatalf("expected signup, got %d: %s", response.Code, response.Body)
@@ -175,19 +174,22 @@ func TestTournamentSignupReservedIdentitiesRequireSpecialToken(t *testing.T) {
 	tournament := openTournament(
 		t, data, "reserved-open", "Reserved Open", game.ModeTotalWar, "Total War",
 	)
-	verifiedEntrants(t, data, "reserved-user")
+	// The entry name is the account's own, so the reserved one is the name the
+	// account holds. Holding it does not make the account its owner: the token
+	// is still asked for at the door.
+	session := registeredSession(t, data, "reserved-user", "WEBGOATGUY")
 	path := "/api/tournaments/" + tournament.TournamentID + "/signups"
 	body := map[string]any{
 		"userId": "reserved-user", "ign": "WEBGOATGUY", "discord": "someone",
 		"agreedToUnfilteredChat": true,
 	}
 
-	response := tournamentRequest(t, server.Routes(), http.MethodPost, path, body, "")
+	response := tournamentRequest(t, server.Routes(), http.MethodPost, path, body, session)
 	if response.Code != http.StatusForbidden {
 		t.Fatalf("expected reserved IGN to be rejected, got %d: %s", response.Code, response.Body)
 	}
 	body["reservationToken"] = "special-secret"
-	response = tournamentRequest(t, server.Routes(), http.MethodPost, path, body, "")
+	response = tournamentRequest(t, server.Routes(), http.MethodPost, path, body, session)
 	if response.Code != http.StatusCreated {
 		t.Fatalf("expected special token to allow reserved IGN, got %d: %s", response.Code, response.Body)
 	}
@@ -228,7 +230,7 @@ func TestTournamentSignupRequiresChatAgreement(t *testing.T) {
 			"userId": "no-consent", "ign": "NoConsent", "discord": "no.consent",
 			"agreedToUnfilteredChat": false,
 		},
-		"",
+		entrantSession(t, data, "no-consent"),
 	)
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("expected consent validation, got %d: %s", response.Code, response.Body)
@@ -263,7 +265,7 @@ func TestAnUnverifiedSignupIsForbidden(t *testing.T) {
 		t.Fatalf("expected publication, got %d: %s", published.Code, published.Body)
 	}
 
-	signup := func(userID string, ign string) *httptest.ResponseRecorder {
+	signup := func(userID, ign, session string) *httptest.ResponseRecorder {
 		return tournamentRequest(
 			t, handler, http.MethodPost,
 			"/api/tournaments/"+tournament.TournamentID+"/signups",
@@ -271,17 +273,33 @@ func TestAnUnverifiedSignupIsForbidden(t *testing.T) {
 				"userId": userID, "ign": ign, "discord": "typed.handle",
 				"agreedToUnfilteredChat": true,
 			},
-			"",
+			session,
 		)
 	}
 
-	if refused := signup("unverified", "Ada"); refused.Code != http.StatusForbidden {
+	// Signed in with Apple: an account, but not one a host can message.
+	if _, err := data.EnsureAccountWithProfileKey(
+		t.Context(), "unverified", "Guest", routeTestAppleProfileKey,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := data.ClaimAccountWithIdentity(
+		t.Context(), "unverified", "Ada",
+		persistence.AppleIdentity("001234.tournament.0001", "", ""),
+	); err != nil {
+		t.Fatal(err)
+	}
+	apple, err := data.CreateSession(t.Context(), "unverified")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refused := signup("unverified", "Ada", apple); refused.Code != http.StatusForbidden {
 		t.Fatalf("expected an unverified signup to be forbidden, got %d: %s",
 			refused.Code, refused.Body)
 	}
 
-	registeredSession(t, data, "verified", "Babbage")
-	entered := signup("verified", "Babbage")
+	verified := registeredSession(t, data, "verified", "Babbage")
+	entered := signup("verified", "Babbage", verified)
 	if entered.Code != http.StatusCreated {
 		t.Fatalf("expected a verified signup to be admitted, got %d: %s",
 			entered.Code, entered.Body)
@@ -329,4 +347,52 @@ func mustTournamentStore(t *testing.T) *persistence.Store {
 		t.Fatal(err)
 	}
 	return data
+}
+
+// The entry is whoever is signed in, under the name their account holds. The
+// route used to take both from the body, so anybody could enter any verified
+// player — whose id is on every game record they have played — under any name
+// at all, which then stood in the bracket unfiltered.
+func TestATournamentEntryIsTheSignedInAccountUnderItsOwnName(t *testing.T) {
+	data := mustTournamentStore(t)
+	defer data.Close()
+	handler := NewWithStore(data, nil).Routes()
+	cup := openTournament(t, data, "own-name-cup", "Own Name Cup", game.ModeTotalWar, "Total War")
+	registeredSession(t, data, "victim", "Victim")
+	intruder := registeredSession(t, data, "intruder", "Intruder")
+	body := func(userID, ign string) map[string]any {
+		return map[string]any{
+			"userId": userID, "ign": ign, "discord": "typed.handle",
+			"agreedToUnfilteredChat": true,
+		}
+	}
+
+	if anonymous := signupRequest(
+		t, handler, cup.TournamentID, body("victim", "Victim"), "",
+	); anonymous.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 entering without a session, got %d: %s",
+			anonymous.Code, anonymous.Body)
+	}
+	if impersonated := signupRequest(
+		t, handler, cup.TournamentID, body("victim", "Victim"), intruder,
+	); impersonated.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 entering somebody else, got %d: %s",
+			impersonated.Code, impersonated.Body)
+	}
+
+	// A typed name is not the name entered: the field shows the account's own.
+	entered := signupRequest(t, handler, cup.TournamentID, body("intruder", "AnythingAtAll"), intruder)
+	if entered.Code != http.StatusCreated {
+		t.Fatalf("expected the signed-in account to be entered, got %d: %s",
+			entered.Code, entered.Body)
+	}
+	var tournament persistence.Tournament
+	if err := json.NewDecoder(entered.Body).Decode(&tournament); err != nil {
+		t.Fatal(err)
+	}
+	if len(tournament.Players) != 1 ||
+		tournament.Players[0].UserID != "intruder" ||
+		tournament.Players[0].IGN != "Intruder" {
+		t.Fatalf("expected Intruder entered under their own name, got %#v", tournament.Players)
+	}
 }

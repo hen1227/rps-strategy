@@ -1,6 +1,33 @@
 # What's New
 
-## v0.10.1 — unreleased
+## v0.11.1 — unreleased
+
+## v0.11.0 — 2026-10-30
+
+- Your phone now taps as you pick up, move and take pieces, step through a game, flip a switch or press a green button. It buzzes when a game starts and when your clock runs low. Turn either off under Appearance.
+- A finished game shows your new rating counting up from the old one, and counts out the pieces each side took, or the squares each side owns in Total War.
+- Hold the back or forward arrow under a board to walk through the game.
+- Game review has a Copy FEN button beside Export, which copies the position on the board.
+- The lobby keeps Intransitive's name on one line on small phones, and dialog close buttons are easier to tap.
+- Screen readers now announce when a button is busy and unavailable while its action completes.
+- You can pick up your next piece while your opponent is still thinking. It stays in your hand through their move unless they take it, and you can play it the moment it's your turn.
+- A link to the site opens in the app when the app is on your phone, and in the browser as before when it isn't.
+- Challenge someone with a link: press Share a link under Create a challenge, then copy it or share it, and whoever opens it is put straight into the game with you. Your link waits in the Right now panel for up to an hour. If you're away when it's opened you get an alert, and they can wait in the lobby until you're back. Anyone else who opens it watches the game.
+- Pieces set off the moment you play them, instead of after a short pause that grew longer as a game went on.
+- In a browser, a match alert stays on screen while you're working in another window, and clears itself once you're back on the RPS tab.
+- A match alert reaches all your devices at once, so one that's slow to answer can't hold up the others.
+- Fixed the search card saying "a Intransitive opponent".
+- Every game played here can be downloaded from Hugging Face. An Open source page under Credits links to it, along with the code, the engine and the bot kit, and the opening explorer links to it too.
+- When the app needs an update to keep playing online, it says so and takes you to the store, instead of failing to connect.
+- Report a feedback post or reply with the Report button beside it. Replying asks you to agree to the community rules first, as posting does.
+- A bot's page has a Report button, for a name, description or picture that breaks the rules.
+- Discord handles typed on a profile, and the names engines give themselves, go through the same word filter as usernames.
+- The app shows the host's controls on Tournaments, Bots and the opening book only to hosts.
+- Fixed deleting an account whose bot had played a series.
+- Deleting your account takes your name off the opening names you published, and the confirmation lists everything that stays.
+- Deleting an account has a page of its own on the website, with a way to ask by email if you can no longer open the account.
+- The privacy policy now states a minimum age of 13 and gives an email address.
+- Fixed the Sign in with Apple button disappearing on iPhone when the server couldn't be reached.
 
 ## v0.10.0 — 2026-10-18
 

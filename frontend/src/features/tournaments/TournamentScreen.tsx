@@ -21,6 +21,7 @@ import {
 import TournamentRegisterForm, {
   hasEntryPanel,
 } from './TournamentRegisterForm';
+import { haptic } from '@/haptics/haptics';
 import PlayerLink from '@/ui/PlayerLink';
 import ScreenShell from '@/ui/ScreenShell';
 import {
@@ -423,18 +424,20 @@ export default function TournamentScreen() {
                 label={refreshing ? '…' : wide ? 'REFRESH' : '↻'}
                 onPress={refresh}
               />
-              <GhostButton
-                accessibilityLabel="Toggle tournament admin controls"
-                compact
-                label={
-                  adminPanelOpen
-                    ? 'CLOSE HOST'
-                    : wide
-                      ? 'HOST CONTROLS'
-                      : 'HOST'
-                }
-                onPress={() => setAdminPanelOpen((open) => !open)}
-              />
+              {admin.offered ? (
+                <GhostButton
+                  accessibilityLabel="Toggle tournament admin controls"
+                  compact
+                  label={
+                    adminPanelOpen
+                      ? 'CLOSE HOST'
+                      : wide
+                        ? 'HOST CONTROLS'
+                        : 'HOST'
+                  }
+                  onPress={() => setAdminPanelOpen((open) => !open)}
+                />
+              ) : null}
             </View>
           </View>
           <Text style={styles.subtitle}>
@@ -522,7 +525,11 @@ export default function TournamentScreen() {
         {tournaments.length === 0 ? (
           <Panel>
             <EmptyState
-              detail="A host can create the first event with an admin token."
+              detail={
+                admin.offered
+                  ? 'A host can create the first event with an admin token.'
+                  : 'Events appear here once a host announces one.'
+              }
               title="No tournaments yet"
             />
           </Panel>
@@ -783,7 +790,10 @@ export default function TournamentScreen() {
                   key={item}
                   accessibilityRole="tab"
                   accessibilityState={{ selected: section === item }}
-                  onPress={() => setSection(item)}
+                  onPress={() => {
+                    if (section !== item) haptic('choose');
+                    setSection(item);
+                  }}
                   style={[
                     styles.tab,
                     !wide && styles.mobileTab,

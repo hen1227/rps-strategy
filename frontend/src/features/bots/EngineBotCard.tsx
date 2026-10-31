@@ -9,6 +9,7 @@ import {
   engineStatus,
 } from '@/features/live/liveSelectors';
 import { ratingLabel } from '@/features/ratings/scale';
+import { haptic } from '@/haptics/haptics';
 import { botIconUrl } from '@/store/api/bots';
 import { colors, radius, space, themedSheet, type } from '@/theme';
 import type { ModeID } from '@/types/game';
@@ -98,7 +99,10 @@ function PitButton({
       accessibilityRole="button"
       accessibilityState={{ disabled: Boolean(disabled), selected: Boolean(role) }}
       disabled={disabled}
-      onPress={onPress}
+      onPress={() => {
+        haptic('choose');
+        onPress();
+      }}
       style={({ pressed }) => [
         styles.pit,
         Boolean(role) && styles.pitOn,

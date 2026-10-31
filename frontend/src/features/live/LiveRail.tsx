@@ -8,14 +8,18 @@ import { liveGameMeta, waitingCount, type EngineSeat, type LiveSnapshot } from '
 import { useLadderRound } from './useLadderRound';
 import { useLiveSnapshot } from './useLiveSnapshot';
 import BotIcon from '@/features/bots/BotIcon';
+import { AwaitedLinkActions, OwnLinkActions } from '@/features/play/ChallengeLinkActions';
 import { ratingLabel } from '@/features/ratings/scale';
 import { links } from '@/navigation/links';
 import { botIconUrl } from '@/store/api/bots';
+import { useNow } from '@/hooks/useNow';
 import { useWatchGame } from '@/hooks/useWatchGame';
+import { linkStatusLine, linkTitle, type ChallengeLinkRole } from '@/store/challengeLinkSelectors';
 import { useGameStore } from '@/store/gameStore';
+import { setupSummary } from '@/store/setupSelectors';
 import { playerName, titledName } from '@/store/spectateSelectors';
 import { colors, radius, shadows, space, themedSheet, type } from '@/theme';
-import type { LiveGameSummary } from '@/types/protocol';
+import type { ChallengeLink, LiveGameSummary } from '@/types/protocol';
 import { Badge, GhostButton, GhostLink, PrimaryButton } from '@/ui/primitives';
 import PlayerLink from '@/ui/PlayerLink';
 import TitleTag from '@/ui/TitleTag';
@@ -173,6 +177,68 @@ function LadderRoundBlock({ round }: { round: LadderRoundView }) {
   );
 }
 
+/**
+ * Your challenge link, and the one you are waiting on.
+ *
+ * First in the rail, above even the ranked round's clock, because it is the
+ * one thing here that is yours and that somebody else is about to act on: a
+ * link is out in a chat window somewhere, or somebody has taken one and is
+ * sitting in the lobby for you. It follows you round every page of the lobby
+ * for exactly that reason.
+ */
+function ChallengeLinkBlock() {
+  const router = useRouter();
+  const ownLink = useGameStore((state) => state.ownLink);
+  const awaitedLink = useGameStore((state) => state.awaitedLink);
+  const modes = useGameStore((state) => state.modes);
+  const defaultTimeControl = useGameStore((state) => state.defaultTimeControl);
+  const now = useNow(30_000);
+
+  const rows: { link: ChallengeLink; role: ChallengeLinkRole }[] = [];
+  if (ownLink) rows.push({ link: ownLink, role: 'author' });
+  if (awaitedLink) rows.push({ link: awaitedLink, role: 'taker' });
+  if (rows.length === 0) return null;
+
+  return (
+    <Block title="Challenge link">
+      {rows.map(({ link, role }) => {
+        const mode = modes.find((candidate) => candidate.id === link.setup?.modeId) ?? null;
+        const terms = link.setup
+          ? setupSummary(link.setup, mode, defaultTimeControl)
+          : (link.modeName ?? '');
+        return (
+          <View key={link.code} style={styles.link}>
+            <Pressable
+              accessibilityLabel={`Open ${linkTitle(link, role).toLowerCase()}`}
+              accessibilityRole="link"
+              onPress={() => router.push(links.challenge(link.code))}
+              style={({ pressed }) => [styles.linkCopy, pressed && styles.pressed]}
+            >
+              <View style={styles.linkHead}>
+                <Text numberOfLines={1} style={styles.linkTitle}>
+                  {linkTitle(link, role)}
+                </Text>
+                {link.state === 'waiting' ? <Badge label="WAITING" tone="live" /> : null}
+              </View>
+              <Text numberOfLines={2} style={styles.rowMeta}>
+                {terms}
+              </Text>
+              {/*
+                Fixed to a line, so a countdown that changes length — or a
+                status that changes words — never moves the blocks below it.
+              */}
+              <Text numberOfLines={1} style={styles.linkStatus}>
+                {now ? linkStatusLine(link, role, now) : ' '}
+              </Text>
+            </Pressable>
+            {role === 'author' ? <OwnLinkActions link={link} /> : <AwaitedLinkActions link={link} />}
+          </View>
+        );
+      })}
+    </Block>
+  );
+}
+
 export default function LiveRail() {
   const router = useRouter();
   const snapshot = useLiveSnapshot();
@@ -180,7 +246,7 @@ export default function LiveRail() {
   const spectatedGameId = useGameStore((state) => state.spectatedGameId);
   const acceptChallenge = useGameStore((state) => state.acceptChallenge);
   const cancelChallenge = useGameStore((state) => state.cancelChallenge);
-  const gameState = useGameStore((state) => state.gameState);
+  const inGame = useGameStore((state) => Boolean(state.gameState));
   const connectionStatus = useGameStore((state) => state.connectionStatus);
 
   // Deliberately not `queue.isSearching`. Being in the queue is now a
@@ -188,7 +254,7 @@ export default function LiveRail() {
   // watching a game or taking somebody's open row is not in conflict with it —
   // the server drops your seek the moment either one seats you.
   const busy =
-    connectionStatus !== 'connected' || Boolean(gameState) || Boolean(spectatedGameId);
+    connectionStatus !== 'connected' || inGame || Boolean(spectatedGameId);
   // On the lobby the page itself lists everybody waiting — with a board each,
   // and the challenges addressed to you — so the rail leaves them out there
   // rather than drawing the same people twice, side by side.
@@ -225,7 +291,9 @@ export default function LiveRail() {
   // Absent on the pre-rendered page and until the schedule arrives. See
   // useLadderRound.
   const round = useLadderRound();
+  const hasLink = useGameStore((state) => Boolean(state.ownLink || state.awaitedLink));
   const nothingHappening =
+    !hasLink &&
     snapshot.playerGames.length === 0 &&
     snapshot.botFights.length === 0 &&
     waiting === 0 &&
@@ -255,6 +323,8 @@ export default function LiveRail() {
         showsVerticalScrollIndicator={false}
         style={styles.scroll}
       >
+        <ChallengeLinkBlock />
+
         {nothingHappening ? (
           <Text style={styles.quiet}>
             No live games. Watch and chat here when one starts.
@@ -508,4 +578,15 @@ const styles = themedSheet(() => ({
   divider: { height: 1, backgroundColor: colors.border },
   footnote: { ...type.meta, color: colors.textFaint },
   pressed: { opacity: 0.7 },
+
+  link: {
+    gap: space.snug,
+    paddingVertical: space.snug,
+    borderTopWidth: 1,
+    borderTopColor: colors.borderSoft,
+  },
+  linkCopy: { gap: space.hair, minWidth: 0 },
+  linkHead: { flexDirection: 'row', alignItems: 'center', gap: space.snug, minWidth: 0 },
+  linkTitle: { ...type.rowTitle, color: colors.text, flexShrink: 1 },
+  linkStatus: { ...type.meta, color: colors.textMuted, fontWeight: '700' },
 }));

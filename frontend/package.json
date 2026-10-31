@@ -13,6 +13,7 @@
     "expo-clipboard": "~57.0.1",
     "expo-constants": "~57.0.13",
     "expo-device": "~57.0.1",
+    "expo-haptics": "~57.0.3",
     "expo-linking": "~57.0.7",
     "expo-notifications": "~57.0.14",
     "expo-router": "~57.0.15",
@@ -55,7 +56,7 @@
     "prebuild:web": "npm run build:rpsfish && npm run build:worker",
     "build:web": "expo export -p web --clear",
     "predeploy": "npm run build:web",
-    "deploy": "gh-pages --nojekyll --remove '{**/*,.claude/**/*,.gitignore,.nojekyll}' -d dist -b dist"
+    "deploy": "gh-pages --nojekyll --dotfiles --remove '{**/*,.claude/**/*,.well-known/**/*,.gitignore,.nojekyll}' -d dist -b dist"
   },
   "private": true,
   "devDependencies": {

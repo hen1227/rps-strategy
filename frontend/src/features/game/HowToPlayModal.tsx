@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { haptic } from '@/haptics/haptics';
 import {
   FIRST_TO_MOVE,
   isBoardRows,
@@ -207,7 +208,10 @@ export default function HowToPlayModal({ mode, onClose, onTry, visible }: HowToP
           <Pressable
             accessibilityLabel="Close how to play"
             accessibilityRole="button"
-            onPress={onClose}
+            onPress={() => {
+              if (!onTry) haptic('press');
+              onClose();
+            }}
             style={({ pressed }) => [
               styles.doneButton,
               onTry && styles.doneButtonQuiet,
@@ -220,7 +224,10 @@ export default function HowToPlayModal({ mode, onClose, onTry, visible }: HowToP
             <Pressable
               accessibilityLabel={`Try ${mode.name} in four moves`}
               accessibilityRole="button"
-              onPress={onTry}
+              onPress={() => {
+                haptic('press');
+                onTry();
+              }}
               style={({ pressed }) => [styles.doneButton, pressed && styles.pressed]}
             >
               <Text style={styles.doneText}>TRY IT ▶</Text>

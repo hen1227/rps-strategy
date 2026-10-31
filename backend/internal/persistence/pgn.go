@@ -316,6 +316,22 @@ func (store *Store) CountArchivedGames(ctx context.Context) (int, error) {
 	return total, nil
 }
 
+// CountFinishedGames is how many games the public archive is made of: every
+// stored game except the ones a shutdown interrupted, which is the same rule
+// the daily Hugging Face export applies (see exportQuery in cmd/exportgames).
+// The export runs once a day, so this runs up to a day ahead of what is
+// published.
+func (store *Store) CountFinishedGames(ctx context.Context) (int, error) {
+	var total int
+	err := store.db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM game_pgn WHERE outcome <> 'unfinished'",
+	).Scan(&total)
+	if err != nil {
+		return 0, fmt.Errorf("count finished games: %w", err)
+	}
+	return total, nil
+}
+
 func boundedPage(limit, offset, fallback, maximum int) (int, int) {
 	if limit <= 0 {
 		limit = fallback

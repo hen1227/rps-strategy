@@ -156,7 +156,7 @@ func TestTournamentSignupValidationAndClosedRegistration(t *testing.T) {
 	if _, err := store.SignupForTournament(
 		t.Context(), tournament.TournamentID, "user-a", "Ada", "ada", false,
 	); !errors.Is(err, ErrInvalidTournament) ||
-		err.Error() != "invalid tournament data: unfiltered chat agreement is required" {
+		err.Error() != "invalid tournament data: agree to take part to enter" {
 		t.Fatalf("expected consent validation, got %v", err)
 	}
 	if _, err := store.SignupForTournament(

@@ -15,5 +15,8 @@ module.exports = ({ config }) => {
   return {
     ...config,
     android: { ...config.android, googleServicesFile: './google-services.json' },
+    // With Firebase configured, its messaging library would fetch a push token
+    // the moment the app starts. See the plugin for why it waits instead.
+    plugins: [...(config.plugins ?? []), './plugins/withFirebaseAutoInitOff'],
   };
 };

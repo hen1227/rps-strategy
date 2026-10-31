@@ -28,6 +28,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  Linking,
   ScrollView,
   StyleSheet,
   Text,
@@ -58,6 +59,7 @@ import { usePieceDrag } from '@/features/board/pieceDrag';
 import { useBoardLayout } from '@/hooks/useBoardLayout';
 import { useBoardSelection } from '@/hooks/useBoardSelection';
 import useReplayKeyboard from '@/hooks/useReplayKeyboard';
+import { DATASET_URL } from '@/navigation/links';
 import { useSettledSearchParams } from '@/navigation/useSettledSearchParams';
 import { ApiError } from '@/store/api/http';
 import { exploreOpeningPosition } from '@/store/api/openings';
@@ -423,7 +425,16 @@ export default function OpeningExplorerScreen() {
         <View style={styles.header}>
           <Text style={styles.brand}>OPENING EXPLORER</Text>
           <Text style={styles.headerSubtitle}>
-            Play a move to explore results from completed games.
+            Play a move to explore results from completed games.{' '}
+            {/* This site's, not all of them: meaf.us's games are counted
+                here but are not ours to publish. */}
+            <Text
+              accessibilityRole="link"
+              onPress={() => Linking.openURL(DATASET_URL)}
+              style={styles.headerLink}
+            >
+              Download this site's games ↗
+            </Text>
           </Text>
         </View>
 
@@ -603,6 +614,7 @@ const styles = themedSheet(() => ({
   // pressing, and a green heading read as one.
   brand: { color: colors.textStrong, fontSize: 12, fontWeight: '900', letterSpacing: 1.6 },
   headerSubtitle: { color: colors.textMuted, fontSize: 13, lineHeight: 19 },
+  headerLink: { color: colors.textSoft, textDecorationLine: 'underline' },
   layout: { flexDirection: 'column', gap: space.medium },
   layoutWide: { alignItems: 'flex-start', flexDirection: 'row' },
   boardColumn: { flexGrow: 0, flexShrink: 0, gap: space.small },

@@ -1,6 +1,7 @@
 import { Link, Stack } from 'expo-router';
 import { StyleSheet, Text, View } from 'react-native';
 
+import { haptic } from '@/haptics/haptics';
 import { links } from '@/navigation/links';
 import PageTitle from '@/navigation/PageTitle';
 import { colors, radius, themedSheet } from '@/theme';
@@ -29,7 +30,7 @@ export default function NotFoundScreen() {
           address is one the app should not keep underneath the lobby it sends
           people to. See `navigation/stack`.
         */}
-        <Link dismissTo href={links.lobby()} style={styles.link}>
+        <Link dismissTo href={links.lobby()} onPress={() => haptic('press')} style={styles.link}>
           Go to the lobby
         </Link>
       </View>

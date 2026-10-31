@@ -3,6 +3,7 @@ import { useState } from 'react';
 
 import { contentTypeOf } from '@/analytics/pagePath';
 import { track } from '@/analytics/track';
+import { haptic } from '@/haptics/haptics';
 
 import { GhostButton } from './primitives';
 
@@ -47,6 +48,7 @@ export default function CopyLinkButton({
       onPress={async () => {
         try {
           await Clipboard.setStringAsync(url);
+          haptic('copied');
           setState('copied');
           track('share', { content_type: contentTypeOf(url), method: 'copy' });
         } catch {

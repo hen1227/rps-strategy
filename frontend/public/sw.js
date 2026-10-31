@@ -49,11 +49,11 @@ self.addEventListener('push', function (event) {
         return self.clients.matchAll({ type: 'window', includeUncontrolled: true });
       })
       .then(function (clients) {
-        // A tab that is open and visible does not need a system banner over
-        // the top of it — it has the board and the chime. Telling every client
-        // lets a visible one dismiss the notification itself, which keeps the
-        // userVisibleOnly promise without shouting at somebody who is looking
-        // straight at the answer.
+        // A tab somebody is looking at does not need a system banner over the
+        // top of it — it has the board and the chime. Telling every client
+        // lets a visible, focused one dismiss the notification itself, which
+        // keeps the userVisibleOnly promise without shouting at somebody who
+        // is looking straight at the answer.
         clients.forEach(function (client) {
           client.postMessage({ type: 'rps-match-summons' });
         });

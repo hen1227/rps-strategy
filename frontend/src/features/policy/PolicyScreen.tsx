@@ -1,25 +1,50 @@
-import { StyleSheet, Text, View } from 'react-native';
+import { Linking, StyleSheet, Text, View } from 'react-native';
 
+import { DATASET_URL } from '@/navigation/links';
 import { colors, contentWidth, radius, themedSheet } from '@/theme';
 import ScreenShell from '@/ui/ScreenShell';
 import { Panel, SectionHeading } from '@/ui/primitives';
 import type { PanelTone } from '@/ui/tones';
 
-export const LAST_UPDATED = 'October 10, 2026';
+export const LAST_UPDATED = 'October 23, 2026';
 export const CONTACT_DISCORD = '@henhen1227';
+export const CONTACT_EMAIL = 'support@henhen1227.com';
 
 // The policy text lives here as data rather than JSX so the screen body stays a
 // single map and editing the wording never means touching layout. Mirrors
 // PRIVACY.md at the repository root — change both together.
 /** One block of the policy, as data so the screen body stays one map. */
-interface PolicySection {
+export interface PolicySection {
   eyebrow: string;
   title: string;
   tone?: PanelTone;
   paragraphs?: string[];
   /** Rendered as a list under the paragraphs. */
   bullets?: string[];
+  /** Somewhere the section points to, as a link after everything else in it. */
+  link?: { label: string; url: string };
 }
+
+/**
+ * How to delete an account, and what deleting it keeps. Named because a second
+ * page shows it on its own: the address the Play listing gives for deletion
+ * requests, which has to put these steps first rather than tenth.
+ */
+export const DELETING_YOUR_ACCOUNT: PolicySection = {
+  "eyebrow": "ACCOUNT CONTROL",
+  "title": "Deleting your account",
+  "paragraphs": [
+    "In the app or on the website, open You → Your account, choose DELETE ACCOUNT at the bottom, and type your username to confirm. Deletion is immediate and permanent. An account that signs in with Discord or Apple can be deleted this way from any browser: sign in at rps.henhen1227.com/account first.",
+    `If you played without signing in and no longer have the device, email ${CONTACT_EMAIL} with your username, and the Account ID shown on Your account if you have it. I will delete the account and reply within 30 days. An account that signs in with Discord or Apple is deleted by signing in instead, so nobody can delete yours by writing in.`,
+    "Your username, Discord and Apple links, titles, leaderboard entry, match alerts, and sign-in are removed. If you signed in with Apple, this app is also disconnected from your Apple ID. Your bots are retired. Accounts with no finished games are deleted outright.",
+    "Finished games stay to preserve opponents’ records and ratings. Your name becomes “Deleted player” in game records, the archive, and saved move lists.",
+    "Feedback posts and replies keep their text under “Deleted player”, and opening names you published stay on their lines without your name. Your votes are removed. To remove a post entirely, delete it before deleting your account, or ask me.",
+    "Reports filed by you or about you are kept, with the names and conversation they recorded, so moderation decisions stay on record.",
+    "Future public archive exports use the deleted name. Files already published are never rewritten, so they keep your old name.",
+    `If deletion fails, email ${CONTACT_EMAIL} or contact me on Discord (${CONTACT_DISCORD}).`,
+    "Clearing browser data removes your local account key. Discord or Apple sign-in restores a linked account. Without a linked account, losing that key means losing access."
+  ]
+};
 
 const sections: PolicySection[] = [
   {
@@ -27,7 +52,8 @@ const sections: PolicySection[] = [
     "title": "Every game is recorded",
     "tone": "accent",
     "paragraphs": [
-      `RPS Strategy is run by Henhen1227, LLC, Henry's company, on a self-hosted server. This agreement is with the LLC, and “I” on this page means Henry Abrahamsen (${CONTACT_DISCORD}), acting for it. Online games are recorded and linked to your account. Play fairly and treat other players well.`
+      `RPS Strategy is run by Henhen1227, LLC, Henry's company, on a self-hosted server. This agreement is with the LLC, and “I” on this page means Henry Abrahamsen (${CONTACT_DISCORD}), acting for it. Online games are recorded and linked to your account. Play fairly and treat other players well.`,
+      "RPS Strategy is not meant for children. Do not play online, chat, or sign in if you are under 13, or under the age your country sets for agreeing to online services."
     ]
   },
   {
@@ -41,7 +67,7 @@ const sections: PolicySection[] = [
       "Finished online games, kept indefinitely: both players, mode, result and reason, ranked status, ratings before and after, move count, time control, and start and finish times.",
       "Player totals: wins, losses, draws, games played, and a rating for each mode. Tournament records include your entry name, Discord handle, matches, and results.",
       "Feedback: posts, replies, votes, and your username when posting. Bug reports also include app version, platform, and any game you attach. This information is public.",
-      "Match alerts: if you turn them on, the push token your phone or browser gives for notifications. It is used only to tell you a game was found, and is removed when you turn alerts off or delete your account."
+      "Match alerts: if you turn them on, the push token your phone or browser gives for notifications. It is used only to tell you a game was found or that somebody took your challenge link, and is removed when you turn alerts off or delete your account."
     ]
   },
   {
@@ -51,7 +77,7 @@ const sections: PolicySection[] = [
       "Your opponent and the lobby can see your username, Discord handle, rating, and record. Anyone can watch live games.",
       "Your opponent and spectators can read game chat. Chat stays in server memory during the game and is not saved to the database, except the recent conversation a report carries. Other players can still take screenshots.",
       "Messages and usernames containing listed slurs or strong profanity are rejected. Use reports for anything the filter misses.",
-      "Anyone can read the feedback board. Posting, replying, and voting require an account signed in with Discord or Apple. Posts carry your username and remain public until deleted. Delete your own posts from the post menu, or ask me to remove them.",
+      "Anyone can read the feedback board. Posting, replying, and voting require an account signed in with Discord or Apple. Posts carry your username and remain public until deleted. Delete your own posts with DELETE MINE on the post, or ask me to remove them.",
       "Keep account problems and other private information off the board. Use reports or contact me directly."
     ]
   },
@@ -59,7 +85,7 @@ const sections: PolicySection[] = [
     "eyebrow": "PLAYER SAFETY",
     "title": "Reporting and blocking",
     "paragraphs": [
-      "Report or block a player from the ⋯ menu in chat or from their profile.",
+      "Report or block a player from the ⋯ menu in chat or from their profile. Report a feedback post or reply with REPORT beside it.",
       "Reports include the recent conversation. I review them within 24 hours and may mute, restrict, or remove an account. Anyone can report, including guests. You will not receive an outcome update.",
       "Your block list is private. Blocking hides messages in both directions and prevents direct challenges. Matchmaking can still pair you. Sign in to block players, and manage your list under Your account → Blocked players."
     ]
@@ -72,15 +98,16 @@ const sections: PolicySection[] = [
       "Exports include moves and clock readings, mode, result and reason, ranked status, ratings before and after, time control, and start and finish times. Games finished from September 9, 2026 onward include both usernames.",
       "Exports exclude Discord IDs and handles, Apple IDs, account IDs, account key hashes, password hashes, IP addresses, and chat. An opaque player key groups games without revealing the underlying account ID.",
       "Games finished before September 9, 2026 use “Anonymous player” for both names.",
-      "Published files may already have been downloaded and cannot be recalled. Renaming your account changes future exports only. Contact me to exclude your name from future files."
-    ]
+      "Published files are never rewritten, and may already have been downloaded. Renaming your account changes future exports only. Contact me to exclude your name from future files."
+    ],
+    "link": { "label": "The archive on Hugging Face ↗", "url": DATASET_URL }
   },
   {
     "eyebrow": "USAGE STATISTICS",
     "title": "Google Analytics",
     "paragraphs": [
       "The website and the apps use Google Analytics to count visits and see which features are used. In the EU, EEA, UK, and Switzerland, nothing is sent until you allow it. Elsewhere it is on by default, and starts off if your browser sends Global Privacy Control. Turn it on or off under Your account → Usage stats.",
-      "What is sent: the pages you open, with names and game IDs removed from the address; actions such as signing in, joining the queue, posting a challenge or feedback, copying a link, and starting and finishing a game, with its mode, result, and length; and your device type, operating system, app or browser version, language, and screen size.",
+      "What is sent: the pages you open, with names and game IDs removed from the address; actions such as signing in, joining the queue, posting a challenge or feedback, copying a link, and starting and finishing a game, with its mode, result, and length; and your device type, model and brand, operating system, app or browser version, language, and screen size.",
       "What is never sent: your username, account ID, Discord or Apple ID, who you played, game IDs, or chat.",
       "On the website, Google sets its _ga cookies and sees your IP address, which it uses to estimate your location. The apps send through my server instead, so Google never receives your phone's IP address. They keep a random analytics ID on the device and use your phone's region setting as your country.",
       "The server also reports finished games and engines connecting, with no player information. An engine's public name and version are included.",
@@ -91,22 +118,10 @@ const sections: PolicySection[] = [
     "eyebrow": "DATA USE",
     "title": "What I do not do",
     "paragraphs": [
-      "No ads, advertising trackers, or data sales. The only data shared is the public game archive and the usage statistics above. Match alerts are delivered by Apple, Google, or your browser's push service, and carry only the alert itself. Only I can access the database. Web-server logs record IP addresses for operation and debugging, separately from game records."
+      "No ads, advertising trackers, or data sales. The public game archive is the only data I share. Google Analytics processes the usage statistics above for me. Match alerts are delivered by Apple, Google, or your browser's push service, and carry only the alert itself. Only I can access the database. Web-server logs record IP addresses for operation and debugging, separately from game records."
     ]
   },
-  {
-    "eyebrow": "ACCOUNT CONTROL",
-    "title": "Deleting your account",
-    "paragraphs": [
-      "Choose Delete account at the bottom of your account page and type your username to confirm. Deletion is immediate and permanent.",
-      "Your username, Discord and Apple links, titles, leaderboard entry, match alerts, and sign-in are removed. If you signed in with Apple, this app is also disconnected from your Apple ID. Your bots are retired. Accounts with no finished games are deleted outright.",
-      "Finished games stay to preserve opponents’ records and ratings. Your name becomes “Deleted player” in game records, the archive, and saved move lists.",
-      "Feedback posts and replies keep their text under “Deleted player”. Your votes are removed. To remove a post entirely, delete it before deleting your account, or ask me.",
-      "Future public archive exports use the deleted name. Previously published files may still contain your old name and cannot be recalled.",
-      `If deletion fails, contact me on Discord (${CONTACT_DISCORD}) for help.`,
-      "Clearing browser data removes your local account key. Discord or Apple sign-in restores a linked account. Without a linked account, losing that key means losing access."
-    ]
-  },
+  DELETING_YOUR_ACCOUNT,
   {
     "eyebrow": "ONLINE PLAY AGREEMENT",
     "title": "Rules for online play",
@@ -124,7 +139,7 @@ const sections: PolicySection[] = [
     "title": "Changes and contact",
     "paragraphs": [
       "I update this page and its date when the policy changes. Continuing to play means you agree to the current version.",
-      `Post bugs and suggestions under You → Feedback. For private questions or problems reports cannot resolve, contact ${CONTACT_DISCORD} on Discord.`
+      `Post bugs and suggestions under You → Feedback. For private questions or problems reports cannot resolve, email ${CONTACT_EMAIL} or contact ${CONTACT_DISCORD} on Discord.`
     ]
   }
 ];
@@ -161,6 +176,15 @@ export default function PolicyScreen() {
                     ))}
                   </View>
                 )}
+                {section.link && (
+                  <Text
+                    accessibilityRole="link"
+                    onPress={() => Linking.openURL(section.link!.url)}
+                    style={styles.link}
+                  >
+                    {section.link.label}
+                  </Text>
+                )}
               </Panel>
             ))}
           </View>
@@ -185,6 +209,14 @@ const styles = themedSheet(() => ({
 
   stack: { gap: 12 },
   body: { color: colors.textMuted, fontSize: 12, lineHeight: 19, marginTop: 10 },
+  link: {
+    alignSelf: 'flex-start',
+    color: colors.textSoft,
+    fontSize: 12,
+    lineHeight: 19,
+    marginTop: 10,
+    textDecorationLine: 'underline',
+  },
 
   bulletList: { gap: 9, marginTop: 13 },
   bulletRow: {
